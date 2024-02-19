@@ -73,12 +73,7 @@ def login():
                 
                 # Redirect or display tokens (for educational purposes, adjust as needed)
                 return f"Auth Token: {AUTH_TOKEN}<br>Feed Token: {FEED_TOKEN}"
-            except Exception as e:
-                return jsonify({
-                    'status': 'error',
-                    'message': str(e)
-                })
-                
+                            
             except Exception as e:
                 return jsonify({
                     'status': 'error',
