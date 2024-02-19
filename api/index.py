@@ -14,7 +14,7 @@ load_dotenv()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
-AUTH_TOKEN = ""
+app.config['AUTH_TOKEN'] = ''
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -71,6 +71,8 @@ def login():
                 session['refreshToken'] = refreshToken
                 session['AUTH_TOKEN'] = AUTH_TOKEN
                 session['FEED_TOKEN'] = FEED_TOKEN
+
+                app.config['AUTH_TOKEN'] = AUTH_TOKEN
                 
                 # Redirect or display tokens (for educational purposes, adjust as needed)
                 return f"Auth Token: {AUTH_TOKEN}<br>Feed Token: {FEED_TOKEN}"
@@ -103,7 +105,7 @@ def place_order():
         data = request.json if request.is_json else request.form
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
-        # AUTH_TOKEN = session.get('AUTH_TOKEN')
+        AUTH_TOKEN = app.config['AUTH_TOKEN']
         api_key = os.getenv('BROKER_API_KEY')
         
         # Prepare headers with the AUTH_TOKEN and other details
