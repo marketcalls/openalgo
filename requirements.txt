@@ -1,7 +1,4 @@
-Flask==3.0.0
+Flask
 python-dotenv
-smartapi-python
 pyotp
-logzero
-websocket-client
 pytz
