@@ -2,3 +2,4 @@ Flask==3.0.0
 python-dotenv
 smartapi-python
 pyotp
+yfinance
