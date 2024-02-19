@@ -5,6 +5,18 @@ from dotenv import load_dotenv
 from SmartApi import SmartConnect  # Adjust import according to your setup
 import pyotp
 
+import logzero
+from logzero import logger
+
+# Set logging level to high value to ignore all logs
+logzero.loglevel(60)  # Higher than CRITICAL
+
+logger.debug("This debug message won't be shown.")
+logger.info("This info message won't be shown.")
+logger.warning("This warning won't be shown.")
+logger.error("This error won't be shown.")
+logger.critical("This critical message won't be shown.")
+
 app = Flask(__name__)
 load_dotenv()
 
