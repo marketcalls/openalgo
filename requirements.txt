@@ -1,1 +1,4 @@
 Flask==3.0.0
+dotenv
+smartapi-python
+pyotp
