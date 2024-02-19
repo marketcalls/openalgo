@@ -14,6 +14,7 @@ load_dotenv()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
+AUTH_TOKEN = ""
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
