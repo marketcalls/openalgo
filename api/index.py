@@ -102,7 +102,7 @@ def place_order():
         data = request.json if request.is_json else request.form
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
-        AUTH_TOKEN = session.get('AUTH_TOKEN') or os.getenv('AUTH_TOKEN')
+        AUTH_TOKEN = session.get('AUTH_TOKEN')
         api_key = os.getenv('BROKER_API_KEY')
         
         # Prepare headers with the AUTH_TOKEN and other details
