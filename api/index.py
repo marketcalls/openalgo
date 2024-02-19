@@ -94,6 +94,7 @@ def logout():
     session.pop('AUTH_TOKEN', None)
     session.pop('FEED_TOKEN', None)
     session.pop('user', None)  # Remove 'user' from session if exists
+    app.config['AUTH_TOKEN'] = ''
 
     # Redirect to login page after logout
     return redirect(url_for('login'))
