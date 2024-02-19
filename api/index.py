@@ -72,7 +72,7 @@ def login():
                 session['FEED_TOKEN'] = FEED_TOKEN
                 
                 # Redirect or display tokens (for educational purposes, adjust as needed)
-                return redirect(url_for('some_next_page'))  # Change 'some_next_page' to your actual next page
+                return redirect(url_for('login')) 
                 
             except Exception as e:
                 return jsonify({
