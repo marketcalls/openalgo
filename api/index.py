@@ -2,35 +2,18 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask import session
 import os
 from dotenv import load_dotenv
-from SmartApi import SmartConnect  # Adjust import according to your setup
+import http.client
+import mimetypes
 import pyotp
-
-import logzero
-from logzero import logger
-
-# Set logging level to high value to ignore all logs
-logzero.loglevel(60)  # Higher than CRITICAL
-
-logger.debug("This debug message won't be shown.")
-logger.info("This info message won't be shown.")
-logger.warning("This warning won't be shown.")
-logger.error("This error won't be shown.")
-logger.critical("This critical message won't be shown.")
+import json
+import time
+import pytz
 
 app = Flask(__name__)
 load_dotenv()
 
 # Environment variables
-broker_api_key = os.getenv('BROKER_API_KEY')
-broker_username = os.getenv('BROKER_USERNAME')
-broker_pin = os.getenv('BROKER_PIN')
-broker_token = os.getenv('BROKER_TOKEN')
-login_username = os.getenv('LOGIN_USERNAME')
-login_password = os.getenv('LOGIN_PASSWORD')
 app.secret_key = os.getenv('APP_KEY')
-
-# SmartConnect object
-obj = SmartConnect(api_key=broker_api_key)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -41,18 +24,56 @@ def login():
         # Process form submission
         username = request.form['username']
         password = request.form['password']
+        login_username = os.getenv('LOGIN_USERNAME')
+        login_password = os.getenv('LOGIN_PASSWORD')
         
         if username == login_username and password == login_password:
             try:
                 session['user'] = username 
-                # Generate session and fetch tokens
-                data = obj.generateSession(broker_username, broker_pin, pyotp.TOTP(broker_token).now())
-                refreshToken = data['data']['refreshToken']
-                AUTH_TOKEN = data['data']['jwtToken']
-                FEED_TOKEN = obj.getfeedToken()
                 
-                # Display tokens (for educational purposes, adjust as needed)
-                return f"Auth Token: {AUTH_TOKEN}<br>Feed Token: {FEED_TOKEN}"
+                # New login method
+                api_key = os.getenv('BROKER_API_KEY')
+                clientcode = os.getenv('BROKER_USERNAME')
+                broker_pin = os.getenv('BROKER_PIN')
+                token = os.getenv('BROKER_TOKEN')  # Assuming TOTP_CODE is stored in BROKER_TOKEN
+                totp = pyotp.TOTP(token).now()
+
+                conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+                payload = json.dumps({
+                    "clientcode": clientcode,
+                    "password": broker_pin,
+                    "totp": totp
+                })
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-UserType': 'USER',
+                    'X-SourceID': 'WEB',
+                    'X-ClientLocalIP': 'CLIENT_LOCAL_IP',  # These values should be replaced with actual data or handled accordingly
+                    'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+                    'X-MACAddress': 'MAC_ADDRESS',
+                    'X-PrivateKey': api_key
+                }
+
+                conn.request("POST", "/rest/auth/angelbroking/user/v1/loginByPassword", payload, headers)
+                res = conn.getresponse()
+                data = res.read()
+                mydata = data.decode("utf-8")
+
+                data_dict = json.loads(mydata)
+
+                refreshToken = data_dict['data']['refreshToken']
+                AUTH_TOKEN = data_dict['data']['jwtToken']
+                FEED_TOKEN = data_dict['data']['feedToken']
+
+                # Store tokens in session for later use
+                session['refreshToken'] = refreshToken
+                session['AUTH_TOKEN'] = AUTH_TOKEN
+                session['FEED_TOKEN'] = FEED_TOKEN
+                
+                # Redirect or display tokens (for educational purposes, adjust as needed)
+                return redirect(url_for('some_next_page'))  # Change 'some_next_page' to your actual next page
+                
             except Exception as e:
                 return jsonify({
                     'status': 'error',
@@ -61,10 +82,17 @@ def login():
         else:
             # (implement error messaging as needed)
             return "Invalid credentials", 401
+
         
 @app.route('/logout')
 def logout():
-    session.pop('user', None)  # Remove 'user' from session
+    # Remove tokens and user information from session
+    session.pop('refreshToken', None)
+    session.pop('AUTH_TOKEN', None)
+    session.pop('FEED_TOKEN', None)
+    session.pop('user', None)  # Remove 'user' from session if exists
+
+    # Redirect to login page after logout
     return redirect(url_for('login'))
 
 @app.route('/placeorder', methods=['POST'])
@@ -73,44 +101,64 @@ def place_order():
         # Extracting form data or JSON data from the POST request
         data = request.json if request.is_json else request.form
         
-        # Assigning default values if not provided in the request
-        variety = data.get('variety', 'NORMAL')
-        producttype = data.get('producttype', 'INTRADAY')
+        # Retrieve AUTH_TOKEN and API_KEY from session or environment
+        AUTH_TOKEN = session.get('AUTH_TOKEN') or os.getenv('AUTH_TOKEN')
+        api_key = os.getenv('BROKER_API_KEY')
         
-        # Building the order parameters dictionary with incoming and default values
-        orderparams = {
-            "variety": variety,
+        # Prepare headers with the AUTH_TOKEN and other details
+        headers = {
+            'Authorization': f'Bearer {AUTH_TOKEN}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-UserType': 'USER',
+            'X-SourceID': 'WEB',
+            'X-ClientLocalIP': 'CLIENT_LOCAL_IP',  # These values should be dynamically determined or managed accordingly
+            'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+            'X-MACAddress': 'MAC_ADDRESS',
+            'X-PrivateKey': api_key
+        }
+
+        # Preparing the payload with data received from the request
+        payload = json.dumps({
+            "variety": data.get('variety', 'NORMAL'),
             "tradingsymbol": data['tradingsymbol'],
             "symboltoken": data['symboltoken'],
             "transactiontype": data['transactiontype'],
             "exchange": data['exchange'],
-            "ordertype": "MARKET",  # Assuming ordertype is always MARKET for this example
-            "producttype": producttype,
-            "duration": "DAY",  # Assuming duration is always DAY for this example
-            "price": "0",  # Assuming price is always 0 for MARKET orders
-            "squareoff": "0",  # Assuming squareoff is not required for this example
-            "stoploss": "0",  # Assuming stoploss is not required for this example
+            "ordertype": data.get('ordertype', 'MARKET'),
+            "producttype": data.get('producttype', 'INTRADAY'),
+            "duration": data.get('duration', 'DAY'),
+            "price": data.get('price', '0'),
+            "squareoff": data.get('squareoff', '0'),
+            "stoploss": data.get('stoploss', '0'),
             "quantity": data['quantity']
-        }
-        
-        # Place the order
-        orderid = obj.placeOrder(orderparams)
-        
-        # Return success response with order ID
-        return jsonify({
-            'status': 'success',
-            'message': 'Order placement is successful',
-            'orderid': orderid
         })
+
+        # Making the HTTP request to place the order
+        conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+        conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+        
+        # Processing the response
+        res = conn.getresponse()
+        data = res.read()
+        response_data = json.loads(data.decode("utf-8"))
+        
+        # Check if the order was successfully placed and return the response
+        if res.status == 200:
+            return jsonify({
+                'status': 'success',
+                'data': response_data
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to place order',
+                'details': response_data
+            }), res.status
     except KeyError as e:
-        # If any mandatory field is missing in the request
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
     except Exception as e:
-        # Handling other exceptions
-        return jsonify({
-            'status': 'error',
-            'message': f"Order placement failed: {e}"
-        }), 500
+        return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
 
 
 if __name__ == '__main__':
