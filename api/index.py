@@ -72,7 +72,12 @@ def login():
                 session['FEED_TOKEN'] = FEED_TOKEN
                 
                 # Redirect or display tokens (for educational purposes, adjust as needed)
-                return redirect(url_for('login')) 
+                return f"Auth Token: {AUTH_TOKEN}<br>Feed Token: {FEED_TOKEN}"
+            except Exception as e:
+                return jsonify({
+                    'status': 'error',
+                    'message': str(e)
+                })
                 
             except Exception as e:
                 return jsonify({
