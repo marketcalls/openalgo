@@ -2,3 +2,4 @@ Flask
 python-dotenv
 pyotp
 pytz
+requests
