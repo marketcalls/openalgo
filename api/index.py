@@ -117,7 +117,7 @@ def place_order():
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
         AUTH_TOKEN = app.config['AUTH_TOKEN']
-        api_key = os.getenv('BROKER_API_KEY')
+        
         
         # Prepare headers with the AUTH_TOKEN and other details
         headers = {
@@ -129,7 +129,7 @@ def place_order():
             'X-ClientLocalIP': 'CLIENT_LOCAL_IP',  # These values should be dynamically determined or managed accordingly
             'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
             'X-MACAddress': 'MAC_ADDRESS',
-            'X-PrivateKey': api_key
+            'X-PrivateKey': data['apikey']
         }
 
         # Preparing the payload with data received from the request
