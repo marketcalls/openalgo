@@ -21,6 +21,9 @@ def home():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    if session.get('logged_in'):
+        return redirect(url_for('dashboard'))
+    
     if request.method == 'GET':
         # Render the login form when the route is accessed with GET
         return render_template('login.html')
