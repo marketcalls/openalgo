@@ -79,7 +79,7 @@ def login():
                 app.config['AUTH_TOKEN'] = AUTH_TOKEN
                 
                 # Redirect or display tokens (for educational purposes, adjust as needed)
-                return f"Auth Token: {AUTH_TOKEN}<br>Feed Token: {FEED_TOKEN}"
+                return redirect(url_for('dashboard'))
                             
             except Exception as e:
                 return jsonify({
@@ -89,6 +89,12 @@ def login():
         else:
             # (implement error messaging as needed)
             return "Invalid credentials", 401
+
+
+# Dashboard route, loads after successful login
+@app.route('/dashboard')
+def dashboard():
+    return render_template('dashboard.html')
 
         
 @app.route('/logout')
