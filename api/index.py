@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for, send_from_directory
+from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for,  render_template_string
 import requests
 import os
 from dotenv import load_dotenv
@@ -8,9 +8,18 @@ import pyotp
 import json
 import time
 import pytz
+import pandas as pd
 
 app = Flask(__name__)
+
+# Fetch data and prepare DataFrame
+url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
+data = requests.get(url).json()
+token_df = pd.DataFrame.from_dict(data)
+
 load_dotenv()
+
+
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
@@ -182,32 +191,24 @@ def place_order():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
 
+# Search page
+@app.route('/token')
+def token():
+    return render_template('token.html')
 
 
-@app.route('/download', methods=['GET'])
-def download_file():
-    # URL of the file to be downloaded
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-    # Folder where the file will be saved
-    folder_path = 'tmp'
-    file_name = url.split('/')[-1]  # Extracts file name from URL
-    file_path = os.path.join(folder_path, file_name)
+@app.route('/search')
+def search():
+    symbol = request.args.get('symbol')
+    results = token_df[token_df['symbol'].str.contains(symbol, case=False)]
+    if results.empty:
+        return "No matching symbols found."
+    else:
+        # Change to render_template and pass results to the template
+        return render_template('search.html', results=results)
 
-    # Ensure the directory exists
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
 
-    # Stream the download to reduce memory usage
-    try:
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()  # Check if the request was successful
-            with open(file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:  # Filter out keep-alive new chunks
-                        f.write(chunk)
-        return f"File successfully downloaded and saved to {file_path}"
-    except requests.exceptions.RequestException as e:
-        return f"Failed to download the file: {str(e)}"
+
 
 if __name__ == '__main__':
     app.run(debug=True)
