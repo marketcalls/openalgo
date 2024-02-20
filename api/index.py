@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, redirect, render_template , session, url_for, send_from_directory
+from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for, send_from_directory
 import requests
 import os
 from dotenv import load_dotenv
@@ -184,7 +184,6 @@ def place_order():
 
 
 
-# Define the route to download a file and save it locally
 @app.route('/download', methods=['GET'])
 def download_file():
     # URL of the file to be downloaded
@@ -198,12 +197,14 @@ def download_file():
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
-    # Attempt to download the file
+    # Stream the download to reduce memory usage
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raises an HTTPError if the response status code is 4XX/5XX
-        with open(file_path, 'wb') as f:
-            f.write(response.content)
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()  # Check if the request was successful
+            with open(file_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:  # Filter out keep-alive new chunks
+                        f.write(chunk)
         return f"File successfully downloaded and saved to {file_path}"
     except requests.exceptions.RequestException as e:
         return f"Failed to download the file: {str(e)}"
