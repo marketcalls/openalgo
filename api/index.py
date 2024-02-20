@@ -201,11 +201,10 @@ def download_data():
     # Convert the JSON data to a pandas DataFrame
     token_df = pd.DataFrame.from_dict(data)
     
-    # Here, you might want to do something with the DataFrame, like saving it to a file
-    # For demonstration, we'll skip that step
+    # Save the DataFrame to a file or do other processing if needed
     
-    # Return a success message
-    return 'Master Contract Downloaded Successfully'
+    # Render the download.html template
+    return render_template('download.html')
 
 # Search page
 @app.route('/token')

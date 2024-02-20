@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlgoBridge</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
+        body {
+            font-family: 'Open Sans', sans-serif;
+        }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-gray-100">
+    <div class="fixed top-0 right-0 p-5 bg-white shadow-lg rounded-bl-md">
+        <nav class="flex space-x-4">
+            <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
+            <a href="/download" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Download</a>
+            <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
+            <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
+        </nav>
+    </div>
+    <div class="container mx-auto mt-20">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>

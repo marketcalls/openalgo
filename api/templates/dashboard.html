@@ -1,8 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{% extends "base.html" %}
+
+{% block head %}
     <title>AlgoBridge Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -11,8 +9,10 @@
             font-family: 'Roboto', sans-serif;
         }
     </style>
-</head>
+{% endblock %}
+
+{% block content %}
 <body class="bg-gray-100 flex justify-center items-center h-screen">
     <h1 class="text-3xl font-medium text-gray-800">Welcome to AlgoBridge Dashboard</h1>
 </body>
-</html>
+{% endblock %}
