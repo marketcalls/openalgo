@@ -13,7 +13,7 @@ load_dotenv()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
-app.config['AUTH_TOKEN'] = ''
+#app.config['AUTH_TOKEN'] = ''
 
 @app.route('/')
 def home():
