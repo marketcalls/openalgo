@@ -9,9 +9,14 @@ import json
 import time
 import pytz
 import pandas as pd
+from datetime import timedelta
+
+
 
 app = Flask(__name__)
 
+# Set Session Timeout
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
 
 load_dotenv()
 
