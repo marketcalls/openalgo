@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for
-from flask import session
+from flask import Flask, request, jsonify, render_template, request, session, url_for
 import os
 from dotenv import load_dotenv
 import http.client
@@ -75,6 +74,7 @@ def login():
                 session['refreshToken'] = refreshToken
                 session['AUTH_TOKEN'] = AUTH_TOKEN
                 session['FEED_TOKEN'] = FEED_TOKEN
+                session['logged_in'] = True
 
                 app.config['AUTH_TOKEN'] = AUTH_TOKEN
                 
@@ -94,6 +94,8 @@ def login():
 # Dashboard route, loads after successful login
 @app.route('/dashboard')
 def dashboard():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     return render_template('dashboard.html')
 
         
@@ -104,6 +106,7 @@ def logout():
     session.pop('AUTH_TOKEN', None)
     session.pop('FEED_TOKEN', None)
     session.pop('user', None)  # Remove 'user' from session if exists
+    session.pop('logged_in', None)
     app.config['AUTH_TOKEN'] = ''
 
     # Redirect to login page after logout
@@ -111,6 +114,8 @@ def logout():
 
 @app.route('/placeorder', methods=['POST'])
 def place_order():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     try:
         # Extracting form data or JSON data from the POST request
         data = request.json if request.is_json else request.form
