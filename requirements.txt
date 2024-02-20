@@ -3,3 +3,4 @@ python-dotenv
 pyotp
 pytz
 requests
+pandas
