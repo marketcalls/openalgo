@@ -30,6 +30,8 @@ AngelOne
     auth VARCHAR(1000)
 );</code>
 
+8.Now you are ready to connect with your favorite trading platform for end to end Algotrading platform for fully automated trading.
+
 ## Features
 
 - **Comprehensive Integration**: Effortlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for a smooth data and strategy transition.
