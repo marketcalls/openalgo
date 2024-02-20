@@ -10,13 +10,14 @@ import time
 import pytz
 import pandas as pd
 from datetime import timedelta
+import psycopg2
 
 
 
 app = Flask(__name__)
 
 # Set Session Timeout
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
+#app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
 
 load_dotenv()
 
@@ -24,7 +25,7 @@ load_dotenv()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
-AUTH_TOKEN = None
+
 
 # Initialize the placeholder as None
 token_df = None
@@ -51,7 +52,7 @@ def login():
         
         if username == login_username and password == login_password:
             try:
-                session['user'] = username 
+                session['user'] = login_username 
                 
                 # New login method
                 api_key = os.getenv('BROKER_API_KEY')
@@ -84,10 +85,45 @@ def login():
 
                 data_dict = json.loads(mydata)
 
-                global AUTH_TOKEN
+                
                 refreshToken = data_dict['data']['refreshToken']
                 AUTH_TOKEN = data_dict['data']['jwtToken']
                 FEED_TOKEN = data_dict['data']['feedToken']
+
+                #writing to database
+                
+
+                try:
+                    conn = psycopg2.connect(database="verceldb",
+                                            host="ep-curly-lab-a4jv1o3w-pooler.us-east-1.aws.neon.tech",
+                                            user="default",
+                                            password="wgVMio6jZk0e",
+                                            port="5432",
+                                            sslmode='require')
+                    cursor = conn.cursor()
+
+                    # UPSERT statement (INSERT ... ON CONFLICT DO UPDATE)
+                    upsert_sql = """
+                    INSERT INTO auth (name, auth) VALUES (%s, %s)
+                    ON CONFLICT (name) DO UPDATE
+                    SET auth = EXCLUDED.auth
+                    RETURNING id;
+                    """
+                    values = (username, AUTH_TOKEN)
+                    cursor.execute(upsert_sql, values)
+                    inserted_id = cursor.fetchone()[0]
+                    conn.commit()
+                    print(f"Upserted record with ID: {inserted_id}")
+
+                except (Exception, psycopg2.DatabaseError) as error:
+                    print("Error while working with PostgreSQL", error)
+                    if conn:
+                        conn.rollback()
+                finally:
+                    if cursor:
+                        cursor.close()
+                    if conn:
+                        conn.close()
 
                 # Store tokens in session for later use
                 session['refreshToken'] = refreshToken
@@ -137,9 +173,43 @@ def place_order():
     try:
         # Extracting form data or JSON data from the POST request
         data = request.json
+
+        login_username = os.getenv('LOGIN_USERNAME')
+
+        try:
+            conn = psycopg2.connect(database="verceldb",
+                                    host="ep-curly-lab-a4jv1o3w-pooler.us-east-1.aws.neon.tech",
+                                    user="default",
+                                    password="wgVMio6jZk0e",
+                                    port="5432",
+                                    sslmode='require')
+
+            # Create a new cursor
+            cursor = conn.cursor()
+
+            # SQL to fetch the auth value
+            select_sql = "SELECT auth FROM auth WHERE name = %s;"
+            cursor.execute(select_sql, (login_username,))
+
+            # Fetch the result
+            result = cursor.fetchone()
+            if result:
+                AUTH_TOKEN = result[0]
+                print(f"The auth value for rajandran is: {AUTH_TOKEN}")
+            else:
+                print(f"No record found for {login_username}.")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error while connecting to PostgreSQL", error)
+        finally:
+            # Close the cursor and the connection
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
-        global AUTH_TOKEN
+        
         print(f'Auth Token : {AUTH_TOKEN}')
         print(f'API Request : {data}')
         

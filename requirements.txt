@@ -4,3 +4,4 @@ pyotp
 pytz
 requests
 pandas
+psycopg2-binary
