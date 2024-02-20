@@ -94,10 +94,10 @@ def login():
                 
 
                 try:
-                    conn = psycopg2.connect(database="verceldb",
-                                            host="ep-curly-lab-a4jv1o3w-pooler.us-east-1.aws.neon.tech",
-                                            user="default",
-                                            password="wgVMio6jZk0e",
+                    conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
+                                            host=os.getenv('POSTGRES_HOST'),
+                                            user=os.getenv('POSTGRES_USER'),
+                                            password=os.getenv('POSTGRES_PASSWORD'),
                                             port="5432",
                                             sslmode='require')
                     cursor = conn.cursor()
@@ -162,7 +162,7 @@ def logout():
     session.pop('FEED_TOKEN', None)
     session.pop('user', None)  # Remove 'user' from session if exists
     session.pop('logged_in', None)
-    app.config['AUTH_TOKEN'] = None
+    
 
     # Redirect to login page after logout
     return redirect(url_for('login'))
@@ -177,12 +177,12 @@ def place_order():
         login_username = os.getenv('LOGIN_USERNAME')
 
         try:
-            conn = psycopg2.connect(database="verceldb",
-                                    host="ep-curly-lab-a4jv1o3w-pooler.us-east-1.aws.neon.tech",
-                                    user="default",
-                                    password="wgVMio6jZk0e",
-                                    port="5432",
-                                    sslmode='require')
+            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
+                                            host=os.getenv('POSTGRES_HOST'),
+                                            user=os.getenv('POSTGRES_USER'),
+                                            password=os.getenv('POSTGRES_PASSWORD'),
+                                            port="5432",
+                                            sslmode='require')
 
             # Create a new cursor
             cursor = conn.cursor()
@@ -300,21 +300,6 @@ def search():
         # Change to render_template and pass results to the template
         return render_template('search.html', results=results)
 
-@app.route('/auth', methods=['GET'])
-def auth():
-    # Retrieve AUTH_TOKEN from the app config
-    global AUTH_TOKEN
-    
-    if AUTH_TOKEN:
-        return jsonify({
-            'status': 'success',
-            'AUTH_TOKEN': AUTH_TOKEN
-        })
-    else:
-        return jsonify({
-            'status': 'error',
-            'message': 'AUTH_TOKEN not found'
-        }), 404
 
 
 if __name__ == '__main__':
