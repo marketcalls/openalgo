@@ -1,8 +1,8 @@
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fexamples%2Ftree%2Fmain%2Fpython%2Fflask3&demo-title=Flask%203%20%2B%20Vercel&demo-description=Use%20Flask%203%20on%20Vercel%20with%20Serverless%20Functions%20using%20the%20Python%20Runtime.&demo-url=https%3A%2F%2Fflask3-python-template.vercel.app%2F&demo-image=https://assets.vercel.com/image/upload/v1669994156/random/flask.png)
 
-# AlgoBridge: Seamless Algotrading Interface
+# AlgoBridge: Simple Algotrading Interface
 
-AlgoBridge is a Flask-based application designed to provide a seamless interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
+AlgoBridge is a Flask-based python application designed to provide a simple  interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
 
 ## Features
 
@@ -22,11 +22,32 @@ To get started with AlgoBridge, follow these steps:
    - Install the required dependencies using `pip install -r requirements.txt`.
 
 2. **Configuration**
-   - Configure your connection settings to Amibroker, Tradingview, Excel, and Google Spreadsheets in the `config.json` file.
+   - Configure the environmental file as per .sample.env file. Rename .sample.env file to .env if required.
+   - If deploying in Vercel then upload the .env file to the enviromental section which is required for login to the app and authentication to placeorders.
 
 3. **Running AlgoBridge**
    - Launch the Flask application by running `python app.py` in your terminal.
    - Access the AlgoBridge interface via your web browser at the provided local address.
+
+4. **Login to the Application**
+   - Login with the App Credentials as per the environmental file
+
+
+5. **Place Order**
+   - Place Order with the /placeorder route with the following sample post message
+      <br>
+      <code>
+      {
+      "apikey":"I2tOBrlR",
+      "tradingsymbol":"SBIN-EQ",
+      "symboltoken":"3045",
+      "transactiontype":"BUY",
+      "exchange":"NSE",
+      "ordertype":"MARKET",
+      "producttype":"INTRADAY",
+      "quantity":"1"
+      }</code>
+
 
 ## Documentation
 
