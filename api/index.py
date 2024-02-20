@@ -24,7 +24,7 @@ load_dotenv()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
-#app.config['AUTH_TOKEN'] = ''
+AUTH_TOKEN = None
 
 # Initialize the placeholder as None
 token_df = None
@@ -84,6 +84,7 @@ def login():
 
                 data_dict = json.loads(mydata)
 
+                global AUTH_TOKEN
                 refreshToken = data_dict['data']['refreshToken']
                 AUTH_TOKEN = data_dict['data']['jwtToken']
                 FEED_TOKEN = data_dict['data']['feedToken']
@@ -138,7 +139,7 @@ def place_order():
         data = request.json
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
-        AUTH_TOKEN = app.config['AUTH_TOKEN']
+        global AUTH_TOKEN
         print(f'Auth Token : {AUTH_TOKEN}')
         print(f'API Request : {data}')
         
@@ -232,12 +233,12 @@ def search():
 @app.route('/auth', methods=['GET'])
 def auth():
     # Retrieve AUTH_TOKEN from the app config
-    auth_token = app.config.get('AUTH_TOKEN')
+    global AUTH_TOKEN
     
     if auth_token:
         return jsonify({
             'status': 'success',
-            'AUTH_TOKEN': auth_token
+            'AUTH_TOKEN': AUTH_TOKEN
         })
     else:
         return jsonify({
