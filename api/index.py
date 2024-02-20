@@ -189,7 +189,7 @@ def download_file():
     # URL of the file to be downloaded
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
     # Folder where the file will be saved
-    folder_path = 'api/files'
+    folder_path = 'tmp'
     file_name = url.split('/')[-1]  # Extracts file name from URL
     file_path = os.path.join(folder_path, file_name)
 
