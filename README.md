@@ -38,7 +38,7 @@ To get started with AlgoBridge, follow these steps:
       <br>
       <code>
       {
-      "apikey":"I2tOBrlR",
+      "apikey":"5dfs3f4",
       "tradingsymbol":"SBIN-EQ",
       "symboltoken":"3045",
       "transactiontype":"BUY",
