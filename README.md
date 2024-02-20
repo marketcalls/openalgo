@@ -4,6 +4,10 @@
 
 AlgoBridge is a Flask-based python application designed to provide a simple  interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
 
+## Supported Broker
+
+AngelOne
+
 ## Features
 
 - **Comprehensive Integration**: Effortlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for a smooth data and strategy transition.
