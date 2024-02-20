@@ -4,9 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Welcome to AlgoBridge</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
+        body {
+            font-family: 'Open Sans', sans-serif;
+        }
+    </style>
 </head>
-<body>
-    <h1>Welcome to AlgoBridge</h1>
+<body class="bg-gray-100 flex justify-center items-center h-screen">
+    <div class="text-center">
+        <h1 class="text-4xl text-gray-800 mb-8">Welcome to AlgoBridge</h1>
+        <!-- Login Button -->
+        <a href="/login" class="inline-block px-6 py-3 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
+            Login
+        </a>
+    </div>
 </body>
 </html>
-
