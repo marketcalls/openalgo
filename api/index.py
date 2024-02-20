@@ -114,8 +114,7 @@ def logout():
 
 @app.route('/placeorder', methods=['POST'])
 def place_order():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
+    
     try:
         # Extracting form data or JSON data from the POST request
         data = request.json if request.is_json else request.form
