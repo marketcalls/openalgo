@@ -120,7 +120,7 @@ def logout():
     session.pop('FEED_TOKEN', None)
     session.pop('user', None)  # Remove 'user' from session if exists
     session.pop('logged_in', None)
-    app.config['AUTH_TOKEN'] = ''
+    app.config['AUTH_TOKEN'] = None
 
     # Redirect to login page after logout
     return redirect(url_for('login'))
@@ -223,6 +223,28 @@ def search():
         return render_template('search.html', results=results)
 
 
+@app.route('/auth', methods=['GET'])
+def auth():
+    # Check if the user is logged in first
+    if not session.get('logged_in'):
+        return jsonify({
+            'status': 'error',
+            'message': 'User not logged in'
+        }), 401
+
+    # Fetch the AUTH_TOKEN from the session or app config
+    auth_token = session.get('AUTH_TOKEN') or app.config.get('AUTH_TOKEN')
+    
+    if auth_token:
+        return jsonify({
+            'status': 'success',
+            'AUTH_TOKEN': auth_token
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': 'AUTH_TOKEN not found'
+        }), 404
 
 
 if __name__ == '__main__':
