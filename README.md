@@ -10,19 +10,19 @@ AngelOne
 
 ## How to Deploy in Vercel
 
-- 1)Sign up with a Github Account
+1)Sign up with a Github Account
 
-- 2)Vercel Signup and Connect Github Account
+2)Vercel Signup and Connect Github Account
 
-- 3)Click on the Deploy Button (This will deploy in Vercel) -> Give a name to the app e.g myalgoapp
+3)Click on the Deploy Button (This will deploy in Vercel) -> Give a name to the app e.g myalgoapp
 
-- 4)myalgoapp -> Settings -> Environmental variables -> upload the .env format
+4)myalgoapp -> Settings -> Environmental variables -> upload the .env format
 
-- 5)Storage -> New Database -> Database Name
+5)Storage -> New Database -> Database Name
 
-- 6)Connect the Database to the Application
+6)Connect the Database to the Application
 
-- 7)Run the Table Query
+7)Run the Table Query
 
 <code>CREATE TABLE auth (
     id SERIAL PRIMARY KEY,
