@@ -137,7 +137,7 @@ def place_order():
             "variety": data.get('variety', 'NORMAL'),
             "tradingsymbol": data['tradingsymbol'],
             "symboltoken": data['symboltoken'],
-            "transactiontype": data['transactiontype'],
+            "transactiontype": data['transactiontype'].upper(),
             "exchange": data['exchange'],
             "ordertype": data.get('ordertype', 'MARKET'),
             "producttype": data.get('producttype', 'INTRADAY'),
