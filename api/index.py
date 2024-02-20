@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, redirect, render_template , session, url_for
+from flask import Flask, request, jsonify, redirect, render_template , session, url_for, send_from_directory
+import requests
 import os
 from dotenv import load_dotenv
 import http.client
@@ -181,6 +182,31 @@ def place_order():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
 
+
+
+# Define the route to download a file and save it locally
+@app.route('/download', methods=['GET'])
+def download_file():
+    # URL of the file to be downloaded
+    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
+    # Folder where the file will be saved
+    folder_path = 'files'
+    file_name = url.split('/')[-1]  # Extracts file name from URL
+    file_path = os.path.join(folder_path, file_name)
+
+    # Ensure the directory exists
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    # Attempt to download the file
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raises an HTTPError if the response status code is 4XX/5XX
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
+        return f"File successfully downloaded and saved to {file_path}"
+    except requests.exceptions.RequestException as e:
+        return f"Failed to download the file: {str(e)}"
 
 if __name__ == '__main__':
     app.run(debug=True)
