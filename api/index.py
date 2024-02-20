@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, request, session, url_for
+from flask import Flask, request, jsonify, redirect, render_template , session, url_for
 import os
 from dotenv import load_dotenv
 import http.client
