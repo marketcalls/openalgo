@@ -12,10 +12,6 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# Fetch data and prepare DataFrame
-url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-data = requests.get(url).json()
-token_df = pd.DataFrame.from_dict(data)
 
 load_dotenv()
 
@@ -24,6 +20,10 @@ load_dotenv()
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')
 #app.config['AUTH_TOKEN'] = ''
+
+# Initialize the placeholder as None
+token_df = None
+
 
 @app.route('/')
 def home():
@@ -190,6 +190,22 @@ def place_order():
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
+    
+@app.route('/download')
+def download_data():
+    global token_df
+    # Fetch data from the URL
+    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
+    data = requests.get(url).json()
+    
+    # Convert the JSON data to a pandas DataFrame
+    token_df = pd.DataFrame.from_dict(data)
+    
+    # Here, you might want to do something with the DataFrame, like saving it to a file
+    # For demonstration, we'll skip that step
+    
+    # Return a success message
+    return 'Master Contract Downloaded Successfully'
 
 # Search page
 @app.route('/token')
