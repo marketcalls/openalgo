@@ -229,7 +229,21 @@ def search():
         # Change to render_template and pass results to the template
         return render_template('search.html', results=results)
 
-
+@app.route('/auth', methods=['GET'])
+def auth():
+    # Retrieve AUTH_TOKEN from the app config
+    auth_token = app.config.get('AUTH_TOKEN')
+    
+    if auth_token:
+        return jsonify({
+            'status': 'success',
+            'AUTH_TOKEN': auth_token
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': 'AUTH_TOKEN not found'
+        }), 404
 
 
 if __name__ == '__main__':
