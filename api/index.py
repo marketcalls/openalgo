@@ -235,7 +235,7 @@ def auth():
     # Retrieve AUTH_TOKEN from the app config
     global AUTH_TOKEN
     
-    if auth_token:
+    if AUTH_TOKEN:
         return jsonify({
             'status': 'success',
             'AUTH_TOKEN': AUTH_TOKEN
