@@ -130,10 +130,12 @@ def place_order():
     
     try:
         # Extracting form data or JSON data from the POST request
-        data = request.json if request.is_json else request.form
+        data = request.json
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
         AUTH_TOKEN = app.config['AUTH_TOKEN']
+        print(f'Auth Token : {AUTH_TOKEN}')
+        print(f'API Request : {data}')
         
         
         # Prepare headers with the AUTH_TOKEN and other details
