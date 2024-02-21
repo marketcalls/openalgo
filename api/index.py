@@ -320,6 +320,78 @@ def orderbook():
     # Pass the data to the orderbook.html template
     return render_template('orderbook.html', order_data=order_data['data'])
 
+@app.route('/tradebook')
+def tradebook():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    login_username = os.getenv('LOGIN_USERNAME')
+
+    AUTH_TOKEN = get_auth_token(login_username)
+    if AUTH_TOKEN is not None:
+        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+    else:
+        print(f"No record found for {login_username}.")
+        
+
+
+    api_key = os.getenv('BROKER_API_KEY')
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    headers = {
+      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-UserType': 'USER',
+      'X-SourceID': 'WEB',
+      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
+      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+      'X-MACAddress': 'MAC_ADDRESS',
+      'X-PrivateKey': api_key
+    }
+    conn.request("GET", "/rest/secure/angelbroking/order/v1/getTradeBook", '', headers)
+
+    res = conn.getresponse()
+    data = res.read()
+    tradebook_data = json.loads(data.decode("utf-8"))
+
+    return render_template('tradebook.html', tradebook_data=tradebook_data['data'])
+
+
+@app.route('/positions')
+def positions():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    login_username = os.getenv('LOGIN_USERNAME')
+
+    AUTH_TOKEN = get_auth_token(login_username)
+    if AUTH_TOKEN is not None:
+        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+    else:
+        print(f"No record found for {login_username}.")
+        
+
+
+    api_key = os.getenv('BROKER_API_KEY')
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    headers = {
+      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-UserType': 'USER',
+      'X-SourceID': 'WEB',
+      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
+      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+      'X-MACAddress': 'MAC_ADDRESS',
+      'X-PrivateKey': api_key
+    }
+    conn.request("GET", "/rest/secure/angelbroking/order/v1/getPosition", '', headers)
+
+    res = conn.getresponse()
+    data = res.read()
+    positions_data = json.loads(data.decode("utf-8"))
+
+    return render_template('positions.html', positions_data=positions_data['data'])
+
+
 
 
 if __name__ == '__main__':

@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="overflow-x-auto relative shadow-md sm:rounded-lg">
+    <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="py-3 px-6">Trading Symbol</th>
+                <th scope="col" class="py-3 px-6">Exchange</th>
+                <th scope="col" class="py-3 px-6">Product Type</th>
+                <th scope="col" class="py-3 px-6">Transaction Type</th>
+                <th scope="col" class="py-3 px-6">Fill Size</th>
+                <th scope="col" class="py-3 px-6">Fill Price</th>
+                <th scope="col" class="py-3 px-6">Trade Value</th>
+                <th scope="col" class="py-3 px-6">Order ID</th>
+                <th scope="col" class="py-3 px-6">Fill Time</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for trade in tradebook_data %}
+            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                <td class="py-4 px-6">{{ trade['tradingsymbol']  }}</td>
+                <td class="py-4 px-6">{{ trade['exchange'] }}</td>
+                <td class="py-4 px-6">{{ trade['producttype'] }}</td>
+                <td class="py-4 px-6">{{ trade['transactiontype'] }}</td>
+                <td class="py-4 px-6">{{ trade['fillsize'] }}</td>
+                <td class="py-4 px-6">{{ trade['fillprice'] }}</td>
+                <td class="py-4 px-6">{{ trade['tradevalue'] }}</td>
+                <td class="py-4 px-6">{{ trade['orderid'] }}</td>
+                <td class="py-4 px-6">{{ trade['filltime'] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

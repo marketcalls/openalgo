@@ -17,9 +17,9 @@
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Transaction Type</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Trigger Price</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Order Type</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Product Type</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Trigger Price</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
                         <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     </tr>
@@ -38,9 +38,10 @@
                         </td>
                         <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['quantity'] }}</td>
                         <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['price'] }}</td>
+                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['triggerprice'] }}</td>
                         <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['ordertype'] }}</td>
                         <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['producttype'] }}</td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['triggerprice'] }}</td>
+                        
                         <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">
                             {{ order['orderid'] }}
                         </td>
@@ -51,6 +52,7 @@
                             {% else %}text-blue-500{% endif %}">
                             {{ order['status'] }}
                         </td>
+                        
 
                     </tr>
                     {% endfor %}
