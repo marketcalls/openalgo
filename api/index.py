@@ -284,6 +284,8 @@ def place_order():
     
 @app.route('/download')
 def download_data():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     global token_df
     # Fetch data from the URL
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
@@ -300,11 +302,15 @@ def download_data():
 # Search page
 @app.route('/token')
 def token():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     return render_template('token.html')
 
 
 @app.route('/search')
 def search():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     symbol = request.args.get('symbol')
     results = token_df[token_df['symbol'].str.contains(symbol, case=False)]
     if results.empty:
@@ -316,7 +322,8 @@ def search():
 
 @app.route('/orderbook')
 def orderbook():
-
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     login_username = os.getenv('LOGIN_USERNAME')
 
     try:
