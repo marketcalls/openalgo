@@ -126,7 +126,7 @@ def login():
                     cursor.execute(upsert_sql, values)
                     inserted_id = cursor.fetchone()[0]
                     conn.commit()
-                    print(f"Upserted record with ID: {inserted_id}")
+                    print(f"Database Upserted record with ID: {inserted_id}")
 
                 except (Exception, psycopg2.DatabaseError) as error:
                     print("Error while working with PostgreSQL", error)
@@ -169,16 +169,50 @@ def dashboard():
         
 @app.route('/logout')
 def logout():
-    # Remove tokens and user information from session
-    session.pop('refreshToken', None)
-    session.pop('AUTH_TOKEN', None)
-    session.pop('FEED_TOKEN', None)
-    session.pop('user', None)  # Remove 'user' from session if exists
-    session.pop('logged_in', None)
-    
+        username = os.getenv('LOGIN_USERNAME')
+        
+        #writing to database      
 
-    # Redirect to login page after logout
-    return redirect(url_for('login'))
+        try:
+            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
+                                    host=os.getenv('POSTGRES_HOST'),
+                                    user=os.getenv('POSTGRES_USER'),
+                                    password=os.getenv('POSTGRES_PASSWORD'),
+                                    port="5432",
+                                    sslmode='require')
+            cursor = conn.cursor()
+
+            # UPSERT statement (INSERT ... ON CONFLICT DO UPDATE)
+            upsert_sql = """
+            INSERT INTO auth (name, auth) VALUES (%s, %s)
+            ON CONFLICT (name) DO UPDATE
+            SET auth = EXCLUDED.auth
+            RETURNING id;
+            """
+            values = (username, "")
+            cursor.execute(upsert_sql, values)
+            inserted_id = cursor.fetchone()[0]
+            conn.commit()
+            print(f"Upserted record with ID: {inserted_id}")
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error while working with PostgreSQL", error)
+            if conn:
+                conn.rollback()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+        # Remove tokens and user information from session
+        session.pop('refreshToken', None)
+        session.pop('AUTH_TOKEN', None)
+        session.pop('FEED_TOKEN', None)
+        session.pop('user', None)  # Remove 'user' from session if exists
+        session.pop('logged_in', None)
+    
+        # Redirect to login page after logout
+        return redirect(url_for('login'))
 
 @app.route('/placeorder', methods=['POST'])
 def place_order():
