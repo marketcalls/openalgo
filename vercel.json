@@ -4,7 +4,7 @@
       "includeFiles": "database/**"
     }
   },
-  "routes": [
-    { "src": "/(.*)", "destination": "/api/index.py" }
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.py" }
   ]
 }
