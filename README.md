@@ -1,6 +1,6 @@
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/marketcalls/algobridge)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/marketcalls/openalgo)
 
-# AlgoBridge: Simple Algotrading Interface
+# OpenAlgo: Simple Algotrading Interface
 
 AlgoBridge is a Flask-based python application designed to provide a simple  interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
 
@@ -96,4 +96,4 @@ For support, feature requests, or to contribute further, please contact us via G
 Embrace the future of trading with AlgoBridge, your partner in maximizing algotrading performance.
 
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/marketcalls/algobridge)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/marketcalls/openalgo)
