@@ -213,7 +213,7 @@ def logout():
             session.pop('logged_in', None)
     
             # Redirect to login page after logout
-            return redirect(url_for('login'))
+        return redirect(url_for('login'))
 
 @app.route('/placeorder', methods=['POST'])
 def place_order():
