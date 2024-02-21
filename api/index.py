@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 # Now you can do a direct import
-from database.auth_db import upsert_auth, get_auth_token
+from database.auth_db import upsert_auth, get_auth_token, ensure_auth_table_exists
 
 
 
@@ -111,6 +111,13 @@ def login():
                 refreshToken = data_dict['data']['refreshToken']
                 AUTH_TOKEN = data_dict['data']['jwtToken']
                 FEED_TOKEN = data_dict['data']['feedToken']
+
+                #check for existence of the table
+                if not ensure_auth_table_exists():
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'Failed to ensure auth table exists'
+                    }), 500
 
                 #writing to database
                 

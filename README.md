@@ -22,15 +22,7 @@ AngelOne
 
 6)Connect the Database to the Application
 
-7)Run the Table Query
-
-<code>CREATE TABLE auth (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) UNIQUE,
-    auth VARCHAR(1000)
-);</code>
-
-8.Now you are ready to connect with your favorite trading platform for end to end Algotrading platform for fully automated trading.
+7)Now you are ready to connect with your favorite trading platform for end to end Algotrading platform for fully automated trading.
 
 ## Features
 

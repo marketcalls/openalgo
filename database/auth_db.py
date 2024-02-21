@@ -57,3 +57,40 @@ def get_auth_token(name):
     finally:
         cursor.close()
         conn.close()
+
+
+def ensure_auth_table_exists():
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM 
+                    information_schema.tables 
+                WHERE 
+                    table_schema = 'public' AND 
+                    table_name = 'auth'
+            );
+        """)
+        exists = cursor.fetchone()[0]
+        if not exists:
+            cursor.execute("""
+                CREATE TABLE auth (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) UNIQUE,
+                    auth VARCHAR(1000)
+                );
+            """)
+            conn.commit()
+            print("Auth table created successfully.")
+        return True
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error ensuring auth table exists:", error)
+        conn.rollback()
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
