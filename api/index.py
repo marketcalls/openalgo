@@ -175,40 +175,45 @@ def dashboard():
     data = res.read()
     margin_data = json.loads(data.decode("utf-8"))
 
-    # Loop through margin_data['data'] and round the values
+    # Print the type and content of margin_data['data']
+    print(f"Type: {type(margin_data['data'])}")
+    print(f"Content: {margin_data['data']}")
+
+    # Assuming margin_data['data'] is a dictionary as it should be
     for key, value in margin_data['data'].items():
-        if value is not None:
+        if value is not None and isinstance(value, str):
             try:
-                # Attempt to convert the string to a float and round it
+                # Only try to convert strings that represent numbers
                 margin_data['data'][key] = "{:.2f}".format(float(value))
             except ValueError:
                 # If there is a ValueError, it means the value can't be converted to a float
-                # and we should leave it as it is (it's likely a non-numeric string)
-                pass   
-   
+                pass
+
+
     return render_template('dashboard.html', margin_data=margin_data['data'])
 
         
 @app.route('/logout')
 def logout():
-        username = os.getenv('LOGIN_USERNAME')
-        
-        #writing to database      
-        inserted_id = upsert_auth(username, "")
-        if inserted_id is not None:
-            print(f"Database Upserted record with ID: {inserted_id}")
-        else:
-            print("Failed to upsert auth token")
-        
-        # Remove tokens and user information from session
-        session.pop('refreshToken', None)
-        session.pop('AUTH_TOKEN', None)
-        session.pop('FEED_TOKEN', None)
-        session.pop('user', None)  # Remove 'user' from session if exists
-        session.pop('logged_in', None)
+        if session.get('logged_in'):
+            username = os.getenv('LOGIN_USERNAME')
+            
+            #writing to database      
+            inserted_id = upsert_auth(username, "")
+            if inserted_id is not None:
+                print(f"Database Upserted record with ID: {inserted_id}")
+            else:
+                print("Failed to upsert auth token")
+            
+            # Remove tokens and user information from session
+            session.pop('refreshToken', None)
+            session.pop('AUTH_TOKEN', None)
+            session.pop('FEED_TOKEN', None)
+            session.pop('user', None)  # Remove 'user' from session if exists
+            session.pop('logged_in', None)
     
-        # Redirect to login page after logout
-        return redirect(url_for('login'))
+            # Redirect to login page after logout
+            return redirect(url_for('login'))
 
 @app.route('/placeorder', methods=['POST'])
 def place_order():
