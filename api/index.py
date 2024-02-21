@@ -11,6 +11,14 @@ import pytz
 import pandas as pd
 from datetime import datetime, timedelta
 import psycopg2
+
+import sys
+from pathlib import Path
+
+# Add the parent directory to sys.path to find the database module
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+# Now you can do a direct import
 from database.auth_db import upsert_auth, get_auth_token
 
 
