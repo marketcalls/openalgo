@@ -6,59 +6,46 @@
 {% endblock %}
 
 {% block content %}
-<div class="py-8">
-    <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
-        <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg">
-            <table class="min-w-full table-auto">
-                <thead class="bg-gray-100">
-                    <tr>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Trading Symbol</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Exchange</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Transaction Type</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Price</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Trigger Price</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Order Type</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Product Type</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
-                        <th class="px-6 py-3 border-b border-gray-200 bg-gray-50 text-left text-xs leading-4 font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white">
-                    {% for order in order_data %}
-                    <tr>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">
-                            {{ order['tradingsymbol'] }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">
-                            {{ order['exchange'] }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200 {{ 'text-green-500' if order['transactiontype'] == 'BUY' else 'text-red-500' }}">
-                            {{ order['transactiontype'] }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['quantity'] }}</td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['price'] }}</td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['triggerprice'] }}</td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['ordertype'] }}</td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">{{ order['producttype'] }}</td>
-                        
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200">
-                            {{ order['orderid'] }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-no-wrap border-b border-gray-200 
-                            {% if order['status'] == 'complete' %}text-green-500
-                            {% elif order['status'] == 'rejected' %}text-red-500
-                            {% elif order['status'] == 'open' %}text-orange-500
-                            {% else %}text-blue-500{% endif %}">
-                            {{ order['status'] }}
-                        </td>
-                        
-
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+<div class="overflow-x-auto relative shadow-md sm:rounded-lg">
+    <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="py-3 px-6">Trading Symbol</th>
+                <th scope="col" class="py-3 px-6">Exchange</th>
+                <th scope="col" class="py-3 px-6">Transaction Type</th>
+                <th scope="col" class="py-3 px-6">Quantity</th>
+                <th scope="col" class="py-3 px-6">Price</th>
+                <th scope="col" class="py-3 px-6">Trigger Price</th>
+                <th scope="col" class="py-3 px-6">Order Type</th>
+                <th scope="col" class="py-3 px-6">Product Type</th>
+                <th scope="col" class="py-3 px-6">Order ID</th>
+                <th scope="col" class="py-3 px-6">Status</th>
+                <th scope="col" class="py-3 px-6">Time</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in order_data %}
+            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                <td class="py-4 px-6">{{ order.tradingsymbol }}</td>
+                <td class="py-4 px-6">{{ order.exchange }}</td>
+                <td class="py-4 px-6 {{ 'text-green-500' if order.transactiontype == 'BUY' else 'text-red-500' }}">{{ order.transactiontype }}</td>
+                <td class="py-4 px-6">{{ order.quantity }}</td>
+                <td class="py-4 px-6">{{ order.price }}</td>
+                <td class="py-4 px-6">{{ order.triggerprice }}</td>
+                <td class="py-4 px-6">{{ order.ordertype }}</td>
+                <td class="py-4 px-6">{{ order.producttype }}</td>
+                <td class="py-4 px-6">{{ order.orderid }}</td>
+                <td class="py-4 px-6 
+                    {% if order.status == 'complete' %}text-green-500
+                    {% elif order.status == 'rejected' %}text-red-500
+                    {% elif order.status == 'open' %}text-orange-500
+                    {% else %}text-blue-500{% endif %}">
+                    {{ order.status }}
+                </td>
+                <td class="py-4 px-6">{{ order.updatetime }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% endblock %}

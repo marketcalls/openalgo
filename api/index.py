@@ -246,10 +246,13 @@ def place_order():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
     
-@app.route('/download')
-def download_data():
+
+# Search page
+@app.route('/token')
+def token():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
+    
     global token_df
     # Fetch data from the URL
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
@@ -257,17 +260,7 @@ def download_data():
     
     # Convert the JSON data to a pandas DataFrame
     token_df = pd.DataFrame.from_dict(data)
-    
-    # Save the DataFrame to a file or do other processing if needed
-    
-    # Render the download.html template
-    return render_template('download.html')
 
-# Search page
-@app.route('/token')
-def token():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
     return render_template('token.html')
 
 
@@ -391,7 +384,40 @@ def positions():
 
     return render_template('positions.html', positions_data=positions_data['data'])
 
+@app.route('/holdings')
+def holdings():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    login_username = os.getenv('LOGIN_USERNAME')
 
+    AUTH_TOKEN = get_auth_token(login_username)
+    if AUTH_TOKEN is not None:
+        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+    else:
+        print(f"No record found for {login_username}.")
+        
+
+
+    api_key = os.getenv('BROKER_API_KEY')
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    headers = {
+      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-UserType': 'USER',
+      'X-SourceID': 'WEB',
+      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
+      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+      'X-MACAddress': 'MAC_ADDRESS',
+      'X-PrivateKey': api_key
+    }
+    conn.request("GET", "/rest/secure/angelbroking/portfolio/v1/getAllHolding", '', headers)
+
+    res = conn.getresponse()
+    data = res.read()
+    holdings_data = json.loads(data.decode("utf-8"))
+
+    return render_template('holdings.html', holdings_data=holdings_data['data'])
 
 
 if __name__ == '__main__':
