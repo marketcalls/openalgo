@@ -9,15 +9,23 @@ import json
 import time
 import pytz
 import pandas as pd
-from datetime import timedelta
+from datetime import datetime, timedelta
 import psycopg2
 
 
 
 app = Flask(__name__)
 
-# Set Session Timeout
-#app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
+def get_session_expiry_time():
+    now_utc = datetime.now(pytz.timezone('UTC'))
+    now_ist = now_utc.astimezone(pytz.timezone('Asia/Kolkata'))
+    print(now_ist)
+    target_time_ist = now_ist.replace(hour=3, minute=00, second=0, microsecond=0)
+    if now_ist > target_time_ist:
+        target_time_ist += timedelta(days=1)
+    remaining_time = target_time_ist - now_ist
+    return remaining_time
+
 
 load_dotenv()
 
@@ -53,6 +61,11 @@ def login():
         if username == login_username and password == login_password:
             try:
                 session['user'] = login_username 
+
+                # Dynamically set session lifetime to time until 03:00 AM IST
+                app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
+                session.permanent = True  # Make the session permanent to use the custom lifetime
+
                 
                 # New login method
                 api_key = os.getenv('BROKER_API_KEY')
@@ -299,6 +312,68 @@ def search():
     else:
         # Change to render_template and pass results to the template
         return render_template('search.html', results=results)
+    
+
+@app.route('/orderbook')
+def orderbook():
+
+    login_username = os.getenv('LOGIN_USERNAME')
+
+    try:
+            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
+                                            host=os.getenv('POSTGRES_HOST'),
+                                            user=os.getenv('POSTGRES_USER'),
+                                            password=os.getenv('POSTGRES_PASSWORD'),
+                                            port="5432",
+                                            sslmode='require')
+
+            # Create a new cursor
+            cursor = conn.cursor()
+
+            # SQL to fetch the auth value
+            select_sql = "SELECT auth FROM auth WHERE name = %s;"
+            cursor.execute(select_sql, (login_username,))
+
+            # Fetch the result
+            result = cursor.fetchone()
+            if result:
+                AUTH_TOKEN = result[0]
+                print(f"The auth value for rajandran is: {AUTH_TOKEN}")
+            else:
+                print(f"No record found for {login_username}.")
+
+    except (Exception, psycopg2.DatabaseError) as error:
+            print("Error while connecting to PostgreSQL", error)
+    finally:
+            # Close the cursor and the connection
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+        
+
+
+    api_key = os.getenv('BROKER_API_KEY')
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+
+    headers = {
+      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-UserType': 'USER',
+      'X-SourceID': 'WEB',
+      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
+      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+      'X-MACAddress': 'MAC_ADDRESS',
+      'X-PrivateKey': api_key
+    }
+    conn.request("GET", "/rest/secure/angelbroking/order/v1/getOrderBook", '', headers)
+    res = conn.getresponse()
+    data = res.read()
+    order_data = json.loads(data.decode("utf-8"))
+
+    # Pass the data to the orderbook.html template
+    return render_template('orderbook.html', order_data=order_data['data'])
 
 
 
