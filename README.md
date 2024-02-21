@@ -2,7 +2,7 @@
 
 # OpenAlgo: Simple Algotrading Interface
 
-AlgoBridge is a Flask-based python application designed to provide a simple  interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
+OpenAlgo is a Flask-based python application designed to provide a simple  interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.
 
 ## Supported Broker
 
@@ -38,22 +38,22 @@ AngelOne
 - **User-Friendly Interface**: Navigate through a straightforward Flask-based application interface accessible to traders of all expertise levels.
 - **Real-Time Execution**: Implement your trading strategies in real-time, ensuring immediate action to capitalize on market opportunities.
 - **Customizable Strategies**: Adapt and tailor your trading strategies to fit your specific needs, with extensive options for customization and automation.
-- **Secure and Reliable**: Prioritizing security and reliability, AlgoBridge offers a dependable platform for your algotrading activities, safeguarding your data and trades.
+- **Secure and Reliable**: Prioritizing security and reliability, OpenAlgo offers a dependable platform for your algotrading activities, safeguarding your data and trades.
 
 ## Getting Started
 
-To get started with AlgoBridge, follow these steps:
+To get started with OpenAlgo, follow these steps:
 
 1. **Installation**
    - Ensure you have Python installed on your system.
-   - Clone the AlgoBridge repository.
+   - Clone the OpenAlgo repository.
    - Install the required dependencies using `pip install -r requirements.txt`.
 
 2. **Configuration**
    - Configure the environmental file as per .sample.env file. Rename .sample.env file to .env if required.
    - If deploying in Vercel then upload the .env file to the enviromental section which is required for login to the app and authentication to placeorders.
 
-3. **Running AlgoBridge**
+3. **Running OpenAlgo**
    - Launch the Flask application by running `python app.py` in your terminal.
    - Access the AlgoBridge interface via your web browser at the provided local address.
 
@@ -79,21 +79,21 @@ To get started with AlgoBridge, follow these steps:
 
 ## Documentation
 
-For detailed documentation on AlgoBridge, including setup guides, API references, and usage examples, refer to the `docs` folder within the repository.
+For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to the `docs` folder within the repository.
 
 ## Contributing
 
-We welcome contributions to AlgoBridge! If you're interested in improving the application or adding new features, please feel free to fork the repository, make your changes, and submit a pull request.
+We welcome contributions to OpenAlgo! If you're interested in improving the application or adding new features, please feel free to fork the repository, make your changes, and submit a pull request.
 
 ## License
 
-AlgoBridge is released under the MIT License. See the LICENSE file for more details.
+OpenAlgo is released under the MIT License. See the LICENSE file for more details.
 
 ## Contact
 
 For support, feature requests, or to contribute further, please contact us via GitHub issues.
 
-Embrace the future of trading with AlgoBridge, your partner in maximizing algotrading performance.
+Embrace the future of trading with OpenAlgo, your partner in maximizing algotrading performance.
 
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/marketcalls/openalgo)
