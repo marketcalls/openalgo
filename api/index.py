@@ -11,6 +11,7 @@ import pytz
 import pandas as pd
 from datetime import datetime, timedelta
 import psycopg2
+from database.auth_db import upsert_auth, get_auth_token
 
 
 
@@ -105,38 +106,11 @@ def login():
 
                 #writing to database
                 
-
-                try:
-                    conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
-                                            host=os.getenv('POSTGRES_HOST'),
-                                            user=os.getenv('POSTGRES_USER'),
-                                            password=os.getenv('POSTGRES_PASSWORD'),
-                                            port="5432",
-                                            sslmode='require')
-                    cursor = conn.cursor()
-
-                    # UPSERT statement (INSERT ... ON CONFLICT DO UPDATE)
-                    upsert_sql = """
-                    INSERT INTO auth (name, auth) VALUES (%s, %s)
-                    ON CONFLICT (name) DO UPDATE
-                    SET auth = EXCLUDED.auth
-                    RETURNING id;
-                    """
-                    values = (username, AUTH_TOKEN)
-                    cursor.execute(upsert_sql, values)
-                    inserted_id = cursor.fetchone()[0]
-                    conn.commit()
+                inserted_id = upsert_auth(login_username, AUTH_TOKEN)
+                if inserted_id is not None:
                     print(f"Database Upserted record with ID: {inserted_id}")
-
-                except (Exception, psycopg2.DatabaseError) as error:
-                    print("Error while working with PostgreSQL", error)
-                    if conn:
-                        conn.rollback()
-                finally:
-                    if cursor:
-                        cursor.close()
-                    if conn:
-                        conn.close()
+                else:
+                    print("Failed to upsert auth token")
 
                 # Store tokens in session for later use
                 session['refreshToken'] = refreshToken
@@ -172,38 +146,12 @@ def logout():
         username = os.getenv('LOGIN_USERNAME')
         
         #writing to database      
-
-        try:
-            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
-                                    host=os.getenv('POSTGRES_HOST'),
-                                    user=os.getenv('POSTGRES_USER'),
-                                    password=os.getenv('POSTGRES_PASSWORD'),
-                                    port="5432",
-                                    sslmode='require')
-            cursor = conn.cursor()
-
-            # UPSERT statement (INSERT ... ON CONFLICT DO UPDATE)
-            upsert_sql = """
-            INSERT INTO auth (name, auth) VALUES (%s, %s)
-            ON CONFLICT (name) DO UPDATE
-            SET auth = EXCLUDED.auth
-            RETURNING id;
-            """
-            values = (username, "")
-            cursor.execute(upsert_sql, values)
-            inserted_id = cursor.fetchone()[0]
-            conn.commit()
-            print(f"Upserted record with ID: {inserted_id}")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print("Error while working with PostgreSQL", error)
-            if conn:
-                conn.rollback()
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
+        inserted_id = upsert_auth(username, "")
+        if inserted_id is not None:
+            print(f"Database Upserted record with ID: {inserted_id}")
+        else:
+            print("Failed to upsert auth token")
+        
         # Remove tokens and user information from session
         session.pop('refreshToken', None)
         session.pop('AUTH_TOKEN', None)
@@ -223,37 +171,11 @@ def place_order():
 
         login_username = os.getenv('LOGIN_USERNAME')
 
-        try:
-            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
-                                            host=os.getenv('POSTGRES_HOST'),
-                                            user=os.getenv('POSTGRES_USER'),
-                                            password=os.getenv('POSTGRES_PASSWORD'),
-                                            port="5432",
-                                            sslmode='require')
-
-            # Create a new cursor
-            cursor = conn.cursor()
-
-            # SQL to fetch the auth value
-            select_sql = "SELECT auth FROM auth WHERE name = %s;"
-            cursor.execute(select_sql, (login_username,))
-
-            # Fetch the result
-            result = cursor.fetchone()
-            if result:
-                AUTH_TOKEN = result[0]
-                print(f"The auth value for rajandran is: {AUTH_TOKEN}")
-            else:
-                print(f"No record found for {login_username}.")
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print("Error while connecting to PostgreSQL", error)
-        finally:
-            # Close the cursor and the connection
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
+        AUTH_TOKEN = get_auth_token(login_username)
+        if AUTH_TOKEN is not None:
+            print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+        else:
+            print(f"No record found for {login_username}.")
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
         
@@ -360,37 +282,11 @@ def orderbook():
         return redirect(url_for('login'))
     login_username = os.getenv('LOGIN_USERNAME')
 
-    try:
-            conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
-                                            host=os.getenv('POSTGRES_HOST'),
-                                            user=os.getenv('POSTGRES_USER'),
-                                            password=os.getenv('POSTGRES_PASSWORD'),
-                                            port="5432",
-                                            sslmode='require')
-
-            # Create a new cursor
-            cursor = conn.cursor()
-
-            # SQL to fetch the auth value
-            select_sql = "SELECT auth FROM auth WHERE name = %s;"
-            cursor.execute(select_sql, (login_username,))
-
-            # Fetch the result
-            result = cursor.fetchone()
-            if result:
-                AUTH_TOKEN = result[0]
-                print(f"The auth value for rajandran is: {AUTH_TOKEN}")
-            else:
-                print(f"No record found for {login_username}.")
-
-    except (Exception, psycopg2.DatabaseError) as error:
-            print("Error while connecting to PostgreSQL", error)
-    finally:
-            # Close the cursor and the connection
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
+    AUTH_TOKEN = get_auth_token(login_username)
+    if AUTH_TOKEN is not None:
+        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+    else:
+        print(f"No record found for {login_username}.")
         
 
 
