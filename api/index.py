@@ -146,7 +146,36 @@ def login():
 def dashboard():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
-    return render_template('dashboard.html')
+    login_username = os.getenv('LOGIN_USERNAME')
+
+    AUTH_TOKEN = get_auth_token(login_username)
+    if AUTH_TOKEN is not None:
+        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
+    else:
+        print(f"No record found for {login_username}.")
+        
+
+
+    api_key = os.getenv('BROKER_API_KEY')
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    headers = {
+      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-UserType': 'USER',
+      'X-SourceID': 'WEB',
+      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
+      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+      'X-MACAddress': 'MAC_ADDRESS',
+      'X-PrivateKey': api_key
+    }
+    conn.request("GET", "/rest/secure/angelbroking//user/v1/getRMS", '', headers)
+
+    res = conn.getresponse()
+    data = res.read()
+    margin_data = json.loads(data.decode("utf-8"))
+
+    return render_template('dashboard.html', margin_data=margin_data['data'])
 
         
 @app.route('/logout')
