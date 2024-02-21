@@ -175,6 +175,17 @@ def dashboard():
     data = res.read()
     margin_data = json.loads(data.decode("utf-8"))
 
+    # Loop through margin_data['data'] and round the values
+    for key, value in margin_data['data'].items():
+        if value is not None:
+            try:
+                # Attempt to convert the string to a float and round it
+                margin_data['data'][key] = "{:.2f}".format(float(value))
+            except ValueError:
+                # If there is a ValueError, it means the value can't be converted to a float
+                # and we should leave it as it is (it's likely a non-numeric string)
+                pass   
+   
     return render_template('dashboard.html', margin_data=margin_data['data'])
 
         
