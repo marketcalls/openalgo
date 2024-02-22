@@ -308,7 +308,7 @@ def place_order():
                 }), 500
         else:
             # If 'data' is null or status is not 200, extract the message and return as error
-            message = response_data.get('message', 'Failed to place order')
+            message = response_data['data'].get('message', 'Failed to place order')
             return jsonify({
                 'status': 'error',
                 'message': message,
