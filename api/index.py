@@ -518,7 +518,7 @@ def holdings():
     else:
         holdings_data = holdings_data['data']
 
-    return render_template('holdings.html', holdings_data=holdings_data['data'])
+    return render_template('holdings.html', holdings_data=holdings_data)
 
 
 if __name__ == '__main__':
