@@ -337,7 +337,6 @@ def search():
     else:
         # Change to render_template and pass results to the template
         return render_template('search.html', results=results)
-    
 
 @app.route('/orderbook')
 def orderbook():
@@ -350,8 +349,6 @@ def orderbook():
         print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
     else:
         print(f"No record found for {login_username}.")
-        
-
 
     api_key = os.getenv('BROKER_API_KEY')
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
@@ -372,8 +369,19 @@ def orderbook():
     data = res.read()
     order_data = json.loads(data.decode("utf-8"))
 
-    # Pass the data to the orderbook.html template
-    return render_template('orderbook.html', order_data=order_data['data'])
+    # Check if 'data' is None
+    if order_data['data'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        order_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        order_data = order_data['data']
+
+    # Pass the data (or lack thereof) to the orderbook.html template
+    return render_template('orderbook.html', order_data=order_data)
+
 
 @app.route('/tradebook')
 def tradebook():
@@ -408,7 +416,18 @@ def tradebook():
     data = res.read()
     tradebook_data = json.loads(data.decode("utf-8"))
 
-    return render_template('tradebook.html', tradebook_data=tradebook_data['data'])
+    # Check if 'data' is None
+    if tradebook_data['data'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        tradebook_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        tradebook_data = tradebook_data['data']
+
+
+    return render_template('tradebook.html', tradebook_data=tradebook_data)
 
 
 @app.route('/positions')
@@ -444,7 +463,17 @@ def positions():
     data = res.read()
     positions_data = json.loads(data.decode("utf-8"))
 
-    return render_template('positions.html', positions_data=positions_data['data'])
+        # Check if 'data' is None
+    if positions_data['data'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        positions_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        positions_data = positions_data['data']
+
+    return render_template('positions.html', positions_data=positions_data)
 
 @app.route('/holdings')
 def holdings():
@@ -478,6 +507,16 @@ def holdings():
     res = conn.getresponse()
     data = res.read()
     holdings_data = json.loads(data.decode("utf-8"))
+
+            # Check if 'data' is None
+    if holdings_data['data'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        holdings_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        holdings_data = holdings_data['data']
 
     return render_template('holdings.html', holdings_data=holdings_data['data'])
 
