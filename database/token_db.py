@@ -1,5 +1,8 @@
 # database/token_db.py
 
+import os
+import psycopg2
+
 def get_db_connection():
     try:
         conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
