@@ -70,7 +70,7 @@ def copy_from_stringio(conn, df, table):
     finally:
         cursor.close()
 
-@app.route('/api/cron', methods=['GET'])
+@app.route('backup_cron', methods=['GET'])
 def cron_job():
     # Fetch and prepare your data
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
