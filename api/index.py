@@ -533,10 +533,7 @@ def holdings():
     return render_template('holdings.html', holdings_data=holdings_data)
 
 
-@app.route('/api/cron', methods=['GET'])
-def cron_job():
-    print('Cron job runs successfully')
-    return 'Cron job runs successfully', 200
+
 
 
 if __name__ == '__main__':
