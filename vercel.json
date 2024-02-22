@@ -2,6 +2,8 @@
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
   ],
+  "regions": ["bom1"],
+
   "crons": [
     {
       "path": "/api/cron",
