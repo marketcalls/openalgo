@@ -1,5 +1,12 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "35 10 * * *" //4.05p.m IST
+    }
   ]
 }
+
