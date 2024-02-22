@@ -291,18 +291,30 @@ def place_order():
         data = res.read()
         response_data = json.loads(data.decode("utf-8"))
         
-        # Check if the order was successfully placed and return the response
-        if res.status == 200:
-            return jsonify({
-                'status': 'success',
-                'data': response_data
-            })
+        # Check if the 'data' field is not null and the order was successfully placed
+        if res.status == 200 and response_data.get('data'):
+            order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+            if order_id:
+                return jsonify({
+                    'status': 'success',
+                    'orderid': order_id
+                })
+            else:
+                # In case 'orderid' is not in the 'data'
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Order placed but order ID not found in response',
+                    'details': response_data
+                }), 500
         else:
+            # If 'data' is null or status is not 200, extract the message and return as error
+            message = response_data.get('message', 'Failed to place order')
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to place order',
+                'message': message,
                 'details': response_data
-            }), res.status
+            }), res.status if res.status != 200 else 500  # Use the API's status code, unless it's 200 but 'data' is null
+    
     except KeyError as e:
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
     except Exception as e:
