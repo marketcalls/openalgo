@@ -72,6 +72,7 @@ def copy_from_stringio(conn, df, table):
 
 @app.route('backup_cron', methods=['GET'])
 def cron_job():
+    print("Cron Job Starting")
     # Fetch and prepare your data
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
     data = requests.get(url).json()
@@ -90,6 +91,7 @@ def cron_job():
         check_and_create_table(conn)
         copy_from_stringio(conn, token_df, 'symtoken')
         conn.close()
+    print("Cron Job Ended Successfully")
 
     return "Cron job ran successfully", 200
 

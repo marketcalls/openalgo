@@ -20,7 +20,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 # Now you can do a direct import
 from database.auth_db import upsert_auth, get_auth_token, ensure_auth_table_exists
-
+from database.token_db import get_token
 
 
 app = Flask(__name__)
@@ -266,11 +266,13 @@ def place_order():
             'X-PrivateKey': data['apikey']
         }
 
+        token = get_token(data['tradingsymbol'],data['exchange'])
+
         # Preparing the payload with data received from the request
         payload = json.dumps({
             "variety": data.get('variety', 'NORMAL'),
             "tradingsymbol": data['tradingsymbol'],
-            "symboltoken": data['symboltoken'],
+            "symboltoken": token,
             "transactiontype": data['transactiontype'].upper(),
             "exchange": data['exchange'],
             "ordertype": data.get('ordertype', 'MARKET'),
