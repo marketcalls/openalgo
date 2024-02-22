@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for,  render_template_string
+from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for,  render_template_string, send_from_directory
 import requests
 import os
 from dotenv import load_dotenv
@@ -51,6 +51,16 @@ token_df = None
 @app.route('/')
 def home():
     return render_template('index.html')
+
+@app.route('/docs/')
+def docs():
+    return send_from_directory('../docs', 'index.html')
+
+@app.route('/docs/<path:filename>')
+def docs_file(filename):
+    return send_from_directory('../docs', filename)
+
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
