@@ -60,7 +60,6 @@ To get started with OpenAlgo, follow these steps:
       {
       "apikey":"5dfs3f4",
       "tradingsymbol":"SBIN-EQ",
-      "symboltoken":"3045",
       "transactiontype":"BUY",
       "exchange":"NSE",
       "ordertype":"MARKET",
