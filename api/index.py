@@ -76,6 +76,9 @@ def login():
         password = request.form['password']
         login_username = os.getenv('LOGIN_USERNAME')
         login_password = os.getenv('LOGIN_PASSWORD')
+
+        print(f"username :{username}")
+        print(f"password :{password}")
         
         if username == login_username and password == login_password:
             try:
