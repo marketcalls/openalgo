@@ -36,7 +36,7 @@ def check_and_create_table(conn):
     """)
     exists = cursor.fetchone()[0]
     if not exists:
-        # Create table if it does not exist, with 'symbol' as a unique column
+        # Create table if it does not exist
         cursor.execute("""
             CREATE TABLE symtoken (
                 token INTEGER,
@@ -55,46 +55,66 @@ def check_and_create_table(conn):
     cursor.close()
 
 def copy_from_stringio(conn, df, table):
-    # Save the dataframe to an in-memory buffer
     buffer = StringIO()
     df.to_csv(buffer, index=False, header=False)
     buffer.seek(0)
     cursor = conn.cursor()
     try:
-        cursor.copy_from(buffer, table, sep=",", null="")  # Adjust the separator and null handling as needed
+        cursor.copy_from(buffer, table, sep=",", null="")
         conn.commit()
-        print("Data copied successfully")
+        print("Master Contract Added to the DB successfully")
     except (Exception, psycopg2.DatabaseError) as error:
         print("Error during copy from StringIO", error)
         conn.rollback()
     finally:
         cursor.close()
 
-@app.route('backup_cron', methods=['GET'])
+def delete_symtoken_table():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS symtoken;")
+        conn.commit()
+        print("Table 'symtoken' has been deleted.")
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error while deleting the 'symtoken' table:", error)
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def db_indexing(conn):
+    cursor = conn.cursor()
+    try:
+        cursor.execute("CREATE INDEX idx_symbol_exch_seg ON symtoken(symbol, exch_seg);")
+        conn.commit()
+        print("Index idx_symbol_exch_seg created successfully.")
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error creating index idx_symbol_exch_seg:", error)
+    finally:
+        cursor.close()
+
+@app.route('/api/cron', methods=['GET'])
 def cron_job():
     print("Cron Job Starting")
-    # Fetch and prepare your data
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
     data = requests.get(url).json()
     token_df = pd.DataFrame.from_dict(data)
-
-    # Ensure 'token' column is numeric, handling non-convertible values
     token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-
-    # Remove duplicate symbols
     token_df = token_df.drop_duplicates(subset='symbol', keep='first')
 
     conn = get_db_connection()
 
-    # Copy data to the database
     if conn is not None:
         check_and_create_table(conn)
         copy_from_stringio(conn, token_df, 'symtoken')
+        db_indexing(conn)  # Call db_indexing right after copying data into the table
         conn.close()
     print("Cron Job Ended Successfully")
 
     return "Cron job ran successfully", 200
 
-# The Flask application's entry point
 if __name__ == '__main__':
     app.run(debug=True)
