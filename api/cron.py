@@ -70,6 +70,33 @@ def copy_from_stringio(conn, df, table):
     finally:
         cursor.close()
 
+def delete_symtoken_table():
+    conn = None
+    try:
+        # Establish the database connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Execute the DROP TABLE command
+        cursor.execute("DROP TABLE IF EXISTS symtoken;")
+        
+        # Commit the changes
+        conn.commit()
+        print("Table 'symtoken' has been deleted.")
+        
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error while deleting the 'symtoken' table:", error)
+        
+    finally:
+        # Close the cursor and connection
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+
+
 @app.route('/api/cron', methods=['GET'])
 def cron_job():
     # Fetch and prepare your data
@@ -87,6 +114,8 @@ def cron_job():
 
     # Copy data to the database
     if conn is not None:
+        # Call the function to delete the table and recreate with fresh content
+        delete_symtoken_table()
         check_and_create_table(conn)
         copy_from_stringio(conn, token_df, 'symtoken')
         conn.close()
