@@ -384,9 +384,30 @@ def orderbook():
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
+        
+    
+        # Initialize counters
+    total_buy_orders = total_sell_orders = total_completed_orders = total_open_orders = total_rejected_orders = 0
+
+    if order_data:
+        for order in order_data:
+            if order['transactiontype'] == 'BUY':
+                total_buy_orders += 1
+            elif order['transactiontype'] == 'SELL':
+                total_sell_orders += 1
+            
+            if order['status'] == 'complete':
+                total_completed_orders += 1
+            elif order['status'] == 'open':
+                total_open_orders += 1
+            elif order['status'] == 'rejected':
+                total_rejected_orders += 1
+
 
     # Pass the data (or lack thereof) to the orderbook.html template
-    return render_template('orderbook.html', order_data=order_data)
+    return render_template('orderbook.html', order_data=order_data, total_buy_orders=total_buy_orders, 
+                           total_sell_orders=total_sell_orders, total_completed_orders=total_completed_orders,
+                             total_open_orders=total_open_orders, total_rejected_orders=total_rejected_orders)
 
 
 @app.route('/tradebook')

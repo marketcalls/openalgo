@@ -6,6 +6,38 @@
 {% endblock %}
 
 {% block content %}
+
+<div class="mb-8">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <!-- Total Buy Orders -->
+        <div class="border border-blue-300 bg-white p-4 rounded-lg shadow-sm">
+            <h2 class="text-sm font-semibold text-blue-800">Buy Orders</h2>
+            <p class="text-lg font-bold text-blue-800">{{ total_buy_orders }}</p>
+        </div>
+        <!-- Total Sell Orders -->
+        <div class="border border-red-300 bg-white p-4 rounded-lg shadow-sm">
+            <h2 class="text-sm font-semibold text-red-800">Sell Orders</h2>
+            <p class="text-lg font-bold text-red-800">{{ total_sell_orders }}</p>
+        </div>
+        <!-- Total Completed Orders -->
+        <div class="border border-green-300 bg-white p-4 rounded-lg shadow-sm">
+            <h2 class="text-sm font-semibold text-green-800">Completed Orders</h2>
+            <p class="text-lg font-bold text-green-800">{{ total_completed_orders }}</p>
+        </div>
+        <!-- Total Open Orders -->
+        <div class="border border-yellow-300 bg-white p-4 rounded-lg shadow-sm">
+            <h2 class="text-sm font-semibold text-yellow-800">Open Orders</h2>
+            <p class="text-lg font-bold text-yellow-800">{{ total_open_orders }}</p>
+        </div>
+        <!-- Total Rejected Orders -->
+        <div class="border border-pink-300 bg-white p-4 rounded-lg shadow-sm">
+            <h2 class="text-sm font-semibold text-pink-800">Rejected Orders</h2>
+            <p class="text-lg font-bold text-pink-800">{{ total_rejected_orders }}</p>
+        </div>
+    </div>
+</div>
+
+
 <div class="overflow-x-auto relative shadow-md sm:rounded-lg">
     <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
         <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
