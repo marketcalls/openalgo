@@ -78,7 +78,7 @@ After completing the setup, access the OpenAlgo platform by navigating to [http:
 
 You can now connect your Amibroker and Tradingview modules to transmit orders, and use the Flask application to monitor trades.
 
-###Place Order
+### Place Order
 
 
 Place Order with the /placeorder route with the following sample post message
