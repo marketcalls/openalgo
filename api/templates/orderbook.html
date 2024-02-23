@@ -28,7 +28,11 @@
             <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
                 <td class="py-4 px-6">{{ order.tradingsymbol }}</td>
                 <td class="py-4 px-6">{{ order.exchange }}</td>
-                <td class="py-4 px-6 {{ 'text-green-500' if order.transactiontype == 'BUY' else 'text-red-500' }}">{{ order.transactiontype }}</td>
+                <td class="py-4 px-6">
+                    <div class="{{ 'bg-green-100 text-green-800' if order.transactiontype == 'BUY' else 'bg-red-100 text-red-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
+                        {{ order.transactiontype }}
+                    </div>
+                </td>
                 <td class="py-4 px-6">{{ order.quantity }}</td>
                 <td class="py-4 px-6">{{ order.price }}</td>
                 <td class="py-4 px-6">{{ order.triggerprice }}</td>
