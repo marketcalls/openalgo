@@ -22,7 +22,11 @@
                 <td class="py-4 px-6">{{ trade['tradingsymbol']  }}</td>
                 <td class="py-4 px-6">{{ trade['exchange'] }}</td>
                 <td class="py-4 px-6">{{ trade['producttype'] }}</td>
-                <td class="py-4 px-6">{{ trade['transactiontype'] }}</td>
+                <td class="py-4 px-6">
+                    <div class="{{ 'bg-red-100 text-red-800' if trade['transactiontype'] == 'SELL' else 'bg-green-100 text-green-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
+                        {{ trade['transactiontype'] }}
+                    </div>
+                </td>
                 <td class="py-4 px-6">{{ trade['fillsize'] }}</td>
                 <td class="py-4 px-6">{{ trade['fillprice'] }}</td>
                 <td class="py-4 px-6">{{ trade['tradevalue'] }}</td>
