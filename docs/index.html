@@ -1,86 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenAlgo Documentation</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-    </style>
-        <!-- Favicon and touch icons for various devices -->
-        <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
-        <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
-        <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
-        <link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
-        <link rel="mask-icon" href="{{ url_for('static', filename='safari-pinned-tab.svg') }}" color="#5bbad5">
-        
-        <!-- Meta tags for color settings on mobile browsers -->
-        <meta name="msapplication-TileColor" content="#da532c">
-        <meta name="theme-color" content="#ffffff">
+    <title>OpenAlgo - Take Control of Your Algo Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
+<body class="bg-gray-100 font-sans leading-normal tracking-normal">
 
-<body class="bg-gray-50 text-gray-900">
-    <div class="container mx-auto px-4 py-8">
-        <h1 class="text-3xl font-bold mb-6">OpenAlgo: Simple Algotrading Interface</h1>
-        <p class="mb-4">OpenAlgo is a Flask-based python application designed to provide a simple interface for algotrading, connecting traders to major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. It is crafted to facilitate easy integration, automation, and execution of trading strategies, offering a user-friendly gateway to enhance trading performance through automation.</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Supported Broker</h2>
-        <p class="mb-4">AngelOne</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">How to Deploy in Vercel</h2>
-        <ol class="list-decimal ml-8 mb-4">
-            <li>Sign up with a Github Account</li>
-            <li>Vercel Signup and Connect Github Account</li>
-            <li>Click on the Deploy Button (This will deploy in Vercel) -> Give a name to the app e.g myalgoapp</li>
-            <li>myalgoapp -> Settings -> Environmental variables -> upload the .env format</li>
-            <li>Storage -> New Database -> Database Name</li>
-            <li>Connect the Database to the Application</li>
-            <li>Now you are ready to connect with your favorite trading platform for end to end Algotrading platform for fully automated trading.</li>
-        </ol>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Features</h2>
-        <ul class="list-disc ml-8 mb-4">
-            <li>Comprehensive Integration: Effortlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for a smooth data and strategy transition.</li>
-            <li>User-Friendly Interface: Navigate through a straightforward Flask-based application interface accessible to traders of all expertise levels.</li>
-            <li>Real-Time Execution: Implement your trading strategies in real-time, ensuring immediate action to capitalize on market opportunities.</li>
-            <li>Customizable Strategies: Adapt and tailor your trading strategies to fit your specific needs, with extensive options for customization and automation.</li>
-            <li>Secure and Reliable: Prioritizing security and reliability, OpenAlgo offers a dependable platform for your algotrading activities, safeguarding your data and trades.</li>
-        </ul>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Getting Started</h2>
-        <h3 class="text-xl font-semibold mt-6 mb-2">Installation</h3>
-        <ol class="list-decimal ml-8 mb-4">
-            <li>Ensure you have Python installed on your system.</li>
-            <li>Clone the OpenAlgo repository.</li>
-            <li>Install the required dependencies using <code>pip install -r requirements.txt</code>.</li>
-        </ol>
-        
-        <h3 class="text-xl font-semibold mt-6 mb-2">Configuration</h3>
-        <p class="mb-4">Configure the environmental file as per .sample.env file. Rename .sample.env file to .env if required.</p>
-        
-        <h3 class="text-xl font-semibold mt-6 mb-2">Running OpenAlgo</h3>
-        <p class="mb-4">Launch the Flask application by running <code>python app.py</code> in your terminal.</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Documentation</h2>
-        <p>For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to the docs folder within the repository.</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Contributing</h2>
-        <p>We welcome contributions to OpenAlgo! If you're interested in improving the application or adding new features, please feel free to fork the repository, make your changes, and submit a pull request.</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">License</h2>
-        <p>OpenAlgo is released under the MIT License. See the LICENSE file for more details.</p>
-        
-        <h2 class="text-2xl font-semibold mt-8 mb-4">Contact</h2>
-        <p>For support, feature requests, or to contribute further, please contact us via GitHub issues.</p>
-        
-        <p class="mt-8">Embrace the future of trading with OpenAlgo, your partner in maximizing algotrading performance.</p>
+    <nav class="bg-gray-900 p-4 mt-0 w-full">
+        <div class="container mx-auto flex items-center">
+            <div class="flex text-white font-extrabold">
+                <a class="flex text-white text-base no-underline hover:text-white hover:no-underline" href="#">
+                    OpenAlgo
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mx-auto my-5 p-5">
+        <div class="w-full p-6">
+            <h1 class="text-3xl text-gray-800 font-bold leading-none mb-3">OpenAlgo - Take Control of Your Algo Platform</h1>
+            <p class="text-gray-600 mb-8">
+                OpenAlgo is an open-source, Flask-based Python application designed to bridge the gap between traders and major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. With a focus on simplifying algotrading, OpenAlgo facilitates easy integration, automation, and execution of trading strategies, providing a user-friendly interface to enhance trading performance.
+            </p>
+
+            <h2 class="text-2xl text-gray-800 font-bold mb-2">Supported Broker</h2>
+            <ul class="list-disc pl-5 mb-5">
+                <li class="text-gray-700">AngelOne</li>
+            </ul>
+
+            <h2 class="text-2xl text-gray-800 font-bold mb-2">Features</h2>
+            <ul class="list-disc pl-5 mb-5">
+                <li class="text-gray-700">Comprehensive Integration: Seamlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for smooth data and strategy transition.</li>
+                <li class="text-gray-700">User-Friendly Interface: A straightforward Flask-based application interface accessible to traders of all levels of expertise.</li>
+                <li class="text-gray-700">Real-Time Execution: Implement your trading strategies in real time, ensuring immediate action to capitalize on market opportunities.</li>
+                <li class="text-gray-700">Customizable Strategies: Easily adapt and tailor your trading strategies to meet your specific needs, with extensive options for customization and automation.</li>
+                <li class="text-gray-700">Secure and Reliable: With a focus on security and reliability, OpenAlgo provides a dependable platform for your algotrading activities, safeguarding your data and trades.</li>
+            </ul>
+
+            <h2 class="text-2xl text-gray-800 font-bold mb-2">Getting Started with OpenAlgo</h2>
+            <p class="text-gray-600 mb-4">Before we begin, ensure you have the following:</p>
+            <ul class="list-disc pl-5 mb-5">
+                <li class="text-gray-700">Visual Studio Code (VS Code) installed on Windows.</li>
+                <li class="text-gray-700">Python version 3.10 or 3.11 installed.</li>
+                <li class="text-gray-700">Git for cloning the repository (Download from <a href="https://git-scm.com/downloads" class="text-blue-500">https://git-scm.com/downloads</a>).</li>
+                <li class="text-gray-700">PostgreSQL for Windows (current version 16).</li>
+            </ul>
+            
+            <p class="text-gray-600 mb-4">Follow these steps to set up your OpenAlgo environment:</p>
+            <ol class="list-decimal pl-5 mb-5">
+                <li class="text-gray-700">Install VS Code Extensions: Open VS Code, navigate to the Extensions section on the left tab, and install the Python, Pylance, and Jupyter extensions.</li>
+                <li class="text-gray-700">Clone the Repository: Open the VS Code Terminal and clone the OpenAlgo repository with the command: <code class="bg-gray-200 text-gray-800 p-1 rounded">git clone https://github.com/marketcalls/openalgo</code></li>
+                <li class="text-gray-700">Install Dependencies: Navigate to the directory where OpenAlgo is cloned and execute: <code class="bg-gray-200 text-gray-800 p-1 rounded">pip install -r requirements.txt</code> to install the necessary Python libraries.</li>
+                <li class="text-gray-700">Set Up PostgreSQL: Download and install PostgreSQL for Windows. Remember the password you set during installation; the default username is `postgres`. Use pgAdmin 4 to create a localhost server and a new database named `openalgo_db`.</li>
+                <li class="text-gray-700">Configure Environment Variables: Update the `.env` file located in `/openalgo/api/` with your specific configurations as shown in the provided template.</li>
+                <li class="text-gray-700">Run the Application: From the `/openalgo/api` directory, start the Flask application with the command: <code class="bg-gray-200 text-gray-800 p-1 rounded">python index.py</code></li>
+            </ol>
+
+            <p class="mb-4">After completing the setup, access the OpenAlgo platform by navigating to <a href="http://127.0.0.1:5000" class="text-blue-500">http://127.0.0.1:5000</a> in your web browser. Log in using the credentials you defined in the `.env` file.</p>
+
+            <p>Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.</p>
+        </div>
     </div>
-</body>
 
+</body>
 </html>
