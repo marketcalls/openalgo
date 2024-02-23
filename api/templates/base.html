@@ -28,23 +28,39 @@
     {% block head %}{% endblock %}
 </head>
 <body class="bg-gray-100">
-    <div class="fixed top-0 right-0 p-5 bg-white shadow-lg rounded-bl-md">
-        <nav class="flex space-x-4">
-            <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
-            <a href="/orderbook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Orderbook</a>
-            <a href="/tradebook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Tradebook</a>
-            <a href="/positions" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Positions</a>
-            <a href="/holdings" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Holdings</a>
-            <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
-            <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
-        </nav>
-    </div>
-    <div class="container mx-auto mt-20">
+    <!-- New Navbar Theme -->
+    <nav class="bg-gray-800">
+      <!-- Navbar content as provided -->
+      <div class="mx-auto max-w-7xl px-2 sm:px-6 lg:px-8">
+        <div class="relative flex h-16 items-center justify-between">
+          <!-- Mobile menu button and additional navbar components -->
+          <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
+          <a href="/orderbook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Orderbook</a>
+          <a href="/tradebook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Tradebook</a>
+          <a href="/positions" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Positions</a>
+          <a href="/holdings" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Holdings</a>
+          <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
+          <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
+      
+        </div>
+      </div>
+      <!-- Mobile menu -->
+      <div class="sm:hidden" id="mobile-menu">
+        <div class="space-y-1 px-2 pb-3 pt-2">
+          <!-- Mobile menu content -->
+          ...
+        </div>
+      </div>
+    </nav>
+
+    <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
+    <div class="container mx-auto mt-24">
         {% block content %}{% endblock %}
     </div>
-    <!-- Footer -->
-    <footer class="bg-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
-        <p>© Copyright 2024 | <a href="https://www.openalgo.in" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
+
+    <!-- Footer Area -->
+    <footer class="bg-gray-800 text-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
+        <p>© Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
     </footer>
 </body>
 </html>
