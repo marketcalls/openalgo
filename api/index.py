@@ -1,26 +1,29 @@
-from flask import Flask, request, Response, jsonify, redirect, render_template , session, url_for,  render_template_string, send_from_directory
+from flask import Flask, request, Response, jsonify, redirect, render_template 
+from flask import session, url_for,  render_template_string, send_from_directory, make_response
+
+import pandas as pd
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 import requests
 import os
-from dotenv import load_dotenv
 import http.client
 import mimetypes
 import pyotp
 import json
 import time
 import pytz
-import pandas as pd
-from datetime import datetime, timedelta
-import psycopg2
-
 import sys
+
 from pathlib import Path
 
 # Add the parent directory to sys.path to find the database module
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-# Now you can do a direct import
+# Now you can do a direct import the modules from other folder
+import psycopg2
 from database.auth_db import upsert_auth, get_auth_token, ensure_auth_table_exists
 from database.token_db import get_token
+from database.master_contract_db import master_contract_download, search_symbols
 
 
 app = Flask(__name__)
@@ -79,11 +82,15 @@ def login():
 
         print(f"username :{username}")
         print(f"password :{password}")
+
+        print(f"login_username :{login_username}")
+        print(f"login_password :{login_password}")
         
         
         if username == login_username and password == login_password:
             try:
                 session['user'] = login_username 
+                session['logged_in'] = True
 
                 # Dynamically set session lifetime to time until 03:00 AM IST
                 app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
@@ -126,6 +133,8 @@ def login():
                 AUTH_TOKEN = data_dict['data']['jwtToken']
                 FEED_TOKEN = data_dict['data']['feedToken']
 
+                session.modified = True
+
                 #check for existence of the table
                 if not ensure_auth_table_exists():
                     return jsonify({
@@ -141,17 +150,15 @@ def login():
                 else:
                     print("Failed to upsert auth token")
 
-                # Store tokens in session for later use
-                session['refreshToken'] = refreshToken
-                session['AUTH_TOKEN'] = AUTH_TOKEN
-                session['FEED_TOKEN'] = FEED_TOKEN
-                session['logged_in'] = True
-
-                app.config['AUTH_TOKEN'] = AUTH_TOKEN
                 
-                # Redirect or display tokens (for educational purposes, adjust as needed)
-                return redirect(url_for('dashboard'))
-                            
+                #Download Master Contract
+                master_contract_status = master_contract_download()
+                response = make_response(jsonify({
+                    'status': 'success',
+                    'master_contract_status': master_contract_status
+                }))
+                return response
+        
             except Exception as e:
                 return jsonify({
                     'status': 'error',
@@ -170,11 +177,7 @@ def dashboard():
     login_username = os.getenv('LOGIN_USERNAME')
 
     AUTH_TOKEN = get_auth_token(login_username)
-    if AUTH_TOKEN is not None:
-        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-    else:
-        print(f"No record found for {login_username}.")
-        
+         
 
 
     api_key = os.getenv('BROKER_API_KEY')
@@ -246,14 +249,11 @@ def place_order():
         login_username = os.getenv('LOGIN_USERNAME')
 
         AUTH_TOKEN = get_auth_token(login_username)
-        if AUTH_TOKEN is not None:
-            print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-        else:
-            print(f"No record found for {login_username}.")
+        
         
         # Retrieve AUTH_TOKEN and API_KEY from session or environment
         
-        print(f'Auth Token : {AUTH_TOKEN}')
+        #print(f'Auth Token : {AUTH_TOKEN}')
         print(f'API Request : {data}')
         
         
@@ -332,29 +332,27 @@ def place_order():
 def token():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
-    
-    global token_df
-    # Fetch data from the URL
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-    data = requests.get(url).json()
-    
-    # Convert the JSON data to a pandas DataFrame
-    token_df = pd.DataFrame.from_dict(data)
 
     return render_template('token.html')
+
 
 
 @app.route('/search')
 def search():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
+    
     symbol = request.args.get('symbol')
-    results = token_df[token_df['symbol'].str.contains(symbol, case=False)]
-    if results.empty:
+    results = search_symbols(symbol)
+    
+    if not results:
         return "No matching symbols found."
     else:
-        # Change to render_template and pass results to the template
-        return render_template('search.html', results=results)
+        # Convert results to a list of dicts to mimic the original DataFrame.to_dict('records') structure
+        columns = ['token', 'symbol', 'name', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'exch_seg', 'tick_size']
+        results_dicts = [dict(zip(columns, result)) for result in results]
+        return render_template('search.html', results=results_dicts)
+
 
 @app.route('/orderbook')
 def orderbook():
@@ -363,10 +361,7 @@ def orderbook():
     login_username = os.getenv('LOGIN_USERNAME')
 
     AUTH_TOKEN = get_auth_token(login_username)
-    if AUTH_TOKEN is not None:
-        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-    else:
-        print(f"No record found for {login_username}.")
+   
 
     api_key = os.getenv('BROKER_API_KEY')
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
@@ -408,10 +403,7 @@ def tradebook():
     login_username = os.getenv('LOGIN_USERNAME')
 
     AUTH_TOKEN = get_auth_token(login_username)
-    if AUTH_TOKEN is not None:
-        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-    else:
-        print(f"No record found for {login_username}.")
+    
         
 
 
@@ -455,11 +447,7 @@ def positions():
     login_username = os.getenv('LOGIN_USERNAME')
 
     AUTH_TOKEN = get_auth_token(login_username)
-    if AUTH_TOKEN is not None:
-        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-    else:
-        print(f"No record found for {login_username}.")
-        
+          
 
 
     api_key = os.getenv('BROKER_API_KEY')
@@ -500,13 +488,7 @@ def holdings():
     login_username = os.getenv('LOGIN_USERNAME')
 
     AUTH_TOKEN = get_auth_token(login_username)
-    if AUTH_TOKEN is not None:
-        print(f"The auth value for {login_username} is: {AUTH_TOKEN}")
-    else:
-        print(f"No record found for {login_username}.")
-        
-
-
+       
     api_key = os.getenv('BROKER_API_KEY')
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
     headers = {
@@ -541,6 +523,5 @@ def holdings():
 
 
 
-
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()

@@ -1,4 +1,5 @@
-from flask import Flask
+# database/master_contract_db.py
+
 import requests
 import pandas as pd
 import psycopg2
@@ -7,10 +8,6 @@ from io import StringIO
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
-app = Flask(__name__)
 
 def get_db_connection():
     try:
@@ -18,12 +15,14 @@ def get_db_connection():
                                 host=os.getenv('POSTGRES_HOST'),
                                 user=os.getenv('POSTGRES_USER'),
                                 password=os.getenv('POSTGRES_PASSWORD'),
-                                port="5432",
-                                sslmode='require')
+                                port=os.getenv('POSTGRES_PORT'),
+                                sslmode=os.getenv('POSTGRES_SSLMODE'))
         return conn
     except (Exception, psycopg2.DatabaseError) as error:
         print("Error while connecting to PostgreSQL", error)
         return None
+# Load environment variables from .env file
+load_dotenv()
 
 def check_and_create_table(conn):
     cursor = conn.cursor()
@@ -88,34 +87,58 @@ def delete_symtoken_table():
 def db_indexing(conn):
     cursor = conn.cursor()
     try:
+        cursor.execute("CREATE INDEX idx_symbol ON symtoken(symbol);")
         cursor.execute("CREATE INDEX idx_symbol_exch_seg ON symtoken(symbol, exch_seg);")
         conn.commit()
-        print("Index idx_symbol_exch_seg created successfully.")
+        print("Indexing idx_symbol_exch_seg created successfully.")
     except (Exception, psycopg2.DatabaseError) as error:
-        print("Error creating index idx_symbol_exch_seg:", error)
+        print("Error creating indexing:", error)
     finally:
         cursor.close()
 
-@app.route('/api/cron', methods=['GET'])
-def cron_job():
-    print("Cron Job Starting")
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-    data = requests.get(url).json()
-    token_df = pd.DataFrame.from_dict(data)
-    token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-    token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+def search_symbols(symbol):
+    conn = get_db_connection()  # Utilize the existing connection function
+    if conn is None:
+        print("Database connection error.")
+        return []
 
-    conn = get_db_connection()
-
-    if conn is not None:
-        delete_symtoken_table()
-        check_and_create_table(conn)
-        copy_from_stringio(conn, token_df, 'symtoken')
-        db_indexing(conn)  # Call db_indexing right after copying data into the table
+    cursor = conn.cursor()
+    query = """
+    SELECT * FROM symtoken
+    WHERE symbol ILIKE %s;  -- Use ILIKE for case-insensitive matching
+    """
+    try:
+        cursor.execute(query, (f'%{symbol}%',))
+        rows = cursor.fetchall()
+        return rows  # Each row is a tuple of column values
+    finally:
+        cursor.close()
         conn.close()
-    print("Cron Job Ended Successfully")
 
-    return "Cron job ran successfully", 200
 
-if __name__ == '__main__':
-    app.run(debug=True)
+
+def master_contract_download():
+    try:
+        print("Downloading Master Contract")
+        url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
+        data = requests.get(url).json()
+        token_df = pd.DataFrame.from_dict(data)
+        token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+
+        conn = get_db_connection()
+
+        if conn is not None:
+            delete_symtoken_table()
+            check_and_create_table(conn)
+            copy_from_stringio(conn, token_df, 'symtoken')
+            db_indexing(conn)  # Call db_indexing right after copying data into the table
+            conn.close()
+        print("Master Contract Download Completed")
+
+        return {'status': 'success', 'message': 'Master contract downloaded successfully'}
+    except Exception as e:
+            print(str(e))
+            return {'status': 'error', 'message': 'Failed to download master contract'}
+    
+

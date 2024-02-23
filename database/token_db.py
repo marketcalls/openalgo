@@ -3,20 +3,20 @@
 import os
 import psycopg2
 
+
 def get_db_connection():
     try:
         conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
                                 host=os.getenv('POSTGRES_HOST'),
                                 user=os.getenv('POSTGRES_USER'),
                                 password=os.getenv('POSTGRES_PASSWORD'),
-                                port="5432",
-                                sslmode='require')
+                                port=os.getenv('POSTGRES_PORT'),
+                                sslmode=os.getenv('POSTGRES_SSLMODE'))
         return conn
     except (Exception, psycopg2.DatabaseError) as error:
         print("Error while connecting to PostgreSQL", error)
         return None
-
-
+    
 def get_token(symbol, exch_seg):
     conn = get_db_connection()
     if conn is not None:

@@ -9,7 +9,7 @@
 {% block content %}
 <div class="container mx-auto px-4 bg-gray-100 min-h-screen">
     <h1 class="text-xl font-semibold text-center mb-4">Search Results</h1>
-    <p class="text-center mb-4">Found {{ results.shape[0] }} matching symbols.</p>
+    <p class="text-center mb-4">Found {{ results|length }} matching symbols.</p>
     <div class="overflow-x-auto">
         <table class="table-auto w-full text-left whitespace-no-wrap">
             <thead>
@@ -26,17 +26,17 @@
                 </tr>
             </thead>
             <tbody class="bg-white divide-y">
-                {% for index, row in results.iterrows() %}
+                {% for row in results %}
                 <tr class="text-gray-700">
-                    <td class="px-4 py-3">{{ row['token'] }}</td>
-                    <td class="px-4 py-3">{{ row['symbol'] }}</td>
-                    <td class="px-4 py-3">{{ row['name'] }}</td>
-                    <td class="px-4 py-3">{{ row['expiry'] }}</td>
-                    <td class="px-4 py-3">{{ row['strike'] }}</td>
-                    <td class="px-4 py-3">{{ row['lotsize'] }}</td>
-                    <td class="px-4 py-3">{{ row['instrumenttype'] }}</td>
-                    <td class="px-4 py-3">{{ row['exch_seg'] }}</td>
-                    <td class="px-4 py-3">{{ row['tick_size'] }}</td>
+                    <td class="px-4 py-3">{{ row.token }}</td>
+                    <td class="px-4 py-3">{{ row.symbol }}</td>
+                    <td class="px-4 py-3">{{ row.name }}</td>
+                    <td class="px-4 py-3">{{ row.expiry }}</td>
+                    <td class="px-4 py-3">{{ row.strike }}</td>
+                    <td class="px-4 py-3">{{ row.lotsize }}</td>
+                    <td class="px-4 py-3">{{ row.instrumenttype }}</td>
+                    <td class="px-4 py-3">{{ row.exch_seg }}</td>
+                    <td class="px-4 py-3">{{ row.tick_size }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
