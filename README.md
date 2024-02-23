@@ -82,7 +82,6 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 
 
 Place Order with the /placeorder route with the following sample post message
-
 <code>
 {
 "apikey":"5dfs3f4",
@@ -93,6 +92,6 @@ Place Order with the /placeorder route with the following sample post message
 "producttype":"INTRADAY",
 "quantity":"1"
 }</code>
-
+<br>
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
