@@ -45,16 +45,16 @@
    
    <!-- Mobile Menu Button -->
      <!-- Hamburger Menu Button, visible when menu is collapsed -->
-     <div class="sm:hidden">
-      <button onclick="toggleMobileMenu()" class="text-white">
-          <div class="p-4 space-y-2 bg-gray-600 rounded shadow">
-              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
-              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
-              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+    <div class="sm:hidden">
+      <button onclick="toggleMobileMenu()" class="text-white p-2">
+          <div class="space-y-1 bg-gray-600 rounded shadow">
+              <span class="block w-6 h-0.5 bg-gray-100"></span>
+              <span class="block w-6 h-0.5 bg-gray-100"></span>
+              <span class="block w-6 h-0.5 bg-gray-100"></span>
           </div>
       </button>
-  </div>
-  
+    </div>
+
       <!-- Mobile Menu (hidden by default) -->
       <div class="sm:hidden fixed top-0 left-0 transform -translate-x-full w-56 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out z-10" id="mobile-menu">
         <!-- Close Button, visible when menu is expanded -->
