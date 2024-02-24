@@ -34,7 +34,7 @@
   <!-- Navbar content as provided -->
   <div class="hidden sm:flex justify-between items-center">
       <!-- Navigation Links -->
-      <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
             <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
             <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
             <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
@@ -44,36 +44,49 @@
   </div>
    
    <!-- Mobile Menu Button -->
-   <div class="sm:hidden">
-    <button onclick="toggleMobileMenu()" class="text-white"  text-xl>
-        <!-- Here you would include a hamburger icon -->
-        <div class="p-4 space-y-2 bg-gray-600 rounded shadow">
-          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
-          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
-          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
-        </div>
-    </button>
-   </div>
-
-  <!-- Mobile Menu (hidden by default) -->
-  <div class="sm:hidden absolute top-0 left-0 transform -translate-x-full w-64 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out" id="mobile-menu">
-      <div class="flex flex-col items-start p-4">
-        <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
-        <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
-        <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
-        <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
-        <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
-        <a href="/search" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
-        <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
-      </div>
+     <!-- Hamburger Menu Button, visible when menu is collapsed -->
+     <div class="sm:hidden">
+      <button onclick="toggleMobileMenu()" class="text-white">
+          <div class="p-4 space-y-2 bg-gray-600 rounded shadow">
+              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+              <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+          </div>
+      </button>
   </div>
+  
+      <!-- Mobile Menu (hidden by default) -->
+      <div class="sm:hidden fixed top-0 left-0 transform -translate-x-full w-full max-w-xs bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out z-10" id="mobile-menu">
+        <!-- Close Button, visible when menu is expanded -->
+        <button onclick="closeMobileMenu()" class="text-white text-3xl p-2 rounded-full absolute right-4 top-4 hover:bg-gray-600">
+            &times; <!-- Close Icon -->
+        </button>
+        <div class="flex flex-col items-start p-4">
+          <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+          <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+          <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+          <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+          <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+          <a href="/search" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+          <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+        </div>
+    </div>
 </nav>
 
 <script>
-  function toggleMobileMenu() {
-      var menu = document.getElementById('mobile-menu');
-      menu.classList.toggle('-translate-x-full');
-  }
+    function toggleMobileMenu() {
+        var menu = document.getElementById('mobile-menu');
+        menu.classList.remove('-translate-x-full');
+        // Hide the hamburger menu button when the menu is open
+        document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'none';
+    }
+    
+    function closeMobileMenu() {
+        var menu = document.getElementById('mobile-menu');
+        menu.classList.add('-translate-x-full');
+        // Show the hamburger menu button when the menu is closed
+        document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'block';
+    }
 </script>
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
