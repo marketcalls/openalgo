@@ -29,29 +29,38 @@
 </head>
 <body class="bg-gray-100">
     <!-- New Navbar Theme -->
-    <nav class="bg-gray-800">
-      <!-- Navbar content as provided -->
-      <div class="mx-auto max-w-7xl px-2 sm:px-6 lg:px-8">
-        <div class="relative flex h-16 items-center justify-between">
-          <!-- Mobile menu button and additional navbar components -->
-          <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
-          <a href="/orderbook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Orderbook</a>
-          <a href="/tradebook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Tradebook</a>
-          <a href="/positions" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Positions</a>
-          <a href="/holdings" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Holdings</a>
-          <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
-          <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
-      
-        </div>
+    <!-- New Navbar Theme -->
+<nav class="bg-gray-800">
+  <!-- Navbar content as provided -->
+  <div class="mx-auto max-w-7xl px-2 sm:px-6 lg:px-8">
+    <div class="relative flex h-16 items-center justify-between">
+      <!-- Flex container for nav items -->
+      <div class="hidden sm:flex sm:space-x-4">
+        <!-- Desktop menu content -->
+        <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
+        <a href="/orderbook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Orderbook</a>
+        <a href="/tradebook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Tradebook</a>
+        <a href="/positions" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Positions</a>
+        <a href="/holdings" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Holdings</a>
+        <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
+        <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
       </div>
-      <!-- Mobile menu -->
-      <div class="sm:hidden" id="mobile-menu">
-        <div class="space-y-1 px-2 pb-3 pt-2">
-          <!-- Mobile menu content -->
-          ...
-        </div>
+      <!-- Mobile menu button -->
+      <div class="sm:hidden">
+        <!-- Hamburger icon or similar for mobile menu -->
+        ...
       </div>
-    </nav>
+    </div>
+  </div>
+  <!-- Mobile menu, hidden by default -->
+  <div class="sm:hidden" id="mobile-menu" style="display: none;">
+    <div class="space-y-1 px-2 pb-3 pt-2">
+      <!-- Mobile menu content -->
+      ...
+    </div>
+  </div>
+</nav>
+
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
     <div class="container mx-auto mt-24">
