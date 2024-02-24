@@ -29,38 +29,52 @@
 </head>
 <body class="bg-gray-100">
     <!-- New Navbar Theme -->
-    <!-- New Navbar Theme -->
-<nav class="bg-gray-800">
+
+<nav class="bg-gray-800 p-4">
   <!-- Navbar content as provided -->
-  <div class="mx-auto max-w-7xl px-2 sm:px-6 lg:px-8">
-    <div class="relative flex h-16 items-center justify-between">
-      <!-- Flex container for nav items -->
-      <div class="hidden sm:flex sm:space-x-4">
-        <!-- Desktop menu content -->
-        <a href="/dashboard" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Dashboard</a>
-        <a href="/orderbook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Orderbook</a>
-        <a href="/tradebook" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Tradebook</a>
-        <a href="/positions" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Positions</a>
-        <a href="/holdings" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Holdings</a>
-        <a href="/token" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Search</a>
-        <a href="/logout" class="text-blue-500 hover:text-blue-700 transition duration-150 ease-in-out">Logout</a>
-      </div>
-      <!-- Mobile menu button -->
-      <div class="sm:hidden">
-        <!-- Hamburger icon or similar for mobile menu -->
-        ...
-      </div>
-    </div>
+  <div class="hidden sm:flex justify-between items-center">
+      <!-- Navigation Links -->
+      <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+            <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+            <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+            <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+            <a href="/search" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
   </div>
-  <!-- Mobile menu, hidden by default -->
-  <div class="sm:hidden" id="mobile-menu" style="display: none;">
-    <div class="space-y-1 px-2 pb-3 pt-2">
-      <!-- Mobile menu content -->
-      ...
-    </div>
+   
+   <!-- Mobile Menu Button -->
+   <div class="sm:hidden">
+    <button onclick="toggleMobileMenu()" class="text-white"  text-xl>
+        <!-- Here you would include a hamburger icon -->
+        <div class="p-4 space-y-2 bg-gray-600 rounded shadow">
+          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+          <span class="block w-8 h-0.5 bg-gray-100 animate-pulse"></span>
+        </div>
+    </button>
+   </div>
+
+  <!-- Mobile Menu (hidden by default) -->
+  <div class="sm:hidden absolute top-0 left-0 transform -translate-x-full w-64 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out" id="mobile-menu">
+      <div class="flex flex-col items-start p-4">
+        <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+        <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+        <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+        <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+        <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+        <a href="/search" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+        <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+      </div>
   </div>
 </nav>
 
+<script>
+  function toggleMobileMenu() {
+      var menu = document.getElementById('mobile-menu');
+      menu.classList.toggle('-translate-x-full');
+  }
+</script>
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
     <div class="container mx-auto mt-24">
