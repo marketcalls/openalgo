@@ -172,13 +172,6 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
 ## AMO
 - YES: Yes
 - NO: No
-
-## Retention
-- DAY: Regular Order
-- IOC: Immediate or Cancel
-
-
-
-
+<br>
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
