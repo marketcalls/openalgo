@@ -85,8 +85,8 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 ### Place Order
 
 
-Sample Place Order with the /api/v1/placeorder route with the following sample post message
-</code>
+Sample Place Order with the /api/v1/placeorder which can be used with any trading platforms to place orders
+<code>
 {
 "apikey":"<your_broker_apikey>",
 "symbol":"RELIANCE-EQ",
@@ -114,7 +114,7 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
     "disclosed_quantity": "0",
 }</code>
 
-## Parameters Description
+
 
 ## Parameters Description
 
