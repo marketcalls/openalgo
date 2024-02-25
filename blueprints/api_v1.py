@@ -1,9 +1,11 @@
 from flask import Blueprint, request, jsonify
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from mapping.transform_data import transform_data
 import http.client
 import json
 import os
+
 
 # Create a Blueprint for version 1 of the API
 api_v1_bp = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -25,7 +27,13 @@ def place_order():
         #print(f'Auth Token : {AUTH_TOKEN}')
         print(f'API Request : {data}')
         
+        token = get_token(data['symbol'],data['exchange'])
         
+        newdata = transform_data(data,token)  
+        
+        print(f'New API Request : {newdata}')
+            
+
         # Prepare headers with the AUTH_TOKEN and other details
         headers = {
             'Authorization': f'Bearer {AUTH_TOKEN}',
@@ -33,28 +41,29 @@ def place_order():
             'Accept': 'application/json',
             'X-UserType': 'USER',
             'X-SourceID': 'WEB',
-            'X-ClientLocalIP': 'CLIENT_LOCAL_IP',  # These values should be dynamically determined or managed accordingly
+            'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
             'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
             'X-MACAddress': 'MAC_ADDRESS',
-            'X-PrivateKey': data['apikey']
+            'X-PrivateKey': newdata['apikey']
         }
 
-        token = get_token(data['tradingsymbol'],data['exchange'])
-
+        
+        
         # Preparing the payload with data received from the request
         payload = json.dumps({
-            "variety": data.get('variety', 'NORMAL'),
-            "tradingsymbol": data['tradingsymbol'],
-            "symboltoken": token,
-            "transactiontype": data['transactiontype'].upper(),
-            "exchange": data['exchange'],
-            "ordertype": data.get('ordertype', 'MARKET'),
-            "producttype": data.get('producttype', 'INTRADAY'),
-            "duration": data.get('duration', 'DAY'),
-            "price": data.get('price', '0'),
-            "squareoff": data.get('squareoff', '0'),
-            "stoploss": data.get('stoploss', '0'),
-            "quantity": data['quantity']
+            "variety": newdata.get('variety', 'NORMAL'),
+            "tradingsymbol": newdata['tradingsymbol'],
+            "symboltoken": newdata['symboltoken'],
+            "transactiontype": newdata['transactiontype'],
+            "exchange": newdata['exchange'],
+            "ordertype": newdata.get('ordertype', 'MARKET'),
+            "producttype": newdata.get('producttype', 'INTRADAY'),
+            "duration": newdata.get('duration', 'DAY'),
+            "price": newdata.get('price', '0'),
+            "triggerprice": newdata.get('triggerprice', '0'),
+            "squareoff": newdata.get('squareoff', '0'),
+            "stoploss": newdata.get('stoploss', '0'),
+            "quantity": newdata['quantity']
         })
 
         # Making the HTTP request to place the order

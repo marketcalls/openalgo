@@ -85,17 +85,98 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 ### Place Order
 
 
-Place Order with the /api/v1/placeorder route with the following sample post message
-<code>
+Sample Place Order with the /api/v1/placeorder route with the following sample post message
+```json
 {
 "apikey":"<your_broker_apikey>",
-"tradingsymbol":"SBIN-EQ",
-"transactiontype":"BUY",
+"symbol":"RELIANCE-EQ",
+"action":"BUY",
 "exchange":"NSE",
-"ordertype":"MARKET",
-"producttype":"INTRADAY",
+"pricetype":"MARKET",
+"product":"MIS",
 "quantity":"1"
-}</code>
+}
 <br>
+
+## Full Sample API Request
+```json
+{
+    "apikey": "<your_broker_apikey>",
+    "strategy": "Test Strategy",
+    "exchange": "BSE",
+    "symbol": "YESBANK",
+    "action": "SELL",
+    "product": "CNC",
+    "pricetype": "MARKET",
+    "quantity": "1",
+    "price": "0",
+    "trigger_price": "0",
+    "disclosed_quantity": "0",
+}
+
+## Parameters Description
+
+| Parameter           | Description                                          | Mandatory/Optional | Default Value |
+|---------------------|------------------------------------------------------|---------------------|---------------|
+| apikey              | Broker API key                                       | Mandatory           | -             |
+| strategy            | Strategy name                                        | Mandatory           | -             |
+| exchange            | Exchange code                                        | Mandatory           | -             |
+| symbol              | Trading symbol                                       | Mandatory           | -             |
+| action              | Action (BUY or SELL)                                 | Mandatory           | -             |
+| product             | Product type                                         | Optional            | MIS           |
+| pricetype           | Price type                                           | Optional            | MARKET        |
+| quantity            | Quantity                                             | Mandatory           | -             |
+| price               | Price                                                | Optional            | 0             |
+| trigger_price       | Trigger price                                        | Optional            | 0             |
+| disclosed_quantity  | Disclosed quantity                                   | Optional            | 0             |
+
+
+# Order Constants
+
+## Exchange
+- NSE: NSE Equity
+- NFO: NSE Futures & Options
+- CDS: NSE Currency
+- BSE: BSE Equity
+- BFO: BSE Futures & Options
+- BCD: BSE Currency
+- MCX: MCX Commodity
+- MCXSXCM: MCXSX Equity
+- MCXSXFO: MCXSX Futures & Options
+- MCXSX: MCXSX Currency
+- NCDEX: NCDEX Commodity
+
+## Product Type
+- CNC: Cash & Carry for equity
+- NRML: Normal for futures and options
+- MIS: Intraday Squareoff
+- CO: Cover Order
+- BO: Bracket Order
+
+## Price Type
+- MARKET: Market Order
+- LIMIT: Limit Order
+- SL: Stop Loss Limit Order
+- SL-M: Stop Loss Market Order
+
+## Action
+- BUY: Buy
+- SELL: Sell
+
+## Split Order
+- YES: Yes
+- NO: No
+
+## AMO
+- YES: Yes
+- NO: No
+
+## Retention
+- DAY: Regular Order
+- IOC: Immediate or Cancel
+
+
+
+
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
