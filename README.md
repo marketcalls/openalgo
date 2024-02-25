@@ -118,7 +118,7 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
 
 ## Parameters Description
 
-| Parameters           | Description          | Mandatory/Optional  | Default Value |
+| Parameters          | Description          | Mandatory/Optional  | Default Value |
 |---------------------|----------------------|---------------------|---------------|
 | apikey              | Broker API key       | Mandatory           | -             |
 | strategy            | Strategy name        | Mandatory           | -             |
