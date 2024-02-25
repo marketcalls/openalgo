@@ -17,6 +17,17 @@ def place_order():
         # Extracting form data or JSON data from the POST request
         data = request.json
 
+        # Mandatory fields list
+        mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity']
+        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+
+        # Check if there are any missing mandatory fields
+        if missing_fields:
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
+            }), 400
+
         login_username = os.getenv('LOGIN_USERNAME')
 
         AUTH_TOKEN = get_auth_token(login_username)

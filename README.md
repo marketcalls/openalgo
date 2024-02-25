@@ -88,6 +88,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 <code>
 {
 "apikey":"<your_broker_apikey>",
+"strategy:"Test Strategy",
 "symbol":"RELIANCE-EQ",
 "action":"BUY",
 "exchange":"NSE",
@@ -105,7 +106,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
     "exchange": "BSE",
     "symbol": "YESBANK",
     "action": "SELL",
-    "product": "CNC",
+    "product": "MIS",
     "pricetype": "MARKET",
     "quantity": "1",
     "price": "0",
