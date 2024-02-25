@@ -165,10 +165,6 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
 - BUY: Buy
 - SELL: Sell
 
-## Split Order
-- YES: Yes
-- NO: No
-
 ## AMO
 - YES: Yes
 - NO: No
