@@ -13,13 +13,15 @@
     </style>
 
     <!-- Favicon and touch icons for various devices -->
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='safari-pinned-tab.svg') }}" color="#5bbad5">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
+    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     
+
+
     <!-- Meta tags for color settings on mobile browsers -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
@@ -34,13 +36,13 @@
   <!-- Navbar content as provided -->
   <div class="hidden sm:flex justify-between items-center">
       <!-- Navigation Links -->
-            <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
-            <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
-            <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
-            <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
-            <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
-            <a href="/token" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
-            <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+            <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
   </div>
    
    <!-- Mobile Menu Button -->

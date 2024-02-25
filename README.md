@@ -63,11 +63,15 @@ to install the necessary Python libraries.
 - Remember the password you set during installation; the default username is `postgres`.
 - Use pgAdmin 4 to create a localhost server and a new database named `openalgo_db`.
 
-5. **Configure Environment Variables**: Update the `.env` file located in `/openalgo/api/` with your specific configurations as shown in the provided template.
+5. **Configure Environment Variables**: 
 
-6. **Run the Application**: From the `/openalgo/api` directory, start the Flask application with the command:
+Rename the `.sample.env` file located in `openalgo` folder to `.env` 
 
-<code>python index.py</code>
+Update the `.env`  with your specific configurations as shown in the provided template.
+
+6. **Run the Application**: From the `openalgo` directory, start the Flask application with the command:
+
+<code>python app.py</code>
 
 
 ### Accessing OpenAlgo
@@ -81,10 +85,10 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 ### Place Order
 
 
-Place Order with the /placeorder route with the following sample post message
+Place Order with the /api/v1/placeorder route with the following sample post message
 <code>
 {
-"apikey":"5dfs3f4",
+"apikey":"<your_broker_apikey>",
 "tradingsymbol":"SBIN-EQ",
 "transactiontype":"BUY",
 "exchange":"NSE",

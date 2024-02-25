@@ -6,7 +6,7 @@
     
     <!-- Page Title & Favicon -->
     <title>OpenAlgo - OpenSource Algo Platform for Everyone</title>
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
 
     <!-- Tailwind CSS and Custom Font -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -27,12 +27,12 @@
     </style>
 
     <!-- Favicon and touch icons for various devices (Already included) -->
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='safari-pinned-tab.svg') }}" color="#5bbad5">
-
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
+    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+    
     <!-- Meta tags for color settings on mobile browsers -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
@@ -40,7 +40,7 @@
 <body class="bg-white h-screen">
     <div class="flex flex-col justify-center items-center h-full px-4 text-center">
         <!-- Logo Image centered -->
-        <img src="{{ url_for('static', filename='android-chrome-192x192.png') }}" alt="OpenAlgo Logo" class="mb-6 mx-auto">
+        <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="mb-6 mx-auto">
 
         <h1 class="text-4xl text-gray-800 mb-2">Take Control of Your Algo Platform</h1>
         <p class="mb-6">
@@ -50,7 +50,7 @@
         <!-- Buttons side by side with horizontal padding -->
         <div class="flex justify-center items-center gap-4 mb-6">
             <a href="https://github.com/marketcalls/openalgo" class="px-6 py-3 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300" target="_blank" rel="noopener noreferrer">Github Source Code</a>
-            <a href="/login" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-300">Login</a>
+            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-300">Login</a>
         </div>
     </div>
 

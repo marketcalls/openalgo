@@ -1,7 +1,22 @@
-.vercel
-*.log
+.env
+.flaskenv
 *.pyc
-__pycache__
+__pycache__/
+instance/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.python-version
+node_modules/
+build/
+dist/
+*.egg-info/
+*.db
+*.sqlite
+*.log
+*.tmp
+
 
 # Environments 
 .env 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenAlgo Login Test</title>
+    <title>OpenAlgo Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         async function login(event) {
@@ -18,7 +18,7 @@
             progressBar.style.width = '25%'; // Start the progress bar at 25%
 
             try {
-                const response = await fetch('/login', {
+                const response = await fetch('/auth/login', {
                     method: 'POST',
                     body: formData
                 });
