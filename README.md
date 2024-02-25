@@ -86,7 +86,7 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 
 
 Sample Place Order with the /api/v1/placeorder route with the following sample post message
-```json
+</code>
 {
 "apikey":"<your_broker_apikey>",
 "symbol":"RELIANCE-EQ",
@@ -95,11 +95,11 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
 "pricetype":"MARKET",
 "product":"MIS",
 "quantity":"1"
-}
+}<code>
 <br>
 
 ## Full Sample API Request
-```json
+<code>
 {
     "apikey": "<your_broker_apikey>",
     "strategy": "Test Strategy",
@@ -112,23 +112,25 @@ Sample Place Order with the /api/v1/placeorder route with the following sample p
     "price": "0",
     "trigger_price": "0",
     "disclosed_quantity": "0",
-}
+}</code>
 
 ## Parameters Description
 
-| Parameter           | Description                                          | Mandatory/Optional | Default Value |
-|---------------------|------------------------------------------------------|---------------------|---------------|
-| apikey              | Broker API key                                       | Mandatory           | -             |
-| strategy            | Strategy name                                        | Mandatory           | -             |
-| exchange            | Exchange code                                        | Mandatory           | -             |
-| symbol              | Trading symbol                                       | Mandatory           | -             |
-| action              | Action (BUY or SELL)                                 | Mandatory           | -             |
-| product             | Product type                                         | Optional            | MIS           |
-| pricetype           | Price type                                           | Optional            | MARKET        |
-| quantity            | Quantity                                             | Mandatory           | -             |
-| price               | Price                                                | Optional            | 0             |
-| trigger_price       | Trigger price                                        | Optional            | 0             |
-| disclosed_quantity  | Disclosed quantity                                   | Optional            | 0             |
+## Parameters Description
+
+| Parameter           | Description          | Mandatory/Optional | Default Value |
+|---------------------|----------------------|---------------------|---------------|
+| apikey              | Broker API key       | Mandatory           | -             |
+| strategy            | Strategy name        | Mandatory           | -             |
+| exchange            | Exchange code        | Mandatory           | -             |
+| symbol              | Trading symbol       | Mandatory           | -             |
+| action              | Action (BUY/SELL)    | Mandatory           | -             |
+| product             | Product type         | Optional            | MIS           |
+| pricetype           | Price type           | Optional            | MARKET        |
+| quantity            | Quantity             | Mandatory           | -             |
+| price               | Price                | Optional            | 0             |
+| trigger_price       | Trigger price        | Optional            | 0             |
+| disclosed_quantity  | Disclosed quantity   | Optional            | 0             |
 
 
 # Order Constants
