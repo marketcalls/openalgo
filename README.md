@@ -84,7 +84,6 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 
 ### Place Order
 
-
 Sample Place Order with the /api/v1/placeorder which can be used with any trading platforms to place orders
 <code>
 {
@@ -95,7 +94,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 "pricetype":"MARKET",
 "product":"MIS",
 "quantity":"1"
-}<code>
+}</code>
 <br>
 
 ## Full Sample API Request
