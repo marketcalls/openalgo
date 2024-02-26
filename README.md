@@ -82,12 +82,16 @@ After completing the setup, access the OpenAlgo platform by navigating to [http:
 
 You can now connect your Amibroker and Tradingview modules to transmit orders, and use the Flask application to monitor trades.
 
+## Generate the APP API Key
+
+Goto the API Key Section and Generate the APP API Key. And use it to placeorder from your trading applicaton
+
 ### Place Order
 
 Sample Place Order with the /api/v1/placeorder which can be used with any trading platforms to place orders
 <code>
 {
-"apikey":"<your_broker_apikey>",
+"apikey":"<your_app_apikey>",
 "strategy:"Test Strategy",
 "symbol":"RELIANCE-EQ",
 "action":"BUY",
@@ -101,7 +105,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 ## Full Sample API Request
 <code>
 {
-    "apikey": "<your_broker_apikey>",
+    "apikey": "<your_app_apikey>",
     "strategy": "Test Strategy",
     "exchange": "BSE",
     "symbol": "YESBANK",
@@ -120,7 +124,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 
 | Parameters          | Description          | Mandatory/Optional  | Default Value |
 |---------------------|----------------------|---------------------|---------------|
-| apikey              | Broker API key       | Mandatory           | -             |
+| apikey              | App API key          | Mandatory           | -             |
 | strategy            | Strategy name        | Mandatory           | -             |
 | exchange            | Exchange code        | Mandatory           | -             |
 | symbol              | Trading symbol       | Mandatory           | -             |

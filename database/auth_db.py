@@ -95,3 +95,65 @@ def ensure_auth_table_exists():
         cursor.close()
         conn.close()
 
+def ensure_api_keys_table_exists():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # Create the table with 'user_id' as an INTEGER and add a UNIQUE constraint.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR NOT NULL UNIQUE,
+                    api_key TEXT NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.commit()
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error creating API keys table", error)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def upsert_api_key(user_id, api_key):
+    conn = get_db_connection()
+    try:
+        
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO api_keys (user_id, api_key) VALUES (%s, %s) 
+                ON CONFLICT (user_id) DO UPDATE SET api_key = EXCLUDED.api_key RETURNING id;
+            """, (user_id, api_key))
+            key_id = cur.fetchone()[0]
+            conn.commit()
+            return key_id
+    except ValueError:
+        print(f"Error: user_id '{user_id}' cannot be converted to an integer.")
+        return None
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error upserting API key", error)
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def get_api_key(user_id):
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT api_key FROM api_keys WHERE user_id = %s;", (user_id,))
+            result = cur.fetchone()
+            if result:
+                return result[0]
+            else:
+                return None
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error fetching API key", error)
+        return None
+    finally:
+        if conn is not None:
+            conn.close()

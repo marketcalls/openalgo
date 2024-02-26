@@ -1,20 +1,18 @@
 from flask import Blueprint, request, jsonify
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token, get_api_key
 from database.token_db import get_token
 from mapping.transform_data import transform_data
 import http.client
 import json
 import os
 
-
 # Create a Blueprint for version 1 of the API
 api_v1_bp = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 
 @api_v1_bp.route('/placeorder', methods=['POST'])
 def place_order():
-    
     try:
-        # Extracting form data or JSON data from the POST request
+        # Extracting JSON data from the POST request
         data = request.json
 
         # Mandatory fields list
@@ -29,21 +27,23 @@ def place_order():
             }), 400
 
         login_username = os.getenv('LOGIN_USERNAME')
+        current_api_key = get_api_key(login_username)
+        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+        
+
+        # Check if the provided Placeorder Request API key matches the Current App API Key
+        if current_api_key != data['apikey']:
+            return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
+
+        data['apikey'] = BROKER_API_KEY
 
         AUTH_TOKEN = get_auth_token(login_username)
-        
-        
-        # Retrieve AUTH_TOKEN and API_KEY from session or environment
-        
-        #print(f'Auth Token : {AUTH_TOKEN}')
         print(f'API Request : {data}')
         
-        token = get_token(data['symbol'],data['exchange'])
-        
-        newdata = transform_data(data,token)  
-        
+        token = get_token(data['symbol'], data['exchange'])
+        newdata = transform_data(data, token)  
         print(f'New API Request : {newdata}')
-            
 
         # Prepare headers with the AUTH_TOKEN and other details
         headers = {
@@ -58,8 +58,6 @@ def place_order():
             'X-PrivateKey': newdata['apikey']
         }
 
-        
-        
         # Preparing the payload with data received from the request
         payload = json.dumps({
             "variety": newdata.get('variety', 'NORMAL'),
@@ -76,6 +74,15 @@ def place_order():
             "stoploss": newdata.get('stoploss', '0'),
             "quantity": newdata['quantity']
         })
+
+        # Making the HTTP request to place the order
+        conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+        conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+        
+        # Processing the response
+        res = conn.getresponse()
+        data = res.read()
+        response_data = json.loads(data.decode("utf-8"))
 
         # Making the HTTP request to place the order
         conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")

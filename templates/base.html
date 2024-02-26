@@ -42,6 +42,7 @@
             <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
             <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
             <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
             <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
   </div>
    
@@ -64,14 +65,16 @@
             &times; <!-- Close Icon -->
         </button>
         <div class="flex flex-col items-start p-4">
-          <a href="/dashboard" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
-          <a href="/orderbook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
-          <a href="/tradebook" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
-          <a href="/positions" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
-          <a href="/holdings" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
-          <a href="/token" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
-          <a href="/logout" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+            <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
+            <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
         </div>
+        
     </div>
 </nav>
 

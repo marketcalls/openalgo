@@ -4,7 +4,10 @@ from blueprints.dashboard import dashboard_bp
 from blueprints.orders import orders_bp
 from blueprints.search import search_bp
 from blueprints.api_v1 import api_v1_bp
+from blueprints.apikey import api_key_bp
 from blueprints.core import core_bp  # Import the core blueprint
+
+from database.auth_db import ensure_api_keys_table_exists
 
 from dotenv import load_dotenv
 import os
@@ -18,7 +21,11 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(search_bp)
 app.register_blueprint(api_v1_bp)
+app.register_blueprint(api_key_bp)
 app.register_blueprint(core_bp)  # Register the core blueprint
+
+# Ensure the API keys table exists
+ensure_api_keys_table_exists()
 
 # Environment variables
 app.secret_key = os.getenv('APP_KEY')

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div id="userInfo" data-login-username="{{ login_username }}" style="display:none;"></div>
+
+<div class="py-6">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg p-5">
+            <div class="flex">
+                <div class="w-full">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        API Key Management
+                    </h3>
+                    <p class="mt-1 max-w-2xl text-sm text-gray-500">
+                        Your API key is shown below. Use it to authenticate your requests.
+                    </p>
+                    <!-- API Key Display -->
+                    <div class="mt-3 bg-gray-100 p-3 rounded">
+                        <p id="apiKeyDisplay" style="display:none;">{{ api_key }}</p>
+                        <button onclick="toggleApiKeyVisibility()" class="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-2 px-4 rounded inline-flex items-center">
+                            Show API Key
+                        </button>
+                        <!-- Copy to Clipboard Button -->
+                        <button onclick="copyApiKeyToClipboard()" class="ml-2 text-sm bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded inline-flex items-center">
+                            Copy
+                        </button>
+                        <!-- Success Alert Placeholder (Initially Hidden) -->
+                        <div id="copySuccessAlert" class="hidden flex items-center p-4 mb-4 mt-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400" role="alert">
+                          <svg class="flex-shrink-0 inline w-4 h-4 me-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                          </svg>
+                          <span class="sr-only">Success:</span>
+                          <div>
+                            <span class="font-medium">Copied!</span> The API key has been copied to your clipboard.
+                          </div>
+                        </div>
+                    </div>
+                    <!-- Regenerate API Key Button -->
+                    <button onclick="regenerateApiKey()" class="mt-4 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                        Regenerate API Key
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+    function toggleApiKeyVisibility() {
+        var apiKeyDisplay = document.getElementById("apiKeyDisplay");
+        var button = document.querySelector("button[onclick='toggleApiKeyVisibility()']");
+        if (apiKeyDisplay.style.display === "none") {
+            apiKeyDisplay.style.display = "block";
+            button.textContent = "Hide API Key";
+        } else {
+            apiKeyDisplay.style.display = "none";
+            button.textContent = "Show API Key";
+        }
+    }
+
+    function copyApiKeyToClipboard() {
+        var apiKey = document.getElementById("apiKeyDisplay").innerText;
+        navigator.clipboard.writeText(apiKey).then(function() {
+            // Show the success alert
+            var alertBox = document.getElementById("copySuccessAlert");
+            alertBox.classList.remove('hidden'); // Make the alert visible
+            setTimeout(() => { alertBox.classList.add('hidden'); }, 3000); // Hide the alert after 3 seconds
+        }, function(err) {
+            console.error('Could not copy text: ', err);
+        });
+    }
+</script>
+{% endblock %}

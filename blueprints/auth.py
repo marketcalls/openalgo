@@ -149,3 +149,4 @@ def logout():
     
             # Redirect to login page after logout
         return redirect(url_for('auth.login'))
+
