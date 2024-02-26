@@ -1,5 +1,5 @@
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, session
 from itsdangerous import URLSafeTimedSerializer
 from database.auth_db import upsert_api_key , get_api_key
 import os
@@ -14,6 +14,9 @@ def generate_api_key(user_id):
 
 @api_key_bp.route('/apikey', methods=['GET', 'POST'])
 def manage_api_key():
+    if not session.get('logged_in'):
+        return redirect(url_for('auth.login'))  
+    
     if request.method == 'GET':
         login_username = os.getenv('LOGIN_USERNAME')
         current_api_key = get_api_key(login_username)

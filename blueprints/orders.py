@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
-from database.token_db import get_token
+from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
 from database.auth_db import get_auth_token
 import http.client
 import json
@@ -14,29 +14,8 @@ orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
 def orderbook():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
-    login_username = os.getenv('LOGIN_USERNAME')
-
-    AUTH_TOKEN = get_auth_token(login_username)
-   
-
-    api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
-    }
-    conn.request("GET", "/rest/secure/angelbroking/order/v1/getOrderBook", '', headers)
-    res = conn.getresponse()
-    data = res.read()
-    order_data = json.loads(data.decode("utf-8"))
+    
+    order_data = get_order_book()
 
     # Check if 'data' is None
     if order_data['data'] is None:
@@ -77,31 +56,9 @@ def orderbook():
 def tradebook():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
-    login_username = os.getenv('LOGIN_USERNAME')
-
-    AUTH_TOKEN = get_auth_token(login_username)
     
-        
 
-
-    api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
-    }
-    conn.request("GET", "/rest/secure/angelbroking/order/v1/getTradeBook", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
-    tradebook_data = json.loads(data.decode("utf-8"))
+    tradebook_data = get_trade_book()
 
     # Check if 'data' is None
     if tradebook_data['data'] is None:
@@ -121,30 +78,8 @@ def tradebook():
 def positions():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
-    login_username = os.getenv('LOGIN_USERNAME')
-
-    AUTH_TOKEN = get_auth_token(login_username)
-          
-
-
-    api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
-    }
-    conn.request("GET", "/rest/secure/angelbroking/order/v1/getPosition", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
-    positions_data = json.loads(data.decode("utf-8"))
+    
+    positions_data = get_positions()
 
         # Check if 'data' is None
     if positions_data['data'] is None:
@@ -162,28 +97,8 @@ def positions():
 def holdings():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
-    login_username = os.getenv('LOGIN_USERNAME')
-
-    AUTH_TOKEN = get_auth_token(login_username)
-       
-    api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
-    }
-    conn.request("GET", "/rest/secure/angelbroking/portfolio/v1/getAllHolding", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
-    holdings_data = json.loads(data.decode("utf-8"))
+    
+    holdings_data = get_holdings()
 
             # Check if 'data' is None
     if holdings_data['data'] is None:
