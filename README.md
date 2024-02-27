@@ -89,7 +89,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 {
 "apikey":"<your_app_apikey>",
 "strategy:"Test Strategy",
-"symbol":"RELIANCE-EQ",
+"symbol":"SAIL-EQ",
 "action":"BUY",
 "exchange":"NSE",
 "pricetype":"MARKET",
@@ -103,9 +103,9 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 {
     "apikey": "<your_app_apikey>",
     "strategy": "Test Strategy",
-    "exchange": "BSE",
-    "symbol": "YESBANK",
-    "action": "SELL",
+    "exchange": "NSE",
+    "symbol": "BHEL-EQ",
+    "action": "BUY",
     "product": "MIS",
     "pricetype": "MARKET",
     "quantity": "1",
@@ -143,17 +143,13 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 - BFO: BSE Futures & Options
 - BCD: BSE Currency
 - MCX: MCX Commodity
-- MCXSXCM: MCXSX Equity
-- MCXSXFO: MCXSX Futures & Options
-- MCXSX: MCXSX Currency
 - NCDEX: NCDEX Commodity
 
 ## Product Type
 - CNC: Cash & Carry for equity
 - NRML: Normal for futures and options
 - MIS: Intraday Squareoff
-- CO: Cover Order
-- BO: Bracket Order
+
 
 ## Price Type
 - MARKET: Market Order
