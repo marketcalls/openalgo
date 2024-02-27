@@ -1,159 +1,70 @@
 # database/auth_db.py
 
+
 import os
-import psycopg2
 
 
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(database=os.getenv('POSTGRES_DATABASE'),
-                                host=os.getenv('POSTGRES_HOST'),
-                                user=os.getenv('POSTGRES_USER'),
-                                password=os.getenv('POSTGRES_PASSWORD'),
-                                port=os.getenv('POSTGRES_PORT'),
-                                sslmode=os.getenv('POSTGRES_SSLMODE'))
-        return conn
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error while connecting to PostgreSQL", error)
-        return None
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import create_engine, UniqueConstraint
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy.sql import func
+from dotenv import load_dotenv
+from database.db import db 
+
+load_dotenv()
+
+DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
+
+engine = create_engine(DATABASE_URL)
+db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+Base = declarative_base()
+Base.query = db_session.query_property()
+
+class Auth(Base):
+    __tablename__ = 'auth'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    auth = Column(String(1000), nullable=False)
+
+class ApiKeys(Base):
+    __tablename__ = 'api_keys'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=False, unique=True)
+    api_key = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+def init_db():
+    print("Initializing Auth DB")
+    Base.metadata.create_all(bind=engine)
 
 def upsert_auth(name, auth_token):
-    conn = get_db_connection()
-    if conn is None:
-        return None
-    try:
-        cursor = conn.cursor()
-        upsert_sql = """
-        INSERT INTO auth (name, auth) VALUES (%s, %s)
-        ON CONFLICT (name) DO UPDATE
-        SET auth = EXCLUDED.auth
-        RETURNING id;
-        """
-        values = (name, auth_token)
-        cursor.execute(upsert_sql, values)
-        inserted_id = cursor.fetchone()[0]
-        conn.commit()
-        return inserted_id
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error while working with PostgreSQL", error)
-        conn.rollback()
-        return None
-    finally:
-        cursor.close()
-        conn.close()
+    auth_obj = Auth.query.filter_by(name=name).first()
+    if auth_obj:
+        auth_obj.auth = auth_token
+    else:
+        auth_obj = Auth(name=name, auth=auth_token)
+        db_session.add(auth_obj)
+    db_session.commit()
+    return auth_obj.id
 
 def get_auth_token(name):
-    conn = get_db_connection()
-    if conn is None:
-        return None
-    try:
-        cursor = conn.cursor()
-        select_sql = "SELECT auth FROM auth WHERE name = %s;"
-        cursor.execute(select_sql, (name,))
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-        else:
-            return None
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def ensure_auth_table_exists():
-    conn = get_db_connection()
-    if conn is None:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT FROM 
-                    information_schema.tables 
-                WHERE 
-                    table_schema = 'public' AND 
-                    table_name = 'auth'
-            );
-        """)
-        exists = cursor.fetchone()[0]
-        if not exists:
-            cursor.execute("""
-                CREATE TABLE auth (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(255) UNIQUE,
-                    auth VARCHAR(1000)
-                );
-            """)
-            conn.commit()
-            print("Auth table created successfully.")
-        return True
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error ensuring auth table exists:", error)
-        conn.rollback()
-        return False
-    finally:
-        cursor.close()
-        conn.close()
-
-def ensure_api_keys_table_exists():
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            # Create the table with 'user_id' as an INTEGER and add a UNIQUE constraint.
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    id SERIAL PRIMARY KEY,
-                    user_id VARCHAR NOT NULL UNIQUE,
-                    api_key TEXT NOT NULL,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            conn.commit()
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error creating API keys table", error)
-    finally:
-        if conn is not None:
-            conn.close()
-
+    auth_obj = Auth.query.filter_by(name=name).first()
+    return auth_obj.auth if auth_obj else None
 
 def upsert_api_key(user_id, api_key):
-    conn = get_db_connection()
-    try:
-        
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO api_keys (user_id, api_key) VALUES (%s, %s) 
-                ON CONFLICT (user_id) DO UPDATE SET api_key = EXCLUDED.api_key RETURNING id;
-            """, (user_id, api_key))
-            key_id = cur.fetchone()[0]
-            conn.commit()
-            return key_id
-    except ValueError:
-        print(f"Error: user_id '{user_id}' cannot be converted to an integer.")
-        return None
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error upserting API key", error)
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
-
+    api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+    if api_key_obj:
+        api_key_obj.api_key = api_key
+    else:
+        api_key_obj = ApiKeys(user_id=user_id, api_key=api_key)
+        db_session.add(api_key_obj)
+    db_session.commit()
+    return api_key_obj.id
 
 def get_api_key(user_id):
-    conn = get_db_connection()
-    if conn is None:
-        return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT api_key FROM api_keys WHERE user_id = %s;", (user_id,))
-            result = cur.fetchone()
-            if result:
-                return result[0]
-            else:
-                return None
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error fetching API key", error)
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
+    api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+    return api_key_obj.api_key if api_key_obj else None
+
+

@@ -10,7 +10,7 @@ import os
 import pyotp
 import http.client
 import json
-from database.auth_db import upsert_auth, ensure_auth_table_exists
+from database.auth_db import upsert_auth
 from database.master_contract_db import master_contract_download
 
 # Load environment variables
@@ -94,12 +94,7 @@ def login():
 
                 session.modified = True
 
-                #check for existence of the table
-                if not ensure_auth_table_exists():
-                    return jsonify({
-                        'status': 'error',
-                        'message': 'Failed to ensure auth table exists'
-                    }), 500
+                
 
                 #writing to database
                 
@@ -119,6 +114,7 @@ def login():
                 return response
         
             except Exception as e:
+                
                 return jsonify({
                     'status': 'error',
                     'message': str(e)

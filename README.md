@@ -58,18 +58,14 @@ Before we begin, ensure you have the following:
 
 to install the necessary Python libraries.
 
-4. **Set Up PostgreSQL**:
-- Download and install PostgreSQL for Windows.
-- Remember the password you set during installation; the default username is `postgres`.
-- Use pgAdmin 4 to create a localhost server and a new database named `openalgo_db`.
 
-5. **Configure Environment Variables**: 
+4. **Configure Environment Variables**: 
 
 Rename the `.sample.env` file located in `openalgo` folder to `.env` 
 
 Update the `.env`  with your specific configurations as shown in the provided template.
 
-6. **Run the Application**: From the `openalgo` directory, start the Flask application with the command:
+5. **Run the Application**: From the `openalgo` directory, start the Flask application with the command:
 
 <code>python app.py</code>
 

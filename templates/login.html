@@ -33,7 +33,6 @@
 
                     // Simulate a delay to see the progress bar update (optional)
                     await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
-
                     if (data.master_contract_status && data.master_contract_status.status === 'success') {
                         progressBar.style.width = '100%';
                         loginStatus.textContent = 'Redirecting to dashboard...';
