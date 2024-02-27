@@ -4,7 +4,6 @@ pyotp
 pytz
 requests
 pandas
-psycopg2-binary
 pyngrok
 Flask-SQLAlchemy
 flask-bcrypt
