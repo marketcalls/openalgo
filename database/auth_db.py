@@ -14,8 +14,9 @@ from dotenv import load_dotenv
 from database.db import db 
 from cachetools import TTLCache
 
-# Define a cache for the auth tokens with a max size and a 60-second TTL
+# Define a cache for the auth tokens and api_key with a max size and a 60-second TTL
 auth_cache = TTLCache(maxsize=1024, ttl=60)
+api_key_cache = TTLCache(maxsize=1024, ttl=60)
 
 load_dotenv()
 
@@ -95,7 +96,26 @@ def upsert_api_key(user_id, api_key):
     return api_key_obj.id
 
 def get_api_key(user_id):
-    api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
-    return api_key_obj.api_key if api_key_obj else None
+    cache_key = f"api-key-{user_id}"
+    if cache_key in api_key_cache:
+        print(f"Cache hit for {cache_key}.")
+        return api_key_cache[cache_key]
+    else:
+        api_key_obj = get_api_key_dbquery(user_id)
+        if api_key_obj is not None:
+            api_key_cache[cache_key] = api_key_obj
+        return api_key_obj
 
+def get_api_key_dbquery(user_id):
+    try:
+        api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+        if api_key_obj:
+            print(f"The API key for user_id '{user_id}' is: {api_key_obj.api_key}")
+            return api_key_obj.api_key
+        else:
+            print(f"No API key found for user_id '{user_id}'.")
+            return None
+    except Exception as e:
+        print("Error while querying the database for API key:", e)
+        return None
 
