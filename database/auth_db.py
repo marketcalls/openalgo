@@ -75,7 +75,7 @@ def get_auth_token_dbquery(name):
     try:
         auth_obj = Auth.query.filter_by(name=name).first()
         if auth_obj:
-            print(f"The auth token for name '{name}' is: {auth_obj.auth}")
+            print(f"The auth token for name '{name}' is fetched from the Database")
             return auth_obj.auth
         else:
             print(f"No auth token found for name '{name}'.")
@@ -110,7 +110,7 @@ def get_api_key_dbquery(user_id):
     try:
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
         if api_key_obj:
-            print(f"The API key for user_id '{user_id}' is: {api_key_obj.api_key}")
+            print(f"The API key for user_id '{user_id}' is fetched from the Database")
             return api_key_obj.api_key
         else:
             print(f"No API key found for user_id '{user_id}'.")

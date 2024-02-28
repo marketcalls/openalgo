@@ -40,6 +40,9 @@ def place_order():
         #print(f'placeorder response : {place_order_api(data)}')
 
         # Check if the 'data' field is not null and the order was successfully placed
+        
+       
+        
         if res.status == 200 and response_data.get('data'):
             order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
             if order_id:
@@ -98,6 +101,12 @@ def place_smart_order():
         
         #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
         res, response_data = place_smartorder_api(data)
+
+        if res == None and response_data.get('message'):
+            return jsonify({
+                    'status': 'success',
+                    'message': response_data.get('message')
+                })
         
         # Check if the 'data' field is not null and the order was successfully placed
         if res.status == 200 and response_data.get('data'):

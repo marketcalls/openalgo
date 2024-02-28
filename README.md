@@ -133,6 +133,76 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 | disclosed_quantity  | Disclosed quantity   | Optional            | 0             |
 
 
+### Place Smart Order
+
+Sample Place Order with the /api/v1/placesmartorder which can be used with any trading platforms to place orders based on the open position
+<code>
+{
+"apikey":"<your_app_apikey>",
+"strategy:"Test Strategy",
+"symbol":"IDEA-EQ",
+"action":"BUY",
+"exchange":"NSE",
+"pricetype":"MARKET",
+"product":"MIS",
+"quantity":"0",
+"position_size": "5"
+}</code>
+<br>
+
+## Full Sample API Request
+<code>
+{
+    "apikey": "<your_app_apikey>",
+    "strategy": "Test Strategy",
+    "exchange": "NSE",
+    "symbol": "IDEA-EQ",
+    "action": "BUY",
+    "product": "MIS",
+    "pricetype": "MARKET",
+    "quantity": "1",
+    "position_size": "5"
+    "price": "0",
+    "trigger_price": "0",
+    "disclosed_quantity": "0",
+}</code>
+
+
+
+## Parameters Description
+
+| Parameters          | Description          | Mandatory/Optional  | Default Value |
+|---------------------|----------------------|---------------------|---------------|
+| apikey              | App API key          | Mandatory           | -             |
+| strategy            | Strategy name        | Mandatory           | -             |
+| exchange            | Exchange code        | Mandatory           | -             |
+| symbol              | Trading symbol       | Mandatory           | -             |
+| action              | Action (BUY/SELL)    | Mandatory           | -             |
+| product             | Product type         | Optional            | MIS           |
+| pricetype           | Price type           | Optional            | MARKET        |
+| quantity            | Quantity             | Mandatory           | -             |
+| position_size       | Position Size        | Mandatory           | -             |
+| price               | Price                | Optional            | 0             |
+| trigger_price       | Trigger price        | Optional            | 0             |
+| disclosed_quantity  | Disclosed quantity   | Optional            | 0             |
+
+
+## How Place Smart Order Works?
+PlaceSmartOrder API function, which allows traders to build intelligent trading systems that can automatically place orders based on existing trade positions in the position book.
+
+| Action | Qty (API) | Pos Size (API) | Current Open Pos | Action by OpenAlgo                     |
+|--------|-----------|----------------|------------------|----------------------------------------|
+| BUY    | 100       | 0              | 0                | No Open Pos Found. Buy +100 qty        |
+| BUY    | 100       | 100            | -100             | BUY 200 to match Open Pos in API Param |
+| BUY    | 100       | 100            | 100              | No Action. Position matched            |
+| BUY    | 100       | 200            | 100              | BUY 100 to match Open Pos in API Param |
+| SELL   | 100       | 0              | 0                | No Open Pos Found. SELL 100 qty        |
+| SELL   | 100       | -100           | +100             | SELL 200 to match Open Pos in API Param|
+| SELL   | 100       | -100           | -100             | No Action. Position matched            |
+| SELL   | 100       | -200           | -100             | SELL 100 to match Open Pos in API Param|
+
+
+
 # Order Constants
 
 ## Exchange

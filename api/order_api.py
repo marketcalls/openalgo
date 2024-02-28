@@ -91,65 +91,80 @@ def place_order_api(data):
     return res, response_data
 
 def place_smartorder_api(data):
-    # Extract the required fields from data
-    action = data['action']
-    desired_position_size = int(data['position_size'])
-    quantity = int(data['quantity'])
 
-    # Get the current open position for the given symbol, exchange, and product
-    current_position_size_str = get_open_position(data['symbol'], data['exchange'], map_product_type(data['product']))
-    print(f"Current Position : {current_position_size_str}")
-    # Convert current position size to integer
-    current_position_size = int(current_position_size_str) if current_position_size_str.isdigit() else 0
+    #If no API call is made in this function then res will return None
+    res = None
 
-    # Initialize the response dictionary
-    response = {
-        'status': 'error',
-        'message': 'Initial',
-        'orderid': None
-    }
+    # Extract necessary info from data
+    symbol = data.get("symbol")
+    exchange = data.get("exchange")
+    product = data.get("product")
+    position_size = int(data.get("position_size", "0"))
 
-    # Decide the action based on the current and desired positions
-    if action == "BUY":
-        if current_position_size < desired_position_size:
-            # Calculate the quantity to buy to match the desired position size
-            quantity_to_buy = desired_position_size - current_position_size
-            data['quantity'] = quantity_to_buy
-            data['action'] = 'BUY'
-            # Place the order with the adjusted quantity
-            #print(f'place_smartapi_request : {place_order_api(data)}')
-            response_data = place_order_api(data)
-            # Process response
-            if response_data['status'] == 'success' and 'orderid' in response_data['data']:
-                response['status'] = 'success'
-                response['message'] = 'Order placed successfully'
-                response['orderid'] = response_data['data']['orderid']
-            else:
-                response['message'] = response_data.get('message', 'Failed to place order')
-        else:
-            response['status'] = 'success'
-            response['message'] = 'Position is already matched or exceeded. No action taken.'
+    
 
-    elif action == "SELL":
-        if current_position_size > desired_position_size:
-            # Calculate the quantity to sell to match the desired position size
-            quantity_to_sell = current_position_size - desired_position_size
-            data['quantity'] = quantity_to_sell
-            data['action'] = 'SELL'
-            # Place the order with the adjusted quantity
-            response_data = place_order_api(data)
-            # Process response
-            if response_data['status'] == 'success' and 'orderid' in response_data['data']:
-                response['status'] = 'success'
-                response['message'] = 'Order placed successfully'
-                response['orderid'] = response_data['data']['orderid']
-            else:
-                response['message'] = response_data.get('message', 'Failed to place order')
-        else:
-            response['status'] = 'success'
-            response['message'] = 'Position is already matched or lower. No action taken.'
+    # Get current open position for the symbol
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product)))
+
+
+    print(f"position_size : {position_size}") 
+    print(f"Open Position : {current_position}") 
+    
+    # Determine action based on position_size and current_position
+    action = None
+    quantity = 0
+
+
+    # If both position_size and current_position are 0, do nothing
+    if position_size == 0 and current_position == 0:
+        action = data['action']
+        quantity = data['quantity']
+        print(f"action : {action}")
+        print(f"Quantity : {quantity}")
+        res, response = place_order_api(data)
+        print(res)
+        print(response)
+        
+        return res , response
+        
+    elif position_size == current_position:
+        response = {"status": "success", "message": "No action needed. Position size matches current position."}
+        return res, response  # res remains None as no API call was mad
+   
+   
+
+    if position_size == 0 and current_position>0 :
+        action = "SELL"
+        quantity = abs(current_position)
+    elif position_size == 0 and current_position<0 :
+        action = "BUY"
+        quantity = abs(current_position)
+    elif current_position == 0:
+        action = "BUY" if position_size > 0 else "SELL"
+        quantity = abs(position_size)
     else:
-        response['message'] = 'Invalid action specified.'
+        if position_size > current_position:
+            action = "BUY"
+            quantity = position_size - current_position
+            print(f"smart buy quantity : {quantity}")
+        elif position_size < current_position:
+            action = "SELL"
+            quantity = current_position - position_size
+            print(f"smart sell quantity : {quantity}")
 
-    return response
 
+
+
+    if action:
+        # Prepare data for placing the order
+        order_data = data.copy()
+        order_data["action"] = action
+        order_data["quantity"] = str(quantity)
+
+        print(order_data)
+        # Place the order
+        res, response = place_order_api(order_data)
+        print(res)
+        print(response)
+        
+        return res , response
