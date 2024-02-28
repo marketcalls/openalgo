@@ -101,7 +101,7 @@ Sample Place Order with the /api/v1/placeorder which can be used with any tradin
 ## Full Sample API Request
 <code>
 {
-    "apikey": "<your_app_apikey>",
+    "apikey": "your_app_apikey",
     "strategy": "Test Strategy",
     "exchange": "NSE",
     "symbol": "BHEL-EQ",
@@ -153,7 +153,7 @@ Sample Place Order with the /api/v1/placesmartorder which can be used with any t
 ## Full Sample API Request
 <code>
 {
-    "apikey": "<your_app_apikey>",
+    "apikey": "your_app_apikey",
     "strategy": "Test Strategy",
     "exchange": "NSE",
     "symbol": "IDEA-EQ",
