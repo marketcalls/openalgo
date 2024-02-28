@@ -43,7 +43,7 @@ Before we begin, ensure you have the following:
 - **Visual Studio Code (VS Code)** installed on Windows.
 - **Python** version 3.10 or 3.11 installed.
 - **Git** for cloning the repository (Download from [https://git-scm.com/downloads](https://git-scm.com/downloads)).
-- **PostgreSQL** for Windows (current version 16).
+
 
 ### Setup
 
