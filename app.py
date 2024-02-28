@@ -29,6 +29,7 @@ load_dotenv()
 app.secret_key = os.getenv('APP_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL') # Adjust the environment variable name as necessary
 
+
 # Initialize SQLAlchemy
 db.init_app(app)
 

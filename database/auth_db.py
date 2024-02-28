@@ -12,12 +12,22 @@ from sqlalchemy import Column, Integer, String, DateTime, Text
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
 from database.db import db 
+from cachetools import TTLCache
+
+# Define a cache for the auth tokens with a max size and a 60-second TTL
+auth_cache = TTLCache(maxsize=1024, ttl=60)
 
 load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=50,  # Increase pool size
+    max_overflow=100,  # Increase overflow
+    pool_timeout=10  # Increase timeout to 10 seconds
+)
+
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -50,8 +60,29 @@ def upsert_auth(name, auth_token):
     return auth_obj.id
 
 def get_auth_token(name):
-    auth_obj = Auth.query.filter_by(name=name).first()
-    return auth_obj.auth if auth_obj else None
+    cache_key = f"auth-{name}"
+    if cache_key in auth_cache:
+        print(f"Cache hit for {cache_key}.")
+        return auth_cache[cache_key]
+    else:
+        auth_obj = get_auth_token_dbquery(name)
+        if auth_obj is not None:
+            auth_cache[cache_key] = auth_obj
+        return auth_obj
+
+def get_auth_token_dbquery(name):
+    try:
+        auth_obj = Auth.query.filter_by(name=name).first()
+        if auth_obj:
+            print(f"The auth token for name '{name}' is: {auth_obj.auth}")
+            return auth_obj.auth
+        else:
+            print(f"No auth token found for name '{name}'.")
+            return None
+    except Exception as e:
+        print("Error while querying the database for auth token:", e)
+        return None
+
 
 def upsert_api_key(user_id, api_key):
     api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
