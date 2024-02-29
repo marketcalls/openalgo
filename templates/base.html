@@ -11,7 +11,7 @@
             var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
 
             socket.on('order_event', function(data) {
-                var bgColorClass = data.action === 'sell' ? 'bg-red-500' : 'bg-green-500';
+                var bgColorClass = data.action.toUpperCase() === 'BUY' ? 'bg-green-500' : 'bg-red-500';
                 var flashMessage = document.createElement('div');
                 flashMessage.className = `fixed bottom-3 right-3 md:bottom-5 md:right-5 ${bgColorClass} text-white py-2 px-4 rounded-lg text-sm`;
                 flashMessage.textContent = `${data.action.toUpperCase()} Order Placed for the Symbol: ${data.symbol} Orderid : ${data.orderid}`;
