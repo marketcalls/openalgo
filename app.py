@@ -58,7 +58,7 @@ if __name__ == '__main__':
         # Setup ngrok if allowed
         from pyngrok import ngrok 
         
-        public_url = ngrok.connect(5000, bind_tls=True).public_url  # Assuming Flask runs on the default port 5000
+        public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         print(" * ngrok URL: " + public_url + " *")
     else:
         print(" * ngrok is not allowed by environment variable settings *")
