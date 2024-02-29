@@ -52,9 +52,14 @@ Before we begin, ensure you have the following:
 
 <code>git clone https://github.com/marketcalls/openalgo</code>
 
-3. **Install Dependencies**: Navigate to the directory where OpenAlgo is cloned and execute:
+3. **Install Dependencies**: 
+
+Windows users Navigate to the directory where OpenAlgo is cloned and execute:
 
 <code>pip install -r requirements.txt</code>
+
+Linux/Nginx users Navigate to the directory where OpenAlgo is cloned and execute:
+<code>pip install -r requirements-nginx.txt</code>
 
 to install the necessary Python libraries.
 
@@ -65,9 +70,18 @@ Rename the `.sample.env` file located in `openalgo` folder to `.env`
 
 Update the `.env`  with your specific configurations as shown in the provided template.
 
-5. **Run the Application**: From the `openalgo` directory, start the Flask application with the command:
+5. **Run the Application**: 
+
+From the `openalgo` directory, start the Flask application with the command:
 
 <code>python app.py</code>
+
+If you are using nginx it is recommded to execute using gunicorn with 
+eventlet or gevent (in this app we are using eventlet).
+<br>
+<code>gunicorn --worker-class eventlet -w 1 app:app</code>
+
+In case of running using Gunicorn, -w 1 specifies that you should only use one worker process. This is important because WebSocket connections are persistent and stateful; having more than one worker would mean that a user could be switched between different workers, which would break the connection.
 
 
 ### Accessing OpenAlgo
@@ -245,17 +259,6 @@ external web application
 For Configuration Instructions Visit the Tutorial
 [https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html](https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html)
 
-## Additional Configuration If you are Hosting in Linux Ubuntu Nginx Configuration
-
-Install gunicorn and eventlet or gevent
-<code>
-pip install gunicorn eventlet
-
-or
-
-pip install gunicorn gevent</code>
-
-and config your nginx files accordingly
 
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
