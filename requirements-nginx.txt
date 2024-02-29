@@ -1,0 +1,14 @@
+Flask
+flask-socketio
+python-dotenv
+pyotp
+pytz
+requests
+pandas
+pyngrok
+Flask-SQLAlchemy
+flask-bcrypt
+SQLAlchemy
+cachetools
+gunicorn
+eventlet
