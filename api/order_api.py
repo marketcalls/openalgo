@@ -1,7 +1,7 @@
 import http.client
 import json
 import os
-from database.auth_db import get_auth_token, get_api_key
+from database.auth_db import get_auth_token
 from database.token_db import get_token
 from mapping.transform_data import transform_data , map_product_type
 

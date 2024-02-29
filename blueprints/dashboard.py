@@ -2,7 +2,6 @@ from flask import Blueprint, render_template, session, redirect, url_for
 from database.auth_db import get_auth_token
 import os 
 import http.client
-import psycopg2
 import json 
 
 

@@ -1,9 +1,6 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
-from database.auth_db import get_auth_token
-import http.client
-import json
-import os
+
 
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')

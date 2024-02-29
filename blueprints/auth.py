@@ -5,7 +5,6 @@ from flask import current_app as app
 from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
-import time 
 import os
 import pyotp
 import http.client
@@ -130,7 +129,7 @@ def logout():
             username = os.getenv('LOGIN_USERNAME')
             
             #writing to database      
-            inserted_id = upsert_auth(username, "")
+            inserted_id = upsert_auth(username, "", revoke=True)
             if inserted_id is not None:
                 print(f"Database Upserted record with ID: {inserted_id}")
             else:

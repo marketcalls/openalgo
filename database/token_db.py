@@ -5,7 +5,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
 
 from cachetools import TTLCache
-from functools import lru_cache
+
 
 # Define a cache for the tokens with a max size and a 60-second TTL
 token_cache = TTLCache(maxsize=1024, ttl=60)

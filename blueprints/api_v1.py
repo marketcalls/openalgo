@@ -1,10 +1,8 @@
 from flask import Blueprint, request, jsonify
-from database.auth_db import get_auth_token, get_api_key
-from database.token_db import get_token
-from mapping.transform_data import transform_data
+from database.auth_db import get_api_key
 from api.order_api import place_order_api, place_smartorder_api
-import http.client
-import json
+from extensions import socketio  # Import SocketIO
+
 import os
 
 # Create a Blueprint for version 1 of the API
@@ -45,6 +43,8 @@ def place_order():
         
         if res.status == 200 and response_data.get('data'):
             order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+            socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
+            
             if order_id:
                 return jsonify({
                     'status': 'success',
@@ -111,6 +111,7 @@ def place_smart_order():
         # Check if the 'data' field is not null and the order was successfully placed
         if res.status == 200 and response_data.get('data'):
             order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+            socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             if order_id:
                 return jsonify({
                     'status': 'success',

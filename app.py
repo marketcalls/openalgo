@@ -1,4 +1,5 @@
 from flask import Flask
+from extensions import socketio  # Import SocketIO
 from blueprints.auth import auth_bp 
 from blueprints.dashboard import dashboard_bp
 from blueprints.orders import orders_bp
@@ -22,6 +23,11 @@ import os
 
 # Initialize Flask application
 app = Flask(__name__)
+
+# Initialize SocketIO
+socketio.init_app(app)  # Link SocketIO to the Flask app
+
+
 load_dotenv()
 
 
@@ -48,8 +54,8 @@ if __name__ == '__main__':
     
     # Setup ngrok
        
-    #public_url = ngrok.connect(name='flask').public_url 
-    #print(" * ngrok URL: " + public_url + " *")
+    public_url = ngrok.connect(name='flask').public_url 
+    print(" * ngrok URL: " + public_url + " *")
 
     with app.app_context():
         # Ensure all the tables exist
@@ -59,4 +65,4 @@ if __name__ == '__main__':
         ensure_token_tables_exists()
 
 
-    app.run()
+    socketio.run(app)
