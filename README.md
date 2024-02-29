@@ -235,5 +235,27 @@ PlaceSmartOrder API function, which allows traders to build intelligent trading 
 - YES: Yes
 - NO: No
 <br>
+
+
+## NGROK Configuration
+If in case you are hosting in your local server / Windows Desktop/Laptop then one can try
+NGROK and configure the domain name to Send Trading Alerts from Tradingview, Google Docs, ChartInk or any
+external web application
+
+For Configuration Instructions Visit the Tutorial
+[https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html](https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html)
+
+## Additional Configuration If you are Hosting in Linux Ubuntu Nginx Configuration
+
+Install gunicorn and eventlet or gevent
+<code>
+pip install gunicorn eventlet
+
+or
+
+pip install gunicorn gevent</code>
+
+and config your nginx files accordingly
+
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
