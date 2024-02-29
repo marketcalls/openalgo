@@ -1,4 +1,5 @@
 Flask
+flask-socketio
 python-dotenv
 pyotp
 pytz

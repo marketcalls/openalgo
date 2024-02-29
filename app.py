@@ -7,7 +7,6 @@ from blueprints.search import search_bp
 from blueprints.api_v1 import api_v1_bp
 from blueprints.apikey import api_key_bp
 from blueprints.core import core_bp  # Import the core blueprint
-from pyngrok import ngrok 
 
 from database.db import db 
 
@@ -54,8 +53,16 @@ if __name__ == '__main__':
     
     # Setup ngrok
        
-    public_url = ngrok.connect(name='flask').public_url 
-    print(" * ngrok URL: " + public_url + " *")
+    # Check if NGROK_ALLOW is set to 'TRUE' in the environment
+    if os.getenv('NGROK_ALLOW') == 'TRUE':
+        # Setup ngrok if allowed
+        from pyngrok import ngrok 
+        
+        public_url = ngrok.connect(5000, bind_tls=True).public_url  # Assuming Flask runs on the default port 5000
+        print(" * ngrok URL: " + public_url + " *")
+    else:
+        print(" * ngrok is not allowed by environment variable settings *")
+
 
     with app.app_context():
         # Ensure all the tables exist
