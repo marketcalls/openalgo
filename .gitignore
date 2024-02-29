@@ -8,9 +8,10 @@ Thumbs.db
 .vscode/
 .idea/
 .python-version
-node_modules/
-build/
-dist/
+
+
+#DB Files and Log/Tmp Files
+
 *.egg-info/
 *.db
 *.sqlite
@@ -26,4 +27,16 @@ venv/
 ENV/ 
 env.bak/ 
 venv.bak/ 
+
+# Node modules
+/node_modules/
+
+# Build output
+/dist/
+/build/
+/.next/
+/out/
+
+# Tailwind CSS output
+# **/output.css
 
