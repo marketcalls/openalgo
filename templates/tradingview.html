@@ -7,37 +7,31 @@
 
 <style>
 
+    .vertical-space {
+        height: 20px; /* or you can use margin */
+    }
+
+    .margin-bottom {
+    margin-bottom: 20px; /* Add space below the element */
+    }
+
     #json-output-container {
         display: none; /* Initially hide the Prism output container */
         width: 100%; /* Full width */
         max-width: 700px; /* Maximum width, but you can adjust this value */
-        margin: left; /* Center the container */
+        margin: auto; /* Center the container */
     }
 
     #symbol, #product {
         width: 100%; /* Full width */
         max-width: 300px; /* Maximum width, but you can adjust this value */
-        margin-left: auto; /* Align left */
-        margin-right: auto; /* Ensure it remains centered */
+        margin: auto; /* Align left */
     }
 
     #webhook-info {
         width: 100%; /* Full width */
         max-width: 700px; /* Maximum width, adjust this value as needed */
-        margin: left; /* Center align */
-        
-    }
-
-    @media (max-width: 1024px) {
-        #json-output-container, #symbol, #product, #webhook-info {
-            max-width: 90%; /* Slightly less width on smaller screens */
-        }
-    }
-
-    @media (max-width: 768px) {
-        #json-output-container, #symbol, #product, #webhook-info {
-            max-width: 80%; /* Even less width on even smaller screens */
-        }
+        margin: auto; /* Center align */
     }
 
     #copy-success-alert {
@@ -46,6 +40,7 @@
         padding-left: 1rem; /* Space between button and alert message */
         line-height: 2.5rem; /* Align with the button height */
     }
+
     /* Container for the copy button and the alert message */
     .copy-container {
         display: flex;
@@ -57,6 +52,40 @@
     pre[class*="language-"] {
         max-width: none;
     }
+
+    /* Adjustments for mobile devices */
+    @media (max-width: 768px) {
+        #json-output-container, #symbol, #product, #webhook-info {
+            max-width: 100%; /* Full width on smaller screens */
+            margin: auto;
+        }
+        
+        .copy-container, #webhook-info {
+            flex-direction: column; /* Stack elements vertically */
+        }
+        
+        #copy-success-alert, #copyAlert {
+            margin-top: 0.5rem; /* Space above the success message */
+        }
+        
+        /* Adjust the form input and select fields to be full width on mobile */
+        #symbol, #product {
+            max-width: 100%;
+        }
+        
+        /* Make the generate JSON button full width */
+        #tradingview-form button[type="submit"] {
+            width: 100%;
+            margin-top: 1rem; /* Margin above the button */
+        }
+        
+        /* Adjust the margin for the webhook info */
+        #webhook-info {
+            margin-top: 2rem; /* Space above the webhook info */
+        }
+    }
+ 
+
 
 </style>
 {% endblock %}
@@ -81,7 +110,9 @@
         <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
     </form>
 
-    
+    <!-- Space before the div -->
+    <div class="vertical-space"></div>
+
     <!-- Tradingview Webhook URL Information -->
     <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4 relative" role="alert">
         <p class="font-bold">Tradingview Webhook URL</p>
@@ -104,7 +135,9 @@
         <div id="copy-success-alert">Copied to clipboard!</div> <!-- Success alert -->
     </div>
 
-    <div style="margin-bottom: 2rem;"></div> <!-- Additional spacing -->
+    <!-- Space after the div -->
+    <div class="margin-bottom"></div>
+    <div class="margin-bottom"></div>
     
 
 <script>

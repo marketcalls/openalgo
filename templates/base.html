@@ -32,6 +32,36 @@
         white-space: pre-wrap; /* Ensures that the JSON text wraps */
         }
 
+        .container {
+            padding-bottom: 100px; /* Adjust the bottom padding to match footer height */
+        }
+
+        footer {
+            height: 100px; /* Set a fixed height for the footer */
+        }
+
+        /* Ensure the footer doesn't overlap content */
+        @media (min-width: 768px) {
+            body {
+                padding-bottom: 100px; /* Same as footer height */
+            }
+        }
+
+        /* Adjustments for mobile */
+        @media (max-width: 767px) {
+            .container {
+                padding-bottom: 80px; /* Adjust if needed for smaller footer on mobile */
+            }
+
+            footer {
+                height: 80px; /* Adjust if needed for smaller footer on mobile */
+            }
+
+            body {
+                padding-bottom: 80px; /* Same as footer height for mobile */
+            }
+        }
+
     </style>
 
     <!-- Favicon and touch icons for various devices -->
