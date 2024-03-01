@@ -1,6 +1,6 @@
 # License
 
-Copyright (c) [Year], Rajandran R
+Copyright (c) 2024, Rajandran R (Founder - Marketcalls)
 
 Website: [www.marketcalls.in](https://www.marketcalls.in)
 
