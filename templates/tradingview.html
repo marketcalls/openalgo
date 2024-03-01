@@ -1,0 +1,168 @@
+<!-- templates/tradingview.html -->
+{% extends 'base.html' %}
+
+{% block head %}
+<!-- Include Prism CSS -->
+<link href="{{ url_for('static', filename='css/prism.css') }}" rel="stylesheet" />
+
+<style>
+
+    #json-output-container {
+        display: none; /* Initially hide the Prism output container */
+        width: 100%; /* Full width */
+        max-width: 700px; /* Maximum width, but you can adjust this value */
+        margin: left; /* Center the container */
+    }
+
+    #symbol, #product {
+        width: 100%; /* Full width */
+        max-width: 300px; /* Maximum width, but you can adjust this value */
+        margin-left: auto; /* Align left */
+        margin-right: auto; /* Ensure it remains centered */
+    }
+
+    #webhook-info {
+        width: 100%; /* Full width */
+        max-width: 700px; /* Maximum width, adjust this value as needed */
+        margin: left; /* Center align */
+        
+    }
+
+    @media (max-width: 1024px) {
+        #json-output-container, #symbol, #product, #webhook-info {
+            max-width: 90%; /* Slightly less width on smaller screens */
+        }
+    }
+
+    @media (max-width: 768px) {
+        #json-output-container, #symbol, #product, #webhook-info {
+            max-width: 80%; /* Even less width on even smaller screens */
+        }
+    }
+
+    #copy-success-alert {
+        display: none; /* Initially hide the copy success alert */
+        color: green; /* Set the color of the success message */
+        padding-left: 1rem; /* Space between button and alert message */
+        line-height: 2.5rem; /* Align with the button height */
+    }
+    /* Container for the copy button and the alert message */
+    .copy-container {
+        display: flex;
+        align-items: center; /* Align button and message vertically */
+        margin-top: 1rem;
+    }
+
+    /* Extend the width of the Prism output box */
+    pre[class*="language-"] {
+        max-width: none;
+    }
+
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto py-8">
+    <h2 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h2> 
+    <form id="tradingview-form">
+        <div class="mb-4">
+            <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
+            <input type="text" id="symbol" name="symbol" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
+        </div>
+        <div class="mb-4">
+            <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
+            <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
+                <option value="MIS">MIS</option>
+                <option value="NRML">NRML</option>
+                <option value="CNC">CNC</option>
+            </select>
+        </div>
+        <!-- Include other fields for strategy details and quantity as needed -->
+        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
+    </form>
+
+    <!-- Tradingview Webhook URL Information -->
+    <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4" role="alert">
+        <p class="font-bold">Tradingview Webhook URL</p>
+        <p>https://ngrok_hosted_domain/api/placesmartorder</p>
+    </div>
+
+    <div id="json-output-container">
+        <pre class="language-json"><code id="json-output"></code></pre>
+        
+    <div class="copy-container">
+        <button id="copy-json" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Copy JSON</button>
+        <div id="copy-success-alert">Copied to clipboard!</div> <!-- Success alert -->
+    </div>
+
+    <div style="margin-bottom: 2rem;"></div> <!-- Additional spacing -->
+
+<script>
+    document.getElementById('tradingview-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        // Collect data from the form
+        var symbol = document.getElementById('symbol').value;
+        var product = document.getElementById('product').value;
+        // Prepare the data to be sent to the server
+        var formData = {
+            symbol: symbol,
+            product: product
+        };
+
+        // AJAX POST request to the /tradingview route
+        fetch('/tradingview', {
+            method: 'POST',
+            body: JSON.stringify(formData),
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok ' + response.statusText);
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Reconstruct the JSON object in the correct order
+            let orderedData = {
+                "apikey": data.apikey,
+                "strategy": data.strategy,
+                "symbol": data.symbol,
+                "action": data.action,
+                "exchange": data.exchange,
+                "pricetype": data.pricetype,
+                "product": data.product,
+                "quantity": data.quantity,
+                "position_size": data.position_size
+            };
+            // Update the display with the ordered and beautified jsonData
+            document.getElementById('json-output-container').style.display = 'block';
+            var jsonOutput = document.getElementById('json-output');
+            jsonOutput.textContent = JSON.stringify(orderedData, null, 2);
+            Prism.highlightElement(jsonOutput);
+        })
+        .catch(error => {
+            console.error('There has been a problem with your fetch operation:', error);
+        });
+    });
+
+    document.getElementById('copy-json').addEventListener('click', function() {
+        var jsonOutput = document.getElementById('json-output').textContent;
+        navigator.clipboard.writeText(jsonOutput).then(function() {
+            // Show the success alert
+            var alertBox = document.getElementById("copy-success-alert");
+            alertBox.style.display = 'inline'; // Use 'inline' instead of 'block' to flow in line with the button
+            setTimeout(() => { alertBox.style.display = 'none'; }, 3000); // Hide the alert after 3 seconds
+        }, function(err) {
+            console.error('Could not copy text: ', err);
+        });
+    });
+</script>
+
+<!-- Include Prism JS -->
+<script src="{{ url_for('static', filename='js/prism.js') }}"></script>
+
+
+{% endblock %}

@@ -6,6 +6,7 @@ from blueprints.orders import orders_bp
 from blueprints.search import search_bp
 from blueprints.api_v1 import api_v1_bp
 from blueprints.apikey import api_key_bp
+from blueprints.tv_json import tv_json_bp
 from blueprints.core import core_bp  # Import the core blueprint
 
 from database.db import db 
@@ -45,6 +46,7 @@ app.register_blueprint(orders_bp)
 app.register_blueprint(search_bp)
 app.register_blueprint(api_v1_bp)
 app.register_blueprint(api_key_bp)
+app.register_blueprint(tv_json_bp)
 app.register_blueprint(core_bp)  # Register the core blueprint
 
 

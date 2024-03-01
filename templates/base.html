@@ -28,6 +28,10 @@
         body {
             font-family: 'Open Sans', sans-serif;
         }
+        #json-output {
+        white-space: pre-wrap; /* Ensures that the JSON text wraps */
+        }
+
     </style>
 
     <!-- Favicon and touch icons for various devices -->
@@ -60,6 +64,7 @@
             <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
             <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
             <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
             <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
             <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
   </div>
@@ -89,6 +94,7 @@
             <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
             <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
             <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
             <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
             <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
         </div>
