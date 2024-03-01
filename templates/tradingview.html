@@ -63,7 +63,7 @@
 
 {% block content %}
 <div class="max-w-4xl mx-auto py-8">
-    <h2 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h2> 
+    <h1 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h1> 
     <form id="tradingview-form">
         <div class="mb-4">
             <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
@@ -81,12 +81,20 @@
         <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
     </form>
 
+    
     <!-- Tradingview Webhook URL Information -->
-    <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4" role="alert">
+    <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4 relative" role="alert">
         <p class="font-bold">Tradingview Webhook URL</p>
-        <p>https://your_ngrok_hosted_domain/api/placesmartorder</p>
-        <p>Ensure in the .env file NGROK_ALLOW = 'TRUE' and NGROK domain config is set</p>
+        <div class="flex items-center space-x-2">
+            <p id="webhookURL" class="flex-1">{{host}}/api/v1/placesmartorder</p>
+            <button onclick="copyToClipboard('#webhookURL', '#copyAlert')" class="bg-green-100 hover:bg-green-200 text-green-700 font-semibold py-2 px-4 border border-green-400 rounded transition-colors duration-300">
+                <img src="{{ url_for('static', filename='images/copy-icon.png') }}" alt="Copy" class="h-4 w-4"/>
+            </button>
+            <span id="copyAlert" class="text-green-500"></span>
+        </div>
     </div>
+
+
 
     <div id="json-output-container">
         <pre class="language-json"><code id="json-output"></code></pre>
@@ -97,6 +105,7 @@
     </div>
 
     <div style="margin-bottom: 2rem;"></div> <!-- Additional spacing -->
+    
 
 <script>
     document.getElementById('tradingview-form').addEventListener('submit', function(e) {
@@ -161,6 +170,27 @@
         });
     });
 </script>
+
+<script>
+    function copyToClipboard(selector, alertSelector) {
+        var text = document.querySelector(selector).textContent;
+        navigator.clipboard.writeText(text).then(function() {
+            // Show the success alert
+            var alertBox = document.querySelector(alertSelector);
+            alertBox.textContent = 'Copied!'; // Set the alert text
+            alertBox.style.display = 'inline'; // Show the alert
+            setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000); // Hide the alert after 3 seconds
+        }, function(err) {
+            // In case of an error
+            var alertBox = document.querySelector(alertSelector);
+            alertBox.textContent = 'Failed to copy'; // Set the alert text
+            alertBox.style.display = 'inline'; // Show the alert
+            setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000); // Hide the alert after 3 seconds
+        });
+    }
+</script>
+
+
 
 <!-- Include Prism JS -->
 <script src="{{ url_for('static', filename='js/prism.js') }}"></script>

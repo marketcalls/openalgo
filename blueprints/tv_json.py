@@ -1,9 +1,15 @@
 # blueprints/tv_json.py
 
-from flask import Blueprint, render_template, request, jsonify, session, url_for
+from flask import Blueprint, render_template, request, jsonify, session, url_for, redirect
 from database.tv_search import search_symbols
 from database.auth_db import get_api_key
 from collections import OrderedDict
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+host = os.getenv('HOST_SERVER')
 
 tv_json_bp = Blueprint('tv_json_bp', __name__, url_prefix='/tradingview')
 
@@ -46,4 +52,4 @@ def tradingview_json():
         response.headers.add('Content-Type', 'application/json')
         return response
     
-    return render_template('tradingview.html')
+    return render_template('tradingview.html',host=host)
