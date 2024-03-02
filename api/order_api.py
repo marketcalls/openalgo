@@ -107,8 +107,8 @@ def place_smartorder_api(data):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product)))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    #print(f"position_size : {position_size}") 
+    #print(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -119,11 +119,11 @@ def place_smartorder_api(data):
     if position_size == 0 and current_position == 0:
         action = data['action']
         quantity = data['quantity']
-        print(f"action : {action}")
-        print(f"Quantity : {quantity}")
+        #print(f"action : {action}")
+        #print(f"Quantity : {quantity}")
         res, response = place_order_api(data)
-        print(res)
-        print(response)
+        #print(res)
+        #print(response)
         
         return res , response
         
@@ -146,11 +146,11 @@ def place_smartorder_api(data):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            print(f"smart buy quantity : {quantity}")
+            #print(f"smart buy quantity : {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            print(f"smart sell quantity : {quantity}")
+            #print(f"smart sell quantity : {quantity}")
 
 
 
@@ -161,10 +161,10 @@ def place_smartorder_api(data):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        print(order_data)
+        #print(order_data)
         # Place the order
         res, response = place_order_api(order_data)
-        print(res)
-        print(response)
+        #print(res)
+        #print(response)
         
         return res , response

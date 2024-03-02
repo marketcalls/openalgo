@@ -85,7 +85,7 @@ def get_auth_token_dbquery(name):
     try:
         auth_obj = Auth.query.filter_by(name=name).first()
         if auth_obj and not auth_obj.is_revoked:
-            print(f"The auth token for name '{name}' is fetched from the Database")
+            #print(f"The auth token for name '{name}' is fetched from the Database")
             return auth_obj  # Return the Auth object
         else:
             print(f"No valid auth token found for name '{name}'.")
@@ -109,7 +109,7 @@ def upsert_api_key(user_id, api_key):
 def get_api_key(user_id):
     cache_key = f"api-key-{user_id}"
     if cache_key in api_key_cache:
-        print(f"Cache hit for {cache_key}.")
+        #print(f"Cache hit for {cache_key}.")
         return api_key_cache[cache_key]
     else:
         api_key_obj = get_api_key_dbquery(user_id)
@@ -121,7 +121,7 @@ def get_api_key_dbquery(user_id):
     try:
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
         if api_key_obj:
-            print(f"The API key for user_id '{user_id}' is fetched from the Database")
+            #print(f"The API key for user_id '{user_id}' is fetched from the Database")
             return api_key_obj.api_key
         else:
             print(f"No API key found for user_id '{user_id}'.")

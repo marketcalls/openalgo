@@ -41,7 +41,7 @@ class SymToken(Base):
 def get_token(symbol, exch_seg):
     cache_key = f"{symbol}-{exch_seg}"
     if cache_key in token_cache:
-        print(f"Cache hit for {cache_key}.")
+        #print(f"Cache hit for {cache_key}.")
         return token_cache[cache_key]
     else:
         token = get_token_dbquery(symbol, exch_seg)
@@ -53,7 +53,7 @@ def get_token_dbquery(symbol, exch_seg):
     try:
         sym_token = db_session.query(SymToken).filter_by(symbol=symbol, exch_seg=exch_seg).first()
         if sym_token:
-            print(f"The token for symbol '{symbol}' and exch_seg '{exch_seg}' is: {sym_token.token}")
+            #print(f"The token for symbol '{symbol}' and exch_seg '{exch_seg}' is: {sym_token.token}")
             return sym_token.token
         else:
             print(f"No match found for symbol '{symbol}' and exch_seg '{exch_seg}'.")
