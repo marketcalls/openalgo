@@ -6,6 +6,7 @@ from blueprints.orders import orders_bp
 from blueprints.search import search_bp
 from blueprints.api_v1 import api_v1_bp
 from blueprints.apikey import api_key_bp
+from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.core import core_bp  # Import the core blueprint
 
@@ -14,7 +15,7 @@ from database.db import db
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.master_contract_db import init_db as ensure_master_contract_tables_exists
 from database.token_db import init_db as ensure_token_tables_exists
-
+from database.apilog_db import init_db as ensure_api_log_tables_exists
 
 
 from dotenv import load_dotenv
@@ -46,6 +47,7 @@ app.register_blueprint(orders_bp)
 app.register_blueprint(search_bp)
 app.register_blueprint(api_v1_bp)
 app.register_blueprint(api_key_bp)
+app.register_blueprint(log_bp)
 app.register_blueprint(tv_json_bp)
 app.register_blueprint(core_bp)  # Register the core blueprint
 
@@ -72,6 +74,6 @@ if __name__ == '__main__':
         ensure_auth_tables_exists()
         ensure_master_contract_tables_exists()
         ensure_token_tables_exists()
-
+        ensure_api_log_tables_exists()
 
     socketio.run(app)

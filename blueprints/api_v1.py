@@ -1,8 +1,9 @@
 from flask import Blueprint, request, jsonify
 from database.auth_db import get_api_key
+from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api
 from extensions import socketio  # Import SocketIO
-
+import copy
 import os
 
 # Create a Blueprint for version 1 of the API
@@ -13,6 +14,9 @@ def place_order():
     try:
         # Extracting JSON data from the POST request
         data = request.json
+        order_request_data = copy.deepcopy(request.json)
+        # Remove 'apikey' from the copy
+        order_request_data.pop('apikey', None)
 
         # Mandatory fields list
         mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity']
@@ -38,18 +42,21 @@ def place_order():
         #print(f'placeorder response : {place_order_api(data)}')
 
         # Check if the 'data' field is not null and the order was successfully placed
-        
-       
+              
         
         if res.status == 200 and response_data.get('data'):
             order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             
             if order_id:
-                return jsonify({
-                    'status': 'success',
-                    'orderid': order_id
-                })
+                order_response_data = {
+                       'status': 'success',
+                        'orderid': order_id
+                        }
+                # Call the asynchronous log function
+                executor.submit(async_log_order,'placeorder',order_request_data, order_response_data)
+                return jsonify(order_response_data)
+                
             else:
                 # In case 'orderid' is not in the 'data'
                 return jsonify({
@@ -78,6 +85,10 @@ def place_smart_order():
     try:
         # Extracting JSON data from the POST request
         data = request.json
+        
+        order_request_data = copy.deepcopy(request.json)
+        # Remove 'apikey' from the copy
+        order_request_data.pop('apikey', None)
 
         # Mandatory fields list
         mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity','position_size']
@@ -103,20 +114,28 @@ def place_smart_order():
         res, response_data = place_smartorder_api(data)
 
         if res == None and response_data.get('message'):
-            return jsonify({
+            order_response_data = {
                     'status': 'success',
                     'message': response_data.get('message')
-                })
+                }
+            
+            # Call the asynchronous log function
+            executor.submit(async_log_order,'placesmartorder',order_request_data, order_response_data)
+            return jsonify(order_response_data)
         
         # Check if the 'data' field is not null and the order was successfully placed
         if res.status == 200 and response_data.get('data'):
             order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             if order_id:
-                return jsonify({
-                    'status': 'success',
-                    'orderid': order_id
-                })
+                order_response_data = {
+                       'status': 'success',
+                        'orderid': order_id
+                        }
+                # Call the asynchronous log function
+                executor.submit(async_log_order,'placesmartorder',order_request_data, order_response_data)
+                return jsonify(order_response_data)
+            
             else:
                 # In case 'orderid' is not in the 'data'
                 return jsonify({

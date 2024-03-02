@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="overflow-x-auto relative shadow-md sm:rounded-lg">
+    <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="py-3 px-6">Order No</th> <!-- Add a header for the numbering -->
+                <th scope="col" class="py-3 px-6">API Type</th>
+                <th scope="col" class="py-3 px-6">Request Data</th>
+                <th scope="col" class="py-3 px-6">Response Data</th>
+                <th scope="col" class="py-3 px-6">Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                <td class="py-4 px-6">{{ loop.index }}</td> <!-- Use loop.index for the numbering -->
+                <td class="py-4 px-6">{{ log.api_type }}</td>
+                <td class="py-4 px-6">{{ log.request_data }}</td>
+                <td class="py-4 px-6">{{ log.response_data }}</td>
+                <td class="py-4 px-6">{{ log.created_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
