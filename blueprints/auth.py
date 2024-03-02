@@ -9,6 +9,7 @@ import os
 import pyotp
 import http.client
 import json
+from threading import Thread
 from database.auth_db import upsert_auth
 from database.master_contract_db import master_contract_download
 
@@ -16,6 +17,16 @@ from database.master_contract_db import master_contract_download
 load_dotenv()
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
+
+def async_master_contract_download(user):
+    """
+    Asynchronously download the master contract and emit a WebSocket event upon completion.
+    """
+    master_contract_status = master_contract_download()  # Assuming this is a blocking call
+    return master_contract_status
+    
+
+
 
 def get_session_expiry_time():
     now_utc = datetime.now(pytz.timezone('UTC'))
@@ -100,17 +111,16 @@ def login():
                 inserted_id = upsert_auth(login_username, AUTH_TOKEN)
                 if inserted_id is not None:
                     print(f"Database Upserted record with ID: {inserted_id}")
+                    thread = Thread(target=async_master_contract_download, args=(session['user'],))
+                    thread.start()
+                    # Send a response that indicates a successful login and an immediate redirect
+                    return jsonify({'status': 'success', 'message': 'Login successful'})
+
                 else:
                     print("Failed to upsert auth token")
 
                 
-                #Download Master Contract
-                master_contract_status = master_contract_download()
-                response = make_response(jsonify({
-                    'status': 'success',
-                    'master_contract_status': master_contract_status
-                }))
-                return response
+
         
             except Exception as e:
                 

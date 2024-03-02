@@ -7,22 +7,51 @@
     <title>OpenAlgo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
-
+    
+            // Listener for master contract download events
+            socket.on('master_contract_download', function(data) {
+                var flashMessage = document.createElement('div');
+                flashMessage.className = 'fixed bottom-3 right-3 md:bottom-5 md:right-5 bg-blue-500 text-white py-2 px-4 rounded-lg text-sm';
+                flashMessage.textContent = `Master Contract: ${data.message}`;
+                document.body.appendChild(flashMessage);
+                setTimeout(function() {
+                    document.body.removeChild(flashMessage);
+                }, 5000);
+            });
+    
+            
+            // Listener for order events (existing functionality)
             socket.on('order_event', function(data) {
                 var bgColorClass = data.action.toUpperCase() === 'BUY' ? 'bg-green-500' : 'bg-red-500';
                 var flashMessage = document.createElement('div');
                 flashMessage.className = `fixed bottom-3 right-3 md:bottom-5 md:right-5 ${bgColorClass} text-white py-2 px-4 rounded-lg text-sm`;
-                flashMessage.textContent = `${data.action.toUpperCase()} Order Placed for the Symbol: ${data.symbol} Orderid : ${data.orderid}`;
+                flashMessage.textContent = `${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`;
                 document.body.appendChild(flashMessage);
                 setTimeout(function() {
                     document.body.removeChild(flashMessage);
                 }, 5000);
             });
         });
+    
+        // Functions for mobile menu toggle (existing functionality)
+        function toggleMobileMenu() {
+            var menu = document.getElementById('mobile-menu');
+            menu.classList.remove('-translate-x-full');
+            document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'none';
+        }
+        
+        function closeMobileMenu() {
+            var menu = document.getElementById('mobile-menu');
+            menu.classList.add('-translate-x-full');
+            document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'block';
+        }
     </script>
+    
+
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
@@ -134,22 +163,6 @@
         
     </div>
 </nav>
-
-<script>
-    function toggleMobileMenu() {
-        var menu = document.getElementById('mobile-menu');
-        menu.classList.remove('-translate-x-full');
-        // Hide the hamburger menu button when the menu is open
-        document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'none';
-    }
-    
-    function closeMobileMenu() {
-        var menu = document.getElementById('mobile-menu');
-        menu.classList.add('-translate-x-full');
-        // Show the hamburger menu button when the menu is closed
-        document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'block';
-    }
-</script>
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
     <div class="container mx-auto mt-24">

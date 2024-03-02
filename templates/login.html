@@ -6,16 +6,15 @@
     <title>OpenAlgo Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
+    
         async function login(event) {
             event.preventDefault(); // Prevent the form from submitting via the browser.
 
             const form = document.getElementById('loginForm');
             const formData = new FormData(form);
             const loginStatus = document.getElementById('loginStatus');
-            const progressBar = document.getElementById('progressBar');
 
-            loginStatus.textContent = 'Logging in and Downloading Master Contract...';
-            progressBar.style.width = '25%'; // Start the progress bar at 25%
+            loginStatus.textContent = 'Logging in...';
 
             try {
                 const response = await fetch('/auth/login', {
@@ -26,40 +25,24 @@
 
                 if (data.status === 'error') {
                     loginStatus.textContent = 'Error: ' + data.message;
-                    progressBar.style.width = '0%'; // Reset progress bar on error
                 } else {
-                    loginStatus.textContent = 'Downloading Master Contract Successful...';
-                    progressBar.style.width = '50%'; // Increase the progress bar on successful login
-
-                    // Simulate a delay to see the progress bar update (optional)
-                    await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
-                    if (data.master_contract_status && data.master_contract_status.status === 'success') {
-                        progressBar.style.width = '100%';
-                        loginStatus.textContent = 'Redirecting to dashboard...';
-                        // Redirect to the dashboard after a short delay
-                        setTimeout(() => {
-                            window.location.href = '/dashboard';
-                        }, 1000); // Redirect after 1 second
-                    } else {
-                        // Handle the case where the master contract download fails
-                        loginStatus.textContent = 'Failed to download master contract: ' + (data.master_contract_status ? data.master_contract_status.message : 'Unknown error');
-                        progressBar.style.width = '0%'; // Reset progress bar on error
-                    }
+                    // Redirect immediately after login success
+                    window.location.href = '/dashboard';
                 }
             } catch (error) {
                 loginStatus.textContent = 'Login failed: Invalid Credentials';
-                progressBar.style.width = '0%'; // Reset progress bar on failure
             }
         }
+
     </script>
 </head>
 
 <body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">
     <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-sm w-full">
         <div class="flex justify-center mb-6">
-            <img class="h-12 w-auto" src="https://tailwindui.com/img/logos/workflow-mark-indigo-500.svg" alt="Your Company">
+            <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
         </div>
-        <h2 class="text-3xl font-bold mb-6 text-center">Sign in to your account</h2>
+        <h2 class="text-3xl font-bold mb-6 text-center">Sign in to OpenAlgo</h2>
         <form id="loginForm" onsubmit="login(event)" class="space-y-6">
             <div>
                 <label for="username" class="block text-sm font-medium text-gray-300">Username</label>
@@ -74,9 +57,6 @@
             </div>
         </form>
         <div id="loginStatus" class="text-gray-400 mt-4 text-center"></div>
-        <div class="w-full bg-gray-700 rounded-full mt-2">
-            <div id="progressBar" class="bg-blue-600 text-xs font-medium text-blue-100 text-center p-0.5 leading-none rounded-full" style="width: 0%"> </div>
-        </div>
     </div>
     <footer class="bg-gray-800 text-white text-center py-4 shadow-lg w-full fixed bottom-0 left-0 right-0">
         <p>Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>

@@ -11,6 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 from database.db import db 
+from extensions import socketio  # Import SocketIO
 
 load_dotenv()
 
@@ -81,10 +82,14 @@ def master_contract_download():
 
         delete_symtoken_table()  # Consider the implications of this action
         copy_from_dataframe(token_df)
-        return {'status': 'success', 'message': 'Master contract downloaded successfully'}
+                
+        return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+
+    
     except Exception as e:
         print(str(e))
-        return {'status': 'error', 'message': 'Failed to download master contract'}
+        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+
 
 
 def search_symbols(symbol):
