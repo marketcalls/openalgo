@@ -4,6 +4,7 @@ from itsdangerous import URLSafeTimedSerializer
 from database.auth_db import upsert_api_key , get_api_key
 import os
 
+
 api_key_bp = Blueprint('api_key_bp', __name__, url_prefix='/')
 
 app_secret_key = os.getenv('APP_KEY')

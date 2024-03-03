@@ -2,6 +2,7 @@
 
 from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
 from flask import current_app as app
+from limiter import limiter  # Import the limiter instance
 from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
@@ -38,8 +39,13 @@ def get_session_expiry_time():
     remaining_time = target_time_ist - now_ist
     return remaining_time
 
+@auth_bp.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify(error="Rate limit exceeded"), 429
+
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per minute")
 def login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
@@ -131,6 +137,7 @@ def login():
         else:
             # (implement error messaging as needed)
             return "Invalid credentials", 401
+        
 
 
 @auth_bp.route('/logout')

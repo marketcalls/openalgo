@@ -3,13 +3,21 @@ from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api
 from extensions import socketio  # Import SocketIO
+from limiter import limiter  # Import the limiter instance
 import copy
 import os
+
+
 
 # Create a Blueprint for version 1 of the API
 api_v1_bp = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 
+@api_v1_bp.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify(error="Rate limit exceeded"), 429
+
 @api_v1_bp.route('/placeorder', methods=['POST'])
+@limiter.limit("10 per second")  
 def place_order():
     try:
         # Extracting JSON data from the POST request
@@ -81,6 +89,7 @@ def place_order():
 
 
 @api_v1_bp.route('/placesmartorder', methods=['POST'])
+@limiter.limit("10 per second")  
 def place_smart_order():
     try:
         # Extracting JSON data from the POST request

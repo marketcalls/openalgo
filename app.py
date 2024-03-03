@@ -1,5 +1,6 @@
 from flask import Flask
 from extensions import socketio  # Import SocketIO
+from limiter import limiter  # Import the Limiter instance
 from blueprints.auth import auth_bp 
 from blueprints.dashboard import dashboard_bp
 from blueprints.orders import orders_bp
@@ -27,6 +28,9 @@ app = Flask(__name__)
 
 # Initialize SocketIO
 socketio.init_app(app)  # Link SocketIO to the Flask app
+
+# Initialize Flask-Limiter with the app object
+limiter.init_app(app)
 
 
 load_dotenv()
