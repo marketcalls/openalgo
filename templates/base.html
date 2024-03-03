@@ -7,10 +7,12 @@
     <title>OpenAlgo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+            var alertSound = document.getElementById('alert-sound');
     
             // Listener for master contract download events
             socket.on('master_contract_download', function(data) {
@@ -18,6 +20,7 @@
                 flashMessage.className = 'fixed bottom-3 right-3 md:bottom-5 md:right-5 bg-blue-500 text-white py-2 px-4 rounded-lg text-sm';
                 flashMessage.textContent = `Master Contract: ${data.message}`;
                 document.body.appendChild(flashMessage);
+                alertSound.play(); // Play the alert sound
                 setTimeout(function() {
                     document.body.removeChild(flashMessage);
                 }, 5000);
@@ -31,6 +34,7 @@
                 flashMessage.className = `fixed bottom-3 right-3 md:bottom-5 md:right-5 ${bgColorClass} text-white py-2 px-4 rounded-lg text-sm`;
                 flashMessage.textContent = `${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`;
                 document.body.appendChild(flashMessage);
+                alertSound.play(); // Play the alert sound
                 setTimeout(function() {
                     document.body.removeChild(flashMessage);
                 }, 5000);
