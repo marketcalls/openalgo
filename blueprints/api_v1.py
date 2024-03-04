@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api
+from api.order_api import place_order_api, place_smartorder_api, get_positions 
+from mapping.transform_data import map_product_type, reverse_map_product_type
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
@@ -166,3 +167,69 @@ def place_smart_order():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
     
+
+@api_v1_bp.route('/closeposition', methods=['POST'])
+@limiter.limit("10 per second")
+def close_position():
+    try:
+        # Extract the API key from the POST request
+        request_data = request.get_json()
+        request_api_key = request_data.get('apikey')
+
+        # Get the current API key from the environment or database
+        login_username = os.getenv('LOGIN_USERNAME')
+        current_api_key = get_api_key(login_username)
+
+        # Check if the provided API key matches the current API key
+        if request_api_key != current_api_key:
+            return jsonify({"message": "Wrong OpenAlgo API Key"}), 403
+
+        # Fetch the current open positions
+        positions_response = get_positions()
+
+        # Check if the positions data is null or empty
+        if positions_response['data'] is None or not positions_response['data']:
+            return jsonify({"message": "No Open Positions Found"}), 200
+
+        if positions_response['status']:
+            # Loop through each position to close
+            for position in positions_response['data']:
+                # Skip if net quantity is zero
+                if int(position['netqty']) == 0:
+                    continue
+
+                # Determine action based on net quantity
+                action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
+                quantity = abs(int(position['netqty']))
+
+                # Prepare the order payload
+                place_order_payload = {
+                    "apikey": current_api_key,
+                    "strategy": "Squareoff",
+                    "symbol": position['tradingsymbol'],
+                    "action": action,
+                    "exchange": position['exchange'],
+                    "pricetype": "MARKET",
+                    "product": reverse_map_product_type(position['producttype']),
+                    "quantity": str(quantity)
+                }              
+
+                print(f"sqoff request : {place_order_payload} ")
+
+                # Place the order to close the position
+                _, api_response = place_order_api(place_order_payload)
+                # Ensure place_order_api handles any errors and logs accordingly
+                print(api_response)
+                # Call the asynchronous log function and send alert in websocket
+                socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions SquaredOff'})
+                executor.submit(async_log_order,'squareoff',request_data, "All Open Positions SquaredOff")
+
+        return jsonify({'status': 'success',"message": "All Open Positions SquaredOff"}), 200
+
+    except KeyError as e:
+        # Handle the case where 'apikey' is not provided in the request
+        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+    except Exception as e:
+        # For any other exceptions
+        socketio.emit('close_position', {'message': 'Failed to SquaredOff' })
+        return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500

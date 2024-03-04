@@ -25,6 +25,18 @@
                     document.body.removeChild(flashMessage);
                 }, 5000);
             });
+
+            // Listener for master contract download events
+            socket.on('close_position', function(data) {
+                var flashMessage = document.createElement('div');
+                flashMessage.className = 'fixed bottom-3 right-3 md:bottom-5 md:right-5 bg-blue-500 text-white py-2 px-4 rounded-lg text-sm';
+                flashMessage.textContent = `Message: ${data.message}`;
+                document.body.appendChild(flashMessage);
+                alertSound.play(); // Play the alert sound
+                setTimeout(function() {
+                    document.body.removeChild(flashMessage);
+                }, 5000);
+            });
     
             
             // Listener for order events (existing functionality)
