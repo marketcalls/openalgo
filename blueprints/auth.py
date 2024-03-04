@@ -46,6 +46,7 @@ def ratelimit_handler(e):
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
 @limiter.limit("5 per minute")
+@limiter.limit("25 per hour")
 def login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
