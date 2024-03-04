@@ -2,11 +2,11 @@ from flask import Blueprint, request, jsonify
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api, get_positions 
-from mapping.transform_data import map_product_type, reverse_map_product_type
+from mapping.transform_data import reverse_map_product_type
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
-import os
+import os 
 
 
 
@@ -176,6 +176,10 @@ def close_position():
         request_data = request.get_json()
         request_api_key = request_data.get('apikey')
 
+        sqoff_request_data = copy.deepcopy(request.json)
+        # Remove 'apikey' from the copy
+        sqoff_request_data.pop('apikey', None)
+
         # Get the current API key from the environment or database
         login_username = os.getenv('LOGIN_USERNAME')
         current_api_key = get_api_key(login_username)
@@ -222,7 +226,7 @@ def close_position():
                 print(api_response)
                 # Call the asynchronous log function and send alert in websocket
                 socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions SquaredOff'})
-                executor.submit(async_log_order,'squareoff',request_data, "All Open Positions SquaredOff")
+                executor.submit(async_log_order,'squareoff',sqoff_request_data, "All Open Positions SquaredOff")
 
         return jsonify({'status': 'success',"message": "All Open Positions SquaredOff"}), 200
 
