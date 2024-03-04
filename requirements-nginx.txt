@@ -1,13 +1,14 @@
 Flask
 flask-socketio
+Flask-SQLAlchemy
+flask-bcrypt
+Flask-Limiter
 python-dotenv
 pyotp
 pytz
 requests
 pandas
 pyngrok
-Flask-SQLAlchemy
-flask-bcrypt
 SQLAlchemy
 cachetools
 gunicorn
