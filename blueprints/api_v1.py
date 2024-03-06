@@ -177,6 +177,13 @@ def close_position():
         request_data = request.get_json()
         request_api_key = request_data.get('apikey')
 
+        mandatory_fields = ['apikey', 'strategy']
+        missing_fields = [field for field in mandatory_fields if field not in data]
+
+        if missing_fields:
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
+
+
         sqoff_request_data = copy.deepcopy(request.json)
         # Remove 'apikey' from the copy
         sqoff_request_data.pop('apikey', None)
