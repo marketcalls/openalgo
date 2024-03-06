@@ -8,7 +8,7 @@ def transform_data(data,token):
     # Basic mapping
     transformed = {
         "apikey": data["apikey"],
-        "variety": "NORMAL",
+        "variety": map_variety(data["pricetype"]),
         "tradingsymbol": data["symbol"],
         "symboltoken": token,
         "transactiontype": data["action"].upper(),
@@ -18,7 +18,8 @@ def transform_data(data,token):
         "duration": "DAY",  # Assuming DAY as default; you might need logic to handle this if it can vary
         "price": data.get("price", "0"),
         "squareoff": "0",  # Assuming not applicable; adjust if needed
-        "stoploss": "0",  # Assuming not applicable; adjust if needed
+        "stoploss": data.get("trigger_price", "0"),  
+        "disclosedquantity": data.get("disclosed_quantity", "0"),
         "quantity": data["quantity"]
     }
 
@@ -51,6 +52,20 @@ def map_product_type(product):
         "MIS": "INTRADAY",
     }
     return product_type_mapping.get(product, "INTRADAY")  # Default to DELIVERY if not found
+
+
+def map_variety(pricetype):
+    """
+    Maps the pricetype to the existing order variety.
+    """
+    variety_mapping = {
+        "MARKET": "NORMAL",
+        "LIMIT": "NORMAL",
+        "SL": "STOPLOSS",
+        "SL-M": "STOPLOSS"
+    }
+    return variety_mapping.get(pricetype, "NORMAL")  # Default to DELIVERY if not found
+
 
 def reverse_map_product_type(product):
     """

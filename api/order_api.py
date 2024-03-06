@@ -3,7 +3,8 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type
+from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type
+
 
 def get_api_response(endpoint, method="GET", payload=''):
     login_username = os.getenv('LOGIN_USERNAME')
@@ -168,3 +169,48 @@ def place_smartorder_api(data):
         #print(response)
         
         return res , response
+    
+
+
+
+def close_all_positions(current_api_key):
+    # Fetch the current open positions
+    positions_response = get_positions()
+
+    # Check if the positions data is null or empty
+    if positions_response['data'] is None or not positions_response['data']:
+        return {"message": "No Open Positions Found"}, 200
+
+    if positions_response['status']:
+        # Loop through each position to close
+        for position in positions_response['data']:
+            # Skip if net quantity is zero
+            if int(position['netqty']) == 0:
+                continue
+
+            # Determine action based on net quantity
+            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
+            quantity = abs(int(position['netqty']))
+
+            # Prepare the order payload
+            place_order_payload = {
+                "apikey": current_api_key,
+                "strategy": "Squareoff",
+                "symbol": position['tradingsymbol'],
+                "action": action,
+                "exchange": position['exchange'],
+                "pricetype": "MARKET",
+                "product": reverse_map_product_type(position['producttype']),
+                "quantity": str(quantity)
+            }
+
+            print(place_order_payload)
+
+            # Place the order to close the position
+            _, api_response =   place_order_api(place_order_payload)
+
+            print(api_response)
+            
+            # Note: Ensure place_order_api handles any errors and logs accordingly
+
+    return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
