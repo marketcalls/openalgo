@@ -213,7 +213,6 @@ def close_position():
         socketio.emit('close_position', {'message': 'Failed to Square Off'})
         return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500
     
-    
 @api_v1_bp.route('/cancelorder', methods=['POST'])
 @limiter.limit("10 per second")
 def cancel_order_route():
@@ -223,11 +222,9 @@ def cancel_order_route():
         order_request_data = copy.deepcopy(data)  # For logging
         order_request_data.pop('apikey', None)  # Remove API key from data to be logged
 
-        print(request.json)
-
         # Mandatory fields list
         mandatory_fields = ['apikey', 'strategy', 'orderid']
-        missing_fields = [field for field in mandatory_fields if field not in request.json]
+        missing_fields = [field for field in mandatory_fields if field not in data]
 
         # Check if there are any missing mandatory fields
         if missing_fields:
@@ -240,16 +237,16 @@ def cancel_order_route():
         current_api_key = get_api_key(login_username)
 
         # Check if the provided API key matches the current API key
-        if current_api_key != request.json['apikey']:
+        if current_api_key != data['apikey']:
             return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
 
         # Call the cancel_order function
-        response_message, status_code = cancel_order(request.json['orderid'])
+        response_message, status_code = cancel_order(data['orderid'])
 
         # Emit the cancellation event to the client via Socket.IO
-        socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': request.json['orderid']})
+        socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
 
-        # Log the order cancellation attempt
+        # Log the successful order cancellation attempt
         executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
         return jsonify(response_message), status_code
@@ -257,37 +254,6 @@ def cancel_order_route():
     except KeyError as e:
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
     except Exception as e:
-        # Log the exception and emit failure event
-        executor.submit(async_log_order, 'cancelorder', order_request_data, {'status': 'error', 'message': str(e)})
+        # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed: {e}"}), 500
-
-
-@api_v1_bp.route('/modifyorder', methods=['POST'])
-@limiter.limit("10 per second")
-def modify_order_route():
-    data = request.json
-    
-    order_request_data = copy.deepcopy(data)  # For logging
-    order_request_data.pop('apikey', None)  # Remove API key from data to be logged
-    
-    mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'orderid', 'action', 'product', 'pricetype', 'price', 'quantity', 'disclosed_quantity', 'trigger_price']
-    missing_fields = [field for field in mandatory_fields if field not in data]
-
-    if missing_fields:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
-
-    login_username = os.getenv('LOGIN_USERNAME')
-    current_api_key = get_api_key(login_username)
-
-    if data['apikey'] != current_api_key:
-        return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
-
-    # Calculate symbol token similar to place_order function
-    # This part assumes you have a function to retrieve the token based on symbol and exchange
-        
-    response_message, status_code = modify_order(data)
-    socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': response_message['orderid']})
-    executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
-
-    return jsonify(response_message), status_code
