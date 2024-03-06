@@ -24,7 +24,7 @@ We welcome contributions to OpenAlgo! If you're interested in improving the appl
 
 ## License
 
-OpenAlgo is released under the MIT License. See the `LICENSE` file for more details.
+OpenAlgo is released under the GPL V3.0 License. See the `LICENSE` file for more details.
 
 ## Contact
 
