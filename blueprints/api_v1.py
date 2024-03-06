@@ -260,6 +260,10 @@ def cancel_order_route():
 @limiter.limit("10 per second")
 def modify_order_route():
     data = request.json
+    
+    order_request_data = copy.deepcopy(data)  # For logging
+    order_request_data.pop('apikey', None)  # Remove API key from data to be logged
+    
     mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'orderid', 'action', 'product', 'pricetype', 'price', 'quantity', 'disclosed_quantity', 'trigger_price']
     missing_fields = [field for field in mandatory_fields if field not in data]
 
@@ -277,6 +281,6 @@ def modify_order_route():
         
     response_message, status_code = modify_order(data)
     socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': response_message['orderid']})
-    executor.submit(async_log_order, 'modifyorder', data, response_message)
+    executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
 
     return jsonify(response_message), status_code
