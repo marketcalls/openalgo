@@ -23,11 +23,30 @@ def transform_data(data,token):
         "quantity": data["quantity"]
     }
 
+
     # Extended mapping for fields that might need conditional logic or additional processing
     transformed["disclosedquantity"] = data.get("disclosed_quantity", "0")
     transformed["triggerprice"] = data.get("trigger_price", "0")
     
     return transformed
+
+
+def transform_modify_order_data(data, token):
+    return {
+        "variety": map_variety(data["pricetype"]),
+        "orderid": data["orderid"],
+        "ordertype": map_order_type(data["pricetype"]),
+        "producttype": map_product_type(data["product"]),
+        "duration": "DAY",
+        "price": data["price"],
+        "quantity": data["quantity"],
+        "tradingsymbol": data["symbol"],
+        "symboltoken": token,
+        "exchange": data["exchange"],
+        "disclosedquantity": data.get("disclosed_quantity", "0"),
+        "stoploss": data.get("trigger_price", "0")
+    }
+
 
 
 def map_order_type(pricetype):

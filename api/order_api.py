@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type
+from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, method="GET", payload=''):
@@ -85,6 +85,7 @@ def place_order_api(data):
         "stoploss": newdata.get('stoploss', '0'),
         "quantity": newdata['quantity']
     })
+
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
     conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
     res = conn.getresponse()
@@ -214,3 +215,75 @@ def close_all_positions(current_api_key):
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
+
+
+def cancel_order(orderid):
+    # Assuming you have a function to get the authentication token
+    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
+    api_key = os.getenv('BROKER_API_KEY')
+    
+    # Set up the request headers
+    headers = {
+        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-UserType': 'USER',
+        'X-SourceID': 'WEB',
+        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
+        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+        'X-MACAddress': 'MAC_ADDRESS',
+        'X-PrivateKey': api_key
+    }
+    
+    # Prepare the payload
+    payload = json.dumps({
+        "variety": "NORMAL",
+        "orderid": orderid,
+    })
+    
+    # Establish the connection and send the request
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")  # Adjust the URL as necessary
+    conn.request("POST", "/rest/secure/angelbroking/order/v1/cancelOrder", payload, headers)
+    res = conn.getresponse()
+    data = json.loads(res.read().decode("utf-8"))
+    
+    # Check if the request was successful
+    if data.get("status"):
+        # Return a success response
+        return {"status": "success", "orderid": orderid}, 200
+    else:
+        # Return an error response
+        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+
+
+def modify_order(data):
+
+    # Assuming you have a function to get the authentication token
+    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
+    api_key = os.getenv('BROKER_API_KEY')
+
+    token = get_token(data['symbol'], data['exchange'])
+    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    # Set up the request headers
+    headers = {
+        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-UserType': 'USER',
+        'X-SourceID': 'WEB',
+        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
+        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
+        'X-MACAddress': 'MAC_ADDRESS',
+        'X-PrivateKey': api_key
+    }
+    payload = json.dumps(transformed_data)
+
+    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    conn.request("POST", "/rest/secure/angelbroking/order/v1/modifyOrder", payload, headers)
+    res = conn.getresponse()
+    data = json.loads(res.read().decode("utf-8"))
+
+    if data.get("status") == "true" or data.get("message") == "SUCCESS":
+        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    else:
+        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status

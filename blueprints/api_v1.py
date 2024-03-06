@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions
+from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
@@ -205,3 +205,78 @@ def close_position():
         # For any other exceptions
         socketio.emit('close_position', {'message': 'Failed to Square Off'})
         return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500
+    
+    
+@api_v1_bp.route('/cancelorder', methods=['POST'])
+@limiter.limit("10 per second")
+def cancel_order_route():
+    try:
+        # Extracting JSON data from the POST request
+        data = request.json
+        order_request_data = copy.deepcopy(data)  # For logging
+        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
+
+        print(request.json)
+
+        # Mandatory fields list
+        mandatory_fields = ['apikey', 'strategy', 'orderid']
+        missing_fields = [field for field in mandatory_fields if field not in request.json]
+
+        # Check if there are any missing mandatory fields
+        if missing_fields:
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
+            }), 400
+
+        login_username = os.getenv('LOGIN_USERNAME')
+        current_api_key = get_api_key(login_username)
+
+        # Check if the provided API key matches the current API key
+        if current_api_key != request.json['apikey']:
+            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+
+        # Call the cancel_order function
+        response_message, status_code = cancel_order(request.json['orderid'])
+
+        # Emit the cancellation event to the client via Socket.IO
+        socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': request.json['orderid']})
+
+        # Log the order cancellation attempt
+        executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
+
+        return jsonify(response_message), status_code
+
+    except KeyError as e:
+        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+    except Exception as e:
+        # Log the exception and emit failure event
+        executor.submit(async_log_order, 'cancelorder', order_request_data, {'status': 'error', 'message': str(e)})
+        socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
+        return jsonify({'status': 'error', 'message': f"Order cancellation failed: {e}"}), 500
+
+
+@api_v1_bp.route('/modifyorder', methods=['POST'])
+@limiter.limit("10 per second")
+def modify_order_route():
+    data = request.json
+    mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'orderid', 'action', 'product', 'pricetype', 'price', 'quantity', 'disclosed_quantity', 'trigger_price']
+    missing_fields = [field for field in mandatory_fields if field not in data]
+
+    if missing_fields:
+        return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
+
+    login_username = os.getenv('LOGIN_USERNAME')
+    current_api_key = get_api_key(login_username)
+
+    if data['apikey'] != current_api_key:
+        return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+
+    # Calculate symbol token similar to place_order function
+    # This part assumes you have a function to retrieve the token based on symbol and exchange
+        
+    response_message, status_code = modify_order(data)
+    socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': response_message['orderid']})
+    executor.submit(async_log_order, 'modifyorder', data, response_message)
+
+    return jsonify(response_message), status_code
