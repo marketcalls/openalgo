@@ -167,52 +167,48 @@ def place_smart_order():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
     
-
-
 @api_v1_bp.route('/closeposition', methods=['POST'])
 @limiter.limit("10 per second")
 def close_position():
     try:
-        # Extract the API key from the POST request
-        request_data = request.get_json()
-        request_api_key = request_data.get('apikey')
-
+        data = request.json  # Corrected to use data directly for consistency
+        sqoff_request_data = copy.deepcopy(data)
+        sqoff_request_data.pop('apikey', None)  # Remove 'apikey' from the copy for logging
+        
+        # Corrected mandatory fields check
         mandatory_fields = ['apikey', 'strategy']
-        missing_fields = [field for field in mandatory_fields if field not in data]
-
+        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+        
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-
-        sqoff_request_data = copy.deepcopy(request.json)
-        # Remove 'apikey' from the copy
-        sqoff_request_data.pop('apikey', None)
-
-        # Get the current API key from the environment or database
         login_username = os.getenv('LOGIN_USERNAME')
         current_api_key = get_api_key(login_username)
-
+        
         # Check if the provided API key matches the current API key
-        if request_api_key != current_api_key:
-            return jsonify({"message": "Wrong OpenAlgo API Key"}), 403
+        if data['apikey'] != current_api_key:
+            return jsonify({"message": "Invalid API key"}), 403
 
-        # Call the new function to close all positions
-        response_code , status_code = close_all_positions(current_api_key)
+        # Call the function to close all positions
+        response_code, status_code = close_all_positions(current_api_key)
 
-        # Call the asynchronous log function and send alert in websocket
+        # Emitting a socket event for closing position
         socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions SquaredOff'})
-        executor.submit(async_log_order,'squareoff',sqoff_request_data, "All Open Positions SquaredOff")
+        
+        # Asynchronously logging the action
+        executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions SquaredOff")
 
         return jsonify(response_code), status_code
 
     except KeyError as e:
-        # Handle the case where 'apikey' is not provided in the request
+        # Handle the case where a mandatory field is not provided
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
     except Exception as e:
-        # For any other exceptions
+        # Emit failure event if an exception occurs
         socketio.emit('close_position', {'message': 'Failed to Square Off'})
         return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500
-    
+
+  
 @api_v1_bp.route('/cancelorder', methods=['POST'])
 @limiter.limit("10 per second")
 def cancel_order_route():
@@ -257,3 +253,43 @@ def cancel_order_route():
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed: {e}"}), 500
+
+
+@api_v1_bp.route('/modifyorder', methods=['POST'])
+@limiter.limit("10 per second")
+def modify_order_route():
+    try:
+        data = request.json
+        order_request_data = copy.deepcopy(data)  # For logging
+        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
+        
+        # Mandatory fields including all necessary for order modification
+        mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'orderid', 'action', 'product', 'pricetype', 'price', 'quantity', 'disclosed_quantity', 'trigger_price']
+        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+
+        if missing_fields:
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
+
+        login_username = os.getenv('LOGIN_USERNAME')
+        current_api_key = get_api_key(login_username)
+
+        if data['apikey'] != current_api_key:
+            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+
+        # Assuming modify_order requires specific parameters from `data` and returns a response_message and a status_code
+        response_message, status_code = modify_order(data)
+        
+        # Emitting the modification event to the client via Socket.IO
+        socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': response_message.get('orderid')})
+        
+        # Asynchronously logging the order modification attempt
+        executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
+
+        return jsonify(response_message), status_code
+
+    except KeyError as e:
+        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+    except Exception as e:
+        # Emit failure event if an exception occurs
+        socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
+        return jsonify({'status': 'error', 'message': f"Order modification failed: {e}"}), 500
