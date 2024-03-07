@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order
+from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order, get_order_book
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
@@ -222,6 +222,8 @@ def cancel_order_route():
         mandatory_fields = ['apikey', 'strategy', 'orderid']
         missing_fields = [field for field in mandatory_fields if field not in data]
 
+        print(missing_fields)
+
         # Check if there are any missing mandatory fields
         if missing_fields:
             return jsonify({
@@ -253,6 +255,74 @@ def cancel_order_route():
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed: {e}"}), 500
+
+
+@api_v1_bp.route('/cancelallorder', methods=['POST'])
+@limiter.limit("10 per second")
+def cancel_all_orders():
+    try:
+        data = request.json
+
+        order_request_data = copy.deepcopy(data)  # For logging
+        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
+        # Validate mandatory fields
+        mandatory_fields = ['apikey', 'strategy']
+        missing_fields = [field for field in mandatory_fields if field not in data]
+
+        if missing_fields:
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
+            }), 400
+
+        login_username = os.getenv('LOGIN_USERNAME')
+        current_api_key = get_api_key(login_username)
+
+        # Check if the provided API key matches the current API key
+        if current_api_key != data['apikey']:
+            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+
+        # Get the order book
+        order_book_response = get_order_book()
+        if order_book_response['status'] != True:
+            return jsonify({'status': 'error', 'message': 'Failed to retrieve order book'}), 500
+
+        # Filter orders that are in 'open' or 'trigger_pending' state
+        orders_to_cancel = [order for order in order_book_response.get('data', [])
+                            if order['status'] in ['open', 'trigger pending']]
+        canceled_orders = []
+        failed_cancellations = []
+
+        # Cancel the filtered orders
+        for order in orders_to_cancel:
+            orderid = order['orderid']
+            cancel_response, status_code = cancel_order(orderid)  # Updated to assume cancel_order returns response and status_code
+            if status_code == 200:
+                canceled_orders.append(orderid)
+                # Emit the cancellation event to the client via Socket.IO
+                socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
+            else:
+                failed_cancellations.append(orderid)
+
+        # Asynchronously logging the cancellation attempt
+        executor.submit(async_log_order, 'cancelallorder', order_request_data, {
+            'canceled_orders': canceled_orders,
+            'failed_cancellations': failed_cancellations
+        })
+
+        # Return a success response
+        message = f'Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders.'
+        return jsonify({
+            'status': 'success',
+            'message': message
+        })
+
+    except KeyError as e:
+        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+    except Exception as e:
+        # Emit failure event if an exception occurs
+        socketio.emit('cancel_order_event', {'message': 'Failed to cancel orders'})
+        return jsonify({'status': 'error', 'message': f"Failed to cancel orders: {e}"}), 500
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])
