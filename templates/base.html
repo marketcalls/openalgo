@@ -58,11 +58,10 @@
                     <a href="{{ url_for('log_bp.view_logs') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Logs</a>
                     <a href="{{ url_for('search_bp.token') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Search</a>
                     <a href="https://docs.openalgo.in" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200" target="_blank">Docs</a>
+                    <a href="{{ url_for('auth.logout') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-red-200" target="_blank">Logout</a>
                 </div>
             </div>
-            <div class="pb-4">
-                <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-red-700 w-full text-center">Logout</a>
-            </div>
+
         </div>
 
         <!-- Mobile Menu (hidden by default) -->
@@ -102,6 +101,10 @@
         var dropdown = document.getElementById('profileMenu');
         dropdown.classList.toggle('hidden');
     });
+
     </script>
+  
+    
+            
 </body>
 </html>
