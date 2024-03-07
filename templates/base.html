@@ -10,65 +10,9 @@
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
     <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
 
-    <script>
-    
-        // Functions for mobile menu toggle (existing functionality)
-        function toggleMobileMenu() {
-            var menu = document.getElementById('mobile-menu');
-            menu.classList.remove('-translate-x-full');
-            document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'none';
-        }
-        
-        function closeMobileMenu() {
-            var menu = document.getElementById('mobile-menu');
-            menu.classList.add('-translate-x-full');
-            document.querySelector('button[onclick="toggleMobileMenu()"]').style.display = 'block';
-        }
-    </script>
-    
-
-
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
-        body {
-            font-family: 'Open Sans', sans-serif;
-        }
-        #json-output {
-        white-space: pre-wrap; /* Ensures that the JSON text wraps */
-        }
-
-        .container {
-            padding-bottom: 100px; /* Adjust the bottom padding to match footer height */
-        }
-
-        footer {
-            height: 100px; /* Set a fixed height for the footer */
-        }
-
-        /* Ensure the footer doesn't overlap content */
-        @media (min-width: 768px) {
-            body {
-                padding-bottom: 100px; /* Same as footer height */
-            }
-        }
-
-        /* Adjustments for mobile */
-        @media (max-width: 767px) {
-            .container {
-                padding-bottom: 80px; /* Adjust if needed for smaller footer on mobile */
-            }
-
-            footer {
-                height: 80px; /* Adjust if needed for smaller footer on mobile */
-            }
-
-            body {
-                padding-bottom: 80px; /* Same as footer height for mobile */
-            }
-        }
-
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
     <!-- Favicon and touch icons for various devices -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
@@ -77,68 +21,71 @@
     <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
-    
-
 
     <!-- Meta tags for color settings on mobile browsers -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
         
-
     {% block head %}{% endblock %}
 </head>
 <body class="bg-gray-100">
-    <!-- New Navbar Theme -->
-
-<nav class="bg-gray-800 p-4">
-  <!-- Navbar content as provided -->
-  <div class="hidden sm:flex justify-between items-center">
-      <!-- Navigation Links -->
-            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
-            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
-            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
-            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
-            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
-            <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
-            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
-            <a href="{{ url_for('log_bp.view_logs') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logs</a>            
-            <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
-            <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
-  </div>
-   
-   <!-- Mobile Menu Button -->
-     <!-- Hamburger Menu Button, visible when menu is collapsed -->
-    <div class="sm:hidden">
-      <button onclick="toggleMobileMenu()" class="text-white p-2">
-          <div class="space-y-1 bg-gray-600 rounded shadow">
-              <span class="block w-6 h-0.5 bg-gray-100"></span>
-              <span class="block w-6 h-0.5 bg-gray-100"></span>
-              <span class="block w-6 h-0.5 bg-gray-100"></span>
-          </div>
-      </button>
-    </div>
-
-      <!-- Mobile Menu (hidden by default) -->
-      <div class="sm:hidden fixed top-0 left-0 transform -translate-x-full w-56 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out z-10" id="mobile-menu">
-        <!-- Close Button, visible when menu is expanded -->
-        <button onclick="closeMobileMenu()" class="text-white text-3xl p-2 rounded-full absolute right-4 top-4 hover:bg-gray-600">
-            &times; <!-- Close Icon -->
-        </button>
-        <div class="flex flex-col items-start p-4">
-            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
-            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
-            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
-            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
-            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
-            <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
-            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
-            <a href="{{ url_for('log_bp.view_logs') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logs</a>            
-            <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Apikey</a>
-            <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+    <nav class="bg-gray-800 p-4">
+        <div class="sm:hidden">
+            <button onclick="toggleMobileMenu()" class="text-white p-2">
+                <div class="space-y-1 bg-gray-600 rounded shadow">
+                    <span class="block w-6 h-0.5 bg-gray-100"></span>
+                    <span class="block w-6 h-0.5 bg-gray-100"></span>
+                    <span class="block w-6 h-0.5 bg-gray-100"></span>
+                </div>
+            </button>
         </div>
-        
-    </div>
-</nav>
+
+        <div class="hidden sm:flex justify-between items-center">
+            <!-- Navigation Links -->
+            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
+            <!-- Profile Picture and Dropdown Menu -->
+            <div class="relative">
+                <button id="profileBtn" class="rounded-full h-10 w-10 flex items-center justify-center bg-gray-700 text-white">
+                    R
+                </button>
+                <div id="profileMenu" class="hidden absolute right-0 mt-2 py-2 w-48 bg-white rounded-md shadow-xl z-20">
+                    <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">ApiKey</a>
+                    <a href="{{ url_for('log_bp.view_logs') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Logs</a>
+                    <a href="{{ url_for('search_bp.token') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Search</a>
+                    <a href="https://docs.openalgo.in" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200" target="_blank">Docs</a>
+                </div>
+            </div>
+            <div class="pb-4">
+                <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-red-700 w-full text-center">Logout</a>
+            </div>
+        </div>
+
+        <!-- Mobile Menu (hidden by default) -->
+        <div id="mobile-menu" class="sm:hidden fixed top-0 left-0 transform -translate-x-full w-56 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out z-10">
+            <button onclick="closeMobileMenu()" class="text-white text-3xl p-2 rounded-full absolute right-4 top-4 hover:bg-gray-600">
+                &times; <!-- Close Icon -->
+            </button>
+            <div class="flex flex-col items-start p-4">
+                <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+                <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+                <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+                <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+                <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+                <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
+                <!-- Profile dropdown links for mobile -->
+                <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">ApiKey</a>
+                <a href="{{ url_for('log_bp.view_logs') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logs</a>
+                <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+                <a href="https://docs.openalgo.in" target="_blank" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Docs</a>
+                <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+            </div>
+        </div>
+    </nav>
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
     <div class="container mx-auto mt-24">
@@ -147,7 +94,14 @@
 
     <!-- Footer Area -->
     <footer class="bg-gray-800 text-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
-        <p>© Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
+        <p>Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
     </footer>
+
+    <script>
+    document.getElementById('profileBtn').addEventListener('click', function() {
+        var dropdown = document.getElementById('profileMenu');
+        dropdown.classList.toggle('hidden');
+    });
+    </script>
 </body>
 </html>
