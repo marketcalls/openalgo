@@ -17,6 +17,10 @@ from database.master_contract_db import master_contract_download
 # Load environment variables
 load_dotenv()
 
+# Access environment variables
+LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")
+LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
+
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
 def async_master_contract_download(user):
@@ -45,8 +49,8 @@ def ratelimit_handler(e):
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per minute")
-@limiter.limit("25 per hour")
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))

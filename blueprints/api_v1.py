@@ -6,7 +6,10 @@ from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
+from dotenv import load_dotenv
+load_dotenv()
 
+API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
 # Create a Blueprint for version 1 of the API
@@ -17,7 +20,7 @@ def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
 @api_v1_bp.route('/placeorder', methods=['POST'])
-@limiter.limit("10 per second")  
+@limiter.limit(API_RATE_LIMIT)
 def place_order():
     try:
         # Extracting JSON data from the POST request
@@ -90,7 +93,7 @@ def place_order():
 
 
 @api_v1_bp.route('/placesmartorder', methods=['POST'])
-@limiter.limit("10 per second")  
+@limiter.limit(API_RATE_LIMIT)
 def place_smart_order():
     try:
         # Extracting JSON data from the POST request
@@ -168,7 +171,7 @@ def place_smart_order():
         return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
     
 @api_v1_bp.route('/closeposition', methods=['POST'])
-@limiter.limit("10 per second")
+@limiter.limit(API_RATE_LIMIT)
 def close_position():
     try:
         data = request.json  # Corrected to use data directly for consistency
@@ -210,7 +213,7 @@ def close_position():
 
   
 @api_v1_bp.route('/cancelorder', methods=['POST'])
-@limiter.limit("10 per second")
+@limiter.limit(API_RATE_LIMIT)
 def cancel_order_route():
     try:
         # Extracting JSON data from the POST request
@@ -258,7 +261,7 @@ def cancel_order_route():
 
 
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
-@limiter.limit("10 per second")
+@limiter.limit(API_RATE_LIMIT)
 def cancel_all_orders():
     try:
         data = request.json
@@ -326,7 +329,7 @@ def cancel_all_orders():
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])
-@limiter.limit("10 per second")
+@limiter.limit(API_RATE_LIMIT)
 def modify_order_route():
     try:
         data = request.json
