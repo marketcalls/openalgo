@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from blueprints.auth import auth_bp 
@@ -54,6 +54,11 @@ app.register_blueprint(api_key_bp)
 app.register_blueprint(log_bp)
 app.register_blueprint(tv_json_bp)
 app.register_blueprint(core_bp)  # Register the core blueprint
+
+
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('404.html'), 404
 
 
 

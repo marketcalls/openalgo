@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenAlgo - 404 Page Not Found</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
+    body {
+      font-family: 'Open Sans', sans-serif;
+    }
+  </style>
+</head>
+
+<body class="bg-gray-100 flex flex-col items-center justify-center h-screen text-center px-4">
+  <header class="absolute top-0 left-0 right-0 p-4 flex justify-between items-center">
+    <a href="#" class="text-orange-500 text-2xl font-bold">OpenAlgo</a>
+    <div>
+      <a href="{{ url_for('core_bp.home') }}" class="text-gray-800 font-semibold hover:text-gray-600 mr-4">Home</a>
+      <a href="{{ url_for('auth.login') }}" class="text-gray-800 font-semibold hover:text-gray-600">Login</a>
+    </div>
+  </header>
+
+  <main class="flex flex-col items-center">
+    <img src="{{ url_for('static', filename='images/yoga.png') }}" alt="Illustration of a person sitting in a meditation pose with a calm expression, surrounded by abstract circular lines." class="mb-8">
+    <h1 class="text-5xl font-bold mb-3">Something's wrong here.</h1>
+    <p class="text-lg text-gray-700 mb-4">This is a 404 error, which means you've clicked on a bad link or entered an invalid URL. 
+  </main>
+</body>
+
+</html>
