@@ -16,7 +16,7 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 
 ## Documentation
 
-For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to the `docs` folder within the repository.
+For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to [https://docs.openalgo.in](https://docs.openalgo.in)
 
 ## Contributing
 
@@ -251,13 +251,10 @@ PlaceSmartOrder API function, which allows traders to build intelligent trading 
 <br>
 
 
-## NGROK Configuration
-If in case you are hosting in your local server / Windows Desktop/Laptop then one can try
-NGROK and configure the domain name to Send Trading Alerts from Tradingview, Google Docs, ChartInk or any
-external web application
+## Windows and Linux Complete Configuration Instructions 
 
 For Configuration Instructions Visit the Tutorial
-[https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html](https://www.marketcalls.in/python/host-your-python-flask-web-application-using-pyngrok-and-ngrok-free-domain.html)
+[https://docs.openalgo.in](https://docs.openalgo.in)
 
 
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
