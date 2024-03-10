@@ -13,6 +13,7 @@ import json
 from threading import Thread
 from database.auth_db import upsert_auth
 from database.master_contract_db import master_contract_download
+from api.auth_api import authenticate_broker
 
 # Load environment variables
 load_dotenv()
@@ -47,105 +48,80 @@ def get_session_expiry_time():
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
-
 @auth_bp.route('/login', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
+
+    if 'user' in session:
+            return redirect(url_for('auth.angel_login'))
+    
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
 
-    
     if request.method == 'GET':
-        # Render the login form when the route is accessed with GET
         return render_template('login.html')
     elif request.method == 'POST':
-        # Process form submission
         username = request.form['username']
         password = request.form['password']
         login_username = os.getenv('LOGIN_USERNAME')
         login_password = os.getenv('LOGIN_PASSWORD')
-       
-        
+
         if username == login_username and password == login_password:
-            try:
-                session['user'] = login_username 
-                session['logged_in'] = True
-
-                # Dynamically set session lifetime to time until 03:00 AM IST
-                app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
-                session.permanent = True  # Make the session permanent to use the custom lifetime
-
-                
-                # New login method
-                api_key = os.getenv('BROKER_API_KEY')
-                clientcode = os.getenv('BROKER_USERNAME')
-                broker_pin = os.getenv('BROKER_PIN')
-                token = os.getenv('BROKER_TOKEN')  # Assuming TOTP_CODE is stored in BROKER_TOKEN
-                totp = pyotp.TOTP(token).now()
-
-                conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-                payload = json.dumps({
-                    "clientcode": clientcode,
-                    "password": broker_pin,
-                    "totp": totp
-                })
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-UserType': 'USER',
-                    'X-SourceID': 'WEB',
-                    'X-ClientLocalIP': 'CLIENT_LOCAL_IP',  # These values should be replaced with actual data or handled accordingly
-                    'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-                    'X-MACAddress': 'MAC_ADDRESS',
-                    'X-PrivateKey': api_key
-                }
-
-                conn.request("POST", "/rest/auth/angelbroking/user/v1/loginByPassword", payload, headers)
-                res = conn.getresponse()
-                data = res.read()
-                mydata = data.decode("utf-8")
-
-                data_dict = json.loads(mydata)
-
-                
-                refreshToken = data_dict['data']['refreshToken']
-                AUTH_TOKEN = data_dict['data']['jwtToken']
-                FEED_TOKEN = data_dict['data']['feedToken']
-
-                session.modified = True
-
-                
-
-                #writing to database
-                
-                inserted_id = upsert_auth(login_username, AUTH_TOKEN)
-                if inserted_id is not None:
-                    print(f"Database Upserted record with ID: {inserted_id}")
-                    thread = Thread(target=async_master_contract_download, args=(session['user'],))
-                    thread.start()
-                    # Send a response that indicates a successful login and an immediate redirect
-                    return jsonify({'status': 'success', 'message': 'Login successful'})
-
-                else:
-                    print("Failed to upsert auth token")
-
-                
-
-        
-            except Exception as e:
-                
-                return jsonify({
-                    'status': 'error',
-                    'message': str(e)
-                })
+            session['user'] = login_username  # Set the username in the session
+            print("login success")
+            # Redirect to broker login without marking as fully logged in
+            return jsonify({'status': 'success'}), 200
         else:
-            # (implement error messaging as needed)
-            return "Invalid credentials", 401
+            return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
+
+
+@auth_bp.route('/angel', methods=['GET', 'POST'])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def angel_login():
+    if session.get('logged_in'):
+        return redirect(url_for('dashboard_bp.dashboard'))
+    if request.method == 'GET':
+        if 'user' not in session:
+            return redirect(url_for('auth.login'))
+        return render_template('angel.html')
+    elif request.method == 'POST':
+        # Extract broker credentials from the form
+        clientcode = request.form['clientid']
+        broker_pin = request.form['pin']
+        totp_code = request.form['totp']  
+
+        auth_token, error_message = authenticate_broker(clientcode, broker_pin, totp_code)
         
+        if auth_token:    
+                        
+            # Set session parameters for full authentication
+            session['logged_in'] = True
+            app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
+            session.permanent = True
+            session['AUTH_TOKEN'] = auth_token  # Store the auth token in the session for further use
+
+            # Store the auth token in the database
+            inserted_id = upsert_auth(session['user'], auth_token)
+            if inserted_id:
+                print(f"Database record upserted with ID: {inserted_id}")
+                # Start async master contract download
+                thread = Thread(target=async_master_contract_download, args=(session['user'],))
+                thread.start()
+                return redirect(url_for('dashboard_bp.dashboard'))
+            else:
+                print("Failed to upsert auth token")
+                return render_template('angel.html', error_message="Failed to store authentication token. Please try again.")
+        else:
+            # Use the error message returned from the authenticate_broker function
+            print(f"Authentication error: {error_message}")
+            return render_template('angel.html', error_message="Broker Authentication Failed")
 
 
 @auth_bp.route('/logout')
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
         if session.get('logged_in'):
             username = os.getenv('LOGIN_USERNAME')

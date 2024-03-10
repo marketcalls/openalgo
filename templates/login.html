@@ -6,35 +6,34 @@
     <title>OpenAlgo Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-    
         async function login(event) {
             event.preventDefault(); // Prevent the form from submitting via the browser.
-
+    
             const form = document.getElementById('loginForm');
             const formData = new FormData(form);
             const loginStatus = document.getElementById('loginStatus');
-
+    
             loginStatus.textContent = 'Logging in...';
-
+    
             try {
                 const response = await fetch('/auth/login', {
                     method: 'POST',
                     body: formData
                 });
                 const data = await response.json();
-
+    
                 if (data.status === 'error') {
                     loginStatus.textContent = 'Error: ' + data.message;
                 } else {
-                    // Redirect immediately after login success
-                    window.location.href = '/dashboard';
+                    // Redirect to /auth/angel after successful login
+                    window.location.href = '/auth/angel';
                 }
             } catch (error) {
-                loginStatus.textContent = 'Login failed: Invalid Credentials';
+                loginStatus.textContent = 'Login failed: Please try again.';
             }
         }
-
     </script>
+    
 </head>
 
 <body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">

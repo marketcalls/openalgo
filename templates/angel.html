@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Broker Authentication</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">
+    <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-sm w-full">
+        <div class="flex justify-center mb-6">
+            <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+        </div>
+        <h2 class="text-3xl font-bold mb-6 text-center">Broker Authentication</h2>
+        <form action="/auth/angel" method="POST" class="space-y-6">
+            <div>
+                <label for="clientid" class="block text-sm font-medium text-gray-300">Client ID</label>
+                <input type="text" id="clientid" name="clientid" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="pin" class="block text-sm font-medium text-gray-300">PIN</label>
+                <input type="password" id="pin" name="pin" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="totp" class="block text-sm font-medium text-gray-300">TOTP</label>
+                <input type="password" id="totp" name="totp" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div class="flex items-center justify-center">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Authenticate</button>
+            </div>
+            {% if error_message %}
+            <div class="alert alert-danger" role="alert">
+            {{ error_message }}
+            </div>
+            {% endif %}
+        </form>
+    </div>
+    <footer class="bg-gray-800 text-white text-center py-4 shadow-lg w-full fixed bottom-0 left-0 right-0">
+        <p>Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
+    </footer>
+</body>
+</html>
