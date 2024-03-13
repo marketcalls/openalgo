@@ -6,6 +6,7 @@ from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
+import html
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -250,7 +251,10 @@ def cancel_order_route():
         # Log the successful order cancellation attempt
         executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
-        return jsonify(response_message), status_code
+        # Sanitize the response_message
+        sanitized_message = {key: html.escape(str(value)) for key, value in response_message.items()}
+        
+        return jsonify(sanitized_message), status_code
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
