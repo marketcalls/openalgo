@@ -369,7 +369,7 @@ def modify_order_route():
         # Asynchronously logging the order modification attempt
         executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
 
-        return jsonify(response_message), status_code
+        return jsonify(response_message), 200
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
