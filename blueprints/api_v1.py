@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order, get_order_book
@@ -6,7 +6,7 @@ from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
-import html
+import json
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -255,10 +255,13 @@ def cancel_order_route():
         # Log the successful order cancellation attempt
         executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
-        # Sanitize the response_message
-        sanitized_message = {key: html.escape(str(value)) for key, value in response_message.items()}
+        # After creating your response object
+        response_message = {'status': 'success', 'orderid': data['orderid']}
+
+        # Create a JSON string of your response_message
+        response_json = json.dumps(response_message)
         
-        return jsonify(sanitized_message), status_code
+        return jsonify(response_json), status_code
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
