@@ -261,7 +261,7 @@ def cancel_order_route():
         # Create a JSON string of your response_message
         response_json = json.dumps(response_message)
         
-        return jsonify(response_json), status_code
+        return jsonify(response_json), 200
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
