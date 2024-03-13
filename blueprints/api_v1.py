@@ -211,10 +211,8 @@ def close_position():
     except KeyError as e:
         # Handle the case where a mandatory field is not provided
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
-    except Exception as e:
-        # Emit failure event if an exception occurs
-        
-        return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500
+    except Exception as e:            
+        return jsonify({'status': 'error', 'message': f"Failed to close positions:"}), 500
     
     
 
