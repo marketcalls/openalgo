@@ -75,7 +75,7 @@ def master_contract_download():
     print("Downloading Master Contract")
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
     try:
-        data = requests.get(url).json()
+        data = requests.get(url, timeout=10).json()  # timeout after 10 seconds
         token_df = pd.DataFrame.from_dict(data)
         token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
         token_df = token_df.drop_duplicates(subset='symbol', keep='first')
