@@ -87,9 +87,11 @@ def place_order():
             }), res.status if res.status != 200 else 500  # Use the API's status code, unless it's 200 but 'data' is null
     
     except KeyError as e:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        # Instead of returning the exception message, return a generic error message
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
+        # For other exceptions, you should also return a generic error message
+        return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
     
 
 
@@ -167,9 +169,11 @@ def place_smart_order():
             }), res.status if res.status != 200 else 500  # Use the API's status code, unless it's 200 but 'data' is null
     
     except KeyError as e:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        # Instead of returning the exception message, return a generic error message
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        return jsonify({'status': 'error', 'message': f"Order placement failed: {e}"}), 500
+        # For other exceptions, you should also return a generic error message
+        return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
     
 @api_v1_bp.route('/closeposition', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
@@ -206,11 +210,13 @@ def close_position():
 
     except KeyError as e:
         # Handle the case where a mandatory field is not provided
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         # Emit failure event if an exception occurs
-        socketio.emit('close_position', {'message': 'Failed to Square Off'})
+        
         return jsonify({'status': 'error', 'message': f"Failed to close positions: {e}"}), 500
+    
+    
 
   
 @api_v1_bp.route('/cancelorder', methods=['POST'])
@@ -257,11 +263,11 @@ def cancel_order_route():
         return jsonify(sanitized_message), status_code
 
     except KeyError as e:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
-        return jsonify({'status': 'error', 'message': f"Order cancellation failed: {e}"}), 500
+        return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
 
 
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
@@ -325,11 +331,11 @@ def cancel_all_orders():
         })
 
     except KeyError as e:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel orders'})
-        return jsonify({'status': 'error', 'message': f"Failed to cancel orders: {e}"}), 500
+        return jsonify({'status': 'error', 'message': f"Failed to cancel orders"}), 500
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])
@@ -365,8 +371,8 @@ def modify_order_route():
         return jsonify(response_message), status_code
 
     except KeyError as e:
-        return jsonify({'status': 'error', 'message': f'Missing mandatory field: {e}'}), 400
+        return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         # Emit failure event if an exception occurs
         socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
-        return jsonify({'status': 'error', 'message': f"Order modification failed: {e}"}), 500
+        return jsonify({'status': 'error', 'message': f"Order modification failed"}), 500
