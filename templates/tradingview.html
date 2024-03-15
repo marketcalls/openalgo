@@ -22,7 +22,7 @@
         margin: left; /* left align the container */
     }
 
-    #symbol, #product {
+    #symbol, #product, #exchange {
         width: 100%; /* Full width */
         max-width: 300px; /* Maximum width, but you can adjust this value */
         margin: auto; /* Align left */
@@ -69,7 +69,7 @@
         }
         
         /* Adjust the form input and select fields to be full width on mobile */
-        #symbol, #product {
+        #symbol, #product, #exchange {
             max-width: 100%;
         }
         
@@ -93,22 +93,36 @@
 {% block content %}
 <div class="max-w-4xl mx-auto py-8">
     <h1 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h1> 
-    <form id="tradingview-form">
-        <div class="mb-4">
-            <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
-            <input type="text" id="symbol" name="symbol" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-        </div>
-        <div class="mb-4">
-            <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
-            <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
-                <option value="MIS">MIS</option>
-                <option value="NRML">NRML</option>
-                <option value="CNC">CNC</option>
-            </select>
-        </div>
-        <!-- Include other fields for strategy details and quantity as needed -->
-        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
-    </form>
+<form id="tradingview-form">
+    <div class="mb-4">
+        <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
+        <input type="text" id="symbol" name="symbol" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
+    </div>
+    <div class="mb-4">
+        <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
+        <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
+            <option value="MIS">MIS</option>
+            <option value="NRML">NRML</option>
+            <option value="CNC">CNC</option>
+        </select>
+    </div>
+    <div class="mb-4">
+        <!-- Corrected placement of div for Exchange dropdown menu -->
+        <label for="exchange" class="block text-gray-700 text-sm font-bold mb-2">Exchange:</label>
+        <select id="exchange" name="exchange" class="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
+            <option value="">Select Exchange</option>
+            <option value="NSE">NSE</option>
+            <option value="NFO">NFO</option>
+            <option value="BSE">BSE</option>
+            <option value="BFO">BFO</option>
+            <option value="CDS">CDS</option>
+            <option value="MCX">MCX</option>
+        </select>
+    </div>
+    <!-- Include other fields for strategy details and quantity as needed -->
+    <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
+</form>
+
 
     <!-- Space before the div -->
     <div class="vertical-space"></div>
@@ -147,14 +161,16 @@
         // Collect data from the form
         var symbol = document.getElementById('symbol').value;
         var product = document.getElementById('product').value;
+        var exchange = document.getElementById('exchange').value;
         // Prepare the data to be sent to the server
         var formData = {
             symbol: symbol,
-            product: product
+            product: product,
+            exchange: exchange
         };
 
         // AJAX POST request to the /tradingview route
-        fetch('/tradingview', {
+        fetch('/tradingview/', {
             method: 'POST',
             body: JSON.stringify(formData),
             headers: {
