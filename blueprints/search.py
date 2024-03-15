@@ -15,7 +15,8 @@ def search():
         return redirect(url_for('auth_bp.login'))
     
     symbol = request.args.get('symbol')
-    results = search_symbols(symbol)
+    exchange = request.args.get('exchange')
+    results = search_symbols(symbol,exchange)
     
     if not results:
         return "No matching symbols found."

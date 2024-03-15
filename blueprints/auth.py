@@ -54,7 +54,7 @@ def ratelimit_handler(e):
 def login():
 
     if 'user' in session:
-            return redirect(url_for('auth.angel_login'))
+            return redirect(url_for('auth.upstox_login'))
     
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
@@ -76,47 +76,20 @@ def login():
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
 
-@auth_bp.route('/angel', methods=['GET', 'POST'])
+@auth_bp.route('/upstox', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def angel_login():
+def upstox_login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
     if request.method == 'GET':
         if 'user' not in session:
+            # Environment variables
             return redirect(url_for('auth.login'))
-        return render_template('angel.html')
-    elif request.method == 'POST':
-        # Extract broker credentials from the form
-        clientcode = request.form['clientid']
-        broker_pin = request.form['pin']
-        totp_code = request.form['totp']  
+        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+        REDIRECT_URL = os.getenv('REDIRECT_URL')
+        return render_template('upstox.html',broker_api_key=BROKER_API_KEY, redirect_url=REDIRECT_URL)
 
-        auth_token, error_message = authenticate_broker(clientcode, broker_pin, totp_code)
-        
-        if auth_token:    
-                        
-            # Set session parameters for full authentication
-            session['logged_in'] = True
-            app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
-            session.permanent = True
-            session['AUTH_TOKEN'] = auth_token  # Store the auth token in the session for further use
-
-            # Store the auth token in the database
-            inserted_id = upsert_auth(session['user'], auth_token)
-            if inserted_id:
-                print(f"Database record upserted with ID: {inserted_id}")
-                # Start async master contract download
-                thread = Thread(target=async_master_contract_download, args=(session['user'],))
-                thread.start()
-                return redirect(url_for('dashboard_bp.dashboard'))
-            else:
-                print("Failed to upsert auth token")
-                return render_template('angel.html', error_message="Failed to store authentication token. Please try again.")
-        else:
-            # Use the error message returned from the authenticate_broker function
-            print(f"Authentication error: {error_message}")
-            return render_template('angel.html', error_message="Broker Authentication Failed")
 
 
 @auth_bp.route('/logout')

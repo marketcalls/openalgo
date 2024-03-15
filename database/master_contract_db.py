@@ -5,6 +5,10 @@
 import os
 import pandas as pd
 import requests
+import gzip
+import shutil
+import requests
+
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -25,8 +29,8 @@ Base.query = db_session.query_property()
 class SymToken(Base):
     __tablename__ = 'symtoken'
     id = Column(Integer, Sequence('symtoken_id_seq'), primary_key=True)
-    token = Column(Integer, index=True)  # Indexed for performance
-    symbol = Column(String, unique=True, nullable=False, index=True)  # Single column index
+    token = Column(String, index=True)  # Indexed for performance
+    symbol = Column(String, nullable=False, index=True)  # Single column index
     name = Column(String)
     expiry = Column(String)
     strike = Column(Float)
@@ -71,14 +75,113 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def download_and_unzip_upstox_data(url, input_path, output_path):
+    """
+    Downloads the compressed JSON from Upstox, unzips it, and saves it to the specified path.
+    """
+    print("Downloading Upstox Master Contract")
+    response = requests.get(url)
+    with open(input_path, 'wb') as f:
+        f.write(response.content)
+    print("Decompressing the JSON file")
+    with gzip.open(input_path, 'rb') as f_in:
+        with open(output_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+
+def reformat_symbol(row):
+    symbol = row['symbol']
+    instrument_type = row['instrumenttype']
+    
+    if instrument_type == 'FUT':
+        # For FUT, remove the spaces and append 'FUT' at the end
+        parts = symbol.split(' ')
+        if len(parts) == 5:  # Make sure the symbol has the correct format
+            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
+    elif instrument_type in ['CE', 'PE']:
+        # For CE/PE, rearrange the parts and remove spaces
+        parts = symbol.split(' ')
+        if len(parts) == 6:  # Make sure the symbol has the correct format
+            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
+    else:
+        symbol = symbol  # No change for other instrument types
+
+    return symbol
+
+def process_upstox_json(path):
+    """
+    Processes the Upstox JSON file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Upstox Data")
+    df = pd.read_json(path)
+
+    #return df
+
+    # Assume your JSON structure requires some transformations to match your schema
+    # For the sake of this example, let's assume 'df' now represents your transformed DataFrame
+    # Map exchange names
+    exchange_map = {
+        "NSE_EQ": "NSE",
+        "NSE_FO": "NFO",
+        "NCD_FO": "CDS",
+        "NSE_INDEX": "NSE",
+        "BSE_INDEX": "NSE",
+        "BSE_EQ": "BSE",
+        "BSE_FO": "BFO",
+        "BCD_FO": "BCD"
+
+    }
+    df['segment'] = df['segment'].map(exchange_map)
+
+    df = df[['instrument_key', 'trading_symbol', 'name', 'expiry', 
+                       'strike_price', 'lot_size', 'instrument_type', 'segment', 
+                       'tick_size']].rename(columns={
+    'instrument_key': 'token',
+    'trading_symbol': 'symbol',
+    'name': 'name',
+    'expiry': 'expiry',
+    'strike_price': 'strike',
+    'lot_size': 'lotsize',
+    'instrument_type': 'instrumenttype',
+    'segment': 'exch_seg',
+    'tick_size': 'tick_size'
+    })
+
+    df['symbol'] = df.apply(reformat_symbol, axis=1)
+
+    
+    return df
+
+    
+
+def delete_upstox_temp_data(input_path, output_path):
+    try:
+        # Check if the file exists
+        if os.path.exists(input_path) and os.path.exists(output_path):
+            # Delete the file
+            os.remove(input_path)
+            os.remove(output_path)
+            print(f"The temporary file {input_path} and  {output_path} has been deleted.")
+        else:
+            print(f"The temporary file {input_path} and  {output_path} does not exist.")
+    except Exception as e:
+        print(f"An error occurred while deleting the file: {e}")
+    
+
+
+
 def master_contract_download():
     print("Downloading Master Contract")
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
+    url = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz'
+    input_path = 'tmp/temp_upstox.json.gz'
+    output_path = 'tmp/upstox.json'
     try:
-        data = requests.get(url, timeout=10).json()  # timeout after 10 seconds
-        token_df = pd.DataFrame.from_dict(data)
-        token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-        token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        download_and_unzip_upstox_data(url, input_path, output_path)
+        token_df = process_upstox_json(output_path)
+        delete_upstox_temp_data(input_path, output_path)
+        #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        
+        #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
 
         delete_symtoken_table()  # Consider the implications of this action
         copy_from_dataframe(token_df)
@@ -92,5 +195,6 @@ def master_contract_download():
 
 
 
-def search_symbols(symbol):
-    return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%')).all()
+def search_symbols(symbol, exchange):
+    return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exch_seg == exchange).all()
+
