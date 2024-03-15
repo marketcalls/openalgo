@@ -15,23 +15,22 @@ tv_json_bp = Blueprint('tv_json_bp', __name__, url_prefix='/tradingview')
 
 @tv_json_bp.route('/', methods=['GET', 'POST'])
 def tradingview_json():
+    
     if not session.get('logged_in'):
         return redirect(url_for('auth_bp.login'))
     
     if request.method == 'POST':
         symbol_input = request.json.get('symbol')  # Changed to request.json to get data from JSON payload
+        exchange = request.json.get('exchange')
         product = request.json.get('product')
         api_key = get_api_key(session.get('user'))  # Make sure 'user_id' is correctly set in session
         
         # Search for the symbol in the database to get the exchange segment
-        symbols = search_symbols(symbol_input)
+        symbols = search_symbols(symbol_input,exchange)
         if not symbols:
             return jsonify({'error': 'Symbol not found'}), 404
         symbol_data = symbols[0]  # Take the first match
-
-        # Assuming strategy details and quantity come from the form or another source
-        strategy_details = request.json.get('strategy_details')  # Placeholder for actual strategy details
-        quantity = request.json.get('quantity')  # Placeholder for actual quantity
+        
 
         # Create the JSON response object
         # Create an OrderedDict with the keys in the desired order
