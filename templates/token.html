@@ -12,10 +12,10 @@
             width: 100%; /* Maximum width */
             max-width: 32rem; /* Maximum width set to 32rem */
         }
-        input[type="text"], input[type="submit"] {
+        input[type="text"], input[type="submit"], select {
             padding: 0.5rem 1rem;
         }
-        input[type="text"] {
+        input[type="text"], select {
             border: 2px solid #e5e7eb;
             border-radius: 0.375rem; /* 6px */
         }
@@ -37,6 +37,16 @@
     <h1 class="text-xl font-bold mb-4">Symbol Search</h1>
     <form action="/search" method="get" class="flex flex-col gap-4">
         <input type="text" name="symbol" placeholder="Enter symbol" required class="input text-sm border-gray-300 focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50 rounded-md shadow-sm">
+        <!-- Exchange dropdown menu -->
+        <select name="exchange" required class="input text-sm border-gray-300 focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50 rounded-md shadow-sm">
+            <option value="">Select Exchange</option>
+            <option value="NSE">NSE</option>
+            <option value="NFO">NFO</option>
+            <option value="BSE">BSE</option>
+            <option value="BFO">BFO</option>
+            <option value="CDS">CDS</option>
+            <option value="MCX">MCX</option>
+        </select>
         <input type="submit" value="Search" class="btn bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
     </form>
 </div>
