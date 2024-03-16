@@ -32,7 +32,7 @@ def transform_modify_order_data(data, token):
     return {
         "orderid": data["orderid"],
         "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product(data["product"]),
+        "producttype": map_product_type(data["product"]),
         "duration": "DAY",
         "price": data["price"],
         "quantity": data["quantity"],
