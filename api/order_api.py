@@ -62,32 +62,26 @@ def place_order_api(data):
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': newdata['apikey']
+        'Accept': 'application/json'
     }
     payload = json.dumps({
-        "variety": newdata.get('variety', 'NORMAL'),
-        "tradingsymbol": newdata['tradingsymbol'],
-        "symboltoken": newdata['symboltoken'],
-        "transactiontype": newdata['transactiontype'],
-        "exchange": newdata['exchange'],
-        "ordertype": newdata.get('ordertype', 'MARKET'),
-        "producttype": newdata.get('producttype', 'INTRADAY'),
-        "duration": newdata.get('duration', 'DAY'),
+        "quantity": newdata['quantity'],
+        "product": newdata.get('product', 'I'),
+        "validity": newdata.get('validity', 'DAY'),
         "price": newdata.get('price', '0'),
-        "triggerprice": newdata.get('triggerprice', '0'),
-        "squareoff": newdata.get('squareoff', '0'),
-        "stoploss": newdata.get('stoploss', '0'),
-        "quantity": newdata['quantity']
+        "tag": newdata.get('tag', 'string'),
+        "instrument_token": newdata['instrument_token'],
+        "order_type": newdata.get('order_type', 'MARKET'),
+        "transaction_type": newdata['transaction_type'],
+        "disclosed_quantity": newdata.get('disclosed_quantity', '0'),
+        "trigger_price": newdata.get('trigger_price', '0'),
+        "is_amo": newdata.get('is_amo', 'false')
     })
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+    print(payload)
+
+    conn = http.client.HTTPSConnection("api.upstox.com")
+    conn.request("POST", "/v2/order/place", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
     return res, response_data

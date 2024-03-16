@@ -58,7 +58,7 @@ def place_order():
               
         
         if res.status == 200 and response_data.get('data'):
-            order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+            order_id = response_data['data'].get('order_id')  # Extracting the orderid from response
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             
             if order_id:
