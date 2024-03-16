@@ -51,14 +51,13 @@ def place_order():
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         
-        res, response_data = place_order_api(data)
-        #print(f'placeorder response : {place_order_api(data)}')
+        res, response_data, order_id = place_order_api(data)
+        print(f'placeorder response : {response_data} and orderid is {order_id}')
 
         # Check if the 'data' field is not null and the order was successfully placed
               
         
-        if res.status == 200 and response_data.get('data'):
-            order_id = response_data['data'].get('order_id')  # Extracting the orderid from response
+        if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             
             if order_id:

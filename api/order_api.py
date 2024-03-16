@@ -84,7 +84,8 @@ def place_order_api(data):
     conn.request("POST", "/v2/order/place", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
-    return res, response_data
+    orderid = response_data['data']['order_id']
+    return res, response_data, orderid
 
 def place_smartorder_api(data):
 
