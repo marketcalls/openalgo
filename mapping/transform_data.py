@@ -1,5 +1,5 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Angel Broking Parameters https://smartapi.angelbroking.com/docs/Orders
+#Mapping Upstox Broking Parameters https://upstox.com/developer/api-documentation/orders
 
 def transform_data(data,token):
     """
