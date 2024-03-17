@@ -16,6 +16,10 @@ def dashboard():
 
     AUTH_TOKEN = get_auth_token(login_username)
 
+    if AUTH_TOKEN is None:
+        return redirect(url_for('auth.logout'))  
+        
+
     api_key = os.getenv('BROKER_API_KEY')
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
     headers = {
