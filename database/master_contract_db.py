@@ -29,18 +29,20 @@ Base.query = db_session.query_property()
 class SymToken(Base):
     __tablename__ = 'symtoken'
     id = Column(Integer, Sequence('symtoken_id_seq'), primary_key=True)
-    token = Column(String, index=True)  # Indexed for performance
     symbol = Column(String, nullable=False, index=True)  # Single column index
+    brsymbol = Column(String, nullable=False, index=True)  # Single column index
     name = Column(String)
+    exchange = Column(String, index=True)  # Include this column in a composite index
+    brexchange = Column(String, index=True)  
+    token = Column(String, index=True)  # Indexed for performance
     expiry = Column(String)
     strike = Column(Float)
     lotsize = Column(Integer)
     instrumenttype = Column(String)
-    exch_seg = Column(String, index=True)  # Include this column in a composite index
     tick_size = Column(Float)
 
-    # Define a composite index on symbol and exch_seg columns
-    __table_args__ = (Index('idx_symbol_exch_seg', 'symbol', 'exch_seg'),)
+    # Define a composite index on symbol and exchange columns
+    __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
     print("Initializing Master Contract DB")
@@ -108,6 +110,7 @@ def reformat_symbol(row):
 
     return symbol
 
+
 def process_upstox_json(path):
     """
     Processes the Upstox JSON file to fit the existing database schema and performs exchange name mapping.
@@ -124,14 +127,18 @@ def process_upstox_json(path):
         "NSE_EQ": "NSE",
         "NSE_FO": "NFO",
         "NCD_FO": "CDS",
-        "NSE_INDEX": "NSE",
-        "BSE_INDEX": "NSE",
+        "NSE_INDEX": "NSE_INDEX",
+        "BSE_INDEX": "BSE_INDEX",
         "BSE_EQ": "BSE",
         "BSE_FO": "BFO",
-        "BCD_FO": "BCD"
+        "BCD_FO": "BCD",
+        "MCX_FO": "MCX"
 
     }
+    segment_copy = df['segment'].copy()
     df['segment'] = df['segment'].map(exchange_map)
+    df['expiry'] = pd.to_datetime(df['expiry'], unit='ms').dt.strftime('%d-%b-%y').str.upper()
+
 
     df = df[['instrument_key', 'trading_symbol', 'name', 'expiry', 
                        'strike_price', 'lot_size', 'instrument_type', 'segment', 
@@ -143,14 +150,16 @@ def process_upstox_json(path):
     'strike_price': 'strike',
     'lot_size': 'lotsize',
     'instrument_type': 'instrumenttype',
-    'segment': 'exch_seg',
+    'segment': 'exchange',
     'tick_size': 'tick_size'
     })
 
+    df['brsymbol'] =  df['symbol']
     df['symbol'] = df.apply(reformat_symbol, axis=1)
-
+    df['brexchange'] = segment_copy
     
     return df
+
 
     
 
@@ -196,5 +205,5 @@ def master_contract_download():
 
 
 def search_symbols(symbol, exchange):
-    return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exch_seg == exchange).all()
+    return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exchange == exchange).all()
 

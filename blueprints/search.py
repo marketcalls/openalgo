@@ -24,14 +24,16 @@ def search():
         # Since results are now objects, we can't directly zip them with columns
         # Instead, we access attributes directly
         results_dicts = [{
-            'token': result.token,
             'symbol': result.symbol,
+            'brsymbol': result.brsymbol,
             'name': result.name,
+            'exchange': result.exchange,
+            'brexchange': result.brexchange,
+            'token': result.token,
             'expiry': result.expiry,
             'strike': result.strike,
             'lotsize': result.lotsize,
             'instrumenttype': result.instrumenttype,
-            'exch_seg': result.exch_seg,
             'tick_size': result.tick_size
         } for result in results]
         return render_template('search.html', results=results_dicts)
