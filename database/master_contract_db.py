@@ -1,18 +1,14 @@
 #database/master_contract_db.py
 
-
-
 import os
 import pandas as pd
 import requests
 import gzip
 import shutil
-import requests
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 from database.db import db 
 from extensions import socketio  # Import SocketIO
@@ -82,7 +78,7 @@ def download_and_unzip_upstox_data(url, input_path, output_path):
     Downloads the compressed JSON from Upstox, unzips it, and saves it to the specified path.
     """
     print("Downloading Upstox Master Contract")
-    response = requests.get(url)
+    response = requests.get(url, timeout=10)  # timeout after 10 seconds
     with open(input_path, 'wb') as f:
         f.write(response.content)
     print("Decompressing the JSON file")
