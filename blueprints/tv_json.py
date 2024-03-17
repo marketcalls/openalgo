@@ -39,7 +39,7 @@ def tradingview_json():
             ("strategy", "Tradingview"),
             ("symbol", symbol_data.symbol),
             ("action", "{{strategy.order.action}}"),
-            ("exchange", symbol_data.exch_seg),
+            ("exchange", symbol_data.exchange),
             ("pricetype", "MARKET"),
             ("product", product),
             ("quantity", "{{strategy.order.contracts}}"),

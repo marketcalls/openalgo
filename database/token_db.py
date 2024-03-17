@@ -34,29 +34,29 @@ class SymToken(Base):
     __tablename__ = 'symtoken'
     id = Column(Integer, primary_key=True)
     symbol = Column(String, nullable=False)
-    exch_seg = Column(String, nullable=False)
+    exchange = Column(String, nullable=False)
     token = Column(Integer, nullable=False)
     # Add other fields as necessary
 
-def get_token(symbol, exch_seg):
-    cache_key = f"{symbol}-{exch_seg}"
+def get_token(symbol, exchange):
+    cache_key = f"{symbol}-{exchange}"
     if cache_key in token_cache:
         #print(f"Cache hit for {cache_key}.")
         return token_cache[cache_key]
     else:
-        token = get_token_dbquery(symbol, exch_seg)
+        token = get_token_dbquery(symbol, exchange)
         if token is not None:
             token_cache[cache_key] = token
         return token
 
-def get_token_dbquery(symbol, exch_seg):
+def get_token_dbquery(symbol, exchange):
     try:
-        sym_token = db_session.query(SymToken).filter_by(symbol=symbol, exch_seg=exch_seg).first()
+        sym_token = db_session.query(SymToken).filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
-            #print(f"The token for symbol '{symbol}' and exch_seg '{exch_seg}' is: {sym_token.token}")
+            #print(f"The token for symbol '{symbol}' and exch_seg '{exchange}' is: {sym_token.token}")
             return sym_token.token
         else:
-            print(f"No match found for symbol '{symbol}' and exch_seg '{exch_seg}'.")
+            print(f"No match found for symbol '{symbol}' and exch_seg '{exchange}'.")
             return None
     except Exception as e:
         print("Error while querying the database:", e)
