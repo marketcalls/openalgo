@@ -7,9 +7,6 @@ from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
 import os
-import pyotp
-import http.client
-import json
 from threading import Thread
 from database.auth_db import upsert_auth
 from database.master_contract_db import master_contract_download
@@ -134,9 +131,7 @@ def logout():
                 print("Failed to upsert auth token")
             
             # Remove tokens and user information from session
-            session.pop('refreshToken', None)
-            session.pop('AUTH_TOKEN', None)
-            session.pop('FEED_TOKEN', None)
+
             session.pop('user', None)  # Remove 'user' from session if exists
             session.pop('logged_in', None)
     
