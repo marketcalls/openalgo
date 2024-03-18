@@ -11,17 +11,11 @@ def get_api_response(endpoint, method="GET", payload=''):
     AUTH_TOKEN = get_auth_token(login_username)
     api_key = os.getenv('BROKER_API_KEY')
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    conn = http.client.HTTPSConnection("api.upstox.com")
     headers = {
       'Authorization': f'Bearer {AUTH_TOKEN}',
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
     }
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
@@ -29,16 +23,16 @@ def get_api_response(endpoint, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook")
+    return get_api_response("/v2/order/retrieve-all")
 
 def get_trade_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook")
+    return get_api_response("/v2/order/trades/get-trades-for-day")
 
 def get_positions():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition")
+    return get_api_response("/v2/portfolio/short-term-positions")
 
 def get_holdings():
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding")
+    return get_api_response("/v2/portfolio/long-term-holdings")
 
 def get_open_position(tradingsymbol, exchange, producttype):
     positions_data = get_positions()

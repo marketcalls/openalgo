@@ -14,6 +14,8 @@ def orderbook():
     
     order_data = get_order_book()
 
+    print(order_data)
+
     # Check if 'data' is None
     if order_data['data'] is None:
         # Handle the case where there is no data
@@ -30,9 +32,9 @@ def orderbook():
 
     if order_data:
         for order in order_data:
-            if order['transactiontype'] == 'BUY':
+            if order['transaction_type'] == 'BUY':
                 total_buy_orders += 1
-            elif order['transactiontype'] == 'SELL':
+            elif order['transaction_type'] == 'SELL':
                 total_sell_orders += 1
             
             if order['status'] == 'complete':
@@ -41,6 +43,7 @@ def orderbook():
                 total_open_orders += 1
             elif order['status'] == 'rejected':
                 total_rejected_orders += 1
+
 
 
     # Pass the data (or lack thereof) to the orderbook.html template
@@ -56,7 +59,7 @@ def tradebook():
     
 
     tradebook_data = get_trade_book()
-
+    print(tradebook_data)
     # Check if 'data' is None
     if tradebook_data['data'] is None:
         # Handle the case where there is no data
@@ -77,7 +80,7 @@ def positions():
         return redirect(url_for('auth.login'))
     
     positions_data = get_positions()
-
+    print(positions_data)
         # Check if 'data' is None
     if positions_data['data'] is None:
         # Handle the case where there is no data
@@ -97,8 +100,9 @@ def holdings():
     
     holdings_data = get_holdings()
 
-            # Check if 'data' is None
-    if holdings_data['data'] is None:
+    
+    # Check if 'data' is None or an empty list
+    if holdings_data.get('data') is None or not holdings_data['data']:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -106,7 +110,7 @@ def holdings():
         holdings_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         holdings_data = holdings_data['data']
-
+        print(holdings)
     return render_template('holdings.html', holdings_data=holdings_data)
 
 

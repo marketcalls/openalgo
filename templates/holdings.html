@@ -13,7 +13,11 @@
             <!-- Total Holding Value Card -->
             <div class="p-4 md:p-6 bg-blue-500 rounded-lg shadow-lg">
                 <div class="text-white text-3xl font-bold">
+                    {% if holdings_data.totalholding %}
                     {{ holdings_data.totalholding.totalholdingvalue }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </div>
                 <div class="text-white mt-2">Total Holding Value</div>
             </div>
@@ -21,7 +25,11 @@
             <!-- Total Investment Value Card -->
             <div class="p-4 md:p-6 bg-green-500 rounded-lg shadow-lg">
                 <div class="text-white text-3xl font-bold">
+                    {% if holdings_data.totalholding %}
                     {{ holdings_data.totalholding.totalinvvalue }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </div>
                 <div class="text-white mt-2">Total Investment Value</div>
             </div>
@@ -29,7 +37,11 @@
             <!-- Total Profit and Loss Card -->
             <div class="p-4 md:p-6 bg-yellow-500 rounded-lg shadow-lg">
                 <div class="text-white text-3xl font-bold">
+                    {% if holdings_data.totalholding %}
                     {{ holdings_data.totalholding.totalprofitandloss }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </div>
                 <div class="text-white mt-2">Total Profit and Loss</div>
             </div>
@@ -37,7 +49,11 @@
             <!-- Total PnL Percentage Card -->
             <div class="p-4 md:p-6 bg-red-500 rounded-lg shadow-lg">
                 <div class="text-white text-3xl font-bold">
+                    {% if holdings_data.totalholding %}
                     {{ holdings_data.totalholding.totalpnlpercentage }}%
+                    {% else %}
+                        0
+                    {% endif %}
                 </div>
                 <div class="text-white mt-2">Total PnL Percentage</div>
             </div>
@@ -59,12 +75,12 @@
                 <tbody>
                     {% for holding in holdings_data.holdings %}
                     <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                        <td class="py-4 px-6">{{ holding.tradingsymbol }}</td>
+                        <td class="py-4 px-6">{{ holding.trading_symbol }}</td>
                         <td class="py-4 px-6">{{ holding.exchange }}</td>
                         <td class="py-4 px-6">{{ holding.quantity }}</td>
                         <td class="py-4 px-6">{{ holding.product }}</td>
-                        <td class="py-4 px-6">{{ holding.profitandloss }}</td>
-                        <td class="py-4 px-6">{{ holding.pnlpercentage }}%</td>
+                        <td class="py-4 px-6">{{ holding.pnl }}</td>
+                        <td class="py-4 px-6">{{ (holding.last_price - holding.average_price)/holding.average_price*100 }}%</td>
                     </tr>
                     {% endfor %}
                 </tbody>
