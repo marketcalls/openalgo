@@ -58,27 +58,27 @@
         <tbody>
             {% for order in order_data %}
             <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                <td class="py-4 px-6">{{ order.tradingsymbol }}</td>
+                <td class="py-4 px-6">{{ order.symbol }}</td>
                 <td class="py-4 px-6">{{ order.exchange }}</td>
                 <td class="py-4 px-6">
-                    <div class="{{ 'bg-green-100 text-green-800' if order.transaction_type == 'BUY' else 'bg-red-100 text-red-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
-                        {{ order.transaction_type }}
+                    <div class="{{ 'bg-green-100 text-green-800' if order.action == 'BUY' else 'bg-red-100 text-red-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
+                        {{ order.action }}
                     </div>
                 </td>
                 <td class="py-4 px-6">{{ order.quantity }}</td>
                 <td class="py-4 px-6">{{ order.price }}</td>
                 <td class="py-4 px-6">{{ order.trigger_price }}</td>
-                <td class="py-4 px-6">{{ order.order_type }}</td>
+                <td class="py-4 px-6">{{ order.pricetype }}</td>
                 <td class="py-4 px-6">{{ order.product }}</td>
-                <td class="py-4 px-6">{{ order.order_id }}</td>
+                <td class="py-4 px-6">{{ order.orderid }}</td>
                 <td class="py-4 px-6 
-                    {% if order.status == 'complete' %}text-green-500
-                    {% elif order.status == 'rejected' %}text-red-500
-                    {% elif order.status == 'open' %}text-orange-500
+                    {% if order.order_status == 'complete' %}text-green-500
+                    {% elif order.order_status == 'rejected' %}text-red-500
+                    {% elif order.order_status == 'open' %}text-orange-500
                     {% else %}text-blue-500{% endif %}">
-                    {{ order.status }}
+                    {{ order.order_status }}
                 </td>
-                <td class="py-4 px-6">{{ order.order_timestamp }}</td>
+                <td class="py-4 px-6">{{ order.timestamp }}</td>
             </tr>
             {% endfor %}
         </tbody>

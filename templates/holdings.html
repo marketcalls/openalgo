@@ -61,12 +61,12 @@
                 <tbody>
                     {% for holding in holdings_data %}
                     <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                        <td class="py-4 px-6">{{ holding.tradingsymbol }}</td>
+                        <td class="py-4 px-6">{{ holding.symbol }}</td>
                         <td class="py-4 px-6">{{ holding.exchange }}</td>
                         <td class="py-4 px-6">{{ holding.quantity }}</td>
                         <td class="py-4 px-6">{{ holding.product }}</td>
                         <td class="py-4 px-6">{{ holding.pnl }}</td>
-                        <td class="py-4 px-6">{{ '{:.2f}'.format((holding.last_price - holding.average_price) / holding.average_price * 100) }}%</td>
+                        <td class="py-4 px-6">{{ '{:.2f}'.format(holding.pnlpercent) }}%</td>
                     </tr>
                     {% endfor %}
                 </tbody>

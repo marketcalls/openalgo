@@ -1,3 +1,4 @@
+import json
 from database.token_db import get_symbol 
 
 def map_order_data(order_data):
@@ -88,6 +89,84 @@ def calculate_order_statistics(order_data):
         'total_rejected_orders': total_rejected_orders
     }
 
+
+def transform_order_data(orders):
+    # Directly handling a dictionary assuming it's the structure we expect
+    if isinstance(orders, dict):
+        # Convert the single dictionary into a list of one dictionary
+        orders = [orders]
+
+    transformed_orders = []
+    
+    for order in orders:
+        # Make sure each item is indeed a dictionary
+        if not isinstance(order, dict):
+            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            continue
+
+        transformed_order = {
+            "symbol": order.get("tradingsymbol", ""),
+            "exchange": order.get("exchange", ""),
+            "action": order.get("transaction_type", ""),
+            "quantity": order.get("quantity", 0),
+            "price": order.get("price", 0.0),
+            "trigger_price": order.get("trigger_price", 0.0),
+            "pricetype": order.get("order_type", ""),
+            "product": order.get("product", ""),
+            "orderid": order.get("order_id", ""),
+            "order_status": order.get("status", ""),
+            "timestamp": order.get("order_timestamp", "")
+        }
+
+        transformed_orders.append(transformed_order)
+
+    return transformed_orders
+
+
+def transform_tradebook_data(tradebook_data):
+    transformed_data = []
+    for trade in tradebook_data:
+        transformed_trade = {
+            "symbol": trade.get('tradingsymbol', ''),
+            "exchange": trade.get('exchange', ''),
+            "product": trade.get('product', ''),
+            "action": trade.get('transaction_type', ''),
+            "quantity": trade.get('quantity', 0),
+            "average_price": trade.get('average_price', 0.0),
+            "trade_value": trade.get('quantity', 0) * trade.get('average_price', 0.0),
+            "orderid": trade.get('order_id', ''),
+            "timestamp": trade.get('order_timestamp', '')
+        }
+        transformed_data.append(transformed_trade)
+    return transformed_data
+
+def transform_positions_data(positions_data):
+    transformed_data = []
+    for position in positions_data:
+        transformed_position = {
+            "symbol": position.get('tradingsymbol', ''),
+            "exchange": position.get('exchange', ''),
+            "product": position.get('product', ''),
+            "quantity": position.get('quantity', 0),
+            "average_price": position.get('average_price', 0.0),
+        }
+        transformed_data.append(transformed_position)
+    return transformed_data
+
+def transform_holdings_data(holdings_data):
+    transformed_data = []
+    for holdings in holdings_data:
+        transformed_position = {
+            "symbol": holdings.get('tradingsymbol', ''),
+            "exchange": holdings.get('exchange', ''),
+            "quantity": holdings.get('quantity', 0),
+            "product": holdings.get('product', ''),
+            "pnl": holdings.get('pnl', 0.0),
+            "pnlpercent": (holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) /holdings.get('average_price', 0.0) *100
+            
+        }
+        transformed_data.append(transformed_position)
+    return transformed_data
 
     
 def map_portfolio_data(portfolio_data):
