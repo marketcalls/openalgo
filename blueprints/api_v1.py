@@ -6,7 +6,6 @@ from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
-import json
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -126,7 +125,7 @@ def place_smart_order():
 
         
         #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
-        res, response_data = place_smartorder_api(data)
+        res, response_data, order_id = place_smartorder_api(data)
 
         if res == None and response_data.get('message'):
             order_response_data = {
@@ -139,18 +138,18 @@ def place_smart_order():
             return jsonify(order_response_data)
         
         # Check if the 'data' field is not null and the order was successfully placed
-        if res.status == 200 and response_data.get('data'):
-            order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+        if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
+            
             if order_id:
                 order_response_data = {
                        'status': 'success',
                         'orderid': order_id
                         }
                 # Call the asynchronous log function
-                executor.submit(async_log_order,'placesmartorder',order_request_data, order_response_data)
+                executor.submit(async_log_order,'placeorder',order_request_data, order_response_data)
                 return jsonify(order_response_data)
-            
+                
             else:
                 # In case 'orderid' is not in the 'data'
                 return jsonify({
@@ -257,10 +256,7 @@ def cancel_order_route():
         # After creating your response object
         response_message = {'status': 'success', 'orderid': data['orderid']}
 
-        # Create a JSON string of your response_message
-        response_json = json.dumps(response_message)
-        
-        return jsonify(response_json), 200
+        return jsonify(response_message), 200
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400

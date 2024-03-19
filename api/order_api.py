@@ -3,7 +3,8 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from mapping.transform_data import transform_data , map_product_type, transform_modify_order_data
+
 
 
 def get_api_response(endpoint, method="GET", payload=''):
@@ -34,14 +35,14 @@ def get_positions():
 def get_holdings():
     return get_api_response("/v2/portfolio/long-term-holdings")
 
-def get_open_position(tradingsymbol, exchange, producttype):
+def get_open_position(tradingsymbol, exchange, product):
     positions_data = get_positions()
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
-                net_qty = position.get('netqty', '0')
+            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
+                net_qty = position.get('quantity', '0')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -216,23 +217,18 @@ def cancel_order(orderid):
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
+       
     }
     
     # Prepare the payload
     payload = json.dumps({
         "variety": "NORMAL",
-        "orderid": orderid,
+        "order_id": orderid,
     })
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")  # Adjust the URL as necessary
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/cancelOrder", payload, headers)
+    conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
+    conn.request("DELETE", "/v2/order/cancel", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
     
@@ -247,32 +243,32 @@ def cancel_order(orderid):
 
 def modify_order(data):
 
+    
+
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
     api_key = os.getenv('BROKER_API_KEY')
 
-    token = get_token(data['symbol'], data['exchange'])
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    
+    transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
+    
+  
     # Set up the request headers
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
+        'Accept': 'application/json'
     }
-    payload = json.dumps(transformed_data)
+    payload = json.dumps(transformed_order_data)
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/modifyOrder", payload, headers)
+    print(payload)
+
+    conn = http.client.HTTPSConnection("api.upstox.com")
+    conn.request("PUT", "/v2/order/modify", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    if data.get("status") == "success" or data.get("message") == "SUCCESS":
+        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status

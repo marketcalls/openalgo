@@ -28,19 +28,15 @@ def transform_data(data,token):
     return transformed
 
 
-def transform_modify_order_data(data, token):
+def transform_modify_order_data(data):
     return {
-        "orderid": data["orderid"],
-        "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"]),
-        "duration": "DAY",
-        "price": data["price"],
         "quantity": data["quantity"],
-        "tradingsymbol": data["symbol"],
-        "symboltoken": token,
-        "exchange": data["exchange"],
-        "disclosedquantity": data.get("disclosed_quantity", "0"),
-        "stoploss": data.get("trigger_price", "0")
+        "validity": "DAY",
+        "price": data["price"],
+        "order_id": data["orderid"],
+        "order_type": map_order_type(data["pricetype"]),
+        "disclosed_quantity": data.get("disclosed_quantity", "0"),
+        "trigger_price": data.get("trigger_price", "0")
     }
 
 
@@ -68,16 +64,4 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "I")  # Default to INTRADAY if not found
 
-
-
-def reverse_map_product_type(product):
-    """
-    Maps the new product type to the existing product type.
-    """
-    reverse_product_type_mapping = {
-        "D": "CNC",
-        "D": "NRML",
-        "I": "MIS",
-    }
-    return reverse_product_type_mapping.get(product, "MIS")  # Default to DELIVERY if not found
 

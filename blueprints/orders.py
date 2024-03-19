@@ -1,11 +1,9 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
-
+from mapping.order_data import calculate_order_statistics, map_order_data
 
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
-
-
 
 @orders_bp.route('/orderbook')
 def orderbook():
@@ -14,42 +12,18 @@ def orderbook():
     
     order_data = get_order_book()
 
-    print(order_data)
+    if order_data['status'] == 'error':
+        return redirect(url_for('auth.logout'))
 
-    # Check if 'data' is None
-    if order_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data['data']
-        
     
-        # Initialize counters
-    total_buy_orders = total_sell_orders = total_completed_orders = total_open_orders = total_rejected_orders = 0
+    order_data = map_order_data(order_data=order_data)       
+    #print(order_data)
 
-    if order_data:
-        for order in order_data:
-            if order['transaction_type'] == 'BUY':
-                total_buy_orders += 1
-            elif order['transaction_type'] == 'SELL':
-                total_sell_orders += 1
-            
-            if order['status'] == 'complete':
-                total_completed_orders += 1
-            elif order['status'] == 'open':
-                total_open_orders += 1
-            elif order['status'] == 'rejected':
-                total_rejected_orders += 1
-
-
+    order_stats = calculate_order_statistics(order_data)
+    print(order_stats)
 
     # Pass the data (or lack thereof) to the orderbook.html template
-    return render_template('orderbook.html', order_data=order_data, total_buy_orders=total_buy_orders, 
-                           total_sell_orders=total_sell_orders, total_completed_orders=total_completed_orders,
-                             total_open_orders=total_open_orders, total_rejected_orders=total_rejected_orders)
+    return render_template('orderbook.html', order_data=order_data, order_stats=order_stats)
 
 
 @orders_bp.route('/tradebook')
@@ -59,16 +33,16 @@ def tradebook():
     
 
     tradebook_data = get_trade_book()
-    print(tradebook_data)
+
+    
     # Check if 'data' is None
-    if tradebook_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        tradebook_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        tradebook_data = tradebook_data['data']
+
+    if tradebook_data['status'] == 'error':
+        return redirect(url_for('auth.logout'))
+
+    tradebook_data = map_order_data(order_data=tradebook_data) 
+    print(tradebook_data)
+
 
 
     return render_template('tradebook.html', tradebook_data=tradebook_data)
@@ -81,16 +55,13 @@ def positions():
     
     positions_data = get_positions()
     print(positions_data)
-        # Check if 'data' is None
-    if positions_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        positions_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        positions_data = positions_data['data']
 
+    if positions_data['status'] == 'error':
+        return redirect(url_for('auth.logout'))
+
+
+    positions_data = map_order_data(positions_data)
+        
     return render_template('positions.html', positions_data=positions_data)
 
 @orders_bp.route('/holdings')
