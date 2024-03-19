@@ -1,12 +1,13 @@
 from flask import Blueprint, request, jsonify, Response
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order, get_order_book
+from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order, cancel_all_orders_api
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
@@ -126,7 +127,7 @@ def place_smart_order():
         
         #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
         res, response_data, order_id = place_smartorder_api(data)
-
+        
         if res == None and response_data.get('message'):
             order_response_data = {
                     'status': 'success',
@@ -265,7 +266,6 @@ def cancel_order_route():
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
 
-
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def cancel_all_orders():
@@ -291,29 +291,16 @@ def cancel_all_orders():
         if current_api_key != data['apikey']:
             return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
 
-        # Get the order book
-        order_book_response = get_order_book()
-        if order_book_response['status'] != True:
-            return jsonify({'status': 'error', 'message': 'Failed to retrieve order book'}), 500
+        # Call the new function to process order cancellations
+        canceled_orders, failed_cancellations = cancel_all_orders_api(data)
 
-        # Filter orders that are in 'open' or 'trigger_pending' state
-        orders_to_cancel = [order for order in order_book_response.get('data', [])
-                            if order['status'] in ['open', 'trigger pending']]
-        canceled_orders = []
-        failed_cancellations = []
+        # Emit events for each canceled order
+        for orderid in canceled_orders:
+            socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
+        
+        # Optionally, emit events for failed cancellations if needed
 
-        # Cancel the filtered orders
-        for order in orders_to_cancel:
-            orderid = order['orderid']
-            cancel_response, status_code = cancel_order(orderid)  # Updated to assume cancel_order returns response and status_code
-            if status_code == 200:
-                canceled_orders.append(orderid)
-                # Emit the cancellation event to the client via Socket.IO
-                socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
-            else:
-                failed_cancellations.append(orderid)
-
-        # Asynchronously logging the cancellation attempt
+        # Asynchronously log the cancellation attempt
         executor.submit(async_log_order, 'cancelallorder', order_request_data, {
             'canceled_orders': canceled_orders,
             'failed_cancellations': failed_cancellations
@@ -332,6 +319,7 @@ def cancel_all_orders():
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel orders'})
         return jsonify({'status': 'error', 'message': f"Failed to cancel orders"}), 500
+
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])

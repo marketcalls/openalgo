@@ -64,4 +64,22 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "I")  # Default to INTRADAY if not found
 
-
+def reverse_map_product_type(exchange,product):
+    """
+    Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
+    """
+    # Exchange to OpenAlgo product type mapping for 'D'
+    exchange_mapping_for_d = {
+        "NSE": "CNC",
+        "BSE": "CNC",
+        "NFO": "NRML",
+        "BFO": "NRML",
+        "MCX": "NRML",
+        "CDS": "NRML",
+    }
+    
+    # Reverse mapping based on product type and exchange
+    if product == 'D':
+        return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
+    elif product == 'I':
+        return "MIS"
