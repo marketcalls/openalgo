@@ -90,3 +90,52 @@ def calculate_order_statistics(order_data):
 
 
     
+def map_portfolio_data(portfolio_data):
+    """
+    Processes and modifies a list of Portfolio dictionaries based on specific conditions.
+    
+    Parameters:
+    - portfolio_data: A list of dictionaries, where each dictionary represents an portfolio information.
+    
+    Returns:
+    - The modified portfolio_data with  'product' fields.
+    """
+        # Check if 'data' is None
+    if portfolio_data['data'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        portfolio_data = portfolio_data['data']
+        
+
+
+    if portfolio_data:
+        for portfolio in portfolio_data:
+            if portfolio['product'] == 'D':
+                portfolio['product'] = 'CNC'
+
+            else:
+                print(f"Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
+                
+    return portfolio_data
+
+
+def calculate_portfolio_statistics(holdings_data):
+    totalholdingvalue = sum(item['last_price'] * item['quantity'] for item in holdings_data)
+    totalinvvalue = sum(item['average_price'] * item['quantity'] for item in holdings_data)
+    totalprofitandloss = sum(item['pnl'] for item in holdings_data)
+    
+    # To avoid division by zero in the case when total_investment_value is 0
+    totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
+
+    return {
+        'totalholdingvalue': totalholdingvalue,
+        'totalinvvalue': totalinvvalue,
+        'totalprofitandloss': totalprofitandloss,
+        'totalpnlpercentage': totalpnlpercentage
+    }
+
+

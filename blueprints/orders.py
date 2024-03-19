@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
-from mapping.order_data import calculate_order_statistics, map_order_data
+from mapping.order_data import calculate_order_statistics, map_order_data, map_portfolio_data, calculate_portfolio_statistics
 
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
@@ -69,19 +69,20 @@ def holdings():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
+        
     holdings_data = get_holdings()
 
-    
-    # Check if 'data' is None or an empty list
-    if holdings_data.get('data') is None or not holdings_data['data']:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        holdings_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        holdings_data = holdings_data['data']
-        print(holdings)
-    return render_template('holdings.html', holdings_data=holdings_data)
+    if holdings_data['status'] == 'error':
+        return redirect(url_for('auth.logout'))
+ 
+
+    holdings_data = map_portfolio_data(holdings_data)
+
+    portfolio_stats = calculate_portfolio_statistics(holdings_data)
+
+
+    print(portfolio_stats)
+
+    return render_template('holdings.html', holdings_data=holdings_data,portfolio_stats=portfolio_stats)
 
 
