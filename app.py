@@ -15,7 +15,6 @@ from database.db import db
 
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.master_contract_db import init_db as ensure_master_contract_tables_exists
-from database.token_db import init_db as ensure_token_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 
 
@@ -82,7 +81,6 @@ if __name__ == '__main__':
         
         ensure_auth_tables_exists()
         ensure_master_contract_tables_exists()
-        ensure_token_tables_exists()
         ensure_api_log_tables_exists()
 
     socketio.run(app)
