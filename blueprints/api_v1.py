@@ -1,13 +1,13 @@
 from flask import Blueprint, request, jsonify, Response
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order, get_order_book
+from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order # cancel_all_orders_api
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
 import os 
-import json
 from dotenv import load_dotenv
+
 load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
@@ -51,14 +51,13 @@ def place_order():
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         
-        res, response_data = place_order_api(data)
-        #print(f'placeorder response : {place_order_api(data)}')
+        res, response_data, order_id = place_order_api(data)
+        print(f'placeorder response : {response_data} and orderid is {order_id}')
 
         # Check if the 'data' field is not null and the order was successfully placed
               
         
-        if res.status == 200 and response_data.get('data'):
-            order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+        if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             
             if order_id:
@@ -127,8 +126,8 @@ def place_smart_order():
 
         
         #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
-        res, response_data = place_smartorder_api(data)
-
+        res, response_data, order_id = place_smartorder_api(data)
+        
         if res == None and response_data.get('message'):
             order_response_data = {
                     'status': 'success',
@@ -140,18 +139,18 @@ def place_smart_order():
             return jsonify(order_response_data)
         
         # Check if the 'data' field is not null and the order was successfully placed
-        if res.status == 200 and response_data.get('data'):
-            order_id = response_data['data'].get('orderid')  # Extracting the orderid from response
+        if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
+            
             if order_id:
                 order_response_data = {
                        'status': 'success',
                         'orderid': order_id
                         }
                 # Call the asynchronous log function
-                executor.submit(async_log_order,'placesmartorder',order_request_data, order_response_data)
+                executor.submit(async_log_order,'placeorder',order_request_data, order_response_data)
                 return jsonify(order_response_data)
-            
+                
             else:
                 # In case 'orderid' is not in the 'data'
                 return jsonify({
@@ -258,10 +257,7 @@ def cancel_order_route():
         # After creating your response object
         response_message = {'status': 'success', 'orderid': data['orderid']}
 
-        # Create a JSON string of your response_message
-        response_json = json.dumps(response_message)
-        
-        return jsonify(response_json), 200
+        return jsonify(response_message), 200
 
     except KeyError as e:
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
@@ -270,7 +266,7 @@ def cancel_order_route():
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
 
-
+'''
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def cancel_all_orders():
@@ -296,29 +292,16 @@ def cancel_all_orders():
         if current_api_key != data['apikey']:
             return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
 
-        # Get the order book
-        order_book_response = get_order_book()
-        if order_book_response['status'] != True:
-            return jsonify({'status': 'error', 'message': 'Failed to retrieve order book'}), 500
+        # Call the new function to process order cancellations
+        canceled_orders, failed_cancellations = cancel_all_orders_api(data)
 
-        # Filter orders that are in 'open' or 'trigger_pending' state
-        orders_to_cancel = [order for order in order_book_response.get('data', [])
-                            if order['status'] in ['open', 'trigger pending']]
-        canceled_orders = []
-        failed_cancellations = []
+        # Emit events for each canceled order
+        for orderid in canceled_orders:
+            socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
+        
+        # Optionally, emit events for failed cancellations if needed
 
-        # Cancel the filtered orders
-        for order in orders_to_cancel:
-            orderid = order['orderid']
-            cancel_response, status_code = cancel_order(orderid)  # Updated to assume cancel_order returns response and status_code
-            if status_code == 200:
-                canceled_orders.append(orderid)
-                # Emit the cancellation event to the client via Socket.IO
-                socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
-            else:
-                failed_cancellations.append(orderid)
-
-        # Asynchronously logging the cancellation attempt
+        # Asynchronously log the cancellation attempt
         executor.submit(async_log_order, 'cancelallorder', order_request_data, {
             'canceled_orders': canceled_orders,
             'failed_cancellations': failed_cancellations
@@ -337,6 +320,7 @@ def cancel_all_orders():
         # Emit failure event if an exception occurs
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel orders'})
         return jsonify({'status': 'error', 'message': f"Failed to cancel orders"}), 500
+
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])
@@ -377,3 +361,4 @@ def modify_order_route():
         # Emit failure event if an exception occurs
         socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
         return jsonify({'status': 'error', 'message': f"Order modification failed"}), 500
+'''

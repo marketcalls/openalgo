@@ -19,19 +19,19 @@
         <tbody>
             {% for trade in tradebook_data %}
             <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                <td class="py-4 px-6">{{ trade['tradingsymbol']  }}</td>
+                <td class="py-4 px-6">{{ trade['symbol']  }}</td>
                 <td class="py-4 px-6">{{ trade['exchange'] }}</td>
-                <td class="py-4 px-6">{{ trade['producttype'] }}</td>
+                <td class="py-4 px-6">{{ trade['product'] }}</td>
                 <td class="py-4 px-6">
-                    <div class="{{ 'bg-red-100 text-red-800' if trade['transactiontype'] == 'SELL' else 'bg-green-100 text-green-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
-                        {{ trade['transactiontype'] }}
+                    <div class="{{ 'bg-red-100 text-red-800' if trade['action'] == 'SELL' else 'bg-green-100 text-green-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
+                        {{ trade['action'] }}
                     </div>
                 </td>
-                <td class="py-4 px-6">{{ trade['fillsize'] }}</td>
-                <td class="py-4 px-6">{{ trade['fillprice'] }}</td>
-                <td class="py-4 px-6">{{ trade['tradevalue'] }}</td>
+                <td class="py-4 px-6">{{ trade['quantity'] }}</td>
+                <td class="py-4 px-6">{{ trade['average_price'] }}</td>
+                <td class="py-4 px-6">{{ trade['trade_value']}}</td>
                 <td class="py-4 px-6">{{ trade['orderid'] }}</td>
-                <td class="py-4 px-6">{{ trade['filltime'] }}</td>
+                <td class="py-4 px-6">{{ trade['timestamp'] }}</td>
             </tr>
             {% endfor %}
         </tbody>

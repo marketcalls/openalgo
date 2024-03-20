@@ -15,11 +15,11 @@
         <tbody>
             {% for position in positions_data %}
             <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                <td class="py-4 px-6">{{ position.tradingsymbol }}</td>
+                <td class="py-4 px-6">{{ position.symbol }}</td>
                 <td class="py-4 px-6">{{ position.exchange }}</td>
-                <td class="py-4 px-6">{{ position.producttype }}</td>
-                <td class="py-4 px-6">{{ position.netqty }}</td>
-                <td class="py-4 px-6">{{ position.avgnetprice }}</td>
+                <td class="py-4 px-6">{{ position.product }}</td>
+                <td class="py-4 px-6">{{ position.quantity }}</td>
+                <td class="py-4 px-6">{{ position.average_price }}</td>
             </tr>
             {% endfor %}
         </tbody>
