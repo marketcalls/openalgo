@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, Response
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order # cancel_all_orders_api
+from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order , cancel_all_orders_api
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
@@ -266,7 +266,7 @@ def cancel_order_route():
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
 
-'''
+
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def cancel_all_orders():
@@ -361,4 +361,3 @@ def modify_order_route():
         # Emit failure event if an exception occurs
         socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
         return jsonify({'status': 'error', 'message': f"Order modification failed"}), 500
-'''
