@@ -154,7 +154,7 @@ def process_angel_json(path):
     df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
     
     # Reformat 'symbol' based on 'brsymbol'
-    df['symbol'] = df['symbol'].str.replace('-EQ|-BE|-BL|-MF|-SG', '', regex=True)
+    df['symbol'] = df['symbol'].str.replace('-EQ|-BE|-MF|-SG', '', regex=True)
     
     
     # Assuming the 'expiry' field in the JSON is in the format '19MAR2024'

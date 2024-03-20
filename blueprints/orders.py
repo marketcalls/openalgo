@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
-from mapping.order_data import calculate_order_statistics, map_order_data,map_trade_data, map_portfolio_data, calculate_portfolio_statistics
+from mapping.order_data import calculate_order_statistics, map_order_data,map_trade_data, map_position_data, map_portfolio_data, calculate_portfolio_statistics
 from mapping.order_data import transform_order_data, transform_tradebook_data, transform_positions_data, transform_holdings_data
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
@@ -66,7 +66,7 @@ def positions():
         return redirect(url_for('auth.logout'))
 
 
-    positions_data = map_order_data(positions_data)
+    positions_data = map_position_data(positions_data)
     
 
     positions_data = transform_positions_data(positions_data)
