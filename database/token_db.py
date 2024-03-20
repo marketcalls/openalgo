@@ -1,8 +1,8 @@
 from database.master_contract_db import SymToken  # Import here to avoid circular imports
 from cachetools import TTLCache
 
-# Define a cache for the tokens with a max size and a 60-second TTL
-token_cache = TTLCache(maxsize=1024, ttl=60)
+# Define a cache for the tokens, symbols with a max size and a 3600-second TTL
+token_cache = TTLCache(maxsize=1024, ttl=3600)
 
 def get_token(symbol, exchange):
     """
