@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
-from mapping.order_data import calculate_order_statistics, map_order_data, map_portfolio_data, calculate_portfolio_statistics
+from mapping.order_data import calculate_order_statistics, map_order_data,map_trade_data, map_position_data, map_portfolio_data, calculate_portfolio_statistics
 from mapping.order_data import transform_order_data, transform_tradebook_data, transform_positions_data, transform_holdings_data
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
@@ -11,7 +11,7 @@ def orderbook():
         return redirect(url_for('auth.login'))
     
     order_data = get_order_book()
-
+    #print(order_data)
     if order_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
@@ -43,7 +43,8 @@ def tradebook():
     if tradebook_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
-    tradebook_data = map_order_data(order_data=tradebook_data) 
+    
+    tradebook_data = map_trade_data(trade_data=tradebook_data) 
     print(tradebook_data)
 
     tradebook_data = transform_tradebook_data(tradebook_data)
@@ -59,13 +60,13 @@ def positions():
         return redirect(url_for('auth.login'))
     
     positions_data = get_positions()
-    
+    print(positions_data)
 
     if positions_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
 
-    positions_data = map_order_data(positions_data)
+    positions_data = map_position_data(positions_data)
     
 
     positions_data = transform_positions_data(positions_data)
@@ -80,19 +81,19 @@ def holdings():
     
         
     holdings_data = get_holdings()
-
+    
     if holdings_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
  
 
     holdings_data = map_portfolio_data(holdings_data)
-    
+    print(holdings_data)
 
     portfolio_stats = calculate_portfolio_statistics(holdings_data)
 
     holdings_data = transform_holdings_data(holdings_data)
     
-    print(holdings_data)
+    
 
     return render_template('holdings.html', holdings_data=holdings_data,portfolio_stats=portfolio_stats)
 

@@ -122,6 +122,8 @@ def transform_order_data(orders):
 
     return transformed_orders
 
+def map_trade_data(trade_data):
+    return map_order_data(trade_data)
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
@@ -139,6 +141,10 @@ def transform_tradebook_data(tradebook_data):
         }
         transformed_data.append(transformed_trade)
     return transformed_data
+
+def map_position_data(position_data):
+    return map_order_data(position_data)
+
 
 def transform_positions_data(positions_data):
     transformed_data = []
