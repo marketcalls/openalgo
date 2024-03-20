@@ -86,11 +86,16 @@ def place_order_api(data):
         "quantity": newdata['quantity']
     })
 
+    print(payload)
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
     conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
-    return res, response_data
+    if response_data['status'] == True:
+        orderid = response_data['data']['orderid']
+    else:
+        orderid = None
+    return res, response_data, orderid
 
 def place_smartorder_api(data):
 
@@ -123,7 +128,7 @@ def place_smartorder_api(data):
         quantity = data['quantity']
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
-        res, response = place_order_api(data)
+        res, response, orderid = place_order_api(data)
         #print(res)
         #print(response)
         
@@ -165,11 +170,11 @@ def place_smartorder_api(data):
 
         #print(order_data)
         # Place the order
-        res, response = place_order_api(order_data)
+        res, response, orderid = place_order_api(order_data)
         #print(res)
         #print(response)
         
-        return res , response
+        return res , response, orderid
     
 
 
@@ -208,7 +213,7 @@ def close_all_positions(current_api_key):
             print(place_order_payload)
 
             # Place the order to close the position
-            _, api_response =   place_order_api(place_order_payload)
+            _, api_response, _ =   place_order_api(place_order_payload)
 
             print(api_response)
             
@@ -287,3 +292,31 @@ def modify_order(data):
         return {"status": "success", "orderid": data["data"]["orderid"]}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+
+
+
+def cancel_all_orders_api(data):
+    # Get the order book
+    order_book_response = get_order_book()
+    #print(order_book_response)
+    if order_book_response['status'] != True:
+        return [], []  # Return empty lists indicating failure to retrieve the order book
+
+    # Filter orders that are in 'open' or 'trigger_pending' state
+    orders_to_cancel = [order for order in order_book_response.get('data', [])
+                        if order['status'] in ['open', 'trigger pending']]
+    #print(orders_to_cancel)
+    canceled_orders = []
+    failed_cancellations = []
+
+    # Cancel the filtered orders
+    for order in orders_to_cancel:
+        orderid = order['orderid']
+        cancel_response, status_code = cancel_order(orderid)
+        if status_code == 200:
+            canceled_orders.append(orderid)
+        else:
+            failed_cancellations.append(orderid)
+    
+    return canceled_orders, failed_cancellations
+

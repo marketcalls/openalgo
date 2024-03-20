@@ -14,29 +14,34 @@
         <table class="table-auto w-full text-left whitespace-no-wrap">
             <thead>
                 <tr class="text-xs font-semibold tracking-wide text-left text-gray-500 uppercase border-b bg-gray-50">
-                    <th class="px-4 py-3">Token</th>
-                    <th class="px-4 py-3">Symbol</th>
+                    
+                    <th class="px-4 py-3">OpenAlgo Symbol</th>
+                    <th class="px-4 py-3">Broker Symbol</th>
                     <th class="px-4 py-3">Name</th>
+                    <th class="px-4 py-3">OpenAlgo Exchange</th>
+                    <th class="px-4 py-3">Broker Exchange</th>
+                    <th class="px-4 py-3">Token</th>
                     <th class="px-4 py-3">Expiry</th>
                     <th class="px-4 py-3">Strike</th>
                     <th class="px-4 py-3">Lot Size</th>
-                    <th class="px-4 py-3">Instrument Type</th>
-                    <th class="px-4 py-3">Exchange Segment</th>
-                    <th class="px-4 py-3">Tick Size</th>
+                    <!-- <th class="px-4 py-3">Instrument Type</th> -->
+                    <!-- <th class="px-4 py-3">Tick Size</th> -->
                 </tr>
             </thead>
             <tbody class="bg-white divide-y">
                 {% for row in results %}
                 <tr class="text-gray-700">
-                    <td class="px-4 py-3">{{ row.token }}</td>
                     <td class="px-4 py-3">{{ row.symbol }}</td>
+                    <td class="px-4 py-3">{{ row.brsymbol }}</td>
                     <td class="px-4 py-3">{{ row.name }}</td>
+                    <td class="px-4 py-3">{{ row.exchange }}</td>
+                    <td class="px-4 py-3">{{ row.brexchange }}</td>
+                    <td class="px-4 py-3">{{ row.token }}</td>
                     <td class="px-4 py-3">{{ row.expiry }}</td>
                     <td class="px-4 py-3">{{ row.strike }}</td>
                     <td class="px-4 py-3">{{ row.lotsize }}</td>
-                    <td class="px-4 py-3">{{ row.instrumenttype }}</td>
-                    <td class="px-4 py-3">{{ row.exch_seg }}</td>
-                    <td class="px-4 py-3">{{ row.tick_size }}</td>
+                    <!-- <td class="px-4 py-3">{{ row.instrumenttype }}</td> -->
+                    <!-- <td class="px-4 py-3">{{ row.tick_size }}</td> -->
                 </tr>
                 {% endfor %}
             </tbody>
