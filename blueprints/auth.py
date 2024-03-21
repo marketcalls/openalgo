@@ -51,7 +51,7 @@ def ratelimit_handler(e):
 def login():
 
     if 'user' in session:
-            return redirect(url_for('auth.upstox_login'))
+            return redirect(url_for('auth.zerodha_login'))
     
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
@@ -73,10 +73,10 @@ def login():
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
 
-@auth_bp.route('/upstox', methods=['GET', 'POST'])
+@auth_bp.route('/zerodha', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def upstox_login():
+def zerodha_login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
     if request.method == 'GET':
@@ -85,7 +85,7 @@ def upstox_login():
             return redirect(url_for('auth.login'))
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
-        return render_template('upstox.html',broker_api_key=BROKER_API_KEY, redirect_url=REDIRECT_URL)
+        return render_template('zerodha.html',broker_api_key=BROKER_API_KEY)
 
 
 

@@ -19,6 +19,10 @@ from database.master_contract_db import master_contract_download
 # Load environment variables
 load_dotenv()
 
+#Get Broker Key
+BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+
 # Access environment variables
 LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")
 LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
@@ -52,15 +56,17 @@ def get_session_expiry_time():
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
-@brlogin_bp.route('/upstox/callback', methods=['GET', 'POST'])
+@brlogin_bp.route('/zerodha/callback', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def upstox_callback():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
-    code = request.args.get('code')
-    if code:
-        auth_token, error_message = authenticate_broker(code)
+    request_token = request.args.get('request_token')
+    if request_token:
+        auth_token, error_message = authenticate_broker(request_token)
+        auth_token = f'{BROKER_API_KEY}:{auth_token}'
+        print(auth_token)
         if auth_token:    
                         
             # Set session parameters for full authentication
@@ -79,11 +85,11 @@ def upstox_callback():
                 return redirect(url_for('dashboard_bp.dashboard'))
             else:
                 print("Failed to upsert auth token")
-                return render_template('upstox.html', error_message="Failed to store authentication token. Please try again.")
+                return render_template('zerodha.html', error_message="Failed to store authentication token. Please try again.")
         else:
             # Use the error message returned from the authenticate_broker function
             print(f"Authentication error: {error_message}")
-            return render_template('upstox.html', error_message="Broker Authentication Failed")
+            return render_template('zerodha.html', error_message="Broker Authentication Failed")
     return "No code received", 400
 
 

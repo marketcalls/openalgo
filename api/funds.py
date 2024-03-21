@@ -7,15 +7,16 @@ from api.order_api import get_positions
 from mapping.order_data import map_order_data
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Upstox's API using the provided auth token."""
+    print(auth_token)
+    """Fetch margin data from Zerodha's API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("api.upstox.com")
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("api.kite.trade")
     headers = {
-        'Authorization': f'Bearer {auth_token}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        'X-Kite-Version': '3',
+        'Authorization': f'token {auth_token}',
     }
-    conn.request("GET", "/v2/user/get-funds-and-margin", '', headers)
+    conn.request("GET", "/user/margins", '', headers)
 
     res = conn.getresponse()
     data = res.read()
@@ -29,34 +30,39 @@ def get_margin_data(auth_token):
         return {}
 
     try:
-        # Calculate the sum of available_margin and used_margin
+        # Calculate the sum of net values for available margin
         total_available_margin = sum([
-            margin_data['data']['commodity']['available_margin'],
-            margin_data['data']['equity']['available_margin']
+            margin_data['data']['commodity']['net'],
+            margin_data['data']['equity']['net']
         ])
+        # Calculate the sum of debits for used margin
         total_used_margin = sum([
-            margin_data['data']['commodity']['used_margin'],
-            margin_data['data']['equity']['used_margin']
+            margin_data['data']['commodity']['utilised']['debits'],
+            margin_data['data']['equity']['utilised']['debits']
         ])
 
-        position_book = get_positions()
+        # Calculate the sum of collateral values
+        total_collateral = sum([
+            margin_data['data']['commodity']['available']['collateral'],
+            margin_data['data']['equity']['available']['collateral']
+        ])
 
-        position_book = map_order_data(position_book)
+        # Calculate the sum of m2m_unrealised
+        total_unrealised = sum([
+            margin_data['data']['commodity']['utilised']['m2m_unrealised'],
+            margin_data['data']['equity']['utilised']['m2m_unrealised']
+        ])
 
-        def sum_realised_unrealised(position_book):
-            total_realised = 0
-            total_unrealised = 0
-            total_realised = sum(position['realised'] for position in position_book)
-            total_unrealised = sum(position['unrealised'] for position in position_book)
-            return total_realised, total_unrealised
-
-        total_realised, total_unrealised = sum_realised_unrealised(position_book)
-
+        # Calculate the sum of m2m_realised
+        total_realised = sum([
+            margin_data['data']['commodity']['utilised']['m2m_realised'],
+            margin_data['data']['equity']['utilised']['m2m_realised']
+        ])
 
         # Construct and return the processed margin data
         processed_margin_data = {
             "availablecash": "{:.2f}".format(total_available_margin),
-            "collateral": "0.00",
+            "collateral": "{:.2f}".format(total_collateral),
             "m2munrealized": "{:.2f}".format(total_unrealised),
             "m2mrealized": "{:.2f}".format(total_realised),
             "utiliseddebits": "{:.2f}".format(total_used_margin),
