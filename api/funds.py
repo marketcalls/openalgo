@@ -3,11 +3,9 @@
 import os
 import http.client
 import json
-from api.order_api import get_positions
-from mapping.order_data import map_order_data
+
 
 def get_margin_data(auth_token):
-    print(auth_token)
     """Fetch margin data from Zerodha's API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
     api_secret = os.getenv('BROKER_API_SECRET')

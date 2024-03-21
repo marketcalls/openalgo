@@ -25,8 +25,8 @@
                 if (data.status === 'error') {
                     loginStatus.textContent = 'Error: ' + data.message;
                 } else {
-                    // Redirect to /auth/upstox after successful login
-                    window.location.href = '/auth/upstox';
+                    // Redirect to /auth/zerodha after successful login
+                    window.location.href = '/auth/zerodha';
                 }
             } catch (error) {
                 loginStatus.textContent = 'Login failed: Please try again.';
