@@ -66,7 +66,7 @@ def upstox_callback():
     if request_token:
         auth_token, error_message = authenticate_broker(request_token)
         auth_token = f'{BROKER_API_KEY}:{auth_token}'
-        print(auth_token)
+        #print(auth_token)
         if auth_token:    
                         
             # Set session parameters for full authentication
