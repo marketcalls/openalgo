@@ -10,37 +10,35 @@ from mapping.transform_data import transform_data , map_product_type, reverse_ma
 def get_api_response(endpoint, method="GET", payload=''):
     login_username = os.getenv('LOGIN_USERNAME')
     AUTH_TOKEN = get_auth_token(login_username)
-    api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api.upstox.com")
+    conn = http.client.HTTPSConnection("api.kite.trade")
     headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
     }
+
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
     return json.loads(data.decode("utf-8"))
 
 def get_order_book():
-    return get_api_response("/v2/order/retrieve-all")
+    return get_api_response("/orders")
 
 def get_trade_book():
-    return get_api_response("/v2/order/trades/get-trades-for-day")
+    return get_api_response("/trades")
 
 def get_positions():
-    return get_api_response("/v2/portfolio/short-term-positions")
+    return get_api_response("/portfolio/positions")
 
 def get_holdings():
-    return get_api_response("/v2/portfolio/long-term-holdings")
+    return get_api_response("/portfolio/holdings")
 
 def get_open_position(tradingsymbol, exchange, product):
     positions_data = get_positions()
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
+        for position in positions_data['data']['net']:
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
                 net_qty = position.get('quantity', '0')
                 break  # Assuming you need the first match
@@ -50,35 +48,40 @@ def get_open_position(tradingsymbol, exchange, product):
 def place_order_api(data):
     login_username = os.getenv('LOGIN_USERNAME')
     AUTH_TOKEN = get_auth_token(login_username)
+    print(AUTH_TOKEN)
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
-    token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
+    #token = get_token(data['symbol'], data['exchange'])
+    newdata = transform_data(data)  
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
+        'Content-Type': 'application/x-www-form-urlencoded' 
     }
-    payload = json.dumps({
-        "quantity": newdata['quantity'],
-        "product": newdata.get('product', 'I'),
-        "validity": newdata.get('validity', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "tag": newdata.get('tag', 'string'),
-        "instrument_token": newdata['instrument_token'],
-        "order_type": newdata.get('order_type', 'MARKET'),
-        "transaction_type": newdata['transaction_type'],
-        "disclosed_quantity": newdata.get('disclosed_quantity', '0'),
-        "trigger_price": newdata.get('trigger_price', '0'),
-        "is_amo": newdata.get('is_amo', 'false')
-    })
+
+    payload = {
+        'tradingsymbol': newdata['tradingsymbol'],
+        'exchange': newdata['exchange'],
+        'transaction_type': newdata['transaction_type'],
+        'order_type': newdata['order_type'],
+        'quantity': newdata['quantity'],
+        'product': newdata['product'],
+        'price': newdata['price'],
+        'trigger_price': newdata['trigger_price'],
+        'disclosed_quantity': newdata['disclosed_quantity'],
+        'validity': newdata['validity'],
+        'tag' : newdata['tag']
+    }
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("POST", "/v2/order/place", payload, headers)
+    conn = http.client.HTTPSConnection("api.kite.trade")
+    conn.request("POST", "/orders/regular", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
+
+    print(response_data)
+
     if response_data['status'] == 'success':
         orderid = response_data['data']['order_id']
     else:

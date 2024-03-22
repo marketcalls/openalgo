@@ -20,7 +20,7 @@ def get_margin_data(auth_token):
     data = res.read()
     margin_data = json.loads(data.decode("utf-8"))
 
-    #print(f"Funds Details: {margin_data}")
+    print(f"Funds Details: {margin_data}")
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure

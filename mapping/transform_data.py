@@ -1,23 +1,27 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Upstox Broking Parameters https://upstox.com/developer/api-documentation/orders
+#Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
 
-def transform_data(data,token):
+from database.token_db import get_br_symbol
+
+def transform_data(data):
     """
     Transforms the new API request structure to the current expected structure.
     """
+    symbol = get_br_symbol(data['symbol'],data['exchange'])
+
     # Basic mapping
     transformed = {
-        "quantity": data["quantity"],
-        "product": map_product_type(data["product"]),
-        "validity":"DAY",
-        "price": data.get("price", "0"),
-        "tag": "string",
-        "instrument_token": token,
-        "order_type": map_order_type(data["pricetype"]),
+        "tradingsymbol" : symbol,
+        "exchange" : data['exchange'],
         "transaction_type": data['action'].upper(),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
+        "order_type": data["pricetype"],
+        "quantity": data["quantity"],
+        "product": data["product"],
+        "price": data.get("price", "0"),
         "trigger_price": data.get("trigger_price", "0"),
-        "is_amo": "false"  # Assuming false as default; you might need logic to handle this if it can vary
+        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
+        "validity":"DAY",
+        "tag": "openalgo",
     }
 
 
