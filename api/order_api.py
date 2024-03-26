@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import urllib.parse
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
@@ -36,11 +37,14 @@ def get_holdings():
 def get_open_position(tradingsymbol, exchange, product):
     positions_data = get_positions()
     net_qty = '0'
+    #print(positions_data['data']['net'])
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']['net']:
+            print(f'{tradingsymbol} and {exchange} and {product}')
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
                 net_qty = position.get('quantity', '0')
+                print(f'Net Quantity {net_qty}')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -75,10 +79,13 @@ def place_order_api(data):
 
     print(payload)
 
+    payload =  urllib.parse.urlencode(payload)
+
     conn = http.client.HTTPSConnection("api.kite.trade")
     conn.request("POST", "/orders/regular", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
+
 
     print(response_data)
 
@@ -105,8 +112,8 @@ def place_smartorder_api(data):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product)))
 
 
-    #print(f"position_size : {position_size}") 
-    #print(f"Open Position : {current_position}") 
+    print(f"position_size : {position_size}") 
+    print(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -175,14 +182,14 @@ def close_all_positions(current_api_key):
     # Fetch the current open positions
     positions_response = get_positions()
 
-    
+    #print(positions_response)
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
         return {"message": "No Open Positions Found"}, 200
 
     if positions_response['status']:
         # Loop through each position to close
-        for position in positions_response['data']:
+        for position in positions_response['data']['net']:
             # Skip if net quantity is zero
             if int(position['quantity']) == 0:
                 continue
@@ -223,28 +230,24 @@ def cancel_order(orderid):
     
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-       
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
     }
     
     # Prepare the payload
-    payload = json.dumps({
-        "variety": "NORMAL",
-        "order_id": orderid,
-    })
+    payload = ''
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
-    conn.request("DELETE", "/v2/order/cancel", payload, headers)
+    conn = http.client.HTTPSConnection("api.kite.trade")  # Adjust the URL as necessary
+    conn.request("DELETE", f"/orders/regular/{orderid}", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    print(data)
     
     # Check if the request was successful
     if data.get("status"):
         # Return a success response
-        return {"status": "success", "orderid": orderid}, 200
+        return {"status": "success", "orderid": data['data']['order_id']}, 200
     else:
         # Return an error response
         return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
@@ -259,23 +262,33 @@ def modify_order(data):
     api_key = os.getenv('BROKER_API_KEY')
 
     
-    transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
+    newdata = transform_modify_order_data(data)  # You need to implement this function
     
   
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
+        'Content-Type': 'application/x-www-form-urlencoded' 
     }
-    payload = json.dumps(transformed_order_data)
+    payload = {
+        'order_type': newdata['order_type'],
+        'quantity': newdata['quantity'],
+        'price': newdata['price'],
+        'trigger_price': newdata['trigger_price'],
+        'disclosed_quantity': newdata['disclosed_quantity'],
+        'validity': newdata['validity']
+      }
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("PUT", "/v2/order/modify", payload, headers)
+    payload =  urllib.parse.urlencode(payload)
+
+    conn = http.client.HTTPSConnection("api.kite.trade")
+    conn.request("PUT", f"/orders/regular/{data['orderid']}", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    print(data)
 
     if data.get("status") == "success" or data.get("message") == "SUCCESS":
         return {"status": "success", "orderid": data["data"]["order_id"]}, 200
@@ -292,7 +305,7 @@ def cancel_all_orders_api(data):
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+                        if order['status'] in ['OPEN', 'TRIGGER PENDING']]
     print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []

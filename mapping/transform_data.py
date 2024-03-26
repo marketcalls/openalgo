@@ -34,13 +34,12 @@ def transform_data(data):
 
 def transform_modify_order_data(data):
     return {
-        "quantity": data["quantity"],
-        "validity": "DAY",
-        "price": data["price"],
-        "order_id": data["orderid"],
         "order_type": map_order_type(data["pricetype"]),
+        "quantity": data["quantity"],
+        "price": data["price"],
+        "trigger_price": data.get("trigger_price", "0"),
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "trigger_price": data.get("trigger_price", "0")
+        "validity": "DAY"      
     }
 
 
@@ -62,28 +61,22 @@ def map_product_type(product):
     Maps the new product type to the existing product type.
     """
     product_type_mapping = {
-        "CNC": "D",
-        "NRML": "D",
-        "MIS": "I",
+        "CNC": "CNC",
+        "NRML": "NRML",
+        "MIS": "MIS",
     }
-    return product_type_mapping.get(product, "I")  # Default to INTRADAY if not found
+    return product_type_mapping.get(product, "MIS")  # Default to INTRADAY if not found
 
 def reverse_map_product_type(exchange,product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
     # Exchange to OpenAlgo product type mapping for 'D'
-    exchange_mapping_for_d = {
-        "NSE": "CNC",
-        "BSE": "CNC",
-        "NFO": "NRML",
-        "BFO": "NRML",
-        "MCX": "NRML",
-        "CDS": "NRML",
+    exchange_mapping = {
+        "CNC": "CNC",
+        "NRML": "NRML",
+        "MIS": "MIS",
     }
+   
+    return exchange_mapping.get(product,'MIS')  # Removed default; will return None if not found
     
-    # Reverse mapping based on product type and exchange
-    if product == 'D':
-        return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
-    elif product == 'I':
-        return "MIS"
