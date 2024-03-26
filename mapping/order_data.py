@@ -1,5 +1,5 @@
 import json
-from database.token_db import get_symbol 
+from database.token_db import get_symbol , get_oa_symbol
 
 def map_order_data(order_data):
     """
@@ -21,30 +21,20 @@ def map_order_data(order_data):
     else:
         order_data = order_data['data']
         
-
+    #print(order_data)
 
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            instrument_token = order['instrument_token']
             exchange = order['exchange']
-            
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(instrument_token, exchange)
+            symbol = order['tradingsymbol']
+       
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['product'] == 'D':
-                    order['product'] = 'CNC'
-                               
-                elif order['product'] == 'I':
-                    order['product'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['product'] == 'D':
-                    order['product'] = 'NRML'
+            if symbol:
+                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
+                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return order_data
 
@@ -73,11 +63,11 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'complete':
+            if order['status'] == 'COMPLETE':
                 total_completed_orders += 1
-            elif order['status'] == 'open':
+            elif order['status'] == 'OPEN':
                 total_open_orders += 1
-            elif order['status'] == 'rejected':
+            elif order['status'] == 'REJECTED':
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -104,6 +94,17 @@ def transform_order_data(orders):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
+        if(order.get("status", "")=="COMPLETE"):
+            order_status = "complete"
+        if(order.get("status", "")=="REJECTED"):
+            order_status = "rejected"
+        if(order.get("status", "")=="TRIGGER PENDING"):
+            order_status = "trigger pending"
+        if(order.get("status", "")=="OPEN"):
+            order_status = "open"
+        if(order.get("status", "")=="CANCELLED"):
+            order_status = "cancelled"
+
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
             "exchange": order.get("exchange", ""),
@@ -114,7 +115,7 @@ def transform_order_data(orders):
             "pricetype": order.get("order_type", ""),
             "product": order.get("product", ""),
             "orderid": order.get("order_id", ""),
-            "order_status": order.get("status", ""),
+            "order_status": order_status,
             "timestamp": order.get("order_timestamp", "")
         }
 
@@ -128,8 +129,13 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+
+        symbol = trade.get('tradingsymbol')
+        exchange = trade.get('exchange')
+
+
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
+            "symbol": get_oa_symbol(symbol=symbol,exchange=exchange),
             "exchange": trade.get('exchange', ''),
             "product": trade.get('product', ''),
             "action": trade.get('transaction_type', ''),
@@ -143,8 +149,42 @@ def transform_tradebook_data(tradebook_data):
     return transformed_data
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+    """
+    Processes and modifies a list of OpenPosition dictionaries based on specific conditions.
+    
+    Parameters:
+    - position_data: A list of dictionaries, where each dictionary represents an Open Position.
+    
+    Returns:
+    - The modified order_data with updated 'tradingsymbol'
+    """
+        # Check if 'data' is None
+    if position_data['data']['net'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        position_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        position_data = position_data['data']['net']
+        
+    #print(order_data)
 
+    if position_data:
+        for position in position_data:
+            # Extract the instrument_token and exchange for the current order
+            exchange = position['exchange']
+            symbol = position['tradingsymbol']
+       
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            if symbol:
+                position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+            else:
+                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                
+    return position_data
+    
 
 def transform_positions_data(positions_data):
     transformed_data = []
@@ -199,11 +239,11 @@ def map_portfolio_data(portfolio_data):
 
     if portfolio_data:
         for portfolio in portfolio_data:
-            if portfolio['product'] == 'D':
+            if portfolio['product'] == 'CNC':
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
+                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 

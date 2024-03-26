@@ -45,7 +45,7 @@ def tradebook():
 
     
     tradebook_data = map_trade_data(trade_data=tradebook_data) 
-    print(tradebook_data)
+    #print(tradebook_data)
 
     tradebook_data = transform_tradebook_data(tradebook_data)
     

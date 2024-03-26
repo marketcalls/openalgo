@@ -198,7 +198,9 @@ def process_zerodha_csv(path):
     # Options Symbol Update 
 
     def format_strike(strike):
-        return "{:.2f}".format(strike).replace('.', '')
+        # Convert the string to a float, then to an integer, and finally back to a string.
+        return str(int(float(strike)))
+
 
     df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
     df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']

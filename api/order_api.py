@@ -41,7 +41,6 @@ def get_open_position(tradingsymbol, exchange, product):
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']['net']:
-            print(f'{tradingsymbol} and {exchange} and {product}')
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
                 net_qty = position.get('quantity', '0')
                 print(f'Net Quantity {net_qty}')

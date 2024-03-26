@@ -65,7 +65,7 @@
                         <td class="py-4 px-6">{{ holding.exchange }}</td>
                         <td class="py-4 px-6">{{ holding.quantity }}</td>
                         <td class="py-4 px-6">{{ holding.product }}</td>
-                        <td class="py-4 px-6">{{ holding.pnl }}</td>
+                        <td class="py-4 px-6">{{ '{:.2f}'.format(holding.pnl) }}</td>
                         <td class="py-4 px-6">{{ '{:.2f}'.format(holding.pnlpercent) }}%</td>
                     </tr>
                     {% endfor %}
