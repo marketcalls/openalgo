@@ -69,12 +69,10 @@ def angel_login():
         
         clientcode = request.form['clientid']
         broker_pin = request.form['pin']
-        totp_code = request.form['totp']  
-
-        print(clientcode)
+        totp_code = request.form['totp']         
 
         auth_token, error_message = angel_auth(clientcode, broker_pin, totp_code)
-        print(auth_token)
+        
         if auth_token:    
                         
             # Set session parameters for full authentication
