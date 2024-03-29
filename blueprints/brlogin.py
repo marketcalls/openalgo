@@ -39,9 +39,7 @@ def broker_callback(broker):
     else:
         # Generic handling for other brokers (e.g., upstox, zerodha)
         code = request.args.get('code') or request.args.get('request_token')
-        print(code)
         auth_token, error_message = auth_function(code)
-        
         forward_url = 'broker.html'
     
     if auth_token:
