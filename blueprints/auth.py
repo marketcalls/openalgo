@@ -5,6 +5,8 @@ from limiter import limiter  # Import the limiter instance
 from dotenv import load_dotenv
 import os
 from database.auth_db import upsert_auth
+from database.user_db import authenticate_user
+
 
 
 # Load environment variables
@@ -36,11 +38,10 @@ def login():
     elif request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        login_username = os.getenv('LOGIN_USERNAME')
-        login_password = os.getenv('LOGIN_PASSWORD')
+        
 
-        if username == login_username and password == login_password:
-            session['user'] = login_username  # Set the username in the session
+        if authenticate_user(username, password):
+            session['user'] = username  # Set the username in the session
             print("login success")
             # Redirect to broker login without marking as fully logged in
             return jsonify({'status': 'success'}), 200
@@ -71,7 +72,7 @@ def broker_login():
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
         if session.get('logged_in'):
-            username = os.getenv('LOGIN_USERNAME')
+            username = session['user']
             
             #writing to database      
             inserted_id = upsert_auth(username, "", revoke=True)

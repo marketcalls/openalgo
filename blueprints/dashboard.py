@@ -11,7 +11,7 @@ def dashboard():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
-    login_username = os.getenv('LOGIN_USERNAME')
+    login_username = session['user']
     AUTH_TOKEN = get_auth_token(login_username)
 
     if AUTH_TOKEN is None:

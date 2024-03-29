@@ -12,9 +12,10 @@ from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
 from blueprints.core import core_bp  # Import the core blueprint
 
-from database.db import db
+#from database.db import db
 
 from database.auth_db import init_db as ensure_auth_tables_exists
+from database.user_db import init_db as ensure_user_tables_exists
 from database.master_contract_db import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 
@@ -41,7 +42,7 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
 
     # Initialize SQLAlchemy
-    db.init_app(app)
+ #   db.init_app(app)
 
     # Register the blueprints
     app.register_blueprint(auth_bp)
@@ -69,6 +70,7 @@ def setup_environment(app):
         app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
         ensure_auth_tables_exists()
+        ensure_user_tables_exists()
         ensure_master_contract_tables_exists()
         ensure_api_log_tables_exists()
 

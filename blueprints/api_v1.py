@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify, Response, session
 from database.auth_db import get_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order , cancel_all_orders_api
@@ -41,7 +41,7 @@ def place_order():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
                
         
@@ -116,7 +116,7 @@ def place_smart_order():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
                
 
@@ -189,7 +189,7 @@ def close_position():
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
         
         # Check if the provided API key matches the current API key
@@ -238,7 +238,7 @@ def cancel_order_route():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
 
         # Check if the provided API key matches the current API key
@@ -285,7 +285,7 @@ def cancel_all_orders():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
 
         # Check if the provided API key matches the current API key
@@ -338,7 +338,7 @@ def modify_order_route():
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
 
         if data['apikey'] != current_api_key:

@@ -4,18 +4,16 @@
 import os
 
 
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import create_engine, UniqueConstraint
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean  
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
-from database.db import db 
 from cachetools import TTLCache
 
 # Define a cache for the auth tokens and api_key with a max size and a 30-second TTL
-auth_cache = TTLCache(maxsize=1024, ttl=30)
+auth_cache = TTLCache(maxsize=1024, ttl=1000)
 api_key_cache = TTLCache(maxsize=1024, ttl=30)
 
 load_dotenv()
