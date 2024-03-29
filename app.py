@@ -18,6 +18,8 @@ from database.auth_db import init_db as ensure_auth_tables_exists
 from database.master_contract_db import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 
+from utils.plugin_loader import load_broker_auth_functions
+
 from dotenv import load_dotenv
 import os
 
@@ -62,6 +64,9 @@ def create_app():
 
 def setup_environment(app):
     with app.app_context():
+
+        #load broker plugins
+        app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
         ensure_auth_tables_exists()
         ensure_master_contract_tables_exists()
