@@ -3,20 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Setup OpenAlgo</title>
+    <title>Setup OpenAlgo Account</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const password = document.getElementById('password');
+            const confirmPassword = document.getElementById('confirm_password');
+            const validationMessage = document.getElementById('validation-message');
+            const submitButton = document.querySelector('button[type="submit"]');
+            
+            function validatePasswordPolicy(password) {
+                return /^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/.test(password);
+            }
+
+            function handleValidation() {
+                const passwordsMatch = password.value === confirmPassword.value;
+                const passwordIsValid = validatePasswordPolicy(password.value);
+
+                if (passwordsMatch && passwordIsValid) {
+                    validationMessage.textContent = "Password matched";
+                    validationMessage.style.color = "green";
+                    submitButton.disabled = false;
+                } else {
+                    validationMessage.textContent = passwordsMatch ? "Password does not meet policy" : "Password not matched";
+                    validationMessage.style.color = "red";
+                    submitButton.disabled = true;
+                }
+
+                document.getElementById('password-policy').style.display = passwordIsValid ? 'none' : 'block';
+            }
+
+            password.onchange = handleValidation;
+            confirmPassword.onkeyup = handleValidation;
+        });
+    </script>
 </head>
 <body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">
     <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-sm w-full">
         <h2 class="text-3xl font-bold mb-6 text-center">Setup OpenAlgo Account</h2>
-        <form action="{{ url_for('core_bp.setup') }}" method="post" class="space-y-6">
+        <form action="{{ url_for('core_bp.setup') }}" method="post" class="space-y-6" id="setupForm">
             <div>
                 <label for="username" class="block text-sm font-medium text-gray-300">Username</label>
                 <input type="text" id="username" name="username" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
             </div>
             <div>
                 <label for="password" class="block text-sm font-medium text-gray-300">Password</label>
-                <input type="password" id="password" name="password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
+                <input type="password" id="password" name="password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500" pattern="^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$" title="Password must contain at least 8 characters, including 1 uppercase, 1 lowercase, 1 number and 1 special character.">
+            </div>
+            <div>
+                <label for="confirm_password" class="block text-sm font-medium text-gray-300">Confirm Password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
+                <span id="validation-message"></span>
             </div>
             <div>
                 <label for="email" class="block text-sm font-medium text-gray-300">Email</label>
@@ -27,7 +64,17 @@
                 <input type="tel" id="mobile_number" name="mobile_number" required pattern="[0-9]{10,15}" class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
             </div>
             <div class="flex items-center justify-center">
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Setup</button>
+                <button type="submit" disabled class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Setup</button>
+            </div>
+            <div id="password-policy" class="text-sm mt-4" style="color: yellow;">
+                <p>Password Policy Guidelines:</p>
+                <ul class="list-disc pl-5">
+                    <li>Minimum 8 characters</li>
+                    <li>At least 1 uppercase letter (A-Z)</li>
+                    <li>At least 1 lowercase letter (a-z)</li>
+                    <li>At least 1 number (0-9)</li>
+                    <li>At least 1 special symbol (@, #, $, etc.)</li>
+                </ul>
             </div>
         </form>
     </div>

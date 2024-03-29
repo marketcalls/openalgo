@@ -1,6 +1,6 @@
 from flask import Blueprint, current_app, send_from_directory 
 from flask import render_template, redirect, request, url_for
-from database.user_db import add_user
+from database.user_db import add_user, find_user_by_username
 
 import os
 
@@ -12,6 +12,9 @@ def home():
 
 @core_bp.route('/setup', methods=['GET', 'POST'])
 def setup():
+    if find_user_by_username() is not None:
+        return redirect(url_for('auth.login'))
+
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
