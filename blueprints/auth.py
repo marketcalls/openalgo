@@ -1,11 +1,11 @@
 # auth.py
 
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
+from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from limiter import limiter  # Import the limiter instance
 from dotenv import load_dotenv
 import os
 from database.auth_db import upsert_auth
-from database.user_db import authenticate_user
+from database.user_db import authenticate_user, User, db_session
 
 
 
@@ -65,6 +65,36 @@ def broker_login():
         REDIRECT_URL = os.getenv('REDIRECT_URL')
         return render_template('broker.html',broker_api_key=BROKER_API_KEY, broker_api_secret=BROKER_API_SECRET,
                                redirect_url=REDIRECT_URL)
+    
+@auth_bp.route('/change', methods=['GET', 'POST'])
+def change_password():
+    if 'user' not in session:
+        # If the user is not logged in, redirect to login page
+        flash('You must be logged in to change your password.', 'warning')
+        return redirect(url_for('auth.login'))
+
+    if request.method == 'POST':
+        username = session['user']
+        old_password = request.form['old_password']
+        new_password = request.form['new_password']
+        confirm_password = request.form['confirm_password']
+
+        user = User.query.filter_by(username=username).first()
+
+        if user and user.check_password(old_password):
+            if new_password == confirm_password:
+                # Here, you should also ensure the new password meets your policy before updating
+                user.set_password(new_password)
+                db_session.commit()
+                flash('Password successfully changed.', 'success')
+                return redirect(url_for('dashboard_bp.dashboard'))  # Ensure you have a dashboard route
+            else:
+                flash('New password and confirm password do not match.', 'error')
+        else:
+            flash('Old password is incorrect.', 'error')
+
+    return render_template('profile.html', username=session['user'])
+
 
 
 @auth_bp.route('/logout')

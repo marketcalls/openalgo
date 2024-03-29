@@ -16,13 +16,13 @@ load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database connection string
 
 # Engine and session setup
-engine = create_engine(DATABASE_URL, echo=True)
+engine = create_engine(DATABASE_URL, echo=False)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
 
-# Define a cache for the usernames with a max size and a 1000-second TTL
-username_cache = TTLCache(maxsize=1024, ttl=1000)
+# Define a cache for the usernames with a max size and a 30-second TTL
+username_cache = TTLCache(maxsize=1024, ttl=30)
 
 class User(Base):
     __tablename__ = 'users'
