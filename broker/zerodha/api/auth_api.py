@@ -21,6 +21,8 @@ def authenticate_broker(request_token):
             'request_token': request_token,
             'checksum': checksum
         }
+
+        print(data)
         
         # Setting the headers as specified by Zerodha's documentation
         headers = {
@@ -29,7 +31,7 @@ def authenticate_broker(request_token):
         
         # Performing the POST request
         response = requests.post(url, headers=headers, data=data)
-        
+        print(f'response : {response}')
         if response.status_code == 200:
             # Success response from Zerodha
             response_data = response.json()

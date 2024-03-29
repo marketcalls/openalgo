@@ -16,77 +16,43 @@ brlogin_bp = Blueprint('brlogin', __name__, url_prefix='/')
 @brlogin_bp.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
-
-@brlogin_bp.route('/callback/angel', methods=['GET', 'POST'])
+@brlogin_bp.route('/<broker>/callback', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def angel_callback():
-
-    broker_auth_functions = app.broker_auth_functions
-
-    if session.get('logged_in'):
-        return redirect(url_for('dashboard_bp.dashboard'))
-    if request.method == 'GET':
-        if 'user' not in session:
-            return redirect(url_for('auth.login'))
-        return render_template('angel.html')
-    elif request.method == 'POST':
-        clientcode = request.form['clientid']
-        broker_pin = request.form['pin']
-        totp_code = request.form['totp']     
-        angel_authenticate = broker_auth_functions.get('angel_auth')    
-        auth_token, error_message = angel_authenticate(clientcode, broker_pin, totp_code)
-        if auth_token:
-            return handle_auth_success(auth_token, session['user'])
-        else:
-            return handle_auth_failure(error_message,forward_url='angel.html')
-
-
-
-@brlogin_bp.route('/upstox/callback', methods=['POST'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def upstox_callback():
-
-    broker_auth_functions = app.broker_auth_functions
-
+def broker_callback(broker):
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
 
-    code = request.args.get('code')
-    if code:
-        upstox_authenticate = broker_auth_functions.get('upstox_auth')  
-        auth_token, error_message = upstox_authenticate(code)
-        if auth_token:
-            return handle_auth_success(auth_token, session['user'])
-        else:
-            return handle_auth_failure(error_message)
+    broker_auth_functions = app.broker_auth_functions
+    auth_function = broker_auth_functions.get(f'{broker}_auth')
+
+    if not auth_function:
+        return jsonify(error="Broker authentication function not found."), 404
+
+    if broker == 'angel':
+        # Assume similar handling for other brokers as needed
+        clientcode = request.form.get('clientid')
+        broker_pin = request.form.get('pin')
+        totp_code = request.form.get('totp')
+        auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
+        forward_url = 'angel.html'
     else:
-        return "No code received", 400
-
-
-
-@brlogin_bp.route('/zerodha/callback', methods=['POST'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def zerodha_callback():
-
-    broker_auth_functions = app.broker_auth_functions
-
-    if session.get('logged_in'):
-        return redirect(url_for('dashboard_bp.dashboard'))
-
-    request_token = request.args.get('request_token')
-    if request_token:
-        zerodha_authenticate = broker_auth_functions.get('upstox_auth')  
-        auth_token, error_message = zerodha_authenticate(request_token)
-        if auth_token:
-            auth_token = f'{BROKER_API_KEY}:{auth_token}'  # Concatenating with the broker key, specific to Zerodha
-            return handle_auth_success(auth_token, session['user'])
-        else:
-            return handle_auth_failure(error_message)
+        # Generic handling for other brokers (e.g., upstox, zerodha)
+        code = request.args.get('code') or request.args.get('request_token')
+        print(code)
+        auth_token, error_message = auth_function(code)
+        
+        forward_url = 'broker.html'
+    
+    if auth_token:
+        if broker == 'zerodha':
+            token = request.args.get('request_token')
+            code = f'{BROKER_API_KEY}:{token}'
+            print(code)
+        return handle_auth_success(auth_token, session['user'])
     else:
-        return "No request token received", 400
+        return handle_auth_failure(error_message, forward_url=forward_url)
+
 
 
 
