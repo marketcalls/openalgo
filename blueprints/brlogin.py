@@ -21,6 +21,7 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker):
     if session.get('logged_in'):
+        session['broker'] = broker
         return redirect(url_for('dashboard_bp.dashboard'))
 
     broker_auth_functions = app.broker_auth_functions
@@ -43,10 +44,10 @@ def broker_callback(broker):
         forward_url = 'broker.html'
     
     if auth_token:
+        session['broker'] = broker
         if broker == 'zerodha':
             token = request.args.get('request_token')
             code = f'{BROKER_API_KEY}:{token}'
-            print(code)
         return handle_auth_success(auth_token, session['user'])
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)

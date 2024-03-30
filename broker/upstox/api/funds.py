@@ -3,8 +3,8 @@
 import os
 import http.client
 import json
-from api.order_api import get_positions
-from mapping.order_data import map_order_data
+from broker.upstox.api.order_api import get_positions
+from broker.upstox.mapping.order_data import map_order_data
 
 def get_margin_data(auth_token):
     """Fetch margin data from Upstox's API using the provided auth token."""
@@ -23,6 +23,7 @@ def get_margin_data(auth_token):
 
     print(f"Funds Details: {margin_data}")
 
+
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
         print(f"Error fetching margin data: {margin_data.get('errors')}")
@@ -39,7 +40,7 @@ def get_margin_data(auth_token):
             margin_data['data']['equity']['used_margin']
         ])
 
-        position_book = get_positions()
+        position_book = get_positions(auth_token)
 
         position_book = map_order_data(position_book)
 

@@ -7,9 +7,9 @@ from mapping.transform_data import transform_data , map_product_type, reverse_ma
 
 
 
-def get_api_response(endpoint, method="GET", payload=''):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def get_api_response(endpoint, auth, method="GET", payload=''):
+
+    AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
 
     conn = http.client.HTTPSConnection("api.upstox.com")
@@ -23,17 +23,17 @@ def get_api_response(endpoint, method="GET", payload=''):
     data = res.read()
     return json.loads(data.decode("utf-8"))
 
-def get_order_book():
-    return get_api_response("/v2/order/retrieve-all")
+def get_order_book(auth):
+    return get_api_response("/v2/order/retrieve-all",auth)
 
-def get_trade_book():
-    return get_api_response("/v2/order/trades/get-trades-for-day")
+def get_trade_book(auth):
+    return get_api_response("/v2/order/trades/get-trades-for-day",auth)
 
-def get_positions():
-    return get_api_response("/v2/portfolio/short-term-positions")
+def get_positions(auth):
+    return get_api_response("/v2/portfolio/short-term-positions",auth)
 
-def get_holdings():
-    return get_api_response("/v2/portfolio/long-term-holdings")
+def get_holdings(auth):
+    return get_api_response("/v2/portfolio/long-term-holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, product):
     positions_data = get_positions()
