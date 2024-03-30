@@ -87,13 +87,16 @@ def change_password():
                 # Here, you should also ensure the new password meets your policy before updating
                 user.set_password(new_password)
                 db_session.commit()
-                socketio.emit('password_change', {'status': 'success', 'message': 'Your Password Changed'})
-                return '', 204
+                # Use flash to notify the user of success
+                flash('Your password has been changed successfully.', 'success')
+                # Redirect to a page where the user can see this confirmation, or stay on the same page
+                return redirect(url_for('auth.change_password'))
             else:
                 flash('New password and confirm password do not match.', 'error')
         else:
-            socketio.emit('password_change', {'status': 'error', 'message': 'Old Password is incorrect'})
-            return '', 204
+            flash('Old Password is incorrect.', 'error')
+            # Optionally, redirect to the same page to let the user try again
+            return redirect(url_for('auth.change_password'))
 
     return render_template('profile.html', username=session['user'])
 

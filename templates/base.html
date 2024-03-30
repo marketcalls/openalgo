@@ -25,7 +25,16 @@
     <!-- Meta tags for color settings on mobile browsers -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
-        
+
+    <style>
+        /* Style in base.html to control the flash message container's spacing */
+        .flash-message-container {
+            margin-bottom: 0; /* Remove bottom margin */
+            padding-bottom: 0; /* Remove bottom padding */
+        }
+    </style>
+    
+
     {% block head %}{% endblock %}
 </head>
 <body class="bg-gray-100">
@@ -91,6 +100,27 @@
             </div>
         </div>
     </nav>
+
+    <!-- Flash Messages Display Area -->
+    <div class="container mx-auto mt-4 flash-message-container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="w-full px-4 py-3 mx-auto">
+                    {% for category, message in messages %}
+                        <div class="
+                            {{ 'bg-green-100 text-green-800' if category == 'success' else 'bg-red-100 text-red-800' }}
+                            px-4 py-3 rounded relative text-center" role="alert">
+                            <strong class="font-bold">{{ message }}</strong>
+                            <!-- Optional close button for the alert, if you want it -->
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+    </div>
+
+
+
 
     <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
     <div class="container mx-auto mt-24">
