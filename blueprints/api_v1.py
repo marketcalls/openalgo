@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, Response, session
-from database.auth_db import get_api_key, validate_api_key
+from database.auth_db import get_api_key, get_auth_token_by_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order , cancel_all_orders_api
 from extensions import socketio  # Import SocketIO
@@ -46,13 +46,14 @@ def place_order():
         
                
         api_key = data['apikey']
+        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
 
-        # Check if the provided Placeorder Request API key matches the Current App API Key
-        if not validate_api_key(api_key) :
+        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
+        if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         
-        res, response_data, order_id = place_order_api(data)
+        res, response_data, order_id = place_order_api(data,AUTH_TOKEN)
         print(f'placeorder response : {response_data} and orderid is {order_id}')
 
         # Check if the 'data' field is not null and the order was successfully placed
@@ -118,17 +119,16 @@ def place_smart_order():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
-               
+        api_key = data['apikey']
+        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
 
-        # Check if the provided Placeorder Request API key matches the Current App API Key
-        if current_api_key != data['apikey']:
+        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
+        if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         
         #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
-        res, response_data, order_id = place_smartorder_api(data)
+        res, response_data, order_id = place_smartorder_api(data,AUTH_TOKEN)
         
         if res == None and response_data.get('message'):
             order_response_data = {
@@ -191,15 +191,17 @@ def close_position():
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
-        
-        # Check if the provided API key matches the current API key
-        if data['apikey'] != current_api_key:
-            return jsonify({"message": "Invalid API key"}), 403
+
+        api_key = data['apikey']
+        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+
+        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
+        if AUTH_TOKEN is None:
+            return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
+
 
         # Call the function to close all positions
-        response_code, status_code = close_all_positions(current_api_key)
+        response_code, status_code = close_all_positions(api_key,AUTH_TOKEN)
 
         # Emitting a socket event for closing position
         socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions SquaredOff'})
@@ -240,15 +242,15 @@ def cancel_order_route():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
+        api_key = data['apikey']
+        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
 
-        # Check if the provided API key matches the current API key
-        if current_api_key != data['apikey']:
-            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
+        if AUTH_TOKEN is None:
+            return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         # Call the cancel_order function
-        response_message, status_code = cancel_order(data['orderid'])
+        response_message, status_code = cancel_order(data['orderid'],AUTH_TOKEN)
 
         # Emit the cancellation event to the client via Socket.IO
         socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
@@ -287,15 +289,17 @@ def cancel_all_orders():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
+        api_key = data['apikey']
+        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
 
-        # Check if the provided API key matches the current API key
-        if current_api_key != data['apikey']:
-            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
+        if AUTH_TOKEN is None:
+            return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
+
+
 
         # Call the new function to process order cancellations
-        canceled_orders, failed_cancellations = cancel_all_orders_api(data)
+        canceled_orders, failed_cancellations = cancel_all_orders_api(data,AUTH_TOKEN)
 
         # Emit events for each canceled order
         for orderid in canceled_orders:
