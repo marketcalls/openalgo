@@ -3,6 +3,7 @@
 from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from limiter import limiter  # Import the limiter instance
 from dotenv import load_dotenv
+from extensions import socketio
 import os
 from database.auth_db import upsert_auth
 from database.user_db import authenticate_user, User, db_session
@@ -86,12 +87,13 @@ def change_password():
                 # Here, you should also ensure the new password meets your policy before updating
                 user.set_password(new_password)
                 db_session.commit()
-                flash('Password successfully changed.', 'success')
-                return redirect(url_for('dashboard_bp.dashboard'))  # Ensure you have a dashboard route
+                socketio.emit('password_change', {'status': 'success', 'message': 'Your Password Changed'})
+                return '', 204
             else:
                 flash('New password and confirm password do not match.', 'error')
         else:
-            flash('Old password is incorrect.', 'error')
+            socketio.emit('password_change', {'status': 'error', 'message': 'Old Password is incorrect'})
+            return '', 204
 
     return render_template('profile.html', username=session['user'])
 

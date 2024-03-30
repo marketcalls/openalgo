@@ -6,9 +6,10 @@ from database.token_db import get_token
 from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
-def get_api_response(endpoint, method="GET", payload=''):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def get_api_response(endpoint, auth, method="GET", payload=''):
+
+    AUTH_TOKEN = auth
+
     api_key = os.getenv('BROKER_API_KEY')
 
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
@@ -26,22 +27,23 @@ def get_api_response(endpoint, method="GET", payload=''):
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
+    
     return json.loads(data.decode("utf-8"))
 
-def get_order_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook")
+def get_order_book(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
 
-def get_trade_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook")
+def get_trade_book(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
 
-def get_positions():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition")
+def get_positions(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
 
-def get_holdings():
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding")
+def get_holdings(auth):
+    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
 
-def get_open_position(tradingsymbol, exchange, producttype):
-    positions_data = get_positions()
+def get_open_position(tradingsymbol, exchange, producttype,auth):
+    positions_data = get_positions(auth)
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):

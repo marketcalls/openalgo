@@ -127,4 +127,28 @@ def get_api_key_dbquery(user_id):
     except Exception as e:
         print("Error while querying the database for API key:", e)
         return None
+    
+
+def validate_api_key(provided_api_key):
+    # First, attempt to find the API key in the cache
+    for cache_key, api_key in api_key_cache.items():
+        if api_key == provided_api_key:
+            #print(f"API Key validated from cache: {provided_api_key}")
+            return True
+
+    # If not found in cache, query the database
+    try:
+        api_key_obj = db_session.query(ApiKeys).filter_by(api_key=provided_api_key).first()
+        if api_key_obj:
+            # If found, cache the result for future requests and return True
+            user_id_cache_key = f"api-key-{api_key_obj.user_id}"
+            api_key_cache[user_id_cache_key] = provided_api_key
+            #print(f"API Key validated from database: {provided_api_key}")
+            return True
+    except Exception as e:
+        print(f"Error while validating API key: {e}")
+
+    # If the API key is not found in either the cache or the database, return False
+    return False
+
 

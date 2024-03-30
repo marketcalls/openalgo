@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, render_template, session, redirec
 from api.order_api import get_order_book, get_trade_book, get_positions, get_holdings
 from mapping.order_data import calculate_order_statistics, map_order_data,map_trade_data, map_position_data, map_portfolio_data, calculate_portfolio_statistics
 from mapping.order_data import transform_order_data, transform_tradebook_data, transform_positions_data, transform_holdings_data
+from database.auth_db import get_auth_token
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
 
@@ -10,7 +11,13 @@ def orderbook():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
-    order_data = get_order_book()
+    login_username = session['user']
+    AUTH_TOKEN = get_auth_token(login_username)
+
+    if AUTH_TOKEN is None:
+        return redirect(url_for('auth.logout'))
+    
+    order_data = get_order_book(AUTH_TOKEN)
     #print(order_data)
     if order_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
@@ -34,8 +41,13 @@ def tradebook():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
+    login_username = session['user']
+    AUTH_TOKEN = get_auth_token(login_username)
 
-    tradebook_data = get_trade_book()
+    if AUTH_TOKEN is None:
+        return redirect(url_for('auth.logout'))
+
+    tradebook_data = get_trade_book(AUTH_TOKEN)
 
     
     # Check if 'data' is None
@@ -59,7 +71,13 @@ def positions():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
-    positions_data = get_positions()
+    login_username = session['user']
+    AUTH_TOKEN = get_auth_token(login_username)
+
+    if AUTH_TOKEN is None:
+        return redirect(url_for('auth.logout'))
+    
+    positions_data = get_positions(AUTH_TOKEN)
     print(positions_data)
 
     if positions_data['status'] == 'error':
@@ -79,8 +97,13 @@ def holdings():
     if not session.get('logged_in'):
         return redirect(url_for('auth.login'))
     
+    login_username = session['user']
+    AUTH_TOKEN = get_auth_token(login_username)
+
+    if AUTH_TOKEN is None:
+        return redirect(url_for('auth.logout'))
         
-    holdings_data = get_holdings()
+    holdings_data = get_holdings(AUTH_TOKEN)
     
     if holdings_data['status'] == 'error':
         return redirect(url_for('auth.logout'))

@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, Response, session
-from database.auth_db import get_api_key
+from database.auth_db import get_api_key, validate_api_key
 from database.apilog_db import async_log_order, executor
 from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order , cancel_all_orders_api
 from extensions import socketio  # Import SocketIO
@@ -23,7 +23,9 @@ def ratelimit_handler(e):
 @api_v1_bp.route('/placeorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def place_order():
+    
     try:
+        
         # Extracting JSON data from the POST request
         data = request.json
         order_request_data = copy.deepcopy(request.json)
@@ -41,13 +43,12 @@ def place_order():
                 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
             }), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
-               
         
+               
+        api_key = data['apikey']
 
         # Check if the provided Placeorder Request API key matches the Current App API Key
-        if current_api_key != data['apikey']:
+        if not validate_api_key(api_key) :
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
         
@@ -87,6 +88,7 @@ def place_order():
     
     except KeyError as e:
         # Instead of returning the exception message, return a generic error message
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         # For other exceptions, you should also return a generic error message

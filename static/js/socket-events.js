@@ -2,6 +2,10 @@ document.addEventListener('DOMContentLoaded', function() {
     var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
     var alertSound = document.getElementById('alert-sound');
 
+    socket.on('password_change', function(data) {
+        showFlashMessage('bg-blue-500', `Password Change: ${data.message}`);
+    });
+
     socket.on('master_contract_download', function(data) {
         showFlashMessage('bg-blue-500', `Master Contract: ${data.message}`);
     });
