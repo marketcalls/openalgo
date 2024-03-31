@@ -6,9 +6,10 @@ from database.token_db import get_token
 from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
-def get_api_response(endpoint, method="GET", payload=''):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def get_api_response(endpoint, auth, method="GET", payload=''):
+
+    AUTH_TOKEN = auth
+
     api_key = os.getenv('BROKER_API_KEY')
 
     conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
@@ -26,22 +27,23 @@ def get_api_response(endpoint, method="GET", payload=''):
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
+    
     return json.loads(data.decode("utf-8"))
 
-def get_order_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook")
+def get_order_book(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
 
-def get_trade_book():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook")
+def get_trade_book(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
 
-def get_positions():
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition")
+def get_positions(auth):
+    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
 
-def get_holdings():
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding")
+def get_holdings(auth):
+    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
 
-def get_open_position(tradingsymbol, exchange, producttype):
-    positions_data = get_positions()
+def get_open_position(tradingsymbol, exchange, producttype,auth):
+    positions_data = get_positions(auth)
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
@@ -52,9 +54,8 @@ def get_open_position(tradingsymbol, exchange, producttype):
 
     return net_qty
 
-def place_order_api(data):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def place_order_api(data,auth):
+    AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
@@ -97,7 +98,7 @@ def place_order_api(data):
         orderid = None
     return res, response_data, orderid
 
-def place_smartorder_api(data):
+def place_smartorder_api(data,auth):
 
     #If no API call is made in this function then res will return None
     res = None
@@ -111,7 +112,7 @@ def place_smartorder_api(data):
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product)))
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product),auth))
 
 
     #print(f"position_size : {position_size}") 
@@ -128,7 +129,7 @@ def place_smartorder_api(data):
         quantity = data['quantity']
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
-        res, response, orderid = place_order_api(data)
+        res, response, orderid = place_order_api(data,auth)
         #print(res)
         #print(response)
         
@@ -170,7 +171,7 @@ def place_smartorder_api(data):
 
         #print(order_data)
         # Place the order
-        res, response, orderid = place_order_api(order_data)
+        res, response, orderid = place_order_api(order_data,auth)
         #print(res)
         #print(response)
         
@@ -179,7 +180,7 @@ def place_smartorder_api(data):
 
 
 
-def close_all_positions(current_api_key):
+def close_all_positions(current_api_key,auth):
     # Fetch the current open positions
     positions_response = get_positions()
 
@@ -213,7 +214,7 @@ def close_all_positions(current_api_key):
             print(place_order_payload)
 
             # Place the order to close the position
-            _, api_response, _ =   place_order_api(place_order_payload)
+            _, api_response, _ =   place_order_api(place_order_payload,auth)
 
             print(api_response)
             
@@ -222,9 +223,9 @@ def close_all_positions(current_api_key):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid):
+def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
+    AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
     
     # Set up the request headers
@@ -261,10 +262,10 @@ def cancel_order(orderid):
         return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
 
 
-def modify_order(data):
+def modify_order(data,auth):
 
     # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
+    AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
 
     token = get_token(data['symbol'], data['exchange'])
@@ -295,7 +296,7 @@ def modify_order(data):
 
 
 
-def cancel_all_orders_api(data):
+def cancel_all_orders_api(data,auth):
     # Get the order book
     order_book_response = get_order_book()
     #print(order_book_response)
@@ -312,7 +313,7 @@ def cancel_all_orders_api(data):
     # Cancel the filtered orders
     for order in orders_to_cancel:
         orderid = order['orderid']
-        cancel_response, status_code = cancel_order(orderid)
+        cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
             canceled_orders.append(orderid)
         else:
