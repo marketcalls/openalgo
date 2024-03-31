@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.upstox.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 
@@ -35,8 +35,8 @@ def get_positions(auth):
 def get_holdings(auth):
     return get_api_response("/v2/portfolio/long-term-holdings",auth)
 
-def get_open_position(tradingsymbol, exchange, product):
-    positions_data = get_positions()
+def get_open_position(tradingsymbol, exchange, product, auth):
+    positions_data = get_positions(auth)
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
@@ -47,9 +47,9 @@ def get_open_position(tradingsymbol, exchange, product):
 
     return net_qty
 
-def place_order_api(data):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def place_order_api(data,auth):
+    AUTH_TOKEN = auth
+    print(AUTH_TOKEN)
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])

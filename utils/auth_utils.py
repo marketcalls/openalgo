@@ -3,18 +3,29 @@ from flask import current_app as app
 from threading import Thread
 from utils.session import get_session_expiry_time
 from database.auth_db import upsert_auth
-#from database.master_contract_db import master_contract_download
+import importlib  # Import the importlib module for dynamic import
 
-def async_master_contract_download(user):
+def async_master_contract_download(broker):
     """
-    Asynchronously download the master contract and emit a WebSocket event upon completion.
+    Asynchronously download the master contract and emit a WebSocket event upon completion,
+    with the 'broker' parameter specifying the broker for which to download the contract.
     """
-    #master_contract_status = master_contract_download()  # Assuming this is a blocking call
+    # Dynamically construct the module path based on the broker
+    module_path = f'broker.{broker}.database.master_contract_db'
+    
+    # Dynamically import the module
+    try:
+        master_contract_module = importlib.import_module(module_path)
+    except ImportError as error:
+        print(f"Error importing {module_path}: {error}")
+        return {'status': 'error', 'message': 'Failed to import master contract module'}
+
+    # Use the dynamically imported module's master_contract_download function
+    master_contract_status = master_contract_module.master_contract_download()
     
     print("Processing Master Contract Download")
-    return True
-
-    #return master_contract_status
+    
+    return master_contract_status
 
 
 
@@ -34,7 +45,7 @@ def handle_auth_success(auth_token, user_session_key,broker):
     if inserted_id:
         print(f"Database record upserted with ID: {inserted_id}")
         print('Upserted Auth Token, Username and Broker')
-        thread = Thread(target=async_master_contract_download, args=(user_session_key,))
+        thread = Thread(target=async_master_contract_download, args=(broker,))
         thread.start()
         return redirect(url_for('dashboard_bp.dashboard'))
     else:

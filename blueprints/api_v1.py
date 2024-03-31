@@ -46,7 +46,7 @@ def place_order():
 
         api_key = data['apikey']
         AUTH_TOKEN, broker = get_auth_token_broker(api_key)
-
+        print(f'The connected broker is {broker}')
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 

@@ -55,6 +55,7 @@ def upsert_auth(name, auth_token, broker, revoke=False):
     auth_obj = Auth.query.filter_by(name=name).first()
     if auth_obj:
         auth_obj.auth = auth_token
+        auth_obj.broker = broker
         auth_obj.is_revoked = revoke  # Update revoke status
     else:
         auth_obj = Auth(name=name, auth=auth_token, broker=broker, is_revoked=revoke)

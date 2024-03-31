@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):

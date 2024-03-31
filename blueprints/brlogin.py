@@ -47,8 +47,9 @@ def broker_callback(broker):
         forward_url = 'broker.html'
     
     if auth_token:
-        # Store broker in session and g
+        # Store broker in session
         session['broker'] = broker
+        print(f'Connected broker: {broker}')
         if broker == 'zerodha':
             token = request.args.get('request_token')
             code = f'{BROKER_API_KEY}:{token}'
