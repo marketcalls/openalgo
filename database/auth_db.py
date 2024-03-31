@@ -3,7 +3,6 @@
 
 import os
 
-
 from sqlalchemy import create_engine, UniqueConstraint
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -13,7 +12,7 @@ from dotenv import load_dotenv
 from cachetools import TTLCache
 
 # Define a cache for the auth tokens and api_key with a max size and a 30-second TTL
-auth_cache = TTLCache(maxsize=1024, ttl=1000)
+auth_cache = TTLCache(maxsize=1024, ttl=30)
 api_key_cache = TTLCache(maxsize=1024, ttl=30)
 
 load_dotenv()
