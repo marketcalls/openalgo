@@ -4,13 +4,13 @@ import os
 import urllib.parse
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.zerodha.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 
-def get_api_response(endpoint, method="GET", payload=''):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
+def get_api_response(endpoint, auth, method="GET", payload=''):
+    
+    AUTH_TOKEN = auth
     conn = http.client.HTTPSConnection("api.kite.trade")
     headers = {
         'X-Kite-Version': '3',
@@ -22,20 +22,20 @@ def get_api_response(endpoint, method="GET", payload=''):
     data = res.read()
     return json.loads(data.decode("utf-8"))
 
-def get_order_book():
-    return get_api_response("/orders")
+def get_order_book(auth):
+    return get_api_response("/orders",auth)
 
-def get_trade_book():
-    return get_api_response("/trades")
+def get_trade_book(auth):
+    return get_api_response("/trades",auth)
 
-def get_positions():
-    return get_api_response("/portfolio/positions")
+def get_positions(auth):
+    return get_api_response("/portfolio/positions",auth)
 
-def get_holdings():
-    return get_api_response("/portfolio/holdings")
+def get_holdings(auth):
+    return get_api_response("/portfolio/holdings",auth)
 
-def get_open_position(tradingsymbol, exchange, product):
-    positions_data = get_positions()
+def get_open_position(tradingsymbol, exchange, product,auth):
+    positions_data = get_positions(auth)
     net_qty = '0'
     #print(positions_data['data']['net'])
 
@@ -48,10 +48,10 @@ def get_open_position(tradingsymbol, exchange, product):
 
     return net_qty
 
-def place_order_api(data):
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
-    print(AUTH_TOKEN)
+def place_order_api(data,auth):
+    
+    AUTH_TOKEN = auth
+    
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     #token = get_token(data['symbol'], data['exchange'])

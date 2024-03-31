@@ -51,8 +51,8 @@ def broker_callback(broker):
         session['broker'] = broker
         print(f'Connected broker: {broker}')
         if broker == 'zerodha':
-            token = request.args.get('request_token')
-            code = f'{BROKER_API_KEY}:{token}'
+            #token = request.args.get('request_token')
+            auth_token = f'{BROKER_API_KEY}:{auth_token}'
         return handle_auth_success(auth_token, session['user'],broker)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
