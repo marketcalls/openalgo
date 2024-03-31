@@ -49,7 +49,6 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    print(AUTH_TOKEN)
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
@@ -85,8 +84,9 @@ def place_order_api(data,auth):
         orderid = None
     return res, response_data, orderid
 
-def place_smartorder_api(data):
+def place_smartorder_api(data,auth):
 
+    AUTH_TOKEN = auth
     #If no API call is made in this function then res will return None
     res = None
 
@@ -99,7 +99,7 @@ def place_smartorder_api(data):
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product)))
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
     #print(f"position_size : {position_size}") 
@@ -116,7 +116,7 @@ def place_smartorder_api(data):
         quantity = data['quantity']
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
-        res, response, orderid = place_order_api(data)
+        res, response, orderid = place_order_api(data,AUTH_TOKEN)
         #print(res)
         #print(response)
         
@@ -159,7 +159,7 @@ def place_smartorder_api(data):
 
         #print(order_data)
         # Place the order
-        res, response, orderid = place_order_api(order_data)
+        res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
         #print(res)
         #print(response)
         
@@ -168,9 +168,10 @@ def place_smartorder_api(data):
 
 
 
-def close_all_positions(current_api_key):
+def close_all_positions(current_api_key,auth):
+    AUTH_TOKEN = auth
     # Fetch the current open positions
-    positions_response = get_positions()
+    positions_response = get_positions(AUTH_TOKEN)
 
     
     # Check if the positions data is null or empty
@@ -204,7 +205,7 @@ def close_all_positions(current_api_key):
             print(place_order_payload)
 
             # Place the order to close the position
-            _, api_response, _ =   place_order_api(place_order_payload)
+            _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
             print(api_response)
             
@@ -213,10 +214,9 @@ def close_all_positions(current_api_key):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid):
+def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
-    api_key = os.getenv('BROKER_API_KEY')
+    AUTH_TOKEN = auth
     
     # Set up the request headers
     headers = {
@@ -247,13 +247,12 @@ def cancel_order(orderid):
         return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
 
 
-def modify_order(data):
+def modify_order(data,auth):
 
     
 
     # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = get_auth_token(os.getenv('LOGIN_USERNAME'))
-    api_key = os.getenv('BROKER_API_KEY')
+    AUTH_TOKEN = auth
 
     
     transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
@@ -280,9 +279,10 @@ def modify_order(data):
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
 
-def cancel_all_orders_api(data):
+def cancel_all_orders_api(data,auth):
     # Get the order book
-    order_book_response = get_order_book()
+    AUTH_TOKEN = auth
+    order_book_response = get_order_book(AUTH_TOKEN)
     print(order_book_response)
     if order_book_response['status'] != 'success':
         return [], []  # Return empty lists indicating failure to retrieve the order book
@@ -297,7 +297,7 @@ def cancel_all_orders_api(data):
     # Cancel the filtered orders
     for order in orders_to_cancel:
         orderid = order['order_id']
-        cancel_response, status_code = cancel_order(orderid)
+        cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
         if status_code == 200:
             canceled_orders.append(orderid)
         else:
