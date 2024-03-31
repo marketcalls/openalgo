@@ -60,7 +60,7 @@ def place_order():
         if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             order_response_data = {'status': 'success', 'orderid': order_id}
-            # executor.submit(async_log_order, 'placeorder', order_request_data, order_response_data) # Assuming executor exists and is configured
+            executor.submit(async_log_order, 'placeorder', order_request_data, order_response_data) # Assuming executor exists and is configured
             return jsonify(order_response_data)
         else:
             message = response_data.get('message', 'Failed to place order')
@@ -103,7 +103,7 @@ def place_smart_order():
         if res and res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             order_response_data = {'status': 'success', 'orderid': order_id}
-            # executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data) # Assuming executor exists and is configured
+            executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data) # Assuming executor exists and is configured
             return jsonify(order_response_data)
         else:
             message = response_data.get('message', 'Failed to place smart order')
@@ -172,7 +172,7 @@ def close_position():
         socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions Squared Off'})
         
         # Assuming executor and async_log_order are properly defined and set up
-        # executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions Squared Off")
+        executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions Squared Off")
 
         return jsonify(response_code), status_code
 
@@ -215,7 +215,7 @@ def cancel_order_route():
         socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
         
         # Assuming executor and async_log_order are properly defined and set up
-        # executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
+        executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
         return jsonify(response_message), status_code
 
@@ -260,6 +260,8 @@ def cancel_all_orders():
         for orderid in canceled_orders:
             socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
         
+        # Assuming executor and async_log_order are properly defined and set up
+        executor.submit(async_log_order, 'cancelallorder', order_request_data, "Cancel All Order Initiated")
         # Optionally, emit events for failed cancellations
 
         # Assuming executor and async_log_order are properly defined and set up
@@ -313,7 +315,7 @@ def modify_order_route():
         socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
         
         # Assuming executor and async_log_order are properly defined and set up
-        # executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
+        executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
 
         return jsonify(response_message), status_code
 
