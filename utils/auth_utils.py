@@ -18,7 +18,7 @@ def async_master_contract_download(user):
 
 
 
-def handle_auth_success(auth_token, user_session_key):
+def handle_auth_success(auth_token, user_session_key,broker):
     """
     Handles common tasks after successful authentication.
     - Sets session parameters
@@ -30,9 +30,10 @@ def handle_auth_success(auth_token, user_session_key):
     session.permanent = True
     session['AUTH_TOKEN'] = auth_token  # Store the auth token in the session
 
-    inserted_id = upsert_auth(user_session_key, auth_token)
+    inserted_id = upsert_auth(user_session_key, auth_token,broker)
     if inserted_id:
         print(f"Database record upserted with ID: {inserted_id}")
+        print('Upserted Auth Token, Username and Broker')
         thread = Thread(target=async_master_contract_download, args=(user_session_key,))
         thread.start()
         return redirect(url_for('dashboard_bp.dashboard'))

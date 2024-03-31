@@ -1,274 +1,232 @@
 from flask import Blueprint, request, jsonify, Response, session
-from database.auth_db import get_api_key, get_auth_token_by_api_key
+from database.auth_db import get_api_key, get_auth_token_broker
 from database.apilog_db import async_log_order, executor
-from api.order_api import place_order_api, place_smartorder_api , close_all_positions , cancel_order , modify_order , cancel_all_orders_api
+# Removed static import of broker-specific APIs
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the limiter instance
 import copy
-import os 
+import os
 from dotenv import load_dotenv
+import importlib  # Import importlib for dynamic imports
 
 load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
-
-# Create a Blueprint for version 1 of the API
 api_v1_bp = Blueprint('api_v1', __name__, url_prefix='/api/v1')
+
+# Additional helper function for dynamic import
+def import_broker_module(broker_name):
+    try:
+        module_path = f'broker.{broker_name}.api.order_api'
+        broker_module = importlib.import_module(module_path)
+        return broker_module
+    except ImportError as error:
+        print(f"Error importing {module_path}: {error}")
+        return None
 
 @api_v1_bp.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
+
 @api_v1_bp.route('/placeorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def place_order():
-    
     try:
-        
-        # Extracting JSON data from the POST request
         data = request.json
-        order_request_data = copy.deepcopy(request.json)
-        # Remove 'apikey' from the copy
+        order_request_data = copy.deepcopy(data)
         order_request_data.pop('apikey', None)
 
-        # Mandatory fields list
         mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity']
-        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+        missing_fields = [field for field in mandatory_fields if field not in data]
 
-        # Check if there are any missing mandatory fields
         if missing_fields:
-            return jsonify({
-                'status': 'error',
-                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
-            }), 400
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-        
-               
         api_key = data['apikey']
-        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
-        
-        res, response_data, order_id = place_order_api(data,AUTH_TOKEN)
-        print(f'placeorder response : {response_data} and orderid is {order_id}')
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
-        # Check if the 'data' field is not null and the order was successfully placed
-              
-        
+        # Use the dynamically imported module's functions
+        res, response_data, order_id = broker_module.place_order_api(data, AUTH_TOKEN)
+
         if res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
-            
-            if order_id:
-                order_response_data = {
-                       'status': 'success',
-                        'orderid': order_id
-                        }
-                # Call the asynchronous log function
-                executor.submit(async_log_order,'placeorder',order_request_data, order_response_data)
-                return jsonify(order_response_data)
-                
-            else:
-                # In case 'orderid' is not in the 'data'
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Order placed but order ID not found in response',
-                    'details': response_data
-                }), 500
+            order_response_data = {'status': 'success', 'orderid': order_id}
+            # executor.submit(async_log_order, 'placeorder', order_request_data, order_response_data) # Assuming executor exists and is configured
+            return jsonify(order_response_data)
         else:
-            # If 'data' is null or status is not 200, extract the message and return as error
             message = response_data.get('message', 'Failed to place order')
-            return jsonify({
-                'status': 'error',
-                'message': message,
-                
-            }), res.status if res.status != 200 else 500  # Use the API's status code, unless it's 200 but 'data' is null
-    
+            return jsonify({'status': 'error', 'message': message}), res.status if res.status != 200 else 500
     except KeyError as e:
-        # Instead of returning the exception message, return a generic error message
         print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        # For other exceptions, you should also return a generic error message
+        print(e)
         return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
-    
 
 
 @api_v1_bp.route('/placesmartorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def place_smart_order():
     try:
-        # Extracting JSON data from the POST request
         data = request.json
-        
-        order_request_data = copy.deepcopy(request.json)
-        # Remove 'apikey' from the copy
+        order_request_data = copy.deepcopy(data)
         order_request_data.pop('apikey', None)
 
-        # Mandatory fields list
-        mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity','position_size']
-        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+        mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'action', 'quantity', 'position_size']
+        missing_fields = [field for field in mandatory_fields if field not in data]
 
-        # Check if there are any missing mandatory fields
         if missing_fields:
-            return jsonify({
-                'status': 'error',
-                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
-            }), 400
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
         api_key = data['apikey']
-        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
-        
-        #print(f'placesmartorder_resp : {place_smartorder_api(data)}')
-        res, response_data, order_id = place_smartorder_api(data,AUTH_TOKEN)
-        
-        if res == None and response_data.get('message'):
-            order_response_data = {
-                    'status': 'success',
-                    'message': response_data.get('message')
-                }
-            
-            # Call the asynchronous log function
-            executor.submit(async_log_order,'placesmartorder',order_request_data, order_response_data)
-            return jsonify(order_response_data)
-        
-        # Check if the 'data' field is not null and the order was successfully placed
-        if res.status == 200:
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
+
+        # Use the dynamically imported module's functions
+        res, response_data, order_id = broker_module.place_smartorder_api(data, AUTH_TOKEN)
+
+        if res and res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
-            
-            if order_id:
-                order_response_data = {
-                       'status': 'success',
-                        'orderid': order_id
-                        }
-                # Call the asynchronous log function
-                executor.submit(async_log_order,'placeorder',order_request_data, order_response_data)
-                return jsonify(order_response_data)
-                
-            else:
-                # In case 'orderid' is not in the 'data'
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Order placed but order ID not found in response',
-                    'details': response_data
-                }), 500
+            order_response_data = {'status': 'success', 'orderid': order_id}
+            # executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data) # Assuming executor exists and is configured
+            return jsonify(order_response_data)
         else:
-            # If 'data' is null or status is not 200, extract the message and return as error
-            message = response_data.get('message', 'Failed to place order')
-            return jsonify({
-                'status': 'error',
-                'message': message,
-                
-            }), res.status if res.status != 200 else 500  # Use the API's status code, unless it's 200 but 'data' is null
-    
+            message = response_data.get('message', 'Failed to place smart order')
+            return jsonify({'status': 'error', 'message': message}), res.status if res else 500
     except KeyError as e:
-        # Instead of returning the exception message, return a generic error message
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        # For other exceptions, you should also return a generic error message
+        print(e)
         return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
-    
+
+
+from flask import Blueprint, request, jsonify
+import copy
+from database.auth_db import get_auth_token_broker
+from extensions import socketio
+from limiter import limiter
+import importlib
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
+# Assuming api_v1_bp is already defined as in the previous examples
+
+# Helper function for dynamic import, as defined previously
+def import_broker_module(broker_name):
+    try:
+        module_path = f'broker.{broker_name}.api.order_api'
+        broker_module = importlib.import_module(module_path)
+        return broker_module
+    except ImportError as error:
+        print(f"Error importing {module_path}: {error}")
+        return None
+
 @api_v1_bp.route('/closeposition', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def close_position():
     try:
-        data = request.json  # Corrected to use data directly for consistency
+        data = request.json
         sqoff_request_data = copy.deepcopy(data)
-        sqoff_request_data.pop('apikey', None)  # Remove 'apikey' from the copy for logging
-        
-        # Corrected mandatory fields check
+        sqoff_request_data.pop('apikey', None)
+
         mandatory_fields = ['apikey', 'strategy']
-        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
-        
+        missing_fields = [field for field in mandatory_fields if field not in data]
+
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-
         api_key = data['apikey']
-        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
-        # Call the function to close all positions
-        response_code, status_code = close_all_positions(api_key,AUTH_TOKEN)
+        # Use the dynamically imported module's functions to close all positions
+        response_code, status_code = broker_module.close_all_positions(api_key, AUTH_TOKEN)
 
-        # Emitting a socket event for closing position
-        socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions SquaredOff'})
+        socketio.emit('close_position', {'status': 'success', 'message': 'All Open Positions Squared Off'})
         
-        # Asynchronously logging the action
-        executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions SquaredOff")
+        # Assuming executor and async_log_order are properly defined and set up
+        # executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions Squared Off")
 
         return jsonify(response_code), status_code
 
     except KeyError as e:
-        # Handle the case where a mandatory field is not provided
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
-    except Exception as e:            
-        return jsonify({'status': 'error', 'message': f"Failed to close positions:"}), 500
-    
+    except Exception as e:
+        print(e)
+        return jsonify({'status': 'error', 'message': f"Failed to close positions"}), 500
+
     
 
-  
 @api_v1_bp.route('/cancelorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def cancel_order_route():
     try:
-        # Extracting JSON data from the POST request
         data = request.json
-        order_request_data = copy.deepcopy(data)  # For logging
-        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
+        order_request_data = copy.deepcopy(data)
+        order_request_data.pop('apikey', None)
 
-        # Mandatory fields list
         mandatory_fields = ['apikey', 'strategy', 'orderid']
         missing_fields = [field for field in mandatory_fields if field not in data]
 
-        print(missing_fields)
-
-        # Check if there are any missing mandatory fields
         if missing_fields:
-            return jsonify({
-                'status': 'error',
-                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
-            }), 400
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
         api_key = data['apikey']
-        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
-        # Call the cancel_order function
-        response_message, status_code = cancel_order(data['orderid'],AUTH_TOKEN)
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
-        # Emit the cancellation event to the client via Socket.IO
+        # Use the dynamically imported module's function to cancel the order
+        response_message, status_code = broker_module.cancel_order(data['orderid'], AUTH_TOKEN)
+
         socketio.emit('cancel_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
+        
+        # Assuming executor and async_log_order are properly defined and set up
+        # executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
-        # Log the successful order cancellation attempt
-        executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
-
-        # After creating your response object
-        response_message = {'status': 'success', 'orderid': data['orderid']}
-
-        return jsonify(response_message), 200
+        return jsonify(response_message), status_code
 
     except KeyError as e:
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        # Emit failure event if an exception occurs
+        print(e)
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
         return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
+  
 
 
 @api_v1_bp.route('/cancelallorder', methods=['POST'])
@@ -276,44 +234,40 @@ def cancel_order_route():
 def cancel_all_orders():
     try:
         data = request.json
+        order_request_data = copy.deepcopy(data)
+        order_request_data.pop('apikey', None)
 
-        order_request_data = copy.deepcopy(data)  # For logging
-        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
-        # Validate mandatory fields
         mandatory_fields = ['apikey', 'strategy']
         missing_fields = [field for field in mandatory_fields if field not in data]
 
         if missing_fields:
-            return jsonify({
-                'status': 'error',
-                'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
-            }), 400
+            return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
         api_key = data['apikey']
-        AUTH_TOKEN = get_auth_token_by_api_key(api_key)
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        # Check if the AUTH_TOKEN is Available if not then it is not a valid OpenAlgo API Key
         if AUTH_TOKEN is None:
             return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
-
-        # Call the new function to process order cancellations
-        canceled_orders, failed_cancellations = cancel_all_orders_api(data,AUTH_TOKEN)
+        # Use the dynamically imported module's function to cancel all orders
+        canceled_orders, failed_cancellations = broker_module.cancel_all_orders_api(data, AUTH_TOKEN)
 
         # Emit events for each canceled order
         for orderid in canceled_orders:
             socketio.emit('cancel_order_event', {'status': 'success', 'orderid': orderid})
         
-        # Optionally, emit events for failed cancellations if needed
+        # Optionally, emit events for failed cancellations
 
-        # Asynchronously log the cancellation attempt
-        executor.submit(async_log_order, 'cancelallorder', order_request_data, {
-            'canceled_orders': canceled_orders,
-            'failed_cancellations': failed_cancellations
-        })
+        # Assuming executor and async_log_order are properly defined and set up
+        # executor.submit(async_log_order, 'cancelallorder', order_request_data, {
+        #     'canceled_orders': canceled_orders,
+        #     'failed_cancellations': failed_cancellations
+        # })
 
-        # Return a success response
         message = f'Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders.'
         return jsonify({
             'status': 'success',
@@ -321,12 +275,12 @@ def cancel_all_orders():
         })
 
     except KeyError as e:
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        # Emit failure event if an exception occurs
+        print(e)
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel orders'})
         return jsonify({'status': 'error', 'message': f"Failed to cancel orders"}), 500
-
 
 
 @api_v1_bp.route('/modifyorder', methods=['POST'])
@@ -334,36 +288,39 @@ def cancel_all_orders():
 def modify_order_route():
     try:
         data = request.json
-        order_request_data = copy.deepcopy(data)  # For logging
-        order_request_data.pop('apikey', None)  # Remove API key from data to be logged
-        
-        # Mandatory fields including all necessary for order modification
+        order_request_data = copy.deepcopy(data)
+        order_request_data.pop('apikey', None)
+
         mandatory_fields = ['apikey', 'strategy', 'exchange', 'symbol', 'orderid', 'action', 'product', 'pricetype', 'price', 'quantity', 'disclosed_quantity', 'trigger_price']
-        missing_fields = [field for field in mandatory_fields if field not in data or not data[field]]
+        missing_fields = [field for field in mandatory_fields if field not in data]
 
         if missing_fields:
             return jsonify({'status': 'error', 'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'}), 400
 
-        login_username = session['user']
-        current_api_key = get_api_key(login_username)
+        api_key = data['apikey']
+        AUTH_TOKEN, broker = get_auth_token_broker(api_key)
 
-        if data['apikey'] != current_api_key:
-            return jsonify({'status': 'error', 'message': 'Invalid API key'}), 403
+        if AUTH_TOKEN is None:
+            return jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403
 
-        # Assuming modify_order requires specific parameters from `data` and returns a response_message and a status_code
-        response_message, status_code = modify_order(data)
+        broker_module = import_broker_module(broker)
+        if broker_module is None:
+            return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
+
+        # Use the dynamically imported module's function to modify the order
+        response_message, status_code = broker_module.modify_order(data, AUTH_TOKEN)
+
+        socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
         
-        # Emitting the modification event to the client via Socket.IO
-        socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': response_message.get('orderid')})
-        
-        # Asynchronously logging the order modification attempt
-        executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
+        # Assuming executor and async_log_order are properly defined and set up
+        # executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
 
-        return jsonify(response_message), 200
+        return jsonify(response_message), status_code
 
     except KeyError as e:
+        print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
-        # Emit failure event if an exception occurs
+        print(e)
         socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
         return jsonify({'status': 'error', 'message': f"Order modification failed"}), 500

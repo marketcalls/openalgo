@@ -1,4 +1,4 @@
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, g
+from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
 from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_login_rate_limit_min, get_login_rate_limit_hour
@@ -21,7 +21,6 @@ def broker_callback(broker):
     if session.get('logged_in'):
         # Store broker in session and g
         session['broker'] = broker
-        g.broker = broker
         return redirect(url_for('dashboard_bp.dashboard'))
 
     broker_auth_functions = app.broker_auth_functions
@@ -50,10 +49,9 @@ def broker_callback(broker):
     if auth_token:
         # Store broker in session and g
         session['broker'] = broker
-        g.broker = broker
         if broker == 'zerodha':
             token = request.args.get('request_token')
             code = f'{BROKER_API_KEY}:{token}'
-        return handle_auth_success(auth_token, session['user'])
+        return handle_auth_success(auth_token, session['user'],broker)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)

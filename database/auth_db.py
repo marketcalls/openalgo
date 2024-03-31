@@ -35,6 +35,8 @@ class Auth(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
     auth = Column(String(1000), nullable=False)
+    broker = Column(String(20), nullable=False)
+
     is_revoked = Column(Boolean, default=False)  
 
 
@@ -49,13 +51,13 @@ def init_db():
     print("Initializing Auth DB")
     Base.metadata.create_all(bind=engine)
 
-def upsert_auth(name, auth_token, revoke=False):
+def upsert_auth(name, auth_token, broker, revoke=False):
     auth_obj = Auth.query.filter_by(name=name).first()
     if auth_obj:
         auth_obj.auth = auth_token
         auth_obj.is_revoked = revoke  # Update revoke status
     else:
-        auth_obj = Auth(name=name, auth=auth_token, is_revoked=revoke)
+        auth_obj = Auth(name=name, auth=auth_token, broker=broker, is_revoked=revoke)
         db_session.add(auth_obj)
     db_session.commit()
     return auth_obj.id
@@ -126,8 +128,8 @@ def get_api_key_dbquery(user_id):
     except Exception as e:
         print("Error while querying the database for API key:", e)
         return None
-    
-def get_auth_token_by_api_key(provided_api_key):
+
+def get_auth_token_broker(provided_api_key):
     # Attempt to validate the API key and get the user ID
     user_id = None
     for cache_key, api_key in api_key_cache.items():
@@ -149,7 +151,17 @@ def get_auth_token_by_api_key(provided_api_key):
             return None
 
     if user_id:
-        # With the user_id, attempt to retrieve the auth token
-        return get_auth_token(user_id)
+        # With the user_id, attempt to retrieve the auth token and broker
+        try:
+            auth_obj = Auth.query.filter_by(name=user_id).first()
+            if auth_obj and not auth_obj.is_revoked:
+                # No need to cache here as it's already managed by the get_auth_token logic
+                return auth_obj.auth, auth_obj.broker  # Return the Auth object's auth token and broker
+            else:
+                print(f"No valid auth token or broker found for user_id '{user_id}'.")
+                return None, None
+        except Exception as e:
+            print("Error while querying the database for auth token and broker:", e)
+            return None, None
     else:
-        return None
+        return None, None
