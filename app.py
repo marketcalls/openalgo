@@ -16,7 +16,7 @@ from blueprints.core import core_bp  # Import the core blueprint
 
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
-from database.master_contract_db import init_db as ensure_master_contract_tables_exists
+from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions

@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, session, redirect, url_for, request
-from database.master_contract_db import search_symbols
+from database.symbol import search_symbols
 
 search_bp = Blueprint('search_bp', __name__, url_prefix='/search')
 

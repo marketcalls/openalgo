@@ -1,4 +1,4 @@
-from database.master_contract_db import SymToken  # Import here to avoid circular imports
+from database.symbol import SymToken  # Import here to avoid circular imports
 from cachetools import TTLCache
 
 # Define a cache for the tokens, symbols with a max size and a 3600-second TTL

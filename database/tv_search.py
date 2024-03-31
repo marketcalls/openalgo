@@ -1,6 +1,6 @@
 # database/tv_search.py
 
-from database.master_contract_db import SymToken
+from database.symbol import SymToken
 
 
 def search_symbols(symbol,exchange):
