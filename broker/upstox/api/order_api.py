@@ -230,17 +230,14 @@ def cancel_order(orderid,auth):
        
     }
     
-    # Prepare the payload
-    payload = json.dumps({
-        "variety": "NORMAL",
-        "order_id": orderid,
-    })
     
     # Establish the connection and send the request
     conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
-    conn.request("DELETE", "/v2/order/cancel", payload, headers)
+    conn.request("DELETE", f"/v2/order/cancel?order_id={orderid}", headers=headers)  # Append the order ID to the URL
+    
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+
     
     # Check if the request was successful
     if data.get("status"):
