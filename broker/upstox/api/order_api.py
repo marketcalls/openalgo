@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
 from broker.upstox.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
@@ -106,8 +106,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    #print(f"position_size : {position_size}") 
-    #print(f"Open Position : {current_position}") 
+    print(f"position_size : {position_size}") 
+    print(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -176,7 +176,7 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
-
+    print(positions_response)
     
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
@@ -193,12 +193,17 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
             quantity = abs(int(position['quantity']))
 
-            
+            print(f"Trading Symbol : {position['tradingsymbol']}")
+            print(f"Exchange : {position['exchange']}")
+
+            symbol = get_symbol(position['instrument_token'],position['exchange'])
+            print(f'The Symbol is {symbol}')
+
             # Prepare the order payload
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
-                "symbol": position['tradingsymbol'],
+                "symbol": symbol,
                 "action": action,
                 "exchange": position['exchange'],
                 "pricetype": "MARKET",
