@@ -38,8 +38,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    print(f'Trading symbol: {tradingsymbol}')
-    print(f'Exchange: {exchange}')
+    
 
     positions_data = get_positions(auth)
     net_qty = '0'
