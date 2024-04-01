@@ -176,7 +176,7 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
-    print(positions_response)
+    #print(positions_response)
     
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
@@ -290,7 +290,7 @@ def cancel_all_orders_api(data,auth):
     # Get the order book
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
-    print(order_book_response)
+    #print(order_book_response)
     if order_book_response['status'] != 'success':
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
