@@ -187,14 +187,18 @@ def map_position_data(position_data):
     
 
 def transform_positions_data(positions_data):
-    transformed_data = []
+    transformed_data = [] 
+
     for position in positions_data:
+        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
+        average_price_formatted = "{:.2f}".format(float(position.get('average_price', 0.0)))
+
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),
             "exchange": position.get('exchange', ''),
             "product": position.get('product', ''),
-            "quantity": position.get('quantity', 0),
-            "average_price": position.get('average_price', 0.0),
+            "quantity": position.get('quantity', '0'),
+            "average_price": average_price_formatted,
         }
         transformed_data.append(transformed_position)
     return transformed_data

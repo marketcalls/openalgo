@@ -78,5 +78,5 @@ def reverse_map_product_type(exchange,product):
         "MIS": "MIS",
     }
    
-    return exchange_mapping.get(product,'MIS')  # Removed default; will return None if not found
+    return exchange_mapping.get(product)
     
