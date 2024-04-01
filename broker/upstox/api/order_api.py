@@ -193,11 +193,12 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
             quantity = abs(int(position['quantity']))
 
-            print(f"Trading Symbol : {position['tradingsymbol']}")
-            print(f"Exchange : {position['exchange']}")
+            #print(f"Trading Symbol : {position['tradingsymbol']}")
+            #print(f"Exchange : {position['exchange']}")
 
+            #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['instrument_token'],position['exchange'])
-            print(f'The Symbol is {symbol}')
+            #print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
             place_order_payload = {
