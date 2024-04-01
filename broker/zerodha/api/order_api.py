@@ -3,7 +3,7 @@ import json
 import os
 import urllib.parse
 from database.auth_db import get_auth_token
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_oa_symbol
 from broker.zerodha.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
@@ -206,12 +206,13 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
             quantity = abs(int(position['quantity']))
 
-            
+            #Get OA Symbol before sending to Place Order
+            symbol = get_oa_symbol(position['tradingsymbol'],position['exchange'])
             # Prepare the order payload
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
-                "symbol": position['tradingsymbol'],
+                "symbol": symbol,
                 "action": action,
                 "exchange": position['exchange'],
                 "pricetype": "MARKET",
@@ -305,7 +306,7 @@ def cancel_all_orders_api(data,auth):
     AUTH_TOKEN = auth
     # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)
-    print(order_book_response)
+    #print(order_book_response)
     if order_book_response['status'] != 'success':
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
