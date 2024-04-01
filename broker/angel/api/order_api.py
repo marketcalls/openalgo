@@ -2,7 +2,7 @@ import http.client
 import json
 import os
 from database.auth_db import get_auth_token
-from database.token_db import get_token
+from database.token_db import get_token , get_br_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
@@ -43,6 +43,8 @@ def get_holdings(auth):
     return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
+    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
     net_qty = '0'
 
