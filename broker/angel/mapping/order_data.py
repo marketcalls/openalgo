@@ -203,7 +203,7 @@ def transform_positions_data(positions_data):
             "symbol": position.get('tradingsymbol', ''),
             "exchange": position.get('exchange', ''),
             "product": position.get('producttype', ''),
-            "quantity": position.get('quantity', 0),
+            "quantity": position.get('netqty', 0),
             "average_price": position.get('avgnetprice', 0.0),
         }
         transformed_data.append(transformed_position)

@@ -99,7 +99,7 @@ def place_smart_order():
 
         # Use the dynamically imported module's functions
         res, response_data, order_id = broker_module.place_smartorder_api(data, AUTH_TOKEN)
-
+        
         if res and res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             order_response_data = {'status': 'success', 'orderid': order_id}
@@ -114,33 +114,6 @@ def place_smart_order():
     except Exception as e:
         print(e)
         return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
-
-
-from flask import Blueprint, request, jsonify
-import copy
-from database.auth_db import get_auth_token_broker
-from extensions import socketio
-from limiter import limiter
-import importlib
-import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
-
-# Assuming api_v1_bp is already defined as in the previous examples
-
-# Helper function for dynamic import, as defined previously
-def import_broker_module(broker_name):
-    try:
-        module_path = f'broker.{broker_name}.api.order_api'
-        broker_module = importlib.import_module(module_path)
-        return broker_module
-    except ImportError as error:
-        print(f"Error importing {module_path}: {error}")
-        return None
 
 @api_v1_bp.route('/closeposition', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)

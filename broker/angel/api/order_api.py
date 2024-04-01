@@ -2,7 +2,7 @@ import http.client
 import json
 import os
 from database.auth_db import get_auth_token
-from database.token_db import get_token , get_br_symbol
+from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
@@ -46,6 +46,9 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
+
+    print(positions_data)
+
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
@@ -102,6 +105,8 @@ def place_order_api(data,auth):
 
 def place_smartorder_api(data,auth):
 
+    AUTH_TOKEN = auth
+
     #If no API call is made in this function then res will return None
     res = None
 
@@ -114,11 +119,11 @@ def place_smartorder_api(data,auth):
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),auth))
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    #print(f"position_size : {position_size}") 
-    #print(f"Open Position : {current_position}") 
+    print(f"position_size : {position_size}") 
+    print(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -132,14 +137,15 @@ def place_smartorder_api(data,auth):
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
         res, response, orderid = place_order_api(data,auth)
-        #print(res)
-        #print(response)
-        
-        return res , response
+        # print(res)
+        # print(response)
+        # print(orderid)
+        return res , response, orderid
         
     elif position_size == current_position:
         response = {"status": "success", "message": "No action needed. Position size matches current position."}
-        return res, response  # res remains None as no API call was mad
+        orderid = None
+        return res, response, orderid  # res remains None as no API call was mad
    
    
 
@@ -175,7 +181,8 @@ def place_smartorder_api(data,auth):
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
         #print(res)
-        #print(response)
+        print(response)
+        print(orderid)
         
         return res , response, orderid
     
@@ -184,7 +191,9 @@ def place_smartorder_api(data,auth):
 
 def close_all_positions(current_api_key,auth):
     # Fetch the current open positions
-    positions_response = get_positions()
+    AUTH_TOKEN = auth
+
+    positions_response = get_positions(AUTH_TOKEN)
 
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
@@ -201,11 +210,16 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
             quantity = abs(int(position['netqty']))
 
+
+            #get openalgo symbol to send to placeorder function
+            symbol = get_symbol(position['symboltoken'],position['exchange'])
+            print(f'The Symbol is {symbol}')
+
             # Prepare the order payload
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
-                "symbol": position['tradingsymbol'],
+                "symbol": symbol,
                 "action": action,
                 "exchange": position['exchange'],
                 "pricetype": "MARKET",
@@ -216,9 +230,13 @@ def close_all_positions(current_api_key,auth):
             print(place_order_payload)
 
             # Place the order to close the position
-            _, api_response, _ =   place_order_api(place_order_payload,auth)
+            res, response, orderid =   place_order_api(place_order_payload,auth)
 
-            print(api_response)
+            # print(res)
+            # print(response)
+            # print(orderid)
+
+
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -271,6 +289,8 @@ def modify_order(data,auth):
     api_key = os.getenv('BROKER_API_KEY')
 
     token = get_token(data['symbol'], data['exchange'])
+    data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
+
     transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
     # Set up the request headers
     headers = {
@@ -300,7 +320,11 @@ def modify_order(data,auth):
 
 def cancel_all_orders_api(data,auth):
     # Get the order book
-    order_book_response = get_order_book()
+
+    AUTH_TOKEN = auth
+    
+
+    order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
     if order_book_response['status'] != True:
         return [], []  # Return empty lists indicating failure to retrieve the order book
