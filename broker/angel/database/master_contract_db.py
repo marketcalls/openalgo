@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
-from database.db import db 
 from extensions import socketio  # Import SocketIO
 
 load_dotenv()

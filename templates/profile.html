@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-xl mx-auto pt-4 pb-10">
+    <h2 class="text-xl font-semibold mb-5">Change Password</h2>
+    <div class="mb-4">
+        <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
+        <input type="text" name="username" id="username" value="{{ username }}" readonly class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 bg-gray-200 text-gray-600 focus:outline-none sm:text-sm" disabled>
+    </div>
+    <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm">
+        <div class="mb-4">
+            <label for="old_password" class="block text-sm font-medium text-gray-700">Old Password</label>
+            <input type="password" name="old_password" id="old_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+        </div>
+        <div class="mb-4">
+            <label for="new_password" class="block text-sm font-medium text-gray-700">New Password</label>
+            <input type="password" name="new_password" id="new_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+        </div>
+        <div class="mb-4">
+            <label for="confirm_password" class="block text-sm font-medium text-gray-700">Confirm New Password</label>
+            <input type="password" name="confirm_password" id="confirm_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+            <p id="passwordMatchMessage" class="text-sm"></p>
+        </div>
+        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Change Password</button>
+    </form>
+    <div class="mt-4">
+        <p>Password Policy Guidelines:</p>
+        <ul class="list-disc pl-5">
+            <li>Minimum 8 characters</li>
+            <li>At least 1 uppercase letter (A-Z)</li>
+            <li>At least 1 lowercase letter (a-z)</li>
+            <li>At least 1 number (0-9)</li>
+            <li>At least 1 special symbol (@, #, $, etc.)</li>
+        </ul>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const newPassword = document.getElementById('new_password');
+    const confirmPassword = document.getElementById('confirm_password');
+    const passwordMatchMessage = document.getElementById('passwordMatchMessage');
+    const changePasswordForm = document.getElementById('changePasswordForm');
+
+    function validatePasswordPolicy(password) {
+        return /^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/.test(password);
+    }
+
+    function updatePasswordMatchMessage(isMatch, isPolicyMet) {
+        if (!isMatch) {
+            passwordMatchMessage.textContent = 'Password not matched';
+            passwordMatchMessage.style.color = 'red';
+        } else if (!isPolicyMet) {
+            passwordMatchMessage.textContent = 'Password does not meet policy';
+            passwordMatchMessage.style.color = 'red';
+        } else {
+            passwordMatchMessage.textContent = 'Password matched';
+            passwordMatchMessage.style.color = 'green';
+        }
+    }
+
+    confirmPassword.addEventListener('input', function() {
+        const isMatch = newPassword.value === confirmPassword.value;
+        const isPolicyMet = validatePasswordPolicy(newPassword.value);
+        updatePasswordMatchMessage(isMatch, isPolicyMet);
+    });
+
+    newPassword.addEventListener('input', function() {
+        const isMatch = newPassword.value === confirmPassword.value;
+        const isPolicyMet = validatePasswordPolicy(newPassword.value);
+        updatePasswordMatchMessage(isMatch, isPolicyMet);
+    });
+
+    changePasswordForm.addEventListener('submit', function(event) {
+        const isMatch = newPassword.value === confirmPassword.value;
+        const isPolicyMet = validatePasswordPolicy(newPassword.value);
+
+        if (!isMatch || !isPolicyMet) {
+            event.preventDefault(); // Prevent form submission
+            updatePasswordMatchMessage(isMatch, isPolicyMet);
+        }
+    });
+});
+</script>
+{% endblock %}

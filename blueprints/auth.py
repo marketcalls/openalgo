@@ -1,16 +1,14 @@
 # auth.py
 
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
-from flask import current_app as app
+from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from limiter import limiter  # Import the limiter instance
-from datetime import datetime, timedelta
-import pytz
 from dotenv import load_dotenv
+from extensions import socketio
 import os
-from threading import Thread
 from database.auth_db import upsert_auth
-from database.master_contract_db import master_contract_download
-from api.auth_api import authenticate_broker
+from database.user_db import authenticate_user, User, db_session
+
+
 
 # Load environment variables
 load_dotenv()
@@ -20,26 +18,6 @@ LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")
 LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
-
-def async_master_contract_download(user):
-    """
-    Asynchronously download the master contract and emit a WebSocket event upon completion.
-    """
-    master_contract_status = master_contract_download()  # Assuming this is a blocking call
-    return master_contract_status
-    
-
-
-
-def get_session_expiry_time():
-    now_utc = datetime.now(pytz.timezone('UTC'))
-    now_ist = now_utc.astimezone(pytz.timezone('Asia/Kolkata'))
-    print(now_ist)
-    target_time_ist = now_ist.replace(hour=3, minute=00, second=0, microsecond=0)
-    if now_ist > target_time_ist:
-        target_time_ist += timedelta(days=1)
-    remaining_time = target_time_ist - now_ist
-    return remaining_time
 
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
@@ -51,7 +29,7 @@ def ratelimit_handler(e):
 def login():
 
     if 'user' in session:
-            return redirect(url_for('auth.angel_login'))
+            return redirect(url_for('auth.broker_login'))
     
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
@@ -61,11 +39,10 @@ def login():
     elif request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        login_username = os.getenv('LOGIN_USERNAME')
-        login_password = os.getenv('LOGIN_PASSWORD')
+        
 
-        if username == login_username and password == login_password:
-            session['user'] = login_username  # Set the username in the session
+        if authenticate_user(username, password):
+            session['user'] = username  # Set the username in the session
             print("login success")
             # Redirect to broker login without marking as fully logged in
             return jsonify({'status': 'success'}), 200
@@ -73,47 +50,56 @@ def login():
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
 
-@auth_bp.route('/angel', methods=['GET', 'POST'])
+
+@auth_bp.route('/broker', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def angel_login():
+def broker_login():
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
     if request.method == 'GET':
         if 'user' not in session:
+            # Environment variables
             return redirect(url_for('auth.login'))
-        return render_template('angel.html')
-    elif request.method == 'POST':
-        # Extract broker credentials from the form
-        clientcode = request.form['clientid']
-        broker_pin = request.form['pin']
-        totp_code = request.form['totp']  
+        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+        BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
+        REDIRECT_URL = os.getenv('REDIRECT_URL')
+        return render_template('broker.html',broker_api_key=BROKER_API_KEY, broker_api_secret=BROKER_API_SECRET,
+                               redirect_url=REDIRECT_URL)
+    
+@auth_bp.route('/change', methods=['GET', 'POST'])
+def change_password():
+    if 'user' not in session:
+        # If the user is not logged in, redirect to login page
+        flash('You must be logged in to change your password.', 'warning')
+        return redirect(url_for('auth.login'))
 
-        auth_token, error_message = authenticate_broker(clientcode, broker_pin, totp_code)
-        
-        if auth_token:    
-                        
-            # Set session parameters for full authentication
-            session['logged_in'] = True
-            app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
-            session.permanent = True
-            session['AUTH_TOKEN'] = auth_token  # Store the auth token in the session for further use
+    if request.method == 'POST':
+        username = session['user']
+        old_password = request.form['old_password']
+        new_password = request.form['new_password']
+        confirm_password = request.form['confirm_password']
 
-            # Store the auth token in the database
-            inserted_id = upsert_auth(session['user'], auth_token)
-            if inserted_id:
-                print(f"Database record upserted with ID: {inserted_id}")
-                # Start async master contract download
-                thread = Thread(target=async_master_contract_download, args=(session['user'],))
-                thread.start()
-                return redirect(url_for('dashboard_bp.dashboard'))
+        user = User.query.filter_by(username=username).first()
+
+        if user and user.check_password(old_password):
+            if new_password == confirm_password:
+                # Here, you should also ensure the new password meets your policy before updating
+                user.set_password(new_password)
+                db_session.commit()
+                # Use flash to notify the user of success
+                flash('Your password has been changed successfully.', 'success')
+                # Redirect to a page where the user can see this confirmation, or stay on the same page
+                return redirect(url_for('auth.change_password'))
             else:
-                print("Failed to upsert auth token")
-                return render_template('angel.html', error_message="Failed to store authentication token. Please try again.")
+                flash('New password and confirm password do not match.', 'error')
         else:
-            # Use the error message returned from the authenticate_broker function
-            print(f"Authentication error: {error_message}")
-            return render_template('angel.html', error_message="Broker Authentication Failed")
+            flash('Old Password is incorrect.', 'error')
+            # Optionally, redirect to the same page to let the user try again
+            return redirect(url_for('auth.change_password'))
+
+    return render_template('profile.html', username=session['user'])
+
 
 
 @auth_bp.route('/logout')
@@ -121,18 +107,20 @@ def angel_login():
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
         if session.get('logged_in'):
-            username = os.getenv('LOGIN_USERNAME')
+            username = session['user']
             
             #writing to database      
-            inserted_id = upsert_auth(username, "", revoke=True)
+            inserted_id = upsert_auth(username, "","", revoke=True)
             if inserted_id is not None:
                 print(f"Database Upserted record with ID: {inserted_id}")
+                print(f'Auth Revoked in the Database')
             else:
                 print("Failed to upsert auth token")
             
             # Remove tokens and user information from session
 
             session.pop('user', None)  # Remove 'user' from session if exists
+            session.pop('broker', None)  # Remove 'user' from session if exists
             session.pop('logged_in', None)
     
             # Redirect to login page after logout

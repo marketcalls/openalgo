@@ -98,5 +98,5 @@ def reverse_map_product_type(product):
         "CARRYFORWARD": "NRML",
         "INTRADAY": "MIS",
     }
-    return reverse_product_type_mapping.get(product, "MIS")  # Default to DELIVERY if not found
+    return reverse_product_type_mapping.get(product)  
 

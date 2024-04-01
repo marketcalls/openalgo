@@ -19,7 +19,7 @@ def manage_api_key():
         return redirect(url_for('auth.login'))  
     
     if request.method == 'GET':
-        login_username = os.getenv('LOGIN_USERNAME')
+        login_username = session['user']
         current_api_key = get_api_key(login_username)
         # Placeholder for fetching the user's current API key if needed
         return render_template('apikey.html', login_username=login_username,api_key=current_api_key if current_api_key else "No API Key found")

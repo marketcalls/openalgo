@@ -25,6 +25,7 @@ def tradingview_json():
         product = request.json.get('product')
         api_key = get_api_key(session.get('user'))  # Make sure 'user_id' is correctly set in session
         
+        broker = session['broker']
         # Search for the symbol in the database to get the exchange segment
         symbols = search_symbols(symbol_input,exchange)
         if not symbols:
