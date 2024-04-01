@@ -27,7 +27,7 @@ def tradingview_json():
         
         broker = session['broker']
         # Search for the symbol in the database to get the exchange segment
-        symbols = search_symbols(symbol_input,exchange,broker)
+        symbols = search_symbols(symbol_input,exchange)
         if not symbols:
             return jsonify({'error': 'Symbol not found'}), 404
         symbol_data = symbols[0]  # Take the first match
