@@ -77,7 +77,7 @@ def setup_environment(app):
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
-        public_url = ngrok.connect().public_url
+        public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         print(" * ngrok URL: " + public_url + " *")
 
 
