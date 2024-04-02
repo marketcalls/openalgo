@@ -51,6 +51,10 @@ def orderbook():
     order_stats = mapping_funcs['calculate_order_statistics'](order_data)
     order_data = mapping_funcs['transform_order_data'](order_data)
 
+    if(order_data[0]['symbol']=='' or order_data[0]['exchange']==''):
+        order_data[0]['quantity'] = ''
+        order_data[0]['price'] = ''
+        order_data[0]['trigger_price'] = ''
     return render_template('orderbook.html', order_data=order_data, order_stats=order_stats)
 
 @orders_bp.route('/tradebook')
