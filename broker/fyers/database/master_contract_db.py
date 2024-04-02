@@ -1,0 +1,253 @@
+#database/master_contract_db.py
+
+import os
+import pandas as pd
+import numpy as np
+import requests
+import gzip
+import shutil
+import http.client
+import json
+import pandas as pd
+import gzip
+import io
+
+
+from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from dotenv import load_dotenv
+from database.auth_db import get_auth_token
+from extensions import socketio  # Import SocketIO
+
+
+
+load_dotenv()
+
+DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
+
+engine = create_engine(DATABASE_URL)
+db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+Base = declarative_base()
+Base.query = db_session.query_property()
+
+class SymToken(Base):
+    __tablename__ = 'symtoken'
+    id = Column(Integer, Sequence('symtoken_id_seq'), primary_key=True)
+    symbol = Column(String, nullable=False, index=True)  # Single column index
+    brsymbol = Column(String, nullable=False, index=True)  # Single column index
+    name = Column(String)
+    exchange = Column(String, index=True)  # Include this column in a composite index
+    brexchange = Column(String, index=True)  
+    token = Column(String, index=True)  # Indexed for performance
+    expiry = Column(String)
+    strike = Column(Float)
+    lotsize = Column(Integer)
+    instrumenttype = Column(String)
+    tick_size = Column(Float)
+
+    # Define a composite index on symbol and exchange columns
+    __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
+
+def init_db():
+    print("Initializing Master Contract DB")
+    Base.metadata.create_all(bind=engine)
+
+def delete_symtoken_table():
+    print("Deleting Symtoken Table")
+    SymToken.query.delete()
+    db_session.commit()
+
+def copy_from_dataframe(df):
+    print("Performing Bulk Insert")
+    # Convert DataFrame to a list of dictionaries
+    data_dict = df.to_dict(orient='records')
+
+    # Retrieve existing tokens to filter them out from the insert
+    existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
+
+    # Filter out data_dict entries with tokens that already exist
+    filtered_data_dict = [row for row in data_dict if row['token'] not in existing_tokens]
+
+    # Insert in bulk the filtered records
+    try:
+        if filtered_data_dict:  # Proceed only if there's anything to insert
+            db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
+            db_session.commit()
+            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+        else:
+            print("No new records to insert.")
+    except Exception as e:
+        print(f"Error during bulk insert: {e}")
+        db_session.rollback()
+
+
+def download_csv_zerodha_data(output_path):
+    """
+    Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
+    to pandas dataframe
+    """
+    login_username = os.getenv('LOGIN_USERNAME')
+    AUTH_TOKEN = get_auth_token(login_username)
+
+    conn = http.client.HTTPSConnection("api.kite.trade")
+    headers = {
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
+    }
+    conn.request("GET", "/instruments", '', headers)
+
+    res = conn.getresponse()
+    if res.status == 200:
+        csv_data = res.read()  # Directly reading CSV data
+        csv_string = csv_data.decode('utf-8')  # Decode bytes to string
+        df = pd.read_csv(io.StringIO(csv_string))  # Convert string to pandas DataFrame
+        df.to_csv(output_path)
+
+        return df
+    else:
+        print(f"Failed to download. Status code: {res.status}")
+
+
+
+def reformat_symbol(row):
+    symbol = row['symbol']
+    instrument_type = row['instrumenttype']
+    
+    if instrument_type == 'FUT':
+        # For FUT, remove the spaces and append 'FUT' at the end
+        parts = symbol.split(' ')
+        if len(parts) == 5:  # Make sure the symbol has the correct format
+            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
+    elif instrument_type in ['CE', 'PE']:
+        # For CE/PE, rearrange the parts and remove spaces
+        parts = symbol.split(' ')
+        if len(parts) == 6:  # Make sure the symbol has the correct format
+            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
+    else:
+        symbol = symbol  # No change for other instrument types
+
+    return symbol
+
+
+
+def process_zerodha_csv(path):
+    """
+    Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Zerodha CSV Data")
+    df = pd.read_csv(path)
+
+    #return df
+
+    # Assume your JSON structure requires some transformations to match your schema
+    # For the sake of this example, let's assume 'df' now represents your transformed DataFrame
+    # Map exchange names
+    exchange_map = {
+        "NSE": "NSE",
+        "NFO": "NFO",
+        "CDS": "CDS",
+        "NSE_INDEX": "NSE_INDEX",
+        "BSE_INDEX": "BSE_INDEX",
+        "BSE": "BSE",
+        "BFO": "BFO",
+        "BCD": "BCD",
+        "MCX": "MCX"
+
+    }
+    
+    df['exchange'] = df['exchange'].map(exchange_map)
+
+
+    # Update exchange names based on the instrument type
+    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
+    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
+    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
+    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'CDS'), 'exchange'] = 'CDS_INDEX'
+
+
+    df['expiry'] = pd.to_datetime(df['expiry']).dt.strftime('%d-%b-%y').str.upper()
+    #df['symbol'] =  df['tradingsymbol']
+
+
+    df = df[['exchange_token', 'tradingsymbol', 'name', 'expiry', 
+                       'strike', 'lot_size', 'instrument_type', 'exchange', 
+                       'tick_size']].rename(columns={
+    'exchange_token': 'token',
+    'tradingsymbol': 'symbol',
+    'name': 'name',
+    'expiry': 'expiry',
+    'strike': 'strike',
+    'lot_size': 'lotsize',
+    'instrument_type': 'instrumenttype',
+    'exchange': 'exchange',
+    'tick_size': 'tick_size'
+    })
+
+    df['brsymbol'] =  df['symbol']
+    df['symbol'] = df.apply(reformat_symbol, axis=1)
+    df['brexchange'] = df['exchange']
+
+
+    # Fill NaN values in the 'expiry' column with an empty string
+    df['expiry'] = df['expiry'].fillna('')
+    
+    # Futures Symbol Update 
+    df.loc[(df['instrumenttype'] == 'FUT'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
+    
+    # Options Symbol Update 
+
+    def format_strike(strike):
+        # Convert the string to a float, then to an integer, and finally back to a string.
+        return str(int(float(strike)))
+
+
+    df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
+    df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
+
+    return df
+    
+
+def delete_zerodha_temp_data(output_path):
+    try:
+        # Check if the file exists
+        if os.path.exists(output_path):
+            # Delete the file
+            os.remove(output_path)
+            print(f"The temporary file {output_path} has been deleted.")
+        else:
+            print(f"The temporary file {output_path} does not exist.")
+    except Exception as e:
+        print(f"An error occurred while deleting the file: {e}")
+    
+
+
+
+def master_contract_download():
+    print("Downloading Master Contract")
+    
+
+    output_path = 'tmp/zerodha.csv'
+    try:
+        download_csv_zerodha_data(output_path)
+        token_df = process_zerodha_csv(output_path)
+        delete_zerodha_temp_data(output_path)
+        #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        
+        #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+
+        delete_symtoken_table()  # Consider the implications of this action
+        copy_from_dataframe(token_df)
+                
+        return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+
+    
+    except Exception as e:
+        print(str(e))
+        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+
+
+
+def search_symbols(symbol, exchange):
+    return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exchange == exchange).all()
+

@@ -129,9 +129,13 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
-     
+
+        symbol = trade.get('tradingsymbol')
+        exchange = trade.get('exchange')
+
+
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol'),
+            "symbol": get_oa_symbol(symbol=symbol,exchange=exchange),
             "exchange": trade.get('exchange', ''),
             "product": trade.get('product', ''),
             "action": trade.get('transaction_type', ''),
@@ -207,9 +211,9 @@ def transform_holdings_data(holdings_data):
             "exchange": holdings.get('exchange', ''),
             "quantity": holdings.get('quantity', 0),
             "product": holdings.get('product', ''),
-            "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
-        
+            "pnl": holdings.get('pnl', 0.0),
+            "pnlpercent": (holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) /holdings.get('average_price', 0.0) *100
+            
         }
         transformed_data.append(transformed_position)
     return transformed_data

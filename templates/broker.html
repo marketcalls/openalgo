@@ -23,6 +23,11 @@
                 <img src="{{ url_for('static', filename='images/brokers/angel.png') }}" alt="Angel Logo" width="100" height="100" class="mb-3">
                 <a href="/angel/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Angel Login</a>
             </div>
+            <!-- Fyers -->
+            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
+                <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers Logo" width="100" height="100" class="mb-3">
+                <a href="https://api-t1.fyers.in/api/v3/generate-authcode?client_id={{broker_api_key}}&redirect_uri={{ redirect_url }}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Fyers Login</a>
+            </div>
             <!-- Upstox -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/upstox.png') }}" alt="Upstox Logo" width="100" height="100" class="mb-3">
@@ -31,7 +36,7 @@
             <!-- Zerodha -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/zerodha.png') }}" alt="Zerodha Logo" width="100" height="100" class="mb-3">
-                <a href="https://kite.trade/connect/login?api_key={{ broker_api_key }}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Zerodha Login</a>
+                <a href="https://kite.trade/connect/login?api_key={{ broker_api_key }}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Zerodha Login</a>    
             </div>
 
                         <!-- 5 Paisa (Planned/Inactive) -->
@@ -44,11 +49,7 @@
                             <img src="{{ url_for('static', filename='images/brokers/dhan.png') }}" alt="Dhan Logo" width="100" height="100" class="mb-3">
                             <button class="w-full bg-gray-500 text-white py-2 px-4 rounded cursor-not-allowed" disabled>Dhan Login</button>
                         </div>
-                        <!-- Fyers (Planned/Inactive) -->
-                        <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
-                            <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers Logo" width="100" height="100" class="mb-3">
-                            <button class="w-full bg-gray-500 text-white py-2 px-4 rounded cursor-not-allowed" disabled>Fyers Login</button>
-                        </div>
+                        
                         <!-- ICICI Direct (Planned/Inactive) -->
                         <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                             <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI Direct Logo" width="100" height="100" class="mb-3">

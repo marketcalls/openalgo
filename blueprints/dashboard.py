@@ -33,7 +33,7 @@ def dashboard():
 
     if AUTH_TOKEN is None:
         return redirect(url_for('auth.logout'))
-    print(f'The auth token is: {AUTH_TOKEN}')
+    #print(f'The auth token is: {AUTH_TOKEN}')
 
     # Ensure the broker is set in the session
     broker = session.get('broker')
