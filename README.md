@@ -89,6 +89,7 @@ In case of running using Gunicorn, -w 1 specifies that you should only use one w
 ### Accessing OpenAlgo
 
 After completing the setup, access the OpenAlgo platform by navigating to [http://127.0.0.1:5000](http://127.0.0.1:5000) in your web browser. Log in using the credentials you defined in the `.env` file.
+setup the account using  [http://127.0.0.1:5000/setup](http://127.0.0.1:5000/setup)
 
 ### Connecting Trading Platforms
 
