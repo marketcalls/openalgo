@@ -41,7 +41,7 @@ def broker_callback(broker):
             totp_code = request.form.get('totp')
             auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
-    if broker=='fyers':
+    elif broker=='fyers':
         code = request.args.get('auth_code')
         print(f'The code is {code}')
         auth_token, error_message = auth_function(code)
