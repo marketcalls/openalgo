@@ -24,6 +24,40 @@ from extensions import socketio  # Import SocketIO
 
 load_dotenv()
 
+# Define the headers as provided
+headers = [
+    "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+    "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+    "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+    "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+    "Reserved column1", "Reserved column2", "Reserved column3"
+]
+
+# Data types for each header
+data_types = {
+    "Fytoken": str,
+    "Symbol Details": str,
+    "Exchange Instrument type": int,
+    "Minimum lot size": int,
+    "Tick size": float,
+    "ISIN": str,
+    "Trading Session": str,
+    "Last update date": str,
+    "Expiry date": str,
+    "Symbol ticker": str,
+    "Exchange": int,
+    "Segment": int,
+    "Scrip code": int,
+    "Underlying symbol": str,
+    "Underlying scrip code": int,
+    "Strike price": float,
+    "Option type": str,
+    "Underlying FyToken": str,
+    "Reserved column1": str,  
+    "Reserved column2": str, 
+    "Reserved column3": str, 
+}
+
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
 engine = create_engine(DATABASE_URL)
@@ -82,163 +116,372 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_csv_zerodha_data(output_path):
-    """
-    Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
-    to pandas dataframe
-    """
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-    }
-    conn.request("GET", "/instruments", '', headers)
-
-    res = conn.getresponse()
-    if res.status == 200:
-        csv_data = res.read()  # Directly reading CSV data
-        csv_string = csv_data.decode('utf-8')  # Decode bytes to string
-        df = pd.read_csv(io.StringIO(csv_string))  # Convert string to pandas DataFrame
-        df.to_csv(output_path)
-
-        return df
-    else:
-        print(f"Failed to download. Status code: {res.status}")
 
 
+def download_csv_fyers_data(output_path):
 
-def reformat_symbol(row):
-    symbol = row['symbol']
-    instrument_type = row['instrumenttype']
-    
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
-    else:
-        symbol = symbol  # No change for other instrument types
-
-    return symbol
-
-
-
-def process_zerodha_csv(path):
-    """
-    Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
-    """
-    print("Processing Zerodha CSV Data")
-    df = pd.read_csv(path)
-
-    #return df
-
-    # Assume your JSON structure requires some transformations to match your schema
-    # For the sake of this example, let's assume 'df' now represents your transformed DataFrame
-    # Map exchange names
-    exchange_map = {
-        "NSE": "NSE",
-        "NFO": "NFO",
-        "CDS": "CDS",
-        "NSE_INDEX": "NSE_INDEX",
-        "BSE_INDEX": "BSE_INDEX",
-        "BSE": "BSE",
-        "BFO": "BFO",
-        "BCD": "BCD",
-        "MCX": "MCX"
-
+    print("Downloading Master Contract CSV Files")
+    # URLs of the CSV files to be downloaded
+    csv_urls = {
+        "NSE_CD": "https://public.fyers.in/sym_details/NSE_CD.csv",
+        "NSE_FO": "https://public.fyers.in/sym_details/NSE_FO.csv",
+        "NSE_CM": "https://public.fyers.in/sym_details/NSE_CM.csv",
+        "BSE_CM": "https://public.fyers.in/sym_details/BSE_CM.csv",
+        "BSE_FO": "https://public.fyers.in/sym_details/BSE_FO.csv",
+        "MCX_COM": "https://public.fyers.in/sym_details/MCX_COM.csv"
     }
     
-    df['exchange'] = df['exchange'].map(exchange_map)
+    # Create a list to hold the paths of the downloaded files
+    downloaded_files = []
 
-
-    # Update exchange names based on the instrument type
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'CDS'), 'exchange'] = 'CDS_INDEX'
-
-
-    df['expiry'] = pd.to_datetime(df['expiry']).dt.strftime('%d-%b-%y').str.upper()
-    #df['symbol'] =  df['tradingsymbol']
-
-
-    df = df[['exchange_token', 'tradingsymbol', 'name', 'expiry', 
-                       'strike', 'lot_size', 'instrument_type', 'exchange', 
-                       'tick_size']].rename(columns={
-    'exchange_token': 'token',
-    'tradingsymbol': 'symbol',
-    'name': 'name',
-    'expiry': 'expiry',
-    'strike': 'strike',
-    'lot_size': 'lotsize',
-    'instrument_type': 'instrumenttype',
-    'exchange': 'exchange',
-    'tick_size': 'tick_size'
-    })
-
-    df['brsymbol'] =  df['symbol']
-    df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = df['exchange']
-
-
-    # Fill NaN values in the 'expiry' column with an empty string
-    df['expiry'] = df['expiry'].fillna('')
-    
-    # Futures Symbol Update 
-    df.loc[(df['instrumenttype'] == 'FUT'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    # Options Symbol Update 
-
-    def format_strike(strike):
-        # Convert the string to a float, then to an integer, and finally back to a string.
-        return str(int(float(strike)))
-
-
-    df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
-    df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
-
-    return df
-    
-
-def delete_zerodha_temp_data(output_path):
-    try:
-        # Check if the file exists
-        if os.path.exists(output_path):
-            # Delete the file
-            os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
+    # Iterate through the URLs and download the CSV files
+    for key, url in csv_urls.items():
+        # Send GET request
+        response = requests.get(url,timeout=10)
+        # Check if the request was successful
+        if response.status_code == 200:
+            # Construct the full output path for the file
+            file_path = f"{output_path}/{key}.csv"
+            # Write the content to the file
+            with open(file_path, 'wb') as file:
+                file.write(response.content)
+            downloaded_files.append(file_path)
         else:
-            print(f"The temporary file {output_path} does not exist.")
-    except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+    
+def reformat_symbol_detail(s):
+    parts = s.split()  # Split the string into parts
+    # Reorder and format the parts to match the desired output
+    # Assuming the format is consistent and always "Name DD Mon YY FUT"
+    return f"{parts[0]}{parts[3]}{parts[2].upper()}{parts[1]}{parts[4]}"
+
+def process_fyers_nse_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers NSE CSV Data")
+    file_path = f'{path}/NSE_CM.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+
+    # Assigning headers to the DataFrame
+    df.columns = headers
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+    df['expiry'] = df['Expiry date']
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+
+
+    # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
+    df.loc[df['Exchange Instrument type'] == 0, 'exchange'] = 'NSE'
+    df.loc[df['Exchange Instrument type'] == 0, 'instrumenttype'] = 'EQ'
+    df.loc[df['Exchange Instrument type'] == 10, 'exchange'] = 'NSE_INDEX'
+    df.loc[df['Exchange Instrument type'] == 10, 'instrumenttype'] = 'INDEX'
+
+    # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
+    df_filtered = df[df['Exchange Instrument type'].isin([0, 10])].copy()
+
+    df_filtered.loc[:, 'symbol'] = df_filtered['Symbol ticker'].str.replace('NSE:', '')
+    df_filtered.loc[:, 'symbol'] = df_filtered['symbol'].str.replace('-EQ', '')
+    df_filtered['brexchange'] = 'NSE'
+    
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df_filtered.drop(columns=columns_to_remove)
+
+
+    
+    return token_df
+
+
+def process_fyers_bse_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers BSE CSV Data")
+    file_path = f'{path}/BSE_CM.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+    # Assigning headers to the DataFrame
+    df.columns = headers
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+    df['expiry'] = df['Expiry date']
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+
+
+    # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
+    df.loc[df['Exchange Instrument type'].isin([0, 4,50]), 'exchange'] = 'BSE'
+    df.loc[df['Exchange Instrument type'].isin([0, 4,50]), 'instrumenttype'] = 'EQ'
+    df.loc[df['Exchange Instrument type'] == 10, 'exchange'] = 'BSE_INDEX'
+    df.loc[df['Exchange Instrument type'] == 10, 'instrumenttype'] = 'INDEX'
+
+    # Keeping only rows where 'exchange' column has been filled ('BSE' or 'BSE_INDEX')
+    df_filtered = df[df['Exchange Instrument type'].isin([0, 4, 10, 50])].copy()
+
+    df_filtered.loc[:, 'symbol'] = df_filtered['Underlying symbol']
+
+    df_filtered['brexchange'] = 'BSE'
+
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df_filtered.drop(columns=columns_to_remove)
+    
+    return token_df
+
+def process_fyers_nfo_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers NFO CSV Data")
+    file_path = f'{path}/NSE_FO.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+    df['brexchange'] = 'NFO'
+    df['exchange'] = 'NFO'
+    df['instrumenttype'] = df['Option type'].str.replace('XX','FUT')
+
+
+    # Apply the function to rows where 'Option type' is 'XX'
+    df.loc[df['Option type'] == 'XX', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df['Option type'] == 'CE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'CE'
+    df.loc[df['Option type'] == 'PE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'PE'
+
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df.drop(columns=columns_to_remove)
+    
+    return token_df
+
+
+def process_fyers_cds_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers CDS CSV Data")
+    file_path = f'{path}/NSE_CD.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+    df['brexchange'] = 'CDS'
+    df['exchange'] = 'CDS'
+    df['instrumenttype'] = df['Option type'].str.replace('XX','FUT')
+
+
+    # Apply the function to rows where 'Option type' is 'XX'
+    df.loc[df['Option type'] == 'XX', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df['Option type'] == 'CE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'CE'
+    df.loc[df['Option type'] == 'PE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'PE'
+
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df.drop(columns=columns_to_remove)
+    
+    return token_df
+
+
+def process_fyers_bfo_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers BFO CSV Data")
+    file_path = f'{path}/BSE_FO.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+    df['brexchange'] = 'BCD'
+    df['exchange'] = 'BCD'
+    df['instrumenttype'] = df['Option type'].fillna('FUT').str.replace('XX', 'FUT')
+
+
+    # Apply the function to rows where 'Option type' is 'XX'
+    df.loc[(df['Option type'] == 'XX') | df['Option type'].isna(), 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df['Option type'] == 'CE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'CE'
+    df.loc[df['Option type'] == 'PE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'PE'
+
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df.drop(columns=columns_to_remove)
+
+    return token_df
+
+def process_fyers_mcx_csv(path):
+    """
+    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Fyers MCX CSV Data")
+    file_path = f'{path}/MCX_COM.csv'
+
+    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+
+    df['token'] = df['Fytoken']
+    df['name'] = df['Symbol Details']
+
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    df['strike'] = df['Strike price']
+    df['lotsize'] = df['Minimum lot size']
+    df['tick_size'] = df['Tick size']
+    df['brsymbol'] = df['Symbol ticker']
+    df['brexchange'] = 'MCX'
+    df['exchange'] = 'MCX'
+    df['instrumenttype'] = df['Option type'].str.replace('XX','FUT')
+
+
+
+    # Apply the function to rows where 'Option type' is 'XX'
+    df.loc[df['Option type'] == 'XX', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df['Option type'] == 'CE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'CE'
+    df.loc[df['Option type'] == 'PE', 'symbol'] = df['Symbol Details'].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)+'PE'
+
+    # List of columns to remove
+    columns_to_remove = [
+        "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+        "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+        "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+        "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+        "Reserved column1", "Reserved column2", "Reserved column3"
+    ]
+
+    # Removing the specified columns
+    token_df = df.drop(columns=columns_to_remove)
+
+
+
+
+    
+    return token_df
+
     
 
-
+def delete_fyers_temp_data(output_path):
+    # Check each file in the directory
+    for filename in os.listdir(output_path):
+        # Construct the full file path
+        file_path = os.path.join(output_path, filename)
+        # If the file is a CSV, delete it
+        if filename.endswith(".csv") and os.path.isfile(file_path):
+            os.remove(file_path)
+            print(f"Deleted {file_path}")
+    
 
 def master_contract_download():
     print("Downloading Master Contract")
     
 
-    output_path = 'tmp/zerodha.csv'
+    output_path = 'tmp'
     try:
-        download_csv_zerodha_data(output_path)
-        token_df = process_zerodha_csv(output_path)
-        delete_zerodha_temp_data(output_path)
+        download_csv_fyers_data(output_path)
+        delete_symtoken_table()
+        token_df = process_fyers_nse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_fyers_bse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_fyers_nfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_fyers_cds_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_fyers_mcx_csv(output_path)
+        copy_from_dataframe(token_df)
+        delete_fyers_temp_data(output_path)
         #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
         
         #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
-        copy_from_dataframe(token_df)
-                
+        
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
     
