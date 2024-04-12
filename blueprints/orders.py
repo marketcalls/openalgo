@@ -44,7 +44,8 @@ def orderbook():
         return redirect(url_for('auth.logout'))
 
     order_data = api_funcs['get_order_book'](auth_token)
-    if order_data['status'] == 'error':
+    print(order_data)
+    if 'status' in order_data and order_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     order_data = mapping_funcs['map_order_data'](order_data=order_data)
@@ -85,7 +86,8 @@ def tradebook():
     get_trade_book = api_funcs['get_trade_book']
     tradebook_data = get_trade_book(auth_token)
 
-    if tradebook_data['status'] == 'error':
+  
+    if 'status' in tradebook_data and tradebook_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions
@@ -125,8 +127,8 @@ def positions():
     # Using the dynamically imported `get_positions` function
     get_positions = api_funcs['get_positions']
     positions_data = get_positions(auth_token)
-
-    if positions_data['status'] == 'error':
+   
+    if 'status' in positions_data and positions_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions
@@ -166,8 +168,8 @@ def holdings():
     # Using the dynamically imported `get_holdings` function
     get_holdings = api_funcs['get_holdings']
     holdings_data = get_holdings(auth_token)
-
-    if holdings_data['status'] == 'error':
+   
+    if 'status' in holdings_data and holdings_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions

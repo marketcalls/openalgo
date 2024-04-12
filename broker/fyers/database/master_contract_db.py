@@ -178,16 +178,15 @@ def process_fyers_nse_csv(path):
 
 
     # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
-    df.loc[df['Exchange Instrument type'] == 0, 'exchange'] = 'NSE'
-    df.loc[df['Exchange Instrument type'] == 0, 'instrumenttype'] = 'EQ'
+    df.loc[df['Exchange Instrument type'].isin([0, 9]), 'exchange'] = 'NSE'
+    df.loc[df['Exchange Instrument type'].isin([0, 9]), 'instrumenttype'] = 'EQ'
     df.loc[df['Exchange Instrument type'] == 10, 'exchange'] = 'NSE_INDEX'
     df.loc[df['Exchange Instrument type'] == 10, 'instrumenttype'] = 'INDEX'
 
     # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
-    df_filtered = df[df['Exchange Instrument type'].isin([0, 10])].copy()
+    df_filtered = df[df['Exchange Instrument type'].isin([0,9, 10])].copy()
 
-    df_filtered.loc[:, 'symbol'] = df_filtered['Symbol ticker'].str.replace('NSE:', '')
-    df_filtered.loc[:, 'symbol'] = df_filtered['symbol'].str.replace('-EQ', '')
+    df_filtered.loc[:, 'symbol'] = df_filtered['Underlying symbol']
     df_filtered['brexchange'] = 'NSE'
     
     # List of columns to remove
