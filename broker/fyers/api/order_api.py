@@ -1,8 +1,6 @@
 import http.client
 import json
 import os
-import urllib.parse
-from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.fyers.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
@@ -46,10 +44,11 @@ def get_open_position(tradingsymbol, exchange, product,auth):
     net_qty = '0'
     #print(positions_data['data']['net'])
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']['net']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
-                net_qty = position.get('quantity', '0')
+    if positions_data and positions_data.get('s') and positions_data.get('netPositions'):
+        for position in positions_data['netPositions']:
+
+            if position.get('symbol') == tradingsymbol  and position.get("productType") == product:
+                net_qty = position.get('qty', '0')
                 print(f'Net Quantity {net_qty}')
                 break  # Assuming you need the first match
 
@@ -180,76 +179,62 @@ def place_smartorder_api(data,auth):
 
 def close_all_positions(current_api_key,auth):
 
-    AUTH_TOKEN = auth
-    # Fetch the current open positions
-    positions_response = get_positions(AUTH_TOKEN)
-
-    #print(positions_response)
-    # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
-        return {"message": "No Open Positions Found"}, 200
-
-    if positions_response['status']:
-        # Loop through each position to close
-        for position in positions_response['data']['net']:
-            # Skip if net quantity is zero
-            if int(position['quantity']) == 0:
-                continue
-
-            # Determine action based on net quantity
-            action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
-            quantity = abs(int(position['quantity']))
-
-            #Get OA Symbol before sending to Place Order
-            symbol = get_oa_symbol(position['tradingsymbol'],position['exchange'])
-            # Prepare the order payload
-            place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": position['exchange'],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'],position['product']),
-                "quantity": str(quantity)
-            }
-
-            print(place_order_payload)
-
-            # Place the order to close the position
-            _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
-
-            print(api_response)
-            
-            # Note: Ensure place_order_api handles any errors and logs accordingly
-
-    return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
-
-
-def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
+
+    api_key = os.getenv('BROKER_API_KEY')
     
     # Set up the request headers
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+        'Authorization': f'{api_key}:{AUTH_TOKEN}',
+        'Content-Type': 'application/json'
     }
     
-    # Prepare the payload
-    payload = ''
+    # Prepare the payload with the specific requirement to close all positions
+    payload = json.dumps({"exit_all": 1})  # Match the API expected payload
     
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.kite.trade")  # Adjust the URL as necessary
-    conn.request("DELETE", f"/orders/regular/{orderid}", payload, headers)
+    # Establish the connection and send the request to the positions endpoint
+    conn = http.client.HTTPSConnection("api-t1.fyers.in")
+    conn.request("DELETE", "/api/v3/positions", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
     print(data)
     
     # Check if the request was successful
-    if data.get("status"):
+    if data.get("s") == "ok":
         # Return a success response
-        return {"status": "success", "orderid": data['data']['order_id']}, 200
+        return {"status": "success", "message": "The position is closed"}, 200
+    else:
+        # Return an error response
+        return {"status": "error", "message": data.get("message", "Failed to close position")}, res.status
+
+def cancel_order(orderid,auth):
+    # Assuming you have a function to get the authentication token
+    AUTH_TOKEN = auth
+
+    api_key = os.getenv('BROKER_API_KEY')
+    
+    # Set up the request headers
+    headers = {
+        'Authorization': f'{api_key}:{AUTH_TOKEN}',
+        'Content-Type': 'application/json'  # Added if payloads are JSON
+    }
+    
+    # Prepare the payload
+    payload = json.dumps({"id": orderid})  # Use json.dumps to convert the dictionary to a JSON string
+    
+    
+    # Establish the connection and send the request
+    conn = http.client.HTTPSConnection("api-t1.fyers.in")
+    conn.request("DELETE", "/api/v3/orders/sync", payload, headers)
+    res = conn.getresponse()
+    data = json.loads(res.read().decode("utf-8"))
+    print(data)
+    
+    # Check if the request was successful
+    if data.get("s")=="ok":
+        # Return a success response
+        return {"status": "success", "orderid": data['id']}, 200
     else:
         # Return an error response
         return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
@@ -261,36 +246,30 @@ def modify_order(data,auth):
 
     AUTH_TOKEN = auth
     
-    newdata = transform_modify_order_data(data)  # You need to implement this function
+    api_key = os.getenv('BROKER_API_KEY')
     
   
     # Set up the request headers
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
+        'Authorization': f'{api_key}:{AUTH_TOKEN}',
+        'Content-Type': 'application/json'  # Added if payloads are JSON
     }
-    payload = {
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity']
-      }
+
+    payload = transform_modify_order_data(data) 
 
     print(payload)
 
-    payload =  urllib.parse.urlencode(payload)
+    # Convert payload to JSON and then encode to bytes
+    payload_bytes = json.dumps(payload).encode('utf-8')
 
     conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("PUT", f"/orders/regular/{data['orderid']}", payload, headers)
+    conn.request("PATCH", "/api/v3/orders/sync", payload_bytes, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
     print(data)
 
-    if data.get("status") == "success" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
+    if data.get("s") == "ok" or data.get("s") == "OK":
+        return {"status": "success", "orderid": data["id"]}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
@@ -301,19 +280,19 @@ def cancel_all_orders_api(data,auth):
     # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
-    if order_book_response['status'] != 'success':
+    if order_book_response['s'] != 'ok':
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['OPEN', 'TRIGGER PENDING']]
+    orders_to_cancel = [order for order in order_book_response.get('orderBook', [])
+                        if order['status'] in [4, 6]]
     print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['order_id']
+        orderid = order['id']
         cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
         if status_code == 200:
             canceled_orders.append(orderid)

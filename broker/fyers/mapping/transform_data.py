@@ -39,12 +39,12 @@ def transform_data(data):
 
 def transform_modify_order_data(data):
     return {
-        "order_type": map_order_type(data["pricetype"]),
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "validity": "DAY"      
+        "id" : data["orderid"],
+        "qty": data["quantity"],
+        "type": map_order_type(data["pricetype"]),
+        "side": map_action(data["action"]),
+        "limitPrice": data["price"],
+        "stopPrice": data.get("trigger_price", "0")   
     }
 
 

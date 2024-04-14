@@ -12,8 +12,6 @@ from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
 from blueprints.core import core_bp  # Import the core blueprint
 
-#from database.db import db
-
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
