@@ -44,13 +44,19 @@ def orderbook():
         return redirect(url_for('auth.logout'))
 
     order_data = api_funcs['get_order_book'](auth_token)
-    if order_data['status'] == 'error':
+    print(order_data)
+    if 'status' in order_data and order_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     order_data = mapping_funcs['map_order_data'](order_data=order_data)
     order_stats = mapping_funcs['calculate_order_statistics'](order_data)
     order_data = mapping_funcs['transform_order_data'](order_data)
 
+    # Fix for empty Angel OrderBook
+    # if(order_data[0]['symbol']=='' or order_data[0]['exchange']==''):
+    #     order_data[0]['quantity'] = ''
+    #     order_data[0]['price'] = ''
+    #     order_data[0]['trigger_price'] = ''
     return render_template('orderbook.html', order_data=order_data, order_stats=order_stats)
 
 @orders_bp.route('/tradebook')
@@ -80,8 +86,9 @@ def tradebook():
     # Using the dynamically imported `get_trade_book` function
     get_trade_book = api_funcs['get_trade_book']
     tradebook_data = get_trade_book(auth_token)
-
-    if tradebook_data['status'] == 'error':
+    print(tradebook_data)
+  
+    if 'status' in tradebook_data and tradebook_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions
@@ -121,8 +128,9 @@ def positions():
     # Using the dynamically imported `get_positions` function
     get_positions = api_funcs['get_positions']
     positions_data = get_positions(auth_token)
-
-    if positions_data['status'] == 'error':
+    print(positions_data)
+   
+    if 'status' in positions_data and positions_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions
@@ -162,8 +170,10 @@ def holdings():
     # Using the dynamically imported `get_holdings` function
     get_holdings = api_funcs['get_holdings']
     holdings_data = get_holdings(auth_token)
+   
+    print(holdings_data)
 
-    if holdings_data['status'] == 'error':
+    if 'status' in holdings_data and holdings_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
     # Using the dynamically imported mapping functions

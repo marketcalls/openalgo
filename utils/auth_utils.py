@@ -23,7 +23,7 @@ def async_master_contract_download(broker):
     # Use the dynamically imported module's master_contract_download function
     master_contract_status = master_contract_module.master_contract_download()
     
-    print("Processing Master Contract Download")
+    print("Master Contract Database Processing Completed")
     
     return master_contract_status
 

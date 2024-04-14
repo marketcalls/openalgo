@@ -4,17 +4,19 @@ import os
 import urllib.parse
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
-from broker.zerodha.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.fyers.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    api_key = os.getenv('BROKER_API_KEY')
+
+    conn = http.client.HTTPSConnection("api-t1.fyers.in")
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+        'Authorization': f'{api_key}:{AUTH_TOKEN}',
+        'Content-Type': 'application/json'  # Added if payloads are JSON
     }
 
     conn.request(method, endpoint, payload, headers)
@@ -23,16 +25,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/orders",auth)
+    return get_api_response("/api/v3/orders",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/trades",auth)
+    return get_api_response("/api/v3/tradebook",auth)
 
 def get_positions(auth):
-    return get_api_response("/portfolio/positions",auth)
+    return get_api_response("/api/v3/positions",auth)
 
 def get_holdings(auth):
-    return get_api_response("/portfolio/holdings",auth)
+    return get_api_response("/api/v3/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, product,auth):
 
