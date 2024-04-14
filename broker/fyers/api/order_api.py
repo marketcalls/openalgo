@@ -62,41 +62,33 @@ def place_order_api(data,auth):
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)  
+
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
+        'Authorization': f'{BROKER_API_KEY}:{AUTH_TOKEN}',
+        'Content-Type': 'application/json'  # Added if payloads are JSON
     }
 
-    payload = {
-        'tradingsymbol': newdata['tradingsymbol'],
-        'exchange': newdata['exchange'],
-        'transaction_type': newdata['transaction_type'],
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'product': newdata['product'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity'],
-        'tag' : newdata['tag']
-    }
+    payload = transform_data(data)  
 
     print(payload)
 
-    payload =  urllib.parse.urlencode(payload)
+    # Convert payload to JSON and then encode to bytes
+    payload_bytes = json.dumps(payload).encode('utf-8')
 
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("POST", "/orders/regular", payload, headers)
+    conn = http.client.HTTPSConnection("api-t1.fyers.in")
+    conn.request("POST", "/api/v3/orders/sync", payload_bytes, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
 
 
-    print(response_data)
+    #print(response_data)
 
-    if response_data['status'] == 'success':
-        orderid = response_data['data']['order_id']
+    if response_data['s'] == 'ok':
+        orderid = response_data['id']
+    elif response_data['s'] == 'error':
+        orderid = response_data.get('id')
+        if not orderid: 
+            orderid = None
     else:
         orderid = None
     return res, response_data, orderid
