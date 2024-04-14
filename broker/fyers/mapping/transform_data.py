@@ -5,41 +5,46 @@ from database.token_db import get_br_symbol
 
 def transform_data(data):
     """
-    Transforms the new API request structure to the current expected structure.
+    Transforms the OpenAlgo Platform API request structure to the format expected by the Fyers API.
     """
-    symbol = get_br_symbol(data['symbol'],data['exchange'])
+    # Assuming get_br_symbol, map_order_type, map_action, and map_product_type are defined elsewhere correctly.
+    symbol = get_br_symbol(data['symbol'], data['exchange'])
 
-    # Basic mapping
+    # Convert fields to correct data types as required by Fyers API
+    quantity = int(data["quantity"])  # Ensuring quantity is an integer
+    price = float(data.get("price", 0))  # Ensuring price is a float
+    trigger_price = float(data.get("trigger_price", 0))  # Ensuring trigger price is a float
+    disclosed_quantity = int(data.get("disclosed_quantity", 0))  # Ensuring disclosed quantity is an integer
+
+    # Map to Fyers API field names and structure
     transformed = {
-        "tradingsymbol" : symbol,
-        "exchange" : data['exchange'],
-        "transaction_type": data['action'].upper(),
-        "order_type": data["pricetype"],
-        "quantity": data["quantity"],
-        "product": data["product"],
-        "price": data.get("price", "0"),
-        "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
-        "validity":"DAY",
-        "tag": "openalgo",
+        "symbol": symbol,
+        "qty": quantity,
+        "type": map_order_type(data["pricetype"]),
+        "side": map_action(data["action"]),
+        "productType": map_product_type(data["product"]),
+        "limitPrice": price,
+        "stopPrice": trigger_price,
+        "validity": "DAY",
+        "disclosedQty": disclosed_quantity,
+        "offlineOrder": False,
+        "stopLoss": 0,
+        "takeProfit": 0,
+        "orderTag": "openalgo",
     }
 
-
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
-    
     return transformed
+
 
 
 def transform_modify_order_data(data):
     return {
-        "order_type": map_order_type(data["pricetype"]),
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "validity": "DAY"      
+        "id" : data["orderid"],
+        "qty": data["quantity"],
+        "type": map_order_type(data["pricetype"]),
+        "side": map_action(data["action"]),
+        "limitPrice": data["price"],
+        "stopPrice": data.get("trigger_price", "0")   
     }
 
 
@@ -49,12 +54,24 @@ def map_order_type(pricetype):
     Maps the new pricetype to the existing order type.
     """
     order_type_mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "SL",
-        "SL-M": "SL-M"
+        "MARKET": 2,
+        "LIMIT": 1,
+        "SL": 4,
+        "SL-M": 3
     }
-    return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
+    return order_type_mapping.get(pricetype, 2)  # Default to MARKET if not found
+
+
+def map_action(action):
+    """
+    Maps the new action to side
+    """
+    action_mapping = {
+        "BUY": 1,
+        "SELL": -1
+    }
+    return action_mapping.get(action) 
+
 
 def map_product_type(product):
     """
@@ -62,8 +79,8 @@ def map_product_type(product):
     """
     product_type_mapping = {
         "CNC": "CNC",
-        "NRML": "NRML",
-        "MIS": "MIS",
+        "NRML": "MARGIN",
+        "MIS": "INTRADAY",
     }
     return product_type_mapping.get(product, "MIS")  # Default to INTRADAY if not found
 
