@@ -49,7 +49,7 @@ data_types = {
     "Segment": int,
     "Scrip code": int,
     "Underlying symbol": str,
-    "Underlying scrip code": int,
+    "Underlying scrip code": pd.Int64Dtype(),
     "Strike price": float,
     "Option type": str,
     "Underlying FyToken": str,

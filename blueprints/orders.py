@@ -52,10 +52,11 @@ def orderbook():
     order_stats = mapping_funcs['calculate_order_statistics'](order_data)
     order_data = mapping_funcs['transform_order_data'](order_data)
 
-    if(order_data[0]['symbol']=='' or order_data[0]['exchange']==''):
-        order_data[0]['quantity'] = ''
-        order_data[0]['price'] = ''
-        order_data[0]['trigger_price'] = ''
+    # Fix for empty Angel OrderBook
+    # if(order_data[0]['symbol']=='' or order_data[0]['exchange']==''):
+    #     order_data[0]['quantity'] = ''
+    #     order_data[0]['price'] = ''
+    #     order_data[0]['trigger_price'] = ''
     return render_template('orderbook.html', order_data=order_data, order_stats=order_stats)
 
 @orders_bp.route('/tradebook')
@@ -85,7 +86,7 @@ def tradebook():
     # Using the dynamically imported `get_trade_book` function
     get_trade_book = api_funcs['get_trade_book']
     tradebook_data = get_trade_book(auth_token)
-
+    print(tradebook_data)
   
     if 'status' in tradebook_data and tradebook_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
@@ -127,6 +128,7 @@ def positions():
     # Using the dynamically imported `get_positions` function
     get_positions = api_funcs['get_positions']
     positions_data = get_positions(auth_token)
+    print(positions_data)
    
     if 'status' in positions_data and positions_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
@@ -169,6 +171,8 @@ def holdings():
     get_holdings = api_funcs['get_holdings']
     holdings_data = get_holdings(auth_token)
    
+    print(holdings_data)
+
     if 'status' in holdings_data and holdings_data['status'] == 'error':
         return redirect(url_for('auth.logout'))
 
