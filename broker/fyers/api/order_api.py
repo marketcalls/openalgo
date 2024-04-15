@@ -48,7 +48,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
         for position in positions_data['netPositions']:
 
             if position.get('symbol') == tradingsymbol  and position.get("productType") == product:
-                net_qty = position.get('qty', '0')
+                net_qty = position.get('netQty', '0')
                 print(f'Net Quantity {net_qty}')
                 break  # Assuming you need the first match
 
@@ -262,7 +262,7 @@ def modify_order(data,auth):
     # Convert payload to JSON and then encode to bytes
     payload_bytes = json.dumps(payload).encode('utf-8')
 
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    conn = http.client.HTTPSConnection("api-t1.fyers.in")
     conn.request("PATCH", "/api/v3/orders/sync", payload_bytes, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
@@ -271,6 +271,7 @@ def modify_order(data,auth):
     if data.get("s") == "ok" or data.get("s") == "OK":
         return {"status": "success", "orderid": data["id"]}, 200
     else:
+        print(data)
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
 

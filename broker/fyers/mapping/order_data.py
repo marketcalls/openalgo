@@ -317,7 +317,7 @@ def transform_positions_data(positions_data):
             "symbol": position.get('symbol', ''),
             "exchange": position.get('exchange', ''),
             "product": producttype,
-            "quantity": position.get('qty', '0'),
+            "quantity": position.get('netQty', '0'),
             "average_price": average_price_formatted,
         }
         transformed_data.append(transformed_position)
