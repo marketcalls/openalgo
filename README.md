@@ -2,9 +2,13 @@
 
 OpenAlgo is an open-source, Flask-based Python application designed to bridge the gap between traders and major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. With a focus on simplifying algotrading, OpenAlgo facilitates easy integration, automation, and execution of trading strategies, providing a user-friendly interface to enhance trading performance.
 
+[![What is OpenAlgo?](https://img.youtube.com/vi/Afthm49vtAA/maxresdefault.jpg)](https://www.youtube.com/watch?v=Afthm49vtAA)
+
+
 ## Supported Broker
 
 - **AngelOne**
+- **Fyers**
 - **Upstox**
 - **Zerodha**
 
@@ -37,6 +41,9 @@ For support, feature requests, or to contribute further, please contact us via G
 # Getting Started with OpenAlgo
 
 ## Installation Procedure
+
+[![Windows Installation Procedure](https://img.youtube.com/vi/PCPAeDKTh50/maxresdefault.jpg)](https://www.youtube.com/watch?v=PCPAeDKTh50)
+
 
 ### Prerequisites
 
@@ -98,160 +105,6 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 ## Generate the APP API Key
 
 Goto the API Key Section and Generate the APP API Key. And use it to placeorder from your trading applicaton
-
-### Place Order
-
-Sample Place Order with the /api/v1/placeorder which can be used with any trading platforms to place orders
-<code>
-{
-"apikey":"<your_app_apikey>",
-"strategy:"Test Strategy",
-"symbol":"SAIL-EQ",
-"action":"BUY",
-"exchange":"NSE",
-"pricetype":"MARKET",
-"product":"MIS",
-"quantity":"1"
-}</code>
-<br>
-
-## Full Sample API Request
-<code>
-{
-    "apikey": "your_app_apikey",
-    "strategy": "Test Strategy",
-    "exchange": "NSE",
-    "symbol": "BHEL-EQ",
-    "action": "BUY",
-    "product": "MIS",
-    "pricetype": "MARKET",
-    "quantity": "1",
-    "price": "0",
-    "trigger_price": "0",
-    "disclosed_quantity": "0",
-}</code>
-
-
-
-## Parameters Description
-
-| Parameters          | Description          | Mandatory/Optional  | Default Value |
-|---------------------|----------------------|---------------------|---------------|
-| apikey              | App API key          | Mandatory           | -             |
-| strategy            | Strategy name        | Mandatory           | -             |
-| exchange            | Exchange code        | Mandatory           | -             |
-| symbol              | Trading symbol       | Mandatory           | -             |
-| action              | Action (BUY/SELL)    | Mandatory           | -             |
-| product             | Product type         | Optional            | MIS           |
-| pricetype           | Price type           | Optional            | MARKET        |
-| quantity            | Quantity             | Mandatory           | -             |
-| price               | Price                | Optional            | 0             |
-| trigger_price       | Trigger price        | Optional            | 0             |
-| disclosed_quantity  | Disclosed quantity   | Optional            | 0             |
-
-
-### Place Smart Order
-
-Sample Place Order with the /api/v1/placesmartorder which can be used with any trading platforms to place orders based on the open position
-<code>
-{
-"apikey":"<your_app_apikey>",
-"strategy:"Test Strategy",
-"symbol":"IDEA-EQ",
-"action":"BUY",
-"exchange":"NSE",
-"pricetype":"MARKET",
-"product":"MIS",
-"quantity":"0",
-"position_size": "5"
-}</code>
-<br>
-
-## Full Sample API Request
-<code>
-{
-    "apikey": "your_app_apikey",
-    "strategy": "Test Strategy",
-    "exchange": "NSE",
-    "symbol": "IDEA-EQ",
-    "action": "BUY",
-    "product": "MIS",
-    "pricetype": "MARKET",
-    "quantity": "1",
-    "position_size": "5"
-    "price": "0",
-    "trigger_price": "0",
-    "disclosed_quantity": "0",
-}</code>
-
-
-
-## Parameters Description
-
-| Parameters          | Description          | Mandatory/Optional  | Default Value |
-|---------------------|----------------------|---------------------|---------------|
-| apikey              | App API key          | Mandatory           | -             |
-| strategy            | Strategy name        | Mandatory           | -             |
-| exchange            | Exchange code        | Mandatory           | -             |
-| symbol              | Trading symbol       | Mandatory           | -             |
-| action              | Action (BUY/SELL)    | Mandatory           | -             |
-| product             | Product type         | Optional            | MIS           |
-| pricetype           | Price type           | Optional            | MARKET        |
-| quantity            | Quantity             | Mandatory           | -             |
-| position_size       | Position Size        | Mandatory           | -             |
-| price               | Price                | Optional            | 0             |
-| trigger_price       | Trigger price        | Optional            | 0             |
-| disclosed_quantity  | Disclosed quantity   | Optional            | 0             |
-
-
-## How Place Smart Order Works?
-PlaceSmartOrder API function, which allows traders to build intelligent trading systems that can automatically place orders based on existing trade positions in the position book.
-
-| Action | Qty (API) | Pos Size (API) | Current Open Pos | Action by OpenAlgo                     |
-|--------|-----------|----------------|------------------|----------------------------------------|
-| BUY    | 100       | 0              | 0                | No Open Pos Found. Buy +100 qty        |
-| BUY    | 100       | 100            | -100             | BUY 200 to match Open Pos in API Param |
-| BUY    | 100       | 100            | 100              | No Action. Position matched            |
-| BUY    | 100       | 200            | 100              | BUY 100 to match Open Pos in API Param |
-| SELL   | 100       | 0              | 0                | No Open Pos Found. SELL 100 qty        |
-| SELL   | 100       | -100           | +100             | SELL 200 to match Open Pos in API Param|
-| SELL   | 100       | -100           | -100             | No Action. Position matched            |
-| SELL   | 100       | -200           | -100             | SELL 100 to match Open Pos in API Param|
-
-
-
-# Order Constants
-
-## Exchange
-- NSE: NSE Equity
-- NFO: NSE Futures & Options
-- CDS: NSE Currency
-- BSE: BSE Equity
-- BFO: BSE Futures & Options
-- BCD: BSE Currency
-- MCX: MCX Commodity
-- NCDEX: NCDEX Commodity
-
-## Product Type
-- CNC: Cash & Carry for equity
-- NRML: Normal for futures and options
-- MIS: Intraday Squareoff
-
-
-## Price Type
-- MARKET: Market Order
-- LIMIT: Limit Order
-- SL: Stop Loss Limit Order
-- SL-M: Stop Loss Market Order
-
-## Action
-- BUY: Buy
-- SELL: Sell
-
-## AMO
-- YES: Yes
-- NO: No
-<br>
 
 
 ## Windows and Linux Complete Configuration Instructions 
