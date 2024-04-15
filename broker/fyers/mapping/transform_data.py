@@ -39,7 +39,7 @@ def transform_data(data):
 
 def transform_modify_order_data(data):
     return {
-        "id" : data["orderid"],  # Convert orderid to integer
+        "id" : data["orderid"],  
         "qty": int(data["quantity"]),  # Convert quantity to integer
         "type": map_order_type(data["pricetype"]),  # Assuming map_order_type returns an integer
         "side": map_action(data["action"]),  # Assuming map_action returns an integer
