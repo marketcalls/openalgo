@@ -202,7 +202,7 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with  'product' fields.
     """
     # Check if 'portfolio_data' is empty
-    if portfolio_data is None or (portfolio_data.get('internalErrorMessage') == "No holdings available"):
+    if portfolio_data is None or (portfolio_data[0].get('internalErrorMessage') == "No holdings available"):
         # Handle the case where there is no data or specific error message about no holdings
         print("No data or no holdings available.")
         portfolio_data = {}  # This resets portfolio_data to an empty dictionary if conditions are met
