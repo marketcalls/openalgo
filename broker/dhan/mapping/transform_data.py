@@ -43,13 +43,16 @@ def transform_data(data,token):
 
 def transform_modify_order_data(data):
     return {
+        "dhanClientId": data["apikey"],
+        "orderId": data["orderid"],
+        "orderType": map_order_type(data["pricetype"]),
+        "legName":"",
         "quantity": data["quantity"],
-        "validity": "DAY",
         "price": data["price"],
-        "order_id": data["orderid"],
-        "order_type": map_order_type(data["pricetype"]),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "trigger_price": data.get("trigger_price", "0")
+        "disclosedQuantity": data.get("disclosed_quantity", "0"),
+        "triggerPrice": data.get("trigger_price", "0"),
+        "validity": "DAY"
+
     }
 
 
@@ -115,22 +118,15 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "INTRADAY")  # Default to INTRADAY if not found
 
-def reverse_map_product_type(exchange,product):
+def reverse_map_product_type(product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
     # Exchange to OpenAlgo product type mapping for 'D'
-    exchange_mapping_for_d = {
-        "NSE": "CNC",
-        "BSE": "CNC",
-        "NFO": "NRML",
-        "BFO": "NRML",
-        "MCX": "NRML",
-        "CDS": "NRML",
+    product_mapping = {
+        "CNC": "CNC",
+        "MARGIN": "NRML",
+        "MIS": "INTRADAY"
     }
     
-    # Reverse mapping based on product type and exchange
-    if product == 'D':
-        return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
-    elif product == 'I':
-        return "MIS"
+    return product_mapping.get(product)  # Removed default; will return None if not found

@@ -5,7 +5,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
 from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-
+from broker.dhan.mapping.transform_data import map_exchange
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
@@ -43,10 +43,10 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     positions_data = get_positions(auth)
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
-                net_qty = position.get('quantity', '0')
+    if positions_data:
+        for position in positions_data:
+            if position.get('tradingSymbol') == tradingsymbol and position.get('exchangeSegment') == map_exchange(exchange) and position.get('productType') == product:
+                net_qty = position.get('netQty', '0')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -80,6 +80,7 @@ def place_order_api(data,auth):
 def place_smartorder_api(data,auth):
 
     AUTH_TOKEN = auth
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     #If no API call is made in this function then res will return None
     res = None
 
@@ -168,14 +169,14 @@ def close_all_positions(current_api_key,auth):
     #print(positions_response)
     
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    if positions_response is None or not positions_response:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response:
         # Loop through each position to close
-        for position in positions_response['data']:
+        for position in positions_response:
             # Skip if net quantity is zero
-            if int(position['quantity']) == 0:
+            if int(position['netQty']) == 0:
                 continue
 
             # Determine action based on net quantity
@@ -186,7 +187,7 @@ def close_all_positions(current_api_key,auth):
             #print(f"Exchange : {position['exchange']}")
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['instrument_token'],position['exchange'])
+            symbol = get_symbol(position['securityId'],map_exchange(position['exchangeSegment']))
             #print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
@@ -195,9 +196,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": map_exchange(position['exchangeSegment']),
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'],position['product']),
+                "product": reverse_map_product_type(position['productType']),
                 "quantity": str(quantity)
             }
 
@@ -219,23 +220,22 @@ def cancel_order(orderid,auth):
     
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'access-token': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-       
     }
     
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
-    conn.request("DELETE", f"/v2/order/cancel?order_id={orderid}", headers=headers)  # Append the order ID to the URL
+    conn = http.client.HTTPSConnection("api.dhan.co")
+    conn.request("DELETE", f"/orders/{orderid}", headers=headers)  # Append the order ID to the URL
     
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
 
     
     # Check if the request was successful
-    if data.get("status"):
+    if data:
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
@@ -249,23 +249,25 @@ def modify_order(data,auth):
 
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    data['apikey'] = BROKER_API_KEY
 
-    
+    orderid = data["orderid"];
     transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
     
   
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'access-token': AUTH_TOKEN,
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
     }
     payload = json.dumps(transformed_order_data)
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("PUT", "/v2/order/modify", payload, headers)
+    conn = http.client.HTTPSConnection("api.dhan.co")
+    conn.request("PUT", f"/orders/{orderid}", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
 
@@ -280,19 +282,19 @@ def cancel_all_orders_api(data,auth):
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
-    if order_book_response['status'] != 'success':
+    if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+    orders_to_cancel = [order for order in order_book_response
+                        if order['orderStatus'] in ['PENDING']]
     print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['order_id']
+        orderid = order['orderId']
         cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
         if status_code == 200:
             canceled_orders.append(orderid)
