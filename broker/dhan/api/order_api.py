@@ -5,7 +5,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
 from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.dhan.mapping.transform_data import map_exchange
+from broker.dhan.mapping.transform_data import map_exchange_type, map_exchange
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
@@ -42,10 +42,10 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
     net_qty = '0'
-
+    
     if positions_data:
         for position in positions_data:
-            if position.get('tradingSymbol') == tradingsymbol and position.get('exchangeSegment') == map_exchange(exchange) and position.get('productType') == product:
+            if position.get('tradingSymbol') == tradingsymbol and position.get('exchangeSegment') == map_exchange_type(exchange) and position.get('productType') == product:
                 net_qty = position.get('netQty', '0')
                 break  # Assuming you need the first match
 
@@ -180,8 +180,8 @@ def close_all_positions(current_api_key,auth):
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
-            quantity = abs(int(position['quantity']))
+            action = 'SELL' if int(position['netQty']) > 0 else 'BUY'
+            quantity = abs(int(position['netQty']))
 
             #print(f"Trading Symbol : {position['tradingsymbol']}")
             #print(f"Exchange : {position['exchange']}")
@@ -207,7 +207,7 @@ def close_all_positions(current_api_key,auth):
             # Place the order to close the position
             _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
-            print(api_response)
+            #print(api_response)
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -270,9 +270,11 @@ def modify_order(data,auth):
     conn.request("PUT", f"/orders/{orderid}", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    print(data)
+    #return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
 
-    if data.get("status") == "success" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
+    if data["orderId"]:
+        return {"status": "success", "orderid": data["orderId"]}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
