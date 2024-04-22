@@ -46,7 +46,7 @@ def transform_modify_order_data(data):
         "dhanClientId": data["apikey"],
         "orderId": data["orderid"],
         "orderType": map_order_type(data["pricetype"]),
-        "legName":"",
+        "legName":"ENTRY_LEG",
         "quantity": data["quantity"],
         "price": data["price"],
         "disclosedQuantity": data.get("disclosed_quantity", "0"),
