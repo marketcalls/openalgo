@@ -48,6 +48,14 @@ def broker_callback(broker):
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='icici':
+        full_url = request.full_path
+        print(f'Full URL: {full_url}') 
+        code = request.args.get('apisession')
+        print(f'The code is {code}')
+        auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
     elif broker=='dhan':
         code = 'dhan'
         print(f'The code is {code}')
