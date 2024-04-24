@@ -1,8 +1,12 @@
 from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
 from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
-from utils.config import get_broker_api_key, get_login_rate_limit_min, get_login_rate_limit_hour
+from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+import http.client
+import json
+import jwt
+
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -17,7 +21,7 @@ def ratelimit_handler(e):
 @brlogin_bp.route('/<broker>/callback', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def broker_callback(broker):
+def broker_callback(broker,para=None):
     print(f'Broker is {broker}')
     if session.get('logged_in'):
         # Store broker in session and g
@@ -53,7 +57,22 @@ def broker_callback(broker):
         print(f'The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
-
+    elif broker=='kotak':
+        if request.method == 'GET':
+            if 'user' not in session:
+                return redirect(url_for('auth.login'))
+            return render_template('kotak.html')
+        
+        elif request.method == 'POST':
+            otp = request.form.get('otp')
+            token = request.form.get('token')
+            sid = request.form.get('sid')
+            userid = request.form.get('userid')
+            api_secret = get_broker_api_secret()
+            
+            auth_token, error_message = auth_function(otp,token,sid,userid,api_secret)
+            
+            forward_url = 'kotak.html'
     else:
         code = request.args.get('code') or request.args.get('request_token')
         print(f'The code is {code}')
@@ -64,6 +83,7 @@ def broker_callback(broker):
         # Store broker in session
         session['broker'] = broker
         print(f'Connected broker: {broker}')
+        
         if broker == 'zerodha':
             #token = request.args.get('request_token')
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
@@ -73,3 +93,62 @@ def broker_callback(broker):
         return handle_auth_success(auth_token, session['user'],broker)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
+
+@brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def broker_loginflow(broker):
+    if broker == 'kotak':
+        mobilenumber = request.form.get('mobilenumber')
+        password = request.form.get('password')
+        conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+        payload = json.dumps({
+        "mobileNumber": mobilenumber,
+        "password": password
+        })
+        api_secret = get_broker_api_secret()
+        headers = {
+        'accept': '*/*',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {api_secret}'
+        }
+        conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
+        res = conn.getresponse()
+        data = res.read().decode("utf-8")
+        data_dict = json.loads(data)
+        
+        token = data_dict['data']['token']
+        sid = data_dict['data']['sid']
+        decode_jwt = jwt.decode(token, options={"verify_signature": False})
+        userid = decode_jwt.get("sub")
+        
+        para = {
+            "token": token,
+            "sid": sid,
+            "userid": userid
+        }
+        getKotakOTP(userid,api_secret)
+        return render_template('kotakotp.html',para=para)
+        
+        
+       
+    return 
+
+
+def getKotakOTP(userid,token):
+    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    payload = json.dumps({
+    "userId": userid,
+    "sendEmail": True,
+    "isWhitelisted": True
+    })
+    headers = {
+    'accept': '*/*',
+    'Content-Type': 'application/json',
+    'Authorization': f'Bearer {token}'
+    }
+    conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+    
+    return 'success'
