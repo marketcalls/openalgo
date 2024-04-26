@@ -1,10 +1,11 @@
 #database/master_contract_db.py
 
 import os
+import glob
 import pandas as pd
 import requests
-import gzip
-import shutil
+import zipfile
+from io import BytesIO
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -72,123 +73,272 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_and_unzip_upstox_data(url, input_path, output_path):
-    """
-    Downloads the compressed JSON from Upstox, unzips it, and saves it to the specified path.
-    """
-    print("Downloading Upstox Master Contract")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
-    with open(input_path, 'wb') as f:
-        f.write(response.content)
-    print("Decompressing the JSON file")
-    with gzip.open(input_path, 'rb') as f_in:
-        with open(output_path, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+def download_and_extract_icici_zip(url, extract_to='tmp'):
+    # Make a request to fetch the data from the URL
+    response = requests.get(url,timeout=10)
+    
+    # Raise an exception if the download fails
+    response.raise_for_status()
+    
+    # Open the ZIP file contained in the response's content
+    with zipfile.ZipFile(BytesIO(response.content)) as the_zip:
+        # Get the list of file names contained in the zip
+        zip_files = the_zip.namelist()
+        
+        # Extract the contents into the specified directory
+        the_zip.extractall(path=extract_to)
 
+
+# Function to transform the strike value
+def transform_strike(strike):
+    if strike.endswith('.0'):
+        return strike[:-2]  # Remove the '.0' from the string
+    return strike  # Return the original value if no '.0'
 
 def reformat_symbol(row):
-    symbol = row['symbol']
+    symbol1 = str(row['symbol1'])
+    expiry = str(row['expiry']).replace('-', '')  # Remove dashes right here
+    row['strike'] = str(row['strike'])
+    row['strike'] = transform_strike(row['strike'])  # Directly call the transform function
+    strike = row['strike']
+
     instrument_type = row['instrumenttype']
-    
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
+
+    if row['instrumenttype'] == 'FUT':
+        symbol = symbol1 + expiry + instrument_type
+    elif row['instrumenttype'] in ['CE', 'PE']:
+        symbol = symbol1 + expiry + strike + instrument_type
     else:
-        symbol = symbol  # No change for other instrument types
+        symbol = symbol1  # Default return in case other instrument types are encountered
 
     return symbol
 
+def process_icici_nse_csv(path):
+    # Define the path to the file
+    file_path = 'tmp/NSEScripMaster.txt'
 
-def process_upstox_json(path):
-    """
-    Processes the Upstox JSON file to fit the existing database schema and performs exchange name mapping.
-    """
-    print("Processing Upstox Data")
-    df = pd.read_json(path)
+    # Check if the file exists
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, sep=",")
+        except Exception as e:
+            # If there's an error, output it
+            print(f"An error occurred: {e}")
+    else:
+        print("File does not exist at the specified path.")
 
-    #return df
+    newdata = pd.DataFrame()
 
-    # Assume your JSON structure requires some transformations to match your schema
-    # For the sake of this example, let's assume 'df' now represents your transformed DataFrame
-    # Map exchange names
-    exchange_map = {
-        "NSE_EQ": "NSE",
-        "NSE_FO": "NFO",
-        "NCD_FO": "CDS",
-        "NSE_INDEX": "NSE_INDEX",
-        "BSE_INDEX": "BSE_INDEX",
-        "BSE_EQ": "BSE",
-        "BSE_FO": "BFO",
-        "BCD_FO": "BCD",
-        "MCX_FO": "MCX"
+    # Replace double quotes and strip spaces from column names
+    df.columns = df.columns.str.replace('"', '').str.strip()
+    df.columns = df.columns.str.upper()
+    
+    df.loc[df['SERIES'] != '0', 'EXCHANGE'] = 'NSE'
+    df.loc[df['SERIES'] == '0', 'EXCHANGE'] = 'NSE_INDEX'
+    df.loc[df['SERIES'] != '0', 'INSTRUMENTTYPE'] = 'EQ'
+    df.loc[df['SERIES'] == '0', 'INSTRUMENTTYPE'] = 'INDEX'
 
-    }
-    segment_copy = df['segment'].copy()
-    df['segment'] = df['segment'].map(exchange_map)
-    df['expiry'] = pd.to_datetime(df['expiry'], unit='ms').dt.strftime('%d-%b-%y').str.upper()
+    newdata['symbol'] = df['EXCHANGECODE']
+    newdata['brsymbol'] = df['SHORTNAME']
+    newdata['name'] = df['COMPANYNAME']
+    newdata['exchange'] = df['EXCHANGE']
+    newdata['brexchange'] = df['EXCHANGE']
+    newdata['token'] = df['TOKEN']
+    newdata['expiry'] = None
+    newdata['strike'] = None
+    newdata['lotsize'] = df['LOTSIZE']
+    newdata['instrumenttype'] = df['INSTRUMENTTYPE']
+    newdata['tick size'] = df['TICKSIZE']
+
+    return newdata
 
 
-    df = df[['instrument_key', 'trading_symbol', 'name', 'expiry', 
-                       'strike_price', 'lot_size', 'instrument_type', 'segment', 
-                       'tick_size']].rename(columns={
-    'instrument_key': 'token',
-    'trading_symbol': 'symbol',
-    'name': 'name',
-    'expiry': 'expiry',
-    'strike_price': 'strike',
-    'lot_size': 'lotsize',
-    'instrument_type': 'instrumenttype',
-    'segment': 'exchange',
-    'tick_size': 'tick_size'
+def process_icici_bse_csv(path):
+    # Define the path to the file
+    file_path = 'tmp/BSEScripMaster.txt'
+
+    # Check if the file exists
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, sep=",")
+        except Exception as e:
+            # If there's an error, output it
+            print(f"An error occurred: {e}")
+    else:
+        print("File does not exist at the specified path.")
+
+    newdata = pd.DataFrame()
+
+    # Replace double quotes and strip spaces from column names
+    df.columns = df.columns.str.replace('"', '').str.strip()
+    df.columns = df.columns.str.upper()   
+  
+    newdata['symbol'] = df['EXCHANGECODE']
+    newdata['symbol'] = newdata['symbol'].where(newdata['symbol'].notna(), '')
+    newdata['brsymbol'] = df['SHORTNAME']
+    newdata['name'] = df['COMPANYNAME']
+    newdata['exchange'] = 'BSE'
+    newdata['brexchange'] = 'BSE'
+    newdata['token'] = df['TOKEN']
+    newdata['expiry'] = None
+    newdata['strike'] = None
+    newdata['lotsize'] = df['LOTSIZE']
+    newdata['instrumenttype'] = 'EQ'
+    newdata['tick size'] = df['TICKSIZE']
+
+    return newdata
+
+def process_icici_nfo_csv(path):
+    # Define the path to the file
+    file_path = 'tmp/FONSEScripMaster.txt'
+
+    # Check if the file exists
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, sep=",")
+        except Exception as e:
+            # If there's an error, output it
+            print(f"An error occurred: {e}")
+    else:
+        print("File does not exist at the specified path.")
+
+    newdata = pd.DataFrame()
+
+    # Replace double quotes and strip spaces from column names
+    df.columns = df.columns.str.replace('"', '').str.strip()
+    df.columns = df.columns.str.upper()   
+    
+    
+    newdata['name'] = df['COMPANYNAME']
+    newdata['exchange'] = 'NFO'
+    newdata['brexchange'] = 'NFO'
+    newdata['token'] = df['TOKEN']
+
+    df['EXPIRYDATE'] = pd.to_datetime(df['EXPIRYDATE'], format='%d-%b-%Y')
+    df['EXPIRYDATE'] = df['EXPIRYDATE']
+    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format
+    newdata['expiry'] = newdata['expiry'].str.upper()
+    newdata['strike'] = df['STRIKEPRICE']
+    newdata['lotsize'] = df['LOTSIZE']
+    
+    newdata['instrumenttype'] = df['OPTIONTYPE'].map({
+    'XX': 'FUT',
+    'CE': 'CE',
+    'PE': 'PE'
     })
 
-    df['brsymbol'] =  df['symbol']
-    df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = segment_copy
-    
-    return df
-
-
     
 
-def delete_upstox_temp_data(input_path, output_path):
+    newdata['tick size'] = df['TICKSIZE']
+   
+
+    newdata['symbol1'] = df['EXCHANGECODE']
+    # Apply the function across the DataFrame rows
+    newdata['symbol'] = newdata.apply(reformat_symbol, axis=1)
+    newdata['brsymbol'] = df['SHORTNAME']
+
+    return newdata
+
+
+def process_icici_cds_csv(path):
+    # Define the path to the file
+    file_path = 'tmp/CDNSEScripMaster.txt'
+
+    # Check if the file exists
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, sep=",")
+        except Exception as e:
+            # If there's an error, output it
+            print(f"An error occurred: {e}")
+    else:
+        print("File does not exist at the specified path.")
+
+    newdata = pd.DataFrame()
+
+    # Replace double quotes and strip spaces from column names
+    df.columns = df.columns.str.replace('"', '').str.strip()
+    df.columns = df.columns.str.upper()   
+    
+    
+    newdata['name'] = df['COMPANYNAME']
+    newdata['exchange'] = 'CDS'
+    newdata['brexchange'] = 'CDS'
+    newdata['token'] = df['TOKEN']
+
+    df['EXPIRYDATE'] = pd.to_datetime(df['EXPIRYDATE'], format='%d-%b-%Y')
+    df['EXPIRYDATE'] = df['EXPIRYDATE']
+    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format
+    newdata['expiry'] = newdata['expiry'].str.upper()
+    newdata['strike'] = df['STRIKEPRICE']
+    newdata['lotsize'] = df['LOTSIZE']
+    
+    newdata['instrumenttype'] = df['OPTIONTYPE'].map({
+    'XX': 'FUT',
+    'CE': 'CE',
+    'PE': 'PE'
+    })
+
+    
+
+    newdata['tick size'] = df['TICKSIZE']
+   
+
+    newdata['symbol1'] = df['EXCHANGECODE']
+    # Apply the function across the DataFrame rows
+    newdata['symbol'] = newdata.apply(reformat_symbol, axis=1)
+    newdata['brsymbol'] = df['SHORTNAME']
+
+    return newdata
+
+
+def delete_icici_temp_data(input_path):
     try:
-        # Check if the file exists
-        if os.path.exists(input_path) and os.path.exists(output_path):
-            # Delete the file
-            os.remove(input_path)
-            os.remove(output_path)
-            print(f"The temporary file {input_path} and  {output_path} has been deleted.")
+        # Construct the full path for txt files in the directory
+        txt_files_path = os.path.join(input_path, '*.txt')
+        # Find all txt files in the directory
+        txt_files = glob.glob(txt_files_path)
+        if txt_files:
+            for file in txt_files:
+                os.remove(file)
+                print(f"Deleted {file}")
         else:
-            print(f"The temporary file {input_path} and  {output_path} does not exist.")
+            print("No .txt files found to delete.")
     except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
-    
+        print(f"An error occurred: {e}")
 
 
 
 def master_contract_download():
-    print("Downloading Master Contract")
-    url = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz'
-    input_path = 'tmp/temp_upstox.json.gz'
-    output_path = 'tmp/upstox.json'
+    
+    url = 'https://directlink.icicidirect.com/NewSecurityMaster/SecurityMaster.zip'
+    input_path = 'tmp'
+ 
     try:
-        download_and_unzip_upstox_data(url, input_path, output_path)
-        token_df = process_upstox_json(output_path)
-        delete_upstox_temp_data(input_path, output_path)
+        print("Downloading Master Contract")
+        download_and_extract_icici_zip(url, input_path)
+        delete_symtoken_table()  # Consider the implications of this action
+        print("Processing NSE CM Master Contract")
+        token_df = process_icici_nse_csv(input_path)
+        copy_from_dataframe(token_df)
+        print("Processing BSE CM Master Contract")
+        token_df = process_icici_bse_csv(input_path)
+        copy_from_dataframe(token_df)
+        print("Processing NSE FO Master Contract")
+        token_df = process_icici_nfo_csv(input_path)
+        copy_from_dataframe(token_df)
+
+        print("Processing NSE CD Master Contract")
+        token_df = process_icici_cds_csv(input_path)
+        copy_from_dataframe(token_df)
+
+
+        delete_icici_temp_data(input_path)
         #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
         
         #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
 
-        delete_symtoken_table()  # Consider the implications of this action
-        copy_from_dataframe(token_df)
+        
                 
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
