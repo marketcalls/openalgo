@@ -1,6 +1,7 @@
 import http.client
 import hashlib
 import json
+from datetime import datetime, timedelta
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
@@ -25,17 +26,236 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     data = res.read()
     return json.loads(data.decode("utf-8"))
 
+
+def get_orders(auth,exchange_code):
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+
+    # Get today's date in UTC
+    today = datetime.utcnow().date()
+
+    # Calculate the 'from_date' and 'to_date' in UTC
+    from_date_utc = datetime.combine(today - timedelta(days=1), datetime.min.time()) + timedelta(hours=18, minutes=30)
+    to_date_utc = datetime.combine(today, datetime.min.time()) + timedelta(hours=18, minutes=29)
+
+    # Convert dates to ISO format for the API call
+    from_date_str = from_date_utc.isoformat() + 'Z'
+    to_date_str = to_date_utc.isoformat() + 'Z'
+    payload = json.dumps({"exchange_code": exchange_code, "from_date": from_date_str, "to_date": to_date_str}, separators=(',', ':'))
+
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn.request("GET", "/breezeapi/api/v1/order", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    # Convert response data to JSON
+    order_data = json.loads(data.decode("utf-8"))
+
+    return order_data
+
+
+
 def get_order_book(auth):
-    return get_api_response("/v2/order/retrieve-all",auth)
+    """Fetch Orderbook data from ICICI Direct's API using the provided Session token."""
+    def collect_orders():
+        exchanges = ["NSE", "BSE", "NFO"]
+        all_orders = []
+        
+        for exchange in exchanges:
+            orders_data = get_orders(auth, exchange)
+            
+            if orders_data['Success']:  # Check if there are successful orders returned
+                all_orders.extend(orders_data['Success'])  # Merge successful orders into the all_orders list
+        
+        return all_orders
+
+    # Collecting and printing all orders
+    order_book = collect_orders()
+    result = {
+        "Success": {
+            "order_book": order_book
+        },
+        "Status": 200,
+        "Error": None
+    }
+    return json.dumps(result, indent=4)
+
+
+def get_trades(auth,exchange_code):
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+
+    # Get today's date in UTC
+    today = datetime.utcnow().date()
+
+    # Calculate the 'from_date' and 'to_date' in UTC
+    from_date_utc = datetime.combine(today - timedelta(days=1), datetime.min.time()) + timedelta(hours=18, minutes=30)
+    to_date_utc = datetime.combine(today, datetime.min.time()) + timedelta(hours=18, minutes=29)
+
+    # Convert dates to ISO format for the API call
+    from_date_str = from_date_utc.isoformat() + 'Z'
+    to_date_str = to_date_utc.isoformat() + 'Z'
+    payload = json.dumps({"exchange_code": exchange_code, "from_date": from_date_str, "to_date": to_date_str}, separators=(',', ':'))
+
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn.request("GET", "/breezeapi/api/v1/trades", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    # Convert response data to JSON
+    trade_data = json.loads(data.decode("utf-8"))
+
+    return trade_data
+
+
+
 
 def get_trade_book(auth):
-    return get_api_response("/v2/order/trades/get-trades-for-day",auth)
+    """Fetch Tradebook data from ICICI Direct's API using the provided Session token."""
+    def collect_trades():
+        exchanges = ["NSE", "BSE", "NFO"]
+        all_trades = []
+        
+        for exchange in exchanges:
+            trades_data = get_trades(auth, exchange)
+            
+            if trades_data['Success']:  # Check if there are successful trades returned
+                all_trades.extend(trades_data['Success'])  # Merge successful trades into the all_trades list
+        
+        return all_trades
+
+    # Collecting and printing all trades
+    trade_book = collect_trades()
+    result = {
+        "Success": {
+            "trade_book": trade_book
+        },
+        "Status": 200,
+        "Error": None
+    }
+    return json.dumps(result, indent=4)
 
 def get_positions(auth):
-    return get_api_response("/v2/portfolio/short-term-positions",auth)
+
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+
+
+    payload = json.dumps({})
+
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn.request("GET", "/breezeapi/api/v1/portfoliopositions", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    # Convert response data to JSON
+    positions_data = json.loads(data.decode("utf-8"))
+    positions_data = json.dumps(positions_data, indent=4)
+
+    return positions_data
+
+
+def get_demat(auth,exchange_code):
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+
+    # Get today's date in UTC
+    today = datetime.utcnow().date()
+
+    # Calculate the 'from_date' and 'to_date' in UTC
+    from_date_utc = datetime.combine(today - timedelta(days=1), datetime.min.time()) + timedelta(hours=18, minutes=30)
+    to_date_utc = datetime.combine(today, datetime.min.time()) + timedelta(hours=18, minutes=29)
+
+    # Convert dates to ISO format for the API call
+    from_date_str = from_date_utc.isoformat() + 'Z'
+    to_date_str = to_date_utc.isoformat() + 'Z'
+    payload = json.dumps({"exchange_code": exchange_code, "from_date": from_date_str, "to_date": to_date_str}, separators=(',', ':'))
+
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn.request("GET", "/breezeapi/api/v1/portfolioholdings", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+
+    # Convert response data to JSON
+    trade_data = json.loads(data.decode("utf-8"))
+
+    return trade_data
+
+
 
 def get_holdings(auth):
-    return get_api_response("/v2/portfolio/long-term-holdings",auth)
+    def collect_holdings():
+        exchanges = ["NSE"]
+        all_holdings = []
+        
+        for exchange in exchanges:
+            holdings_data = get_demat(auth, exchange)
+            
+            if holdings_data['Success']:  # Check if there are successful holdings returned
+                all_holdings.extend(holdings_data['Success'])  # Merge successful holdings into the all_holdings list
+        
+        return all_holdings
+
+    # Collecting and printing all holdings
+    holdings = collect_holdings()
+    result = {
+        "holdings": {
+            "holdings": holdings
+        },
+        "Status": 200,
+        "Error": None
+    }
+    return json.dumps(result, indent=4)
+
+
 
 def get_open_position(tradingsymbol, exchange, product, auth):
 
