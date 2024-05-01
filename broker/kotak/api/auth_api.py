@@ -28,9 +28,9 @@ def authenticate_broker(otp,token,sid,userid,api_secret):
         data_dict = json.loads(data)
         
         token = data_dict['data']['token']
-        sid = data_dict['data']['sid']
+        sidotp = data_dict['data']['sid']
         
-        auth_string = f"{token}:::{sid}"
+        auth_string = f"{token}:::{sidotp}"
         return auth_string, None
         
     except Exception as e:
