@@ -214,10 +214,10 @@ def process_icici_nfo_csv(path):
     newdata['brexchange'] = 'NFO'
     newdata['token'] = df['TOKEN']
 
+    newdata['EXPIRYDATE1'] = df['EXPIRYDATE'].copy()
     df['EXPIRYDATE'] = pd.to_datetime(df['EXPIRYDATE'], format='%d-%b-%Y')
-    df['EXPIRYDATE'] = df['EXPIRYDATE']
-    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format
-    newdata['expiry'] = newdata['expiry'].str.upper()
+    #df['EXPIRYDATE'] = df['EXPIRYDATE']
+    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format    newdata['expiry'] = newdata['expiry'].str.upper()
     newdata['strike'] = df['STRIKEPRICE']
     newdata['lotsize'] = df['LOTSIZE']
     
@@ -244,8 +244,38 @@ def process_icici_nfo_csv(path):
 
     newdata['symbol1'] = df['EXCHANGECODE']
     # Apply the function across the DataFrame rows
-    newdata['symbol'] = newdata.apply(reformat_symbol, axis=1)
-    newdata['brsymbol'] = df['SHORTNAME']
+    newdata['symbol'] = newdata.apply(lambda x: reformat_symbol(x).upper(), axis=1)
+
+    newdata['SHORTNAME'] = df['SHORTNAME']
+    
+    def format_strike(strike):
+        # Convert strike to string first
+        strike_str = str(strike)
+        # Check if the string ends with '.0' and remove it
+        if strike_str.endswith('.0'):
+            # Remove the last two characters '.0'
+            return strike_str[:-2]
+        # Return the original string if it does not end with '.0'
+        return strike_str
+
+
+    def calculate_brsymbol(row):
+        if row['instrumenttype'] == 'FUT':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper() + ':::' +  'FUT'
+        elif row['instrumenttype'] == 'CE':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper()  + ':::' +  format_strike(row['strike']) + ':::' +  'Call'
+        elif row['instrumenttype'] == 'PE':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper()  + ':::' +  format_strike(row['strike']) + ':::' +  'Put'
+        else:
+            return row['SHORTNAME']
+
+
+
+    # Apply the function to each row to calculate brsymbol
+    newdata['brsymbol'] = newdata.apply(lambda x: calculate_brsymbol(x).upper(), axis=1)
+    # Remove the 'SHORTNAME' column from the DataFrame
+    newdata = newdata.drop('SHORTNAME', axis=1)
+    newdata = newdata.drop('EXPIRYDATE1', axis=1)
 
     return newdata
 
@@ -276,10 +306,10 @@ def process_icici_cds_csv(path):
     newdata['brexchange'] = 'CDS'
     newdata['token'] = df['TOKEN']
 
+    newdata['EXPIRYDATE1'] = df['EXPIRYDATE'].copy()
     df['EXPIRYDATE'] = pd.to_datetime(df['EXPIRYDATE'], format='%d-%b-%Y')
-    df['EXPIRYDATE'] = df['EXPIRYDATE']
-    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format
-    newdata['expiry'] = newdata['expiry'].str.upper()
+    #df['EXPIRYDATE'] = df['EXPIRYDATE']
+    newdata['expiry'] = df['EXPIRYDATE'].dt.strftime('%d-%b-%y')  # '25-APR-24' format    newdata['expiry'] = newdata['expiry'].str.upper()
     newdata['strike'] = df['STRIKEPRICE']
     newdata['lotsize'] = df['LOTSIZE']
     
@@ -296,8 +326,38 @@ def process_icici_cds_csv(path):
 
     newdata['symbol1'] = df['EXCHANGECODE']
     # Apply the function across the DataFrame rows
-    newdata['symbol'] = newdata.apply(reformat_symbol, axis=1)
-    newdata['brsymbol'] = df['SHORTNAME']
+    newdata['symbol'] = newdata.apply(lambda x: reformat_symbol(x).upper(), axis=1)
+
+    newdata['SHORTNAME'] = df['SHORTNAME']
+    
+    def format_strike(strike):
+        # Convert strike to string first
+        strike_str = str(strike)
+        # Check if the string ends with '.0' and remove it
+        if strike_str.endswith('.0'):
+            # Remove the last two characters '.0'
+            return strike_str[:-2]
+        # Return the original string if it does not end with '.0'
+        return strike_str
+
+
+    def calculate_brsymbol(row):
+        if row['instrumenttype'] == 'FUT':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper() + ':::' +  'FUT'
+        elif row['instrumenttype'] == 'CE':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper()  + ':::' +  format_strike(row['strike']) + ':::' +  'Call'
+        elif row['instrumenttype'] == 'PE':
+            return row['SHORTNAME'] + ':::' +  row['EXPIRYDATE1'].upper()  + ':::' +  format_strike(row['strike']) + ':::' +  'Put'
+        else:
+            return row['SHORTNAME']
+
+
+
+    # Apply the function to each row to calculate brsymbol
+    newdata['brsymbol'] = newdata.apply(lambda x: calculate_brsymbol(x).upper(), axis=1)
+    # Remove the 'SHORTNAME' column from the DataFrame
+    newdata = newdata.drop('SHORTNAME', axis=1)
+    newdata = newdata.drop('EXPIRYDATE1', axis=1)
 
     return newdata
 

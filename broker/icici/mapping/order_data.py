@@ -271,16 +271,34 @@ def map_position_data(position_data):
         position_data = position_data['Success']
         #print(position_data)
         
-
+  
 
     if position_data:
         for position in position_data:
             # Extract the instrument_token and exchange for the current position
-            stock_code = position['stock_code']
+            
             exchange = position['exchange_code']
+            right = position['right'].upper()
+            expiry_date = position['expiry_date'].upper()
+            
+            
+            symbol = position['stock_code']
+
+            if exchange == "NFO" and right == "OTHERS":
+                symbol = position['stock_code'] + ":::" + expiry_date + ":::" + "FUT"
+            elif exchange == "NFO" and (right == "CALL" or right == "PUT"):
+                symbol = f"{position['stock_code']}:::{expiry_date}:::{position['strike_price']}:::{right}"
+
+            
+            
+            print(symbol)
+            print(exchange)
+            print(right)
+            print(expiry_date)
             
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol=stock_code,exchange=exchange)
+            symbol_from_db = get_oa_symbol(symbol=symbol,exchange=exchange)
+            print(symbol_from_db)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current position
             if symbol_from_db:
@@ -310,7 +328,7 @@ def map_position_data(position_data):
                 elif position['exchange_code'] in ['NFO', 'MCX', 'BFO', 'CDS'] and position['product_type'] == 'OptionPlus':
                     position['product_type'] = 'MIS'
             else:
-                print(f"Symbol not found for Symbol {stock_code} and exchange {exchange}. Keeping original trading symbol.")
+                print(f"Symbol not found for Symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return position_data
 
