@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime
 from broker.icici.api.order_api import get_positions
-from broker.icici.mapping.order_data import map_order_data
+from broker.icici.mapping.order_data import map_position_data
 
 def get_margin_data(auth_token):
     """Fetch margin data from ICICI Direct's API using the provided Session token."""
@@ -37,9 +37,13 @@ def get_margin_data(auth_token):
     print(f"Funds Details: {margin_data}")
 
 
-    if margin_data.get('status') == 'error':
+    if margin_data.get('Status') != 200:
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        error_message = margin_data.get('Error')
+        if error_message:
+            print(f"Error fetching margin data: {error_message}")
+        else:
+            print("Error fetching margin data: Unknown error")
         return {}
 
     try:
@@ -47,15 +51,16 @@ def get_margin_data(auth_token):
         total_available_margin = margin_data['Success']['total_bank_balance']
         total_used_margin = margin_data['Success']['block_by_trade_balance']
 
-        #position_book = get_positions(auth_token)
+        position_book = get_positions(auth_token)
 
-        #position_book = map_order_data(position_book)
+        position_book = map_position_data(position_book)
 
         def sum_realised_unrealised():
             total_realised = 0
             total_unrealised = 0
-            total_realised = 0 #sum(position['realised'] for position in position_book)
-            total_unrealised = 0 #sum(position['unrealised'] for position in position_book)
+
+            total_realised = sum(float(position['pnl']) if position['pnl'] is not None else 0 for position in position_book)
+            total_unrealised = sum((float(position['ltp']) * float(position['quantity'])) - (float(position['average_price']) * float(position['quantity'])) for position in position_book)
             return total_realised, total_unrealised
 
         #total_realised, total_unrealised = sum_realised_unrealised(position_book)

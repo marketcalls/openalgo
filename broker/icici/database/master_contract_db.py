@@ -231,6 +231,16 @@ def process_icici_nfo_csv(path):
 
     newdata['tick size'] = df['TICKSIZE']
    
+    mapping = {
+    'NIFTY 50': 'NIFTY',
+    'NIFTY BANK': 'BANKNIFTY',
+    'NIFTY MIDCAP': 'MIDCPNIFTY',
+    'NIFTY FINANCIAL': 'FINNIFTY',
+    'NIFTY NEXT 50': 'NIFTYNXT50'
+    }
+
+    # Map the values
+    df['EXCHANGECODE'] = df['EXCHANGECODE'].map(mapping)
 
     newdata['symbol1'] = df['EXCHANGECODE']
     # Apply the function across the DataFrame rows

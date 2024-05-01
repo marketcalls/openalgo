@@ -10,22 +10,6 @@ from broker.upstox.mapping.transform_data import transform_data , map_product_ty
 
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
-
-    AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
-
 
 def get_orders(auth,exchange_code):
     api_key = os.getenv('BROKER_API_KEY')
@@ -84,14 +68,13 @@ def get_order_book(auth):
     # Collecting and printing all orders
     order_book = collect_orders()
     result = {
-        "Success": {
+        "data": {
             "order_book": order_book
         },
         "Status": 200,
         "Error": None
     }
-    return json.dumps(result, indent=4)
-
+    return result
 
 def get_trades(auth,exchange_code):
     api_key = os.getenv('BROKER_API_KEY')
@@ -151,13 +134,13 @@ def get_trade_book(auth):
     # Collecting and printing all trades
     trade_book = collect_trades()
     result = {
-        "Success": {
+        "data": {
             "trade_book": trade_book
         },
         "Status": 200,
         "Error": None
     }
-    return json.dumps(result, indent=4)
+    return result
 
 def get_positions(auth):
 
@@ -186,7 +169,7 @@ def get_positions(auth):
 
     # Convert response data to JSON
     positions_data = json.loads(data.decode("utf-8"))
-    positions_data = json.dumps(positions_data, indent=4)
+    #positions_data = json.dumps(positions_data, indent=4)
 
     return positions_data
 
@@ -247,13 +230,13 @@ def get_holdings(auth):
     # Collecting and printing all holdings
     holdings = collect_holdings()
     result = {
-        "holdings": {
+        "data": {
             "holdings": holdings
         },
         "Status": 200,
         "Error": None
     }
-    return json.dumps(result, indent=4)
+    return result
 
 
 
