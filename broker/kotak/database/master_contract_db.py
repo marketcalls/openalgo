@@ -2,16 +2,25 @@
 
 import os
 import pandas as pd
+import numpy as np
 import requests
 import gzip
 import shutil
-from datetime import datetime
+import http.client
+import json
+import pandas as pd
+import gzip
+import io
+
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
+from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
+
+
 
 load_dotenv()
 
@@ -72,149 +81,354 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-def download_json_angel_data(url, output_path):
-    """
-    Downloads a JSON file from the specified URL and saves it to the specified path.
-    """
-    print("Downloading JSON data")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
-    if response.status_code == 200:  # Successful download
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
-        print("Download complete")
-    else:
-        print(f"Failed to download data. Status code: {response.status_code}")
+def download_csv_kotak_data(output_path):
 
+    print("Downloading Master Contract CSV Files")
+    # URLs of the CSV files to be downloaded
+    csv_urls = get_kotak_master_filepaths()
+    print(csv_urls)
+    # Create a list to hold the paths of the downloaded files
+    downloaded_files = []
 
-def reformat_symbol(row):
-    symbol = row['symbol']
-    instrument_type = row['instrumenttype']
-    
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
-    else:
-        symbol = symbol  # No change for other instrument types
-
-    return symbol
-
-
-def convert_date(date_str):
-    # Convert from '19MAR2024' to '19-MAR-24'
-    try:
-        return datetime.strptime(date_str, '%d%b%Y').strftime('%d-%b-%y')
-    except ValueError:
-        # Return the original date if it doesn't match the format
-        return date_str
-
-def process_angel_json(path):
-    """
-    Processes the Angel JSON file to fit the existing database schema.
-    Args:
-    path (str): The file path of the downloaded JSON data.
-
-    Returns:
-    DataFrame: The processed DataFrame ready to be inserted into the database.
-    """
-    # Read JSON data into a DataFrame
-    df = pd.read_json(path)
-    
-    # Rename the columns based on the database schema
-    # Assuming that the JSON structure matches the sample response provided
-    df = df.rename(columns={
-        'exch_seg': 'exchange',
-        'instrumenttype': 'instrumenttype',
-        'lotsize': 'lotsize',
-        'strike': 'strike',
-        'symbol': 'symbol',
-        'token': 'token',
-        'name': 'name',
-        'tick_size': 'tick_size'
-    })
-    
-    # Reformat 'symbol' column if needed (based on the given reformat_symbol function)
-    #df['symbol'] = df.apply(lambda row: reformat_symbol(row), axis=1)
-    
-    
-    # Assuming 'brsymbol' and 'brexchange' are not present in the JSON and are the same as 'symbol' and 'exchange'
-    df['brsymbol'] = df['symbol']
-    df['brexchange'] = df['exchange']
-
-     # Update exchange names based on the instrument type
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
-    
-    # Reformat 'symbol' based on 'brsymbol'
-    df['symbol'] = df['symbol'].str.replace('-EQ|-BE|-MF|-SG', '', regex=True)
-    
-    
-    # Assuming the 'expiry' field in the JSON is in the format '19MAR2024'
-    df['expiry'] = df['expiry'].apply(lambda x: convert_date(x) if pd.notnull(x) else x)
-    df['expiry'] = df['expiry'].str.upper()
-
-    
-
-
-    # Convert 'strike' to float, 'lotsize' to int, and 'tick_size' to float as per the database schema
-    df['strike'] = df['strike'].astype(float) / 100
-    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['exchange'] == 'CDS'), 'strike'] = df['strike'].astype(float) / 100000
-    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'strike'] = df['strike'].astype(float) / 100000
-    
-
-    df['lotsize'] = df['lotsize'].astype(int)
-    df['tick_size'] = df['tick_size'].astype(float)
-
-    # Futures Symbol Update in CDS and MCX Exchanges
-    df.loc[(df['instrumenttype'] == 'FUTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    df.loc[(df['instrumenttype'] == 'FUTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    df.loc[(df['instrumenttype'] == 'FUTCOM') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # Options Symbol Update in CDS and MCX Exchanges
-    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:]
-    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:] 
-    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:]
-
- 
-    # Return the processed DataFrame
-    return df
-
-def delete_angel_temp_data(output_path):
-    try:
-        # Check if the file exists
-        if os.path.exists(output_path):
-            # Delete the file
-            os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
+    # Iterate through the URLs and download the CSV files
+    for key, url in csv_urls.items():
+        # Send GET request
+        response = requests.get(url,timeout=10)
+        # Check if the request was successful
+        if response.status_code == 200:
+            # Construct the full output path for the file
+            file_path = f"{output_path}/{key}.csv"
+            # Write the content to the file
+            with open(file_path, 'wb') as file:
+                file.write(response.content)
+            downloaded_files.append(file_path)
         else:
-            print(f"The temporary file {output_path} does not exist.")
-    except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+    
+
+def process_kotak_nse_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak NSE CSV Data")
+    file_path = f'{path}/NSE_CM.csv'
+
+    df = pd.read_csv(file_path)
+
+    
+    filtereddataframe = pd.DataFrame()
+    
+    filtereddataframe['token'] = df['pSymbol']
+    filtereddataframe['name'] = df['pDesc']
+    filtereddataframe['expiry'] = df['pExpiryDate']
+    filtereddataframe['strike'] = df['dStrikePrice;']
+    filtereddataframe['lotsize'] = df['lLotSize']
+    filtereddataframe['tick_size'] = df['dTickSize ']
+    filtereddataframe['brsymbol'] = df['pTrdSymbol']
+    filtereddataframe['symbol'] = df['pSymbolName']
+
+    # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
+    
+    df.loc[df['pGroup'].isin(['EQ', 'BE']), 'instrumenttype'] = 'EQ'
+    df.loc[df['pISIN'].isna(), 'exchange'] = 'NSE_INDEX'
+    df.loc[df['pGroup'].isin(['EQ', 'BE']), 'exchange'] = 'NSE'
+    df.loc[df['pISIN'].isna(), 'instrumenttype'] = 'INDEX'
+    df.loc[df['pISIN'].isna(), 'pGroup'] = ''
+
+    filtereddataframe['instrumenttype'] = df['instrumenttype']
+    filtereddataframe['exchange'] = df['exchange']
+    filtereddataframe['pGroup'] = df['pGroup']
+    
+    # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
+    df_filtered = filtereddataframe[filtereddataframe['pGroup'].isin(['EQ', 'BE', ''])].copy()
+
+    df_filtered['brexchange'] = 'NSE'
+    
+    # List of columns to remove
+    columns_to_remove = [
+        "pGroup"
+    ]
+
+    # Removing the specified columns
+    token_df = df_filtered.drop(columns=columns_to_remove)
+
+    return token_df
+
+def process_kotak_bse_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak BSE CSV Data")
+    file_path = f'{path}/BSE_CM.csv'
+
+    df = pd.read_csv(file_path)
+    df.columns = df.columns.str.replace(' ', '')
+    df.columns = df.columns.str.replace(';', '')
+    df.dropna(subset=['pSymbolName'], inplace=True)
+    
+    filtereddataframe = pd.DataFrame()
+    
+    filtereddataframe['token'] = df['pSymbol']
+    filtereddataframe['name'] = df['pDesc']
+    filtereddataframe['expiry'] = df['pExpiryDate']
+    filtereddataframe['strike'] = df['dStrikePrice']
+    filtereddataframe['lotsize'] = df['lLotSize']
+    filtereddataframe['tick_size'] = df['dTickSize']
+    filtereddataframe['brsymbol'] = df['pTrdSymbol']
+    filtereddataframe['symbol'] = df['pSymbolName']
+
+    # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
+    
+    df['instrumenttype'] = 'EQ'
+    df.loc[df['pISIN'].isna(), 'exchange'] = 'BSE_INDEX'
+    df['exchange'] = 'BSE'
+    df.loc[df['pISIN'].isna(), 'instrumenttype'] = 'INDEX'
+    df.loc[df['pISIN'].isna(), 'pGroup'] = ''
+
+    filtereddataframe['instrumenttype'] = df['instrumenttype']
+    filtereddataframe['exchange'] = df['exchange']
+    filtereddataframe['pGroup'] = df['pGroup']
+    
+    # Keeping only rows where 'exchange' column has been filled ('NSE' or 'NSE_INDEX')
+    df_filtered = filtereddataframe.copy()
+
+    df_filtered['brexchange'] = 'BSE'
+    
+    # List of columns to remove
+    columns_to_remove = [
+        "pGroup"
+    ]
+
+    # Removing the specified columns
+    token_df = df_filtered.drop(columns=columns_to_remove)
+
+    return token_df
+
+def combine_details(row):
+    base = f"{row['name']}{row['expiry'].replace('-', '')}"
+    if row['instrumenttype'] == 'FUT':
+        return f"{base}FUT"
+    elif row['instrumenttype'] in ['CE', 'PE']:
+        row['strike'] = int(row['strike']) if row['strike'].is_integer() else row['strike']
+        return f"{base}{row['strike']}{row['instrumenttype']}"
+    else:
+        return base
+
+def process_kotak_nfo_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak NFO CSV Data")
+    file_path = f'{path}/NSE_FO.csv'
+
+    df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
+    df.columns = df.columns.str.replace(' ', '')
+    df.columns = df.columns.str.replace(';', '')
+    tokensymbols = pd.DataFrame()
+    tokensymbols['token'] = df['pSymbol']
+    tokensymbols['name'] = df['pSymbolName']
+    df['lExpiryDate'] = df['lExpiryDate']+315513000
+    
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    tokensymbols['expiry'] = pd.to_datetime(df['lExpiryDate'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    tokensymbols['expiry'] = tokensymbols['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    tokensymbols['strike'] = df['dStrikePrice']/100
+    tokensymbols['strike'] = tokensymbols['strike'].apply(lambda x: int(x) if x.is_integer() else x)
+    
+    tokensymbols['lotsize'] = df['lLotSize']
+    tokensymbols['tick_size'] = df['dTickSize']
+    tokensymbols['brsymbol'] = df['pTrdSymbol']
+    tokensymbols['brexchange'] = df['pExchSeg']
+    tokensymbols['exchange'] = 'NFO'
+    
+    #df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
+    tokensymbols['instrumenttype'] = df['pOptionType'].str.replace('XX','FUT')
+    
+    #pSymbolName  df['expiry']
+    tokensymbols['symbol'] = tokensymbols.apply(combine_details, axis=1)
+    return tokensymbols
+
+def get_kotak_master_filepaths():
+    api_secret = os.getenv('BROKER_API_SECRET')
+    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    payload = ''
+    headers = {
+    'accept': '*/*',
+    'Authorization': f'Bearer {api_secret}'
+    }
+    conn.request("GET", "/Files/1.0/masterscrip/v1/file-paths", payload, headers)
+    res = conn.getresponse()
+    
+    data = res.read().decode("utf-8")
+    data_dict = json.loads(data)
+        
+    filepaths_list = data_dict['data']['filesPaths']
+    file_dict = {}
+    for url in filepaths_list:
+        file_name = url.split('/')[-1].upper().replace('.CSV', '')  
+        file_dict[file_name] = url
+
+    return file_dict
+    
+
+def process_kotak_cds_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak CDS CSV Data")
+    file_path = f'{path}/CDE_FO.csv'
+
+    df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
+    df.columns = df.columns.str.replace(' ', '')
+    df.columns = df.columns.str.replace(';', '')
+    tokensymbols = pd.DataFrame()
+    tokensymbols['token'] = df['pSymbol']
+    tokensymbols['name'] = df['pSymbolName']
+    df['lExpiryDate'] = df['lExpiryDate']+315513000
+    
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    tokensymbols['expiry'] = pd.to_datetime(df['lExpiryDate'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    tokensymbols['expiry'] = tokensymbols['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    tokensymbols['strike'] = df['dStrikePrice']/100
+    tokensymbols['strike'] = tokensymbols['strike'].apply(lambda x: int(x) if x.is_integer() else x)
+    
+    tokensymbols['lotsize'] = df['lLotSize']
+    tokensymbols['tick_size'] = df['dTickSize']
+    tokensymbols['brsymbol'] = df['pTrdSymbol']
+    tokensymbols['brexchange'] = df['pExchSeg']
+    tokensymbols['exchange'] = 'CDS'
+    
+    
+    
+    #df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
+    tokensymbols['instrumenttype'] = df['pOptionType'].str.replace('XX','FUT')
+    
+    #pSymbolName  df['expiry']
+    tokensymbols['symbol'] = tokensymbols.apply(combine_details, axis=1)
+    return tokensymbols
 
 
+def process_kotak_mcx_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak MCX CSV Data")
+    file_path = f'{path}/MCX_FO.csv'
+
+    df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
+    df.columns = df.columns.str.replace(' ', '')
+    df.columns = df.columns.str.replace(';', '')
+    df.dropna(subset=['pOptionType'], inplace=True)
+    tokensymbols = pd.DataFrame()
+    tokensymbols['token'] = df['pSymbol']
+    tokensymbols['name'] = df['pSymbolName']
+    df['lExpiryDate'] = df['lExpiryDate']
+    
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    tokensymbols['expiry'] = pd.to_datetime(df['lExpiryDate'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    tokensymbols['expiry'] = tokensymbols['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    tokensymbols['strike'] = df['dStrikePrice']/100
+    tokensymbols['strike'] = tokensymbols['strike'].apply(lambda x: int(x) if x.is_integer() else x)
+    
+    tokensymbols['lotsize'] = df['lLotSize']
+    tokensymbols['tick_size'] = df['dTickSize']
+    tokensymbols['brsymbol'] = df['pTrdSymbol']
+    tokensymbols['brexchange'] = df['pExchSeg']
+    tokensymbols['exchange'] = 'MCX'
+    
+    
+    
+    #df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
+    tokensymbols['instrumenttype'] = df['pOptionType'].str.replace('XX','FUT')
+    
+    #pSymbolName  df['expiry']
+    tokensymbols['symbol'] = tokensymbols.apply(combine_details, axis=1)
+    return tokensymbols
+
+
+def process_kotak_bfo_csv(path):
+    """
+    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing kotak MCX CSV Data")
+    file_path = f'{path}/BSE_FO.csv'
+
+    df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
+    df.columns = df.columns.str.replace(' ', '')
+    df.columns = df.columns.str.replace(';', '')
+    df.dropna(subset=['pOptionType'], inplace=True)
+    tokensymbols = pd.DataFrame()
+    tokensymbols['token'] = df['pSymbol']
+    tokensymbols['name'] = df['pSymbolName']
+    df['lExpiryDate'] = df['lExpiryDate']
+    
+    # Convert 'Expiry date' from Unix timestamp to datetime
+    tokensymbols['expiry'] = pd.to_datetime(df['lExpiryDate'], unit='s')
+
+    # Format the datetime object to the desired format '15-APR-24'
+    tokensymbols['expiry'] = tokensymbols['expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    tokensymbols['strike'] = df['dStrikePrice']/100
+    tokensymbols['strike'] = tokensymbols['strike'].apply(lambda x: int(x) if x.is_integer() else x)
+    
+    tokensymbols['lotsize'] = df['lLotSize']
+    tokensymbols['tick_size'] = df['dTickSize']
+    tokensymbols['brsymbol'] = df['pTrdSymbol']
+    tokensymbols['brexchange'] = df['pExchSeg']
+    tokensymbols['exchange'] = 'BFO'
+    
+    
+    
+    #df1['instrumenttype'] = df['pOptionType'].apply(lambda x: x.replace('XX', 'FUT'))
+    tokensymbols['instrumenttype'] = df['pOptionType'].str.replace('XX','FUT')
+    
+    #pSymbolName  df['expiry']
+    tokensymbols['symbol'] = tokensymbols.apply(combine_details, axis=1)
+    return tokensymbols
+
+def delete_kotak_temp_data(output_path):
+    # Check each file in the directory
+    for filename in os.listdir(output_path):
+        # Construct the full file path
+        file_path = os.path.join(output_path, filename)
+        # If the file is a CSV, delete it
+        if filename.endswith(".csv") and os.path.isfile(file_path):
+            os.remove(file_path)
+            print(f"Deleted {file_path}")
+    
 def master_contract_download():
     print("Downloading Master Contract")
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-    output_path = 'tmp/angel.json'
+    
+    output_path = 'tmp'
     try:
-        download_json_angel_data(url,output_path)
-        token_df = process_angel_json(output_path)
-        delete_angel_temp_data(output_path)
+        download_csv_kotak_data(output_path)
+        delete_symtoken_table()
+        token_df = process_kotak_nse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_kotak_nfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_kotak_bse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_kotak_cds_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_kotak_mcx_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_kotak_bfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        delete_kotak_temp_data(output_path)
         #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
         
         #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
-        copy_from_dataframe(token_df)
-                
+        
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
     
