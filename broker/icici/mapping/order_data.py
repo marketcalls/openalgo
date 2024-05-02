@@ -1,6 +1,16 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
 
+def format_strike(strike):
+    # Convert strike to string first
+    strike_str = str(strike)
+    # Check if the string ends with '.0' and remove it
+    if strike_str.endswith('.0'):
+        # Remove the last two characters '.0'
+        return strike_str[:-2]
+    # Return the original string if it does not end with '.0'
+    return strike_str
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -27,11 +37,31 @@ def map_order_data(order_data):
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            stock_code = order['stock_code']
+            right = ''
+            expiry_date = ''
+
             exchange = order['exchange_code']
+            if exchange == "NFO":
+                right = order['right'].upper()
+                expiry_date = order['expiry_date'].upper()
+            
+            
+            symbol = order['stock_code']
+
+            if exchange == "NFO" and right == "OTHERS":
+                symbol = order['stock_code'] + ":::" + expiry_date + ":::" + "FUT"
+            elif exchange == "NFO" and (right == "CALL" or right == "PUT"):
+                symbol = f"{order['stock_code']}:::{expiry_date}:::{format_strike(order['strike_price'])}:::{right}"
+
+            
+            
+            # print(symbol)
+            # print(exchange)
+            # print(right)
+            # print(expiry_date)
             
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol=stock_code,exchange=exchange)
+            symbol_from_db = get_oa_symbol(symbol=symbol,exchange=exchange)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
@@ -61,7 +91,7 @@ def map_order_data(order_data):
                 elif order['exchange_code'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['product_type'] == 'OptionPlus':
                     order['product_type'] = 'MIS'
             else:
-                print(f"Symbol not found for Symbol {stock_code} and exchange {exchange}. Keeping original trading symbol.")
+                print(f"Symbol not found for Symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -186,11 +216,31 @@ def map_trade_data(trade_data):
     if trade_data:
         for trade in trade_data:
             # Extract the instrument_token and exchange for the current trade
-            stock_code = trade['stock_code']
+            right = ''
+            expiry_date = ''
+
             exchange = trade['exchange_code']
+            if exchange == "NFO":
+                right = trade['right'].upper()
+                expiry_date = trade['expiry_date'].upper()
+            
+            
+            symbol = trade['stock_code']
+
+            if exchange == "NFO" and right == "OTHERS":
+                symbol = trade['stock_code'] + ":::" + expiry_date + ":::" + "FUT"
+            elif exchange == "NFO" and (right == "CALL" or right == "PUT"):
+                symbol = f"{trade['stock_code']}:::{expiry_date}:::{format_strike(trade['strike_price'])}:::{right}"
+
+            
+            
+            # print(symbol)
+            # print(exchange)
+            # print(right)
+            # print(expiry_date)
             
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol=stock_code,exchange=exchange)
+            symbol_from_db = get_oa_symbol(symbol=symbol,exchange=exchange)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol_from_db:
@@ -220,7 +270,7 @@ def map_trade_data(trade_data):
                 elif trade['exchange_code'] in ['NFO', 'MCX', 'BFO', 'CDS'] and trade['product_type'] == 'OptionPlus':
                     trade['product_type'] = 'MIS'
             else:
-                print(f"Symbol not found for Symbol {stock_code} and exchange {exchange}. Keeping original trading symbol.")
+                print(f"Symbol not found for Symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return trade_data
 
@@ -287,6 +337,8 @@ def map_position_data(position_data):
             
             symbol = position['stock_code']
 
+
+
             if exchange == "NFO" and right == "OTHERS":
                 symbol = position['stock_code'] + ":::" + expiry_date + ":::" + "FUT"
             elif exchange == "NFO" and (right == "CALL" or right == "PUT"):
@@ -294,10 +346,10 @@ def map_position_data(position_data):
 
             
             
-            print(symbol)
-            print(exchange)
-            print(right)
-            print(expiry_date)
+            # print(symbol)
+            # print(exchange)
+            # print(right)
+            # print(expiry_date)
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_oa_symbol(symbol=symbol,exchange=exchange)
