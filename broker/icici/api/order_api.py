@@ -6,7 +6,7 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.upstox.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.icici.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 
@@ -257,37 +257,42 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
-    token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    payload = json.dumps({
-        "quantity": newdata['quantity'],
-        "product": newdata.get('product', 'I'),
-        "validity": newdata.get('validity', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "tag": newdata.get('tag', 'string'),
-        "instrument_token": newdata['instrument_token'],
-        "order_type": newdata.get('order_type', 'MARKET'),
-        "transaction_type": newdata['transaction_type'],
-        "disclosed_quantity": newdata.get('disclosed_quantity', '0'),
-        "trigger_price": newdata.get('trigger_price', '0'),
-        "is_amo": newdata.get('is_amo', 'false')
-    })
+    
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+    
+
+
+    br_symbol = get_br_symbol(data['symbol'], data['exchange'])
+
+    newdata = transform_data(data, br_symbol)  
+
+    
+
+    payload = json.dumps(newdata, separators=(',', ':'))
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("POST", "/v2/order/place", payload, headers)
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+    conn.request("POST", "/breezeapi/api/v1/order", payload, headers)
     res = conn.getresponse()
+
     response_data = json.loads(res.read().decode("utf-8"))
-    if response_data['status'] == 'success':
-        orderid = response_data['data']['order_id']
+    print(response_data)
+    if response_data['Status'] == 200:
+        orderid = response_data['Success']['order_id']
     else:
         orderid = None
     return res, response_data, orderid

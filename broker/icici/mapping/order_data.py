@@ -276,10 +276,13 @@ def map_position_data(position_data):
     if position_data:
         for position in position_data:
             # Extract the instrument_token and exchange for the current position
-            
+            right = ''
+            expiry_date = ''
+
             exchange = position['exchange_code']
-            right = position['right'].upper()
-            expiry_date = position['expiry_date'].upper()
+            if exchange == "NFO":
+                right = position['right'].upper()
+                expiry_date = position['expiry_date'].upper()
             
             
             symbol = position['stock_code']
@@ -336,12 +339,20 @@ def map_position_data(position_data):
 
 def transform_positions_data(positions_data):
     transformed_data = []
+    quantity = 0
+
+    
+
     for position in positions_data:
+        if(position.get('action', '')=='Buy'):
+            quantity = int(position.get('quantity', 0))
+        if(position.get('action', '')=='Sell'):
+            quantity = int(position.get('quantity', 0))*-1
         transformed_position = {
             "symbol": position.get('stock_code', ''),
             "exchange": position.get('exchange_code', ''),
             "product": position.get('product_type', ''),
-            "quantity": position.get('quantity', 0),
+            "quantity": str(quantity),
             "average_price": position.get('average_price', 0.0),
         }
         transformed_data.append(transformed_position)

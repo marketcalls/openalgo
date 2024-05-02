@@ -1,29 +1,74 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
 #Mapping Upstox Broking Parameters https://upstox.com/developer/api-documentation/orders
 
-def transform_data(data,token):
+    
+
+
+def transform_data(data,br_symbol):
     """
     Transforms the new API request structure to the current expected structure.
     """
+    #Initialization of Variables
+    product = ''
+    expiry_date = ''
+    right = ''
+    strike_price = ''
+
+    if(data['exchange']=="NSE"):
+        if(data['product']=='CNC'):
+            product = 'cash'
+        if(data['product']=='MIS'):
+            product = 'margin'
+    if(data['exchange']=="NFO"):
+        if(data['symbol'].endswith("FUT")):
+            product = 'futures'
+            print(br_symbol)
+            symbol = br_symbol.split(':::')
+            br_symbol = symbol[0]
+            expiry_date = symbol[1]
+            right = 'others'
+            strike_price = ''
+        elif(data['symbol'].endswith("CE")):
+            product = 'options'
+            symbol = br_symbol.split(':::')
+            br_symbol = symbol[0]
+            expiry_date = symbol[1]
+            right = 'call'
+            strike_price = symbol[2]
+        elif(data['symbol'].endswith("PE")):
+            product = 'options'
+            symbol = br_symbol.split(':::')
+            br_symbol = symbol[0]
+            expiry_date = symbol[1]
+            right = 'put'
+            strike_price = symbol[2]
+
+
+    
+
     # Basic mapping
     transformed = {
-        "quantity": data["quantity"],
-        "product": map_product_type(data["product"]),
-        "validity":"DAY",
-        "price": data.get("price", "0"),
-        "tag": "string",
-        "instrument_token": token,
+        "stock_code": br_symbol,
+        "exchange_code": data['exchange'],
+        "product":product,
+        "action": data['action'].lower(),
         "order_type": map_order_type(data["pricetype"]),
-        "transaction_type": data['action'].upper(),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
-        "trigger_price": data.get("trigger_price", "0"),
-        "is_amo": "false"  # Assuming false as default; you might need logic to handle this if it can vary
-    }
+        "stoploss": float(data.get("trigger_price", 0)),
+        "quantity": data['quantity'],
+        "price": data['price'],
+        "validity": 'day',
+        "disclosed_quantity": int(data.get("disclosed_quantity", 0)),
+        "user_remark": "openalgo" 
+    } 
 
 
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
+
+    if(data['exchange']=='NFO'):
+        # Extended mapping for fields that might need conditional logic or additional processing
+        transformed["expiry_date"] = expiry_date
+        transformed["right"] = right
+        transformed["strike_price"] = strike_price
+   
     
     return transformed
 
@@ -46,10 +91,10 @@ def map_order_type(pricetype):
     Maps the new pricetype to the existing order type.
     """
     order_type_mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "SL",
-        "SL-M": "SL-M"
+        "MARKET": "market",
+        "LIMIT": "limit",
+        "SL": "stoploss",
+        "SL-M": "stoploss"
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 
@@ -83,3 +128,4 @@ def reverse_map_product_type(exchange,product):
         return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
     elif product == 'I':
         return "MIS"
+
