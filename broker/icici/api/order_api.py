@@ -436,26 +436,53 @@ def close_all_positions(current_api_key,auth):
 def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    
-    # Set up the request headers
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-       
-    }
-    
-    
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
-    conn.request("DELETE", f"/v2/order/cancel?order_id={orderid}", headers=headers)  # Append the order ID to the URL
-    
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    order_book_response = get_order_book(AUTH_TOKEN)
 
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+
+    exchange_code = ''
+
+    if 'data' in order_book_response and 'order_book' in order_book_response['data']:
+        # Search for the order_id in the order book
+        for order in order_book_response['data']['order_book']:
+            if order['order_id'] == orderid:
+                # If order_id is found, print the order_id and exchange_code
+                exchange_code =  order['exchange_code']
+                print(f"Order ID {orderid} found with Exchange Code: {exchange_code}")
+
+    if exchange_code is not None:
+        
+        json_data = { 
+                    "order_id": orderid, 
+                    "exchange_code": exchange_code
+                    }
+        payload = json.dumps(json_data, separators=(',', ':'))
+
+        print(json_data)
+
+        # Time stamp & checksum generation for request headers
+        time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+        checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
+
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Checksum': 'token ' + checksum,
+            'X-Timestamp': time_stamp,
+            'X-AppKey': api_key,
+            'X-SessionToken': auth
+        }
+
+        conn = http.client.HTTPSConnection("api.icicidirect.com")
+        conn.request("DELETE", "/breezeapi/api/v1/order", payload, headers)
+        res = conn.getresponse()
+
+        data = json.loads(res.read().decode("utf-8"))
+
+        print(data)
     
     # Check if the request was successful
-    if data.get("status"):
+    if data["Status"]==200:
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
