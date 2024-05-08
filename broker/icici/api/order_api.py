@@ -459,7 +459,7 @@ def cancel_order(orderid,auth):
                     }
         payload = json.dumps(json_data, separators=(',', ':'))
 
-        print(json_data)
+        print(f'Order Cancellation Request : {json_data}')
 
         # Time stamp & checksum generation for request headers
         time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
@@ -479,7 +479,7 @@ def cancel_order(orderid,auth):
 
         data = json.loads(res.read().decode("utf-8"))
 
-        print(data)
+        print(f'Order Cancellation Response : {data}')
     
     # Check if the request was successful
     if data["Status"]==200:
