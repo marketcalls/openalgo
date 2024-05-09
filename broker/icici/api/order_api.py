@@ -6,7 +6,7 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.icici.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.icici.mapping.transform_data import transform_data , map_symbol, map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 
@@ -240,17 +240,50 @@ def get_holdings(auth):
 
 
 
-def get_open_position(tradingsymbol, exchange, product, auth):
+def get_open_position(data, auth):
 
-    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
+    symbol = data.get("symbol")
+    exchange = data.get("exchange")
+    product = data.get("product")
+
+    #convert openalgo symbol to broker symbol
+    br_symbol = get_br_symbol(symbol, exchange)
+    br_symbol, product, expiry_date, right, strike_price = map_symbol(data,br_symbol)
+
+    # Printing the values
+    print("br_symbol:", br_symbol)
+    print("Product:", product)
+    print("Expiry Date:", expiry_date)
+    print("Right:", right)
+    print("Strike Price:", strike_price)
+
     positions_data = get_positions(auth)
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
-                net_qty = position.get('quantity', '0')
+    def safe_upper(value):
+        return value.upper() if value is not None else None
+
+    if positions_data and positions_data.get('Status') and positions_data.get('Success'):
+        for position in positions_data['Success']:
+            pb_stock_code = safe_upper(position.get('stock_code'))
+            pb_exchange = safe_upper(position.get('exchange_code'))
+            pb_product = safe_upper(position.get('product_type'))
+            pb_expiry = safe_upper(position.get('expiry_date'))
+            pb_right = safe_upper(position.get('right'))
+            pb_strike = safe_upper(position.get('strike_price'))
+            if (pb_stock_code == safe_upper(br_symbol) and
+                pb_exchange == safe_upper(exchange) and
+                pb_product == safe_upper(product) and
+                pb_expiry == safe_upper(expiry_date) and
+                pb_right == safe_upper(right) and
+                pb_strike == safe_upper(strike_price)):
+
+                if(position.get('action', '')=='Buy'):
+                    quantity = int(position.get('quantity', 0))
+                    net_qty = str(quantity)
+                if(position.get('action', '')=='Sell'):
+                    quantity = int(position.get('quantity', 0))*-1
+                    net_qty = str(quantity)
                 break  # Assuming you need the first match
 
     return net_qty
@@ -303,16 +336,18 @@ def place_smartorder_api(data,auth):
     #If no API call is made in this function then res will return None
     res = None
 
+
     # Extract necessary info from data
-    symbol = data.get("symbol")
-    exchange = data.get("exchange")
-    product = data.get("product")
+
+
+
+    
     position_size = int(data.get("position_size", "0"))
 
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
+    current_position = int(get_open_position(data, AUTH_TOKEN))
 
 
     print(f"position_size : {position_size}") 

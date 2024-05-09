@@ -8,42 +8,14 @@ def transform_data(data,br_symbol):
     """
     Transforms the new API request structure to the current expected structure.
     """
-    #Initialization of Variables
-    product = ''
-    expiry_date = ''
-    right = ''
-    strike_price = ''
+    br_symbol, product, expiry_date, right, strike_price = map_symbol(data,br_symbol)
 
-    if(data['exchange']=="NSE"):
-        if(data['product']=='CNC'):
-            product = 'cash'
-        if(data['product']=='MIS'):
-            product = 'margin'
-    if(data['exchange']=="NFO"):
-        if(data['symbol'].endswith("FUT")):
-            product = 'futures'
-            print(br_symbol)
-            symbol = br_symbol.split(':::')
-            br_symbol = symbol[0]
-            expiry_date = symbol[1]
-            right = 'others'
-            strike_price = ''
-        elif(data['symbol'].endswith("CE")):
-            product = 'options'
-            symbol = br_symbol.split(':::')
-            br_symbol = symbol[0]
-            expiry_date = symbol[1]
-            right = 'call'
-            strike_price = symbol[2]
-        elif(data['symbol'].endswith("PE")):
-            product = 'options'
-            symbol = br_symbol.split(':::')
-            br_symbol = symbol[0]
-            expiry_date = symbol[1]
-            right = 'put'
-            strike_price = symbol[2]
-
-
+    # Printing the values
+    # print("br_symbol:", br_symbol)
+    # print("Product:", product)
+    # print("Expiry Date:", expiry_date)
+    # print("Right:", right)
+    # print("Strike Price:", strike_price)
     
 
     # Basic mapping
@@ -83,6 +55,47 @@ def transform_modify_order_data(data):
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
         "trigger_price": data.get("trigger_price", "0")
     }
+
+def map_symbol(data,br_symbol):
+    product = ''
+    expiry_date = None
+    right = None
+    strike_price = None
+    
+
+    if data['exchange'] == "NSE":
+        if data['product'] == 'CNC':
+            product = 'cash'
+        elif data['product'] == 'MIS':
+            product = 'margin'
+
+    elif data['exchange'] == "NFO":
+        if data['symbol'].endswith("FUT"):
+            product = 'futures'
+            symbol_parts = br_symbol.split(':::')
+            br_symbol = symbol_parts[0]
+            expiry_date = symbol_parts[1]
+            right = 'others'
+            strike_price = ''
+
+        elif data['symbol'].endswith("CE"):
+            product = 'options'
+            symbol_parts = br_symbol.split(':::')
+            br_symbol = symbol_parts[0]
+            expiry_date = symbol_parts[1]
+            right = 'call'
+            strike_price = symbol_parts[2]
+
+        elif data['symbol'].endswith("PE"):
+            product = 'options'
+            symbol_parts = br_symbol.split(':::')
+            br_symbol = symbol_parts[0]
+            expiry_date = symbol_parts[1]
+            right = 'put'
+            strike_price = symbol_parts[2]
+
+    return br_symbol, product, expiry_date, right, strike_price
+
 
 
 
