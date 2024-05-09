@@ -63,7 +63,7 @@ def map_symbol(data,br_symbol):
     strike_price = None
     
 
-    if data['exchange'] == "NSE":
+    if data['exchange'] == "NSE" or data['exchange'] == "BSE":
         if data['product'] == 'CNC':
             product = 'cash'
         elif data['product'] == 'MIS':
@@ -71,7 +71,10 @@ def map_symbol(data,br_symbol):
 
     elif data['exchange'] == "NFO":
         if data['symbol'].endswith("FUT"):
-            product = 'futures'
+            if(data['product']=='NRML'):
+                product = 'futures'
+            if(data['product']=='MIS'):
+                product = 'furtureplus'
             symbol_parts = br_symbol.split(':::')
             br_symbol = symbol_parts[0]
             expiry_date = symbol_parts[1]
@@ -79,7 +82,10 @@ def map_symbol(data,br_symbol):
             strike_price = ''
 
         elif data['symbol'].endswith("CE"):
-            product = 'options'
+            if(data['product']=='NRML'):
+                product = 'options'
+            if(data['product']=='MIS'):
+                product = 'optionplus'
             symbol_parts = br_symbol.split(':::')
             br_symbol = symbol_parts[0]
             expiry_date = symbol_parts[1]
@@ -87,7 +93,10 @@ def map_symbol(data,br_symbol):
             strike_price = symbol_parts[2]
 
         elif data['symbol'].endswith("PE"):
-            product = 'options'
+            if(data['product']=='NRML'):
+                product = 'options'
+            if(data['product']=='MIS'):
+                product = 'optionplus'
             symbol_parts = br_symbol.split(':::')
             br_symbol = symbol_parts[0]
             expiry_date = symbol_parts[1]
@@ -111,34 +120,26 @@ def map_order_type(pricetype):
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 
-def map_product_type(product):
-    """
-    Maps the new product type to the existing product type.
-    """
-    product_type_mapping = {
-        "CNC": "D",
-        "NRML": "D",
-        "MIS": "I",
-    }
-    return product_type_mapping.get(product, "I")  # Default to INTRADAY if not found
+
 
 def reverse_map_product_type(exchange,product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
-    # Exchange to OpenAlgo product type mapping for 'D'
-    exchange_mapping_for_d = {
-        "NSE": "CNC",
-        "BSE": "CNC",
-        "NFO": "NRML",
-        "BFO": "NRML",
-        "MCX": "NRML",
-        "CDS": "NRML",
-    }
+    if(exchange=="NSE" or exchange=="BSE"):
+        if product=="Margin":
+            return "MIS"
+        if product=="Cash":
+            return "CNC"
+    if(exchange=="NFO"):
+        if product=="Futures":
+            return "NRML"
+        if product=="Options":
+            return "NRML"
+        if product=="FuturePlus":
+            return "MIS"
+        if product=="OptionPlus":
+            return "MIS"
     
-    # Reverse mapping based on product type and exchange
-    if product == 'D':
-        return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
-    elif product == 'I':
-        return "MIS"
+        
 

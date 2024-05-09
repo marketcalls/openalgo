@@ -6,7 +6,7 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.icici.mapping.transform_data import transform_data , map_symbol, map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.icici.mapping.transform_data import transform_data , map_symbol, reverse_map_product_type, transform_modify_order_data
 
 
 
@@ -238,7 +238,8 @@ def get_holdings(auth):
     }
     return result
 
-
+def safe_upper(value):
+        return value.upper() if value is not None else None
 
 def get_open_position(data, auth):
 
@@ -260,8 +261,7 @@ def get_open_position(data, auth):
     positions_data = get_positions(auth)
     net_qty = '0'
 
-    def safe_upper(value):
-        return value.upper() if value is not None else None
+    
 
     if positions_data and positions_data.get('Status') and positions_data.get('Success'):
         for position in positions_data['Success']:
@@ -339,13 +339,10 @@ def place_smartorder_api(data,auth):
 
     # Extract necessary info from data
 
-
-
     
     position_size = int(data.get("position_size", "0"))
 
     
-
     # Get current open position for the symbol
     current_position = int(get_open_position(data, AUTH_TOKEN))
 
@@ -420,15 +417,15 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
-    #print(positions_response)
+    print(positions_response)
     
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    if positions_response['Success'] is None or not positions_response['Success']:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response['Status']==200:
         # Loop through each position to close
-        for position in positions_response['data']:
+        for position in positions_response['Success']:
             # Skip if net quantity is zero
             if int(position['quantity']) == 0:
                 continue
@@ -439,10 +436,25 @@ def close_all_positions(current_api_key,auth):
 
             #print(f"Trading Symbol : {position['tradingsymbol']}")
             #print(f"Exchange : {position['exchange']}")
+            symbol = position['stock_code']
+            exchange = position['exchange_code']
+            expiry_date = safe_upper(position['expiry_date'])
+            strike_price = safe_upper(position['strike_price'])
+            right = safe_upper(position['right'])
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['instrument_token'],position['exchange'])
-            #print(f'The Symbol is {symbol}')
+            if(exchange=="NSE"):
+                brsymbol = symbol
+            if(exchange=="BSE"):
+                brsymbol = symbol
+            if(exchange=="NFO" and right=="OTHERS"):
+                brsymbol = symbol + ':::' +  expiry_date + ':::' +  'FUT'
+            if(exchange=="NFO" and right=="CALL"):
+                brsymbol = symbol + ':::' +  expiry_date + ':::' +  strike_price + ':::' +  right
+            if(exchange=="NFO" and right=="PUT"):
+                brsymbol = symbol + ':::' +  expiry_date + ':::' +  strike_price + ':::' +  right
+            symbol = get_oa_symbol(brsymbol,exchange)
+            print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
             place_order_payload = {
@@ -450,10 +462,11 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": exchange,
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'],position['product']),
-                "quantity": str(quantity)
+                "product": reverse_map_product_type(exchange,position['product_type']),
+                "quantity": str(quantity),
+                "price": "0"
             }
 
             print(place_order_payload)
