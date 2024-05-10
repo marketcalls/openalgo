@@ -77,7 +77,7 @@ def place_order_api(data,auth):
     
     
     json_string = json.dumps(newdata)
-    
+    print(json_string)
     payload = urllib.parse.quote(json_string)
     payload = f'jData={payload}'
     

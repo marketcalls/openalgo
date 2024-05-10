@@ -23,8 +23,7 @@ def transform_data(data,token):
         "rt":"DAY",
         "tp":data.get("trigger_price", "0"),
         "ts":symbol,
-        "tt":'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None'),
-        "ig":"OpenAlgo"
+        "tt":'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
     }
     return transformed
 
