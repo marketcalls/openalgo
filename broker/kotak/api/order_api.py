@@ -1,46 +1,50 @@
 import http.client
 import json
+import urllib.parse
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.kotak.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
 
-    api_key = os.getenv('BROKER_API_KEY')
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    access_token_parts = AUTH_TOKEN.split(":::")
+    token = access_token_parts[0]
+    sid = access_token_parts[1]
+    
+    api_secret = os.getenv('BROKER_API_SECRET')
+    print(api_secret) 
+    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    payload = ''
     headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
+    'accept': 'application/json',
+    'Sid': sid,
+    'Auth': token,
+    'neo-fin-key': 'neotradeapi',
+    'Authorization': f'Bearer {api_secret}'
     }
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
-    
+    print(data.decode("utf-8"))
+        
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
+    return get_api_response("/Orders/2.0/quick/user/orders?sId=server1",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
+    return get_api_response("/Orders/2.0/quick/user/trades?sId=server1",auth)
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
+    return get_api_response("/Orders/2.0/quick/user/positions?sId=server1",auth)
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
+    return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false",auth)
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -61,44 +65,41 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
+    access_token_parts = AUTH_TOKEN.split(":::")
+    auth_token_broker = access_token_parts[0]
+    sid = access_token_parts[1]
+    
+    api_secret = os.getenv('BROKER_API_SECRET')
+    
+    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
+    
+    
+    json_string = json.dumps(newdata)
+    print(json_string)
+    payload = urllib.parse.quote(json_string)
+    payload = f'jData={payload}'
+    
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': newdata['apikey']
+    'accept': 'application/json',
+    'Sid': sid,
+    'Auth': auth_token_broker,
+    'neo-fin-key': 'neotradeapi',
+    'Authorization': f'Bearer {api_secret}',
+    'Content-Type': 'application/x-www-form-urlencoded'
+    
     }
-    payload = json.dumps({
-        "variety": newdata.get('variety', 'NORMAL'),
-        "tradingsymbol": newdata['tradingsymbol'],
-        "symboltoken": newdata['symboltoken'],
-        "transactiontype": newdata['transactiontype'],
-        "exchange": newdata['exchange'],
-        "ordertype": newdata.get('ordertype', 'MARKET'),
-        "producttype": newdata.get('producttype', 'INTRADAY'),
-        "duration": newdata.get('duration', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "triggerprice": newdata.get('triggerprice', '0'),
-        "squareoff": newdata.get('squareoff', '0'),
-        "stoploss": newdata.get('stoploss', '0'),
-        "quantity": newdata['quantity']
-    })
-
-    print(payload)
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+    
+    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?sId=server1", payload, headers)
     res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-    if response_data['status'] == True:
-        orderid = response_data['data']['orderid']
+    data = res.read()
+    
+    response_data = data.decode("utf-8")
+    response_data = json.loads(response_data)
+    print(response_data)
+    if response_data['stat'] == 'Ok':
+        orderid = response_data['nOrdNo']
     else:
         orderid = None
     return res, response_data, orderid

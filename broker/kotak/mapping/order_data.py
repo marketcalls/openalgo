@@ -1,5 +1,6 @@
 import json
-from database.token_db import get_symbol, get_oa_symbol 
+from database.token_db import get_symbol, get_oa_symbol
+from broker.kotak.mapping.transform_data import map_exchange 
 
 def map_order_data(order_data):
     """
@@ -26,27 +27,22 @@ def map_order_data(order_data):
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            symboltoken = order['symboltoken']
-            exchange = order['exchange']
+            symboltoken = order['tok']
+            exchange = map_exchange(order['exSeg'])
+            order['exSeg'] = exchange
+            
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
-                               
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                order['trdSym'] = symbol_from_db
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
-                
+                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")         
     return order_data
+
+
 
 
 def calculate_order_statistics(order_data):
@@ -67,17 +63,19 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['transactiontype'] == 'BUY':
+            if order['trnsTp'] == 'B':
+                order['trnsTp'] = 'BUY'
                 total_buy_orders += 1
-            elif order['transactiontype'] == 'SELL':
+            elif order['trnsTp'] == 'S':
+                order['trnsTp'] = 'SELL'
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'complete':
+            if order['ordSt'] == 'complete':
                 total_completed_orders += 1
-            elif order['status'] == 'open':
+            elif order['ordSt'] == 'open':
                 total_open_orders += 1
-            elif order['status'] == 'rejected':
+            elif order['ordSt'] == 'rejected':
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -103,19 +101,27 @@ def transform_order_data(orders):
         if not isinstance(order, dict):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
-
+        if order.get('prcTp') == 'MKT':
+            order['prcTp'] = 'MARKET'
+        elif order.get('prcTp') == 'L':
+            order['prcTp'] = 'LIMIT'
+        elif order.get('prcTp') == 'SL':
+            order['prcTp'] = 'SL'
+        elif order.get('prcTp') == 'SL-M':
+            order['prcTp'] = 'SL-M'
+        
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
-            "exchange": order.get("exchange", ""),
-            "action": order.get("transactiontype", ""),
-            "quantity": order.get("quantity", 0),
-            "price": order.get("price", 0.0),
-            "trigger_price": order.get("triggerprice", 0.0),
-            "pricetype": order.get("ordertype", ""),
-            "product": order.get("producttype", ""),
-            "orderid": order.get("orderid", ""),
-            "order_status": order.get("status", ""),
-            "timestamp": order.get("updatetime", "")
+            "symbol": order.get("trdSym", ""),
+            "exchange": order.get("exSeg", ""),
+            "action": order.get("trnsTp", ""),
+            "quantity": order.get("qty", 0),
+            "price": order.get("avgPrc", 0.0),
+            "trigger_price": order.get("trgPrc", 0.0),
+            "pricetype": order.get("prcTp", ""),
+            "product": order.get("prod", ""),
+            "orderid": order.get("nOrdNo", ""),
+            "order_status": order.get("ordSt", ""),
+            "timestamp": order.get("ordEntTm", "")
         }
 
         transformed_orders.append(transformed_order)
@@ -149,26 +155,25 @@ def map_trade_data(trade_data):
     if trade_data:
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
-            symbol = order['tradingsymbol']
-            exchange = order['exchange']
-            
+            symbol = order['tok']
+            exchange = map_exchange(order['exSeg'])
+            order['exSeg'] = exchange
+            print(symbol)
+            print(exchange)
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
+            symbol_from_db = get_symbol(symbol, exchange)
+            print(symbol_from_db)
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
-                               
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                order['trdSym'] = symbol_from_db
+                if order['trnsTp'] == 'B':
+                    order['trnsTp'] = 'BUY'
+                elif order['trnsTp'] == 'S':
+                    order['trnsTp'] = 'SELL'
+                    
             else:
                 print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
+    print(trade_data)           
     return trade_data
 
 
@@ -176,17 +181,18 @@ def map_trade_data(trade_data):
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
+    
     for trade in tradebook_data:
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
-            "exchange": trade.get('exchange', ''),
-            "product": trade.get('producttype', ''),
-            "action": trade.get('transactiontype', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('fillprice', 0.0),
-            "trade_value": trade.get('tradevalue', 0),
-            "orderid": trade.get('orderid', ''),
-            "timestamp": trade.get('filltime', '')
+            "symbol": trade.get('trdSym', ''),
+            "exchange": trade.get('exSeg', ''),
+            "product": trade.get('prod', ''),
+            "action": trade.get('trnsTp', ''),
+            "quantity": trade.get('fldQty', 0),
+            "average_price": trade.get('avgPrc', 0.0),
+            "trade_value": float(trade.get('fldQty', 0.0))*float(trade.get('avgPrc', 0.0)),
+            "orderid": trade.get('nOrdNo', ''),
+            "timestamp": trade.get('exTm', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -200,12 +206,17 @@ def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
-            "product": position.get('producttype', ''),
-            "quantity": position.get('netqty', 0),
+            "symbol": position.get('trdSym', ''),
+            "exchange": position.get('exSeg', ''),
+            "product": position.get('prod', ''),
+            "quantity": (int(position.get('flBuyQty', 0)) - int(position.get('flSellQty', 0)))+(int(position.get('cfBuyQty', 0)) - int(position.get('cfSellQty', 0))),
             "average_price": position.get('avgnetprice', 0.0),
         }
+        if transformed_position['quantity'] > 0:
+            transformed_position["average_price"] = round(float(position['buyAmt'])/float(position['flBuyQty']),2)
+        elif transformed_position['quantity'] < 0:
+            transformed_position["average_price"] = round(float(position['sellAmt'])/float(position['flSellQty']),2)
+            
         transformed_data.append(transformed_position)
     return transformed_data
 
