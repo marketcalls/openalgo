@@ -1,5 +1,5 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Upstox Broking Parameters https://upstox.com/developer/api-documentation/orders
+#Mapping ICICI Broking Parameters https://api.icicidirect.com/breezeapi/documents/index.html#order
 
     
 
@@ -27,7 +27,7 @@ def transform_data(data,br_symbol):
         "order_type": map_order_type(data["pricetype"]),
         "stoploss": float(data.get("trigger_price", 0)),
         "quantity": data['quantity'],
-        "price": data['price'],
+        "price": float(data.get("price", 0.0)),
         "validity": 'day',
         "disclosed_quantity": int(data.get("disclosed_quantity", 0)),
         "user_remark": "openalgo" 
@@ -45,15 +45,23 @@ def transform_data(data,br_symbol):
     return transformed
 
 
-def transform_modify_order_data(data):
+def transform_modify_order_data(data,br_symbol):
+
+
+    br_symbol, product, expiry_date, right, strike_price = map_symbol(data,br_symbol)
+
     return {
-        "quantity": data["quantity"],
-        "validity": "DAY",
-        "price": data["price"],
         "order_id": data["orderid"],
-        "order_type": map_order_type(data["pricetype"]),
+        "exchange_code": data["exchange"],
+        "quantity": data["quantity"],
+        "price": data["price"],
+        "stoploss": data.get("trigger_price", ""),
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "trigger_price": data.get("trigger_price", "0")
+        "order_type": map_order_type(data['pricetype']),
+        "validity": 'day',
+        "expiry_date": expiry_date,
+        "right": right,
+        "strike_price": strike_price
     }
 
 def map_symbol(data,br_symbol):
@@ -74,7 +82,7 @@ def map_symbol(data,br_symbol):
             if(data['product']=='NRML'):
                 product = 'futures'
             if(data['product']=='MIS'):
-                product = 'furtureplus'
+                product = 'futures'
             symbol_parts = br_symbol.split(':::')
             br_symbol = symbol_parts[0]
             expiry_date = symbol_parts[1]
@@ -85,7 +93,7 @@ def map_symbol(data,br_symbol):
             if(data['product']=='NRML'):
                 product = 'options'
             if(data['product']=='MIS'):
-                product = 'optionplus'
+                product = 'options'
             symbol_parts = br_symbol.split(':::')
             br_symbol = symbol_parts[0]
             expiry_date = symbol_parts[1]

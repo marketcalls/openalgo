@@ -545,27 +545,43 @@ def modify_order(data,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
 
+    api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
     
-    transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
+
+
+    br_symbol = get_br_symbol(data['symbol'], data['exchange'])
+
     
-  
-    # Set up the request headers
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    payload = json.dumps(transformed_order_data)
+    transformed_order_data = transform_modify_order_data(data,br_symbol)  # You need to implement this function
+    
+    payload = json.dumps(transformed_order_data, separators=(',', ':'))
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("PUT", "/v2/order/modify", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    # Time stamp & checksum generation for request headers
+    time_stamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    checksum = hashlib.sha256((time_stamp + payload + api_secret).encode("utf-8")).hexdigest()
 
-    if data.get("status") == "success" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Checksum': 'token ' + checksum,
+        'X-Timestamp': time_stamp,
+        'X-AppKey': api_key,
+        'X-SessionToken': auth
+    }
+
+    conn = http.client.HTTPSConnection("api.icicidirect.com")
+    conn.request("PUT", "/breezeapi/api/v1/order", payload, headers)
+    res = conn.getresponse()
+
+  
+    response_data = json.loads(res.read().decode("utf-8"))
+
+    print(response_data)
+    if response_data['Status'] == 200:
+        orderid = response_data['Success']['order_id']
+        return {"status": "success", "orderid": orderid}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
@@ -575,12 +591,13 @@ def cancel_all_orders_api(data,auth):
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
-    if order_book_response['status'] != 'success':
+    if order_book_response['Status'] != 200:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+    # Access the 'order_book' list from the response and filter orders based on their 'status'
+    orders_to_cancel = [order for order in order_book_response.get('data', {}).get('order_book', [])
+                        if order['status'] in ['Ordered']]
+    print(orders_to_cancel)
     print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
