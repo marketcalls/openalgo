@@ -51,8 +51,8 @@ def get_margin_data(auth_token):
         processed_margin_data = {
             "availablecash": "{:.2f}".format(equity_margin.get('NetAvailableMargin', 0)),
             "collateral": "{:.2f}".format(equity_margin.get('TotalCollateralValue', 0)),
-            "m2munrealized": "{:.2f}".format(equity_margin.get('NetAvailableMargin', 0)),
-            "m2mrealized": "{:.2f}".format(equity_margin.get('NetAvailableMargin', 0)),
+            "m2munrealized": "0",
+            "m2mrealized": "0",
             "utiliseddebits": "{:.2f}".format(equity_margin.get('MarginUtilized', 0)),
         }
 
