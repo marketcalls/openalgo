@@ -29,8 +29,22 @@ def broker_callback(broker):
 
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
+    
+    if broker == '5paisa':
+        if request.method == 'GET':
+            if 'user' not in session:
+                return redirect(url_for('auth.login'))
+            return render_template('5paisa.html')
+        
+        elif request.method == 'POST':
+            clientcode = request.form.get('clientid')
+            broker_pin = request.form.get('pin')
+            totp_code = request.form.get('totp')
 
-    if broker == 'angel':
+            auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
+            forward_url = '5paisa.html'
+
+    elif broker == 'angel':
         if request.method == 'GET':
             if 'user' not in session:
                 return redirect(url_for('auth.login'))
