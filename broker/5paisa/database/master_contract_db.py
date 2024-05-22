@@ -129,7 +129,8 @@ def process_5paisa_csv(path):
     # Filter the DataFrame for Series 'EQ', 'BE', 'XX'
     filtered_df = df[df['Series'].isin(['EQ', 'BE', 'XX'])].copy()
 
-    filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = 'FUT'
+    filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = df['ScripType']
+    #filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = 'FUT'
 
     # Convert 'Expiry' to datetime format
     filtered_df['Expiry'] = pd.to_datetime(filtered_df['Expiry'])
@@ -138,14 +139,21 @@ def process_5paisa_csv(path):
     filtered_df['Expiry'] = filtered_df['Expiry'].dt.strftime('%d-%b-%y').str.upper()
 
     # Function to format StrikeRate
-    def format_strike_rate(value):
-        if value % 1 == 0:
-            return int(value)
-        else:
-            return float(value)
+    def format_strike(strike):
+        # Convert strike to string first
+        strike_str = str(strike)
+        # Check if the string ends with '.0' and remove it
+        if strike_str.endswith('.0'):
+            # Remove the last two characters '.0'
+            return strike_str[:-2]
+        elif strike_str.endswith('.00'):
+            # Remove the last three characters '.00'
+            return strike_str[:-3]
+        # Return the original string if it does not end with '.0'
+        return strike_str
 
     # Apply the function to the StrikeRate column
-    filtered_df['StrikeRate'] = filtered_df['StrikeRate'].apply(format_strike_rate)
+    filtered_df['StrikeRate'] = filtered_df['StrikeRate'].apply(format_strike)
 
 
 
