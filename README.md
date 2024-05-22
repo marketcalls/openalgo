@@ -9,9 +9,11 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 
 ## Supported Broker
 
+- **5paisa**
 - **AngelOne**
 - **Dhan**
 - **Fyers**
+- **ICICI Direct**
 - **Upstox**
 - **Zerodha**
 
