@@ -30,7 +30,7 @@ def broker_callback(broker):
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
     
-    if broker == '5paisa':
+    if broker == 'fivepaisa':
         if request.method == 'GET':
             if 'user' not in session:
                 return redirect(url_for('auth.login'))
