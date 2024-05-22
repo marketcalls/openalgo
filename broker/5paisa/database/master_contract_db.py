@@ -72,51 +72,27 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-def download_json_angel_data(url, output_path):
+
+def download_csv_5paisa_data(url, output_path):
     """
-    Downloads a JSON file from the specified URL and saves it to the specified path.
+    Downloads a CSV file from the specified URL and saves it to the specified path.
     """
-    print("Downloading JSON data")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
-    if response.status_code == 200:  # Successful download
+
+    print("Downloading CSV data")
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
         with open(output_path, 'wb') as f:
-            f.write(response.content)
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
         print("Download complete")
     else:
         print(f"Failed to download data. Status code: {response.status_code}")
 
 
-def reformat_symbol(row):
-    symbol = row['symbol']
-    instrument_type = row['instrumenttype']
-    
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
-    else:
-        symbol = symbol  # No change for other instrument types
-
-    return symbol
-
-
-def convert_date(date_str):
-    # Convert from '19MAR2024' to '19-MAR-24'
-    try:
-        return datetime.strptime(date_str, '%d%b%Y').strftime('%d-%b-%y')
-    except ValueError:
-        # Return the original date if it doesn't match the format
-        return date_str
-
-def process_angel_json(path):
+def process_5paisa_csv(path):
     """
-    Processes the Angel JSON file to fit the existing database schema.
+    Processes the 5Paisa CSV file to fit the existing database schema.
     Args:
     path (str): The file path of the downloaded JSON data.
 
@@ -124,70 +100,90 @@ def process_angel_json(path):
     DataFrame: The processed DataFrame ready to be inserted into the database.
     """
     # Read JSON data into a DataFrame
-    df = pd.read_json(path)
-    
-    # Rename the columns based on the database schema
-    # Assuming that the JSON structure matches the sample response provided
-    df = df.rename(columns={
-        'exch_seg': 'exchange',
-        'instrumenttype': 'instrumenttype',
-        'lotsize': 'lotsize',
-        'strike': 'strike',
-        'symbol': 'symbol',
-        'token': 'token',
-        'name': 'name',
-        'tick_size': 'tick_size'
-    })
-    
-    # Reformat 'symbol' column if needed (based on the given reformat_symbol function)
-    #df['symbol'] = df.apply(lambda row: reformat_symbol(row), axis=1)
-    
-    
-    # Assuming 'brsymbol' and 'brexchange' are not present in the JSON and are the same as 'symbol' and 'exchange'
-    df['brsymbol'] = df['symbol']
-    df['brexchange'] = df['exchange']
-
-     # Update exchange names based on the instrument type
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-    df.loc[(df['instrumenttype'] == 'AMXIDX') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
-    
-    # Reformat 'symbol' based on 'brsymbol'
-    df['symbol'] = df['symbol'].str.replace('-EQ|-BE|-MF|-SG', '', regex=True)
-    
-    
-    # Assuming the 'expiry' field in the JSON is in the format '19MAR2024'
-    df['expiry'] = df['expiry'].apply(lambda x: convert_date(x) if pd.notnull(x) else x)
-    df['expiry'] = df['expiry'].str.upper()
-
-    
+    df = pd.read_csv(path)
+    exchange_mapping = {
+    ('N', 'C'): 'NSE',
+    ('B', 'C'): 'BSE',
+    ('N', 'D'): 'NFO',
+    ('B', 'D'): 'BFO',
+    ('N', 'U'): 'CDS',
+    ('B', 'U'): 'BCD',
+    ('M', 'D'): 'MCX'
+    # Add other mappings as needed
+    }
 
 
-    # Convert 'strike' to float, 'lotsize' to int, and 'tick_size' to float as per the database schema
-    df['strike'] = df['strike'].astype(float) / 100
-    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['exchange'] == 'CDS'), 'strike'] = df['strike'].astype(float) / 100000
-    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'strike'] = df['strike'].astype(float) / 100000
-    
 
-    df['lotsize'] = df['lotsize'].astype(int)
-    df['tick_size'] = df['tick_size'].astype(float)
+    # Function to map Exch and ExchType to exchange names with additional conditions
+    def map_exchange(row):
+        if row['Exch'] == 'N' and row['ExchType'] == 'C':
+            return 'NSE_INDEX' if row['ScripCode'] > 999900 else 'NSE'
+        elif row['Exch'] == 'B' and row['ExchType'] == 'C':
+            return 'BSE_INDEX' if row['ScripCode'] > 999900 else 'BSE'
+        else:
+            return exchange_mapping.get((row['Exch'], row['ExchType']), 'Unknown')
 
-    # Futures Symbol Update in CDS and MCX Exchanges
-    df.loc[(df['instrumenttype'] == 'FUTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    df.loc[(df['instrumenttype'] == 'FUTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    df.loc[(df['instrumenttype'] == 'FUTCOM') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
+    # Apply the function to create the exchange column
+    df['exchange'] = df.apply(map_exchange, axis=1)
 
-    # Options Symbol Update in CDS and MCX Exchanges
-    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:]
-    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:] 
-    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:]
+    # Filter the DataFrame for Series 'EQ', 'BE', 'XX'
+    filtered_df = df[df['Series'].isin(['EQ', 'BE', 'XX'])].copy()
 
- 
+    filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = 'FUT'
+
+    # Convert 'Expiry' to datetime format
+    filtered_df['Expiry'] = pd.to_datetime(filtered_df['Expiry'])
+
+    # Format 'Expiry' to 'DD-MMM-YY'
+    filtered_df['Expiry'] = filtered_df['Expiry'].dt.strftime('%d-%b-%y').str.upper()
+
+    # Function to format StrikeRate
+    def format_strike_rate(value):
+        if value % 1 == 0:
+            return int(value)
+        else:
+            return float(value)
+
+    # Apply the function to the StrikeRate column
+    filtered_df['StrikeRate'] = filtered_df['StrikeRate'].apply(format_strike_rate)
+
+
+
+    # Convert the Expiry column to strings and strip '-'
+    filtered_df['Expiry1'] = filtered_df['Expiry'].astype(str).str.replace('-', '')
+
+    # Apply the conditions
+    def create_trading_symbol(row):
+        if row['Series'] in ['BE', 'EQ']:
+            return row['SymbolRoot']
+        elif row['Series'] == 'XX':
+            return row['SymbolRoot'] + row['Expiry1'] + 'FUT'
+        elif row['Series'] == 'CE':
+            return row['SymbolRoot'] + row['Expiry1'] + str(row['StrikeRate']) + 'CE'
+        elif row['Series'] == 'PE':
+            return row['SymbolRoot'] + row['Expiry1'] + str(row['StrikeRate']) + 'PE'
+        return row['SymbolRoot'] 
+
+    filtered_df['TradingSymbol'] = filtered_df.apply(create_trading_symbol, axis=1)
+
+    # Create a new DataFrame in OpenAlgo format
+    new_df = pd.DataFrame()
+    new_df['symbol'] = filtered_df['TradingSymbol'] 
+    new_df['brsymbol'] = filtered_df['ScripData'] 
+    new_df['name'] = filtered_df['FullName'] 
+    new_df['exchange'] = filtered_df['exchange'] 
+    new_df['brexchange'] = filtered_df['exchange'] 
+    new_df['token'] = filtered_df['ScripCode'] 
+    new_df['expiry'] = filtered_df['Expiry'] 
+    new_df['strike'] = filtered_df['StrikeRate'] 
+    new_df['lotsize'] = filtered_df['LotSize'] 
+    new_df['instrumenttype'] = filtered_df['Series'] 
+    new_df['tick_size'] = filtered_df['TickSize'] 
+            
     # Return the processed DataFrame
-    return df
+    return new_df
 
-def delete_angel_temp_data(output_path):
+def delete_5paisa_temp_data(output_path):
     try:
         # Check if the file exists
         if os.path.exists(output_path):
@@ -202,12 +198,12 @@ def delete_angel_temp_data(output_path):
 
 def master_contract_download():
     print("Downloading Master Contract")
-    url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
-    output_path = 'tmp/angel.json'
+    url = 'https://openapi.5paisa.com/VendorsAPI/Service1.svc/ScripMaster/segment/all'
+    output_path = 'tmp/5paisa.csv'
     try:
-        download_json_angel_data(url,output_path)
-        token_df = process_angel_json(output_path)
-        delete_angel_temp_data(output_path)
+        download_csv_5paisa_data(url, output_path)
+        token_df = process_5paisa_csv(output_path)
+        delete_5paisa_temp_data(output_path)
         #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
         
         #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
