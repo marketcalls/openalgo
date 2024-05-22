@@ -127,9 +127,10 @@ def process_5paisa_csv(path):
     df['exchange'] = df.apply(map_exchange, axis=1)
 
     # Filter the DataFrame for Series 'EQ', 'BE', 'XX'
-    filtered_df = df[df['Series'].isin(['EQ', 'BE', 'XX'])].copy()
+    filtered_df = df[df['Series'].isin(['EQ', 'BE', 'XX', '  '])].copy()
 
-    filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = df['ScripType']
+    filtered_df.loc[filtered_df['Series'].isin(['XX', '  ']), 'Series'] = df['ScripType']
+
     #filtered_df.loc[filtered_df['Series'] == 'XX', 'Series'] = 'FUT'
 
     # Convert 'Expiry' to datetime format

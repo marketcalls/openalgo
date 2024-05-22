@@ -10,19 +10,23 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
 
-    api_key = os.getenv('BROKER_API_KEY')
+    # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
+    broker_api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    if not broker_api_key or not api_secret:
+        return None, "BROKER_API_KEY or BROKER_API_SECRET not found in environment variables"
+
+    # Split the string to separate the API key and the client ID
+    try:
+        api_key, user_id, client_id  = broker_api_key.split(':::')
+    except ValueError:
+        return None, "BROKER_API_KEY format is incorrect. Expected format: 'api_key:::user_id:::client_id'"
+
+    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
     headers = {
       'Authorization': f'Bearer {AUTH_TOKEN}',
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
     }
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
@@ -61,44 +65,50 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
+    
+    # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
+    broker_api_key = os.getenv('BROKER_API_KEY')
+    api_secret = os.getenv('BROKER_API_SECRET')
+
+    if not broker_api_key or not api_secret:
+        return None, "BROKER_API_KEY or BROKER_API_SECRET not found in environment variables"
+
+    # Split the string to separate the API key and the client ID
+    try:
+        api_key, user_id, client_id  = broker_api_key.split(':::')
+    except ValueError:
+        return None, "BROKER_API_KEY format is incorrect. Expected format: 'api_key:::user_id:::client_id'"
+
+
+
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': newdata['apikey']
+        'Authorization': f'bearer {AUTH_TOKEN}'
     }
-    payload = json.dumps({
-        "variety": newdata.get('variety', 'NORMAL'),
-        "tradingsymbol": newdata['tradingsymbol'],
-        "symboltoken": newdata['symboltoken'],
-        "transactiontype": newdata['transactiontype'],
-        "exchange": newdata['exchange'],
-        "ordertype": newdata.get('ordertype', 'MARKET'),
-        "producttype": newdata.get('producttype', 'INTRADAY'),
-        "duration": newdata.get('duration', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "triggerprice": newdata.get('triggerprice', '0'),
-        "squareoff": newdata.get('squareoff', '0'),
-        "stoploss": newdata.get('stoploss', '0'),
-        "quantity": newdata['quantity']
-    })
+    
+
+    json_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": newdata
+        }
+
+    payload = json.dumps(json_data)
+
+
 
     print(payload)
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
+    conn.request("POST", "/VendorsAPI/Service1.svc/V1/PlaceOrderRequest", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
-    if response_data['status'] == True:
-        orderid = response_data['data']['orderid']
+    print(response_data)
+    if response_data['head']['statusDescription'] == "Success":
+        orderid = response_data['body']['BrokerOrderID']
     else:
         orderid = None
     return res, response_data, orderid

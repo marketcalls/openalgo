@@ -10,26 +10,22 @@ def transform_data(data,token):
     symbol = get_br_symbol(data["symbol"],data["exchange"])
     # Basic mapping
     transformed = {
-        "apikey": data["apikey"],
-        "variety": map_variety(data["pricetype"]),
-        "tradingsymbol": symbol,
-        "symboltoken": token,
-        "transactiontype": data["action"].upper(),
-        "exchange": data["exchange"],
-        "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"]),
-        "duration": "DAY",  # Assuming DAY as default; you might need logic to handle this if it can vary
-        "price": data.get("price", "0"),
-        "squareoff": "0",  # Assuming not applicable; adjust if needed
-        "stoploss": data.get("trigger_price", "0"),  
-        "disclosedquantity": data.get("disclosed_quantity", "0"),
-        "quantity": data["quantity"]
+        "OrderType": map_action(data["action"].upper()),
+        "Exchange": map_exchange(data["exchange"]),
+        "ExchangeType": map_exchange_type(data["exchange"]),
+        "ScripCode": token,
+        "ScriData": symbol,
+        "Price": data.get("price", "0"), 
+        "Qty": data["quantity"],
+        "StopLossPrice": data.get("trigger_price", "0"), 
+        "DisQty": data.get("disclosed_quantity", "0"),
+        "IsIntraday": True if data.get("product") == "MIS" else False,
+        "AHPlaced": "N",  # AMO Order by default NO
+        "RemoteOrderID": "OpenAlgo",  
+        "AppSource": "7044"
     }
 
 
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosedquantity"] = data.get("disclosed_quantity", "0")
-    transformed["triggerprice"] = data.get("trigger_price", "0")
     
     return transformed
 
@@ -50,7 +46,46 @@ def transform_modify_order_data(data, token):
         "stoploss": data.get("trigger_price", "0")
     }
 
+def map_action(action):
+    """
+    Maps the new action to the existing order type.
+    """
+    action_mapping = {
+        "BUY": "B",
+        "SELL": "S"
+    }
+    return action_mapping.get(action)
 
+def map_exchange(exchange):
+    """
+    Maps the new exchange to the existing exchange
+    """
+    exchange_mapping = {
+        "NSE": "N",
+        "BSE": "B",
+        "NFO": "N",
+        "BFO": "B",
+        "CDS": "N",
+        "BCD": "B",
+        "MCX": "M"
+    }
+    return exchange_mapping.get(exchange) 
+
+
+def map_exchange_type(exchange):
+    """
+    Maps the new exchange to the existing exchange type
+    """
+    exchange_mapping_type = {
+        "NSE": "C",
+        "BSE": "C",
+        "NFO": "D",
+        "BFO": "D",
+        "CDS": "U",
+        "BCD": "U",
+        "MCX": "D"
+    }
+    return exchange_mapping_type.get(exchange) 
 
 def map_order_type(pricetype):
     """
