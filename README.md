@@ -119,3 +119,7 @@ For Configuration Instructions Visit the Tutorial
 
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=marketcalls/openalgo&type=Date)](https://star-history.com/#marketcalls/openalgo&Date)
+
