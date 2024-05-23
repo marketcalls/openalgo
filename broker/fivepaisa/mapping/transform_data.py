@@ -13,7 +13,7 @@ def transform_data(data,token):
         "OrderType": map_action(data["action"].upper()),
         "Exchange": map_exchange(data["exchange"]),
         "ExchangeType": map_exchange_type(data["exchange"]),
-        "ScripCode": token,
+        "ScriCode": token,
         "ScriData": symbol,
         "Price": data.get("price", "0"), 
         "Qty": data["quantity"],

@@ -14,6 +14,7 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 - **Dhan**
 - **Fyers**
 - **ICICI Direct**
+- **Kotak**
 - **Upstox**
 - **Zerodha**
 
@@ -113,11 +114,15 @@ You can now connect your Amibroker and Tradingview modules to transmit orders, a
 Goto the API Key Section and Generate the APP API Key. And use it to placeorder from your trading applicaton
 
 
-## Windows and Linux Complete Configuration Instructions 
+## Windows, Mac OS and Linux Complete Configuration Instructions 
 
 For Configuration Instructions Visit the Tutorial
 [https://docs.openalgo.in](https://docs.openalgo.in)
 
 
 Congratulations! You have successfully set up OpenAlgo. Explore the platform and start maximizing your trading performance through automation.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=marketcalls/openalgo&type=Date)](https://star-history.com/#marketcalls/openalgo&Date)
 

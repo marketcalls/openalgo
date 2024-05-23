@@ -25,6 +25,47 @@
             display: inline-block;
             border-radius: 4px; /* Optional: if you want rounded corners */
         }
+        .info-box {
+            background-color: #2d3748; /* Gray-800 background */
+            color: white;
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-top: 24px; /* Space between buttons and boxes */
+            flex: 1; /* Allow boxes to grow and shrink equally */
+            max-width: 300px; /* Optional: limit max width for each box */
+            margin: 8px; /* Space between boxes */
+        }
+        .info-box h3 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+        }
+        .info-container {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            flex-wrap: wrap; /* Allow boxes to wrap on smaller screens */
+            margin-top: 24px;
+        }
+        .brokers-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px; /* Space between broker images */
+            margin-top: 24px;
+        }
+        .spacer {
+            height: 20px; /* Adjust the height as needed */
+        }
+
+        .greyscale img {
+            filter: grayscale(100%);
+            transition: filter 0.3s ease; /* Smooth transition */
+        }
+        .greyscale img:hover {
+            filter: grayscale(0%);
+        }
     </style>
 
     <!-- Favicon and touch icons for various devices (Already included) -->
@@ -53,11 +94,66 @@
             <a href="https://docs.openalgo.in" class="px-6 py-3 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300" target="_blank" rel="noopener noreferrer">Documentation</a>
             <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-300">Login</a>
         </div>
+        <div class="spacer"></div>
+        <div class="spacer"></div>
+        <div class="spacer"></div>
+        
+        <!-- New Content Boxes Container -->
+        <!-- <div class="info-container flex justify-center items-start gap-16 mt-6">
+            <div class="info-box flex-1 max-w-xs p-4">
+                <h3 class="font-semibold text-white">Algorithmic Strategies</h3>
+                <p>Create and execute algorithmic trading strategies seamlessly using OpenAlgo. Easily integrate with trading platforms like Amibroker, TradingView, Python, Chartink, and MetaTrader.</p>
+            </div>
+            <div class="info-box flex-1 max-w-xs p-4">
+                <h3 class="font-semibold text-white">Seamless Integration</h3>
+                <p>OpenAlgo connects with popular trading platforms and supports self-hosting on Windows, macOS, and Linux. Host on your desktop or servers for maximum flexibility and control.</p>
+            </div>
+            <div class="info-box flex-1 max-w-xs p-4">
+                <h3 class="font-semibold text-white">Open Source</h3>
+                <p>OpenAlgo is 100% Free and Open Source, supported by a dedicated community of traders & developers. Benefit from continuous updates & community-driven enhancements. Join our community to contribute.</p>
+            </div>
+        </div> -->
+
+        <!-- Brokers Images Container -->
+        <div class="brokers-container greyscale gap-16 mt-6">
+            <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5Paisa" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/angel.png') }}" alt="Angel" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/dhan.png') }}" alt="Dhan" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/kotak.png') }}" alt="Kotak" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/upstox.png') }}" alt="Upstox" width="64" height="64">
+            <img src="{{ url_for('static', filename='images/brokers/zerodha.png') }}" alt="Zerodha" width="64" height="64">
+        </div>
     </div>
 
-    <!-- Footer (Already included) -->
-    <footer class="bg-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
-        <!-- ... footer content ... -->
+    <!-- Footer with Heart Icon -->
+    <footer class="footer">
+        <p class="footer-content">Made with Lots of <img src="{{ url_for('static', filename='images/thumbs-up.png') }}" alt="Heart Icon" width="32" height="32"> from Traders</p>
     </footer>
+
+    <style>
+    .footer {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+        background-color: white;
+        padding: 8px 0;
+        box-shadow: 0 -4px 6px rgba(0, 0, 0, 0);
+    }
+    .footer-content {
+        display: flex;
+        align-items: center;
+        font-weight: bold;
+    }
+    .footer img {
+        margin: 0 8px; /* Adjust spacing around the image as needed */
+        vertical-align: middle; /* Ensure image is aligned with text */
+    }
+    </style>
+
 </body>
 </html>
