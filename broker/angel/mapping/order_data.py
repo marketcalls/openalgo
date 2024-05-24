@@ -265,12 +265,20 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
-    totalinvvalue = holdings_data['totalholding']['totalinvvalue']
-    totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
-    
-    # To avoid division by zero in the case when total_investment_value is 0
-    totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
+
+    if holdings_data['totalholding'] is None:
+        totalholdingvalue = 0
+        totalinvvalue = 0
+        totalprofitandloss = 0
+        totalpnlpercentage = 0
+    else:
+
+        totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
+        totalinvvalue = holdings_data['totalholding']['totalinvvalue']
+        totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
+        
+        # To avoid division by zero in the case when total_investment_value is 0
+        totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
 
     return {
         'totalholdingvalue': totalholdingvalue,
