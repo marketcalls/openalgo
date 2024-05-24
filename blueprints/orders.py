@@ -46,7 +46,7 @@ def orderbook():
     order_data = api_funcs['get_order_book'](auth_token)
     print(order_data)
     if 'status' in order_data:
-        if order_data['status'] == 'error' or order_data['status'] != 200:
+        if order_data['status'] == 'error':
             return redirect(url_for('auth.logout'))
 
     order_data = mapping_funcs['map_order_data'](order_data=order_data)
