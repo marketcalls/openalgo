@@ -2,6 +2,8 @@ import os
 import http.client
 import json
 from dotenv import load_dotenv
+from broker.fivepaisa.api.order_api import get_positions
+
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -46,13 +48,21 @@ def get_margin_data(auth_token):
         print(f"Margin Data is : {margin_data}")
         
         equity_margin = margin_data.get('body', {}).get('EquityMargin', [])[0]  # Access the first element of the list
+        positions_data = get_positions(auth_token)
+
+        # Extracting the position details
+        net_position_details = positions_data['body']['NetPositionDetail']
+
+        # Calculating the total BookedPL and total MTOM
+        total_booked_pl = sum(position['BookedPL'] for position in net_position_details)
+        total_mtom = sum(position['MTOM'] for position in net_position_details)
 
         # Construct and return the processed margin data
         processed_margin_data = {
             "availablecash": "{:.2f}".format(equity_margin.get('NetAvailableMargin', 0)),
             "collateral": "{:.2f}".format(equity_margin.get('TotalCollateralValue', 0)),
-            "m2munrealized": "0",
-            "m2mrealized": "0",
+            "m2munrealized": round(total_mtom,2),
+            "m2mrealized": round(total_booked_pl,2),
             "utiliseddebits": "{:.2f}".format(equity_margin.get('MarginUtilized', 0)),
         }
 
