@@ -12,14 +12,14 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data['data'] is None:
+    if order_data['body']['OrderBookDetail'] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        order_data = order_data['data']
+        order_data = order_data['body']['OrderBookDetail']
         
 
 
@@ -135,14 +135,14 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data['data'] is None:
+    if trade_data['body']['TradeBookDetail'] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        trade_data = trade_data['data']
+        trade_data = trade_data['body']['TradeBookDetail']
         
 
 
@@ -193,7 +193,44 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+    """
+    Processes and modifies a list of OpenPosition dictionaries based on specific conditions.
+    
+    Parameters:
+    - position_data: A list of dictionaries, where each dictionary represents an Open Position.
+    
+    Returns:
+    - The modified order_data with updated 'tradingsymbol'
+    """
+        # Check if 'data' is None
+    if position_data['body']['NetPositionDetail'] is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        position_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        position_data = position_data['body']['NetPositionDetail'] 
+        
+    print(position_data)
+
+    if position_data:
+        for position in position_data:
+            # Extract the instrument_token and exchange for the current order
+            exchange_code = position['exchange']
+            segment_code = position['segment']
+            exchange = 'get_exchange(exchange_code, segment_code)'
+            symbol = position['symbol']
+       
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            if symbol:
+                position['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['exchange'] = exchange
+            else:
+                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                
+    return position_data
 
 
 def transform_positions_data(positions_data):
@@ -236,13 +273,13 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
     """
     # Check if 'data' is None or doesn't contain 'holdings'
-    if portfolio_data.get('data') is None or 'holdings' not in portfolio_data['data']:
+    if portfolio_data['body']['Data'] is None:
         print("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 
     # Directly work with 'data' for clarity and simplicity
-    data = portfolio_data['data']
+    data = portfolio_data['body']['Data']
 
     # Modify 'product' field for each holding if applicable
     if data.get('holdings'):

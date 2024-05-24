@@ -5,27 +5,20 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.fivepaisa.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
+# Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
+broker_api_key = os.getenv('BROKER_API_KEY')
+api_secret = os.getenv('BROKER_API_SECRET')
+api_key, user_id, client_id  = broker_api_key.split(':::')
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
 
-    # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
-    broker_api_key = os.getenv('BROKER_API_KEY')
-    api_secret = os.getenv('BROKER_API_SECRET')
 
-    if not broker_api_key or not api_secret:
-        return None, "BROKER_API_KEY or BROKER_API_SECRET not found in environment variables"
-
-    # Split the string to separate the API key and the client ID
-    try:
-        api_key, user_id, client_id  = broker_api_key.split(':::')
-    except ValueError:
-        return None, "BROKER_API_KEY format is incorrect. Expected format: 'api_key:::user_id:::client_id'"
-
+ 
     conn = http.client.HTTPSConnection("Openapi.5paisa.com")
     headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Authorization': f'bearer {AUTH_TOKEN}',
       'Content-Type': 'application/json',
     }
     conn.request(method, endpoint, payload, headers)
@@ -35,16 +28,56 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
+    json_data = {
+        "head": {
+            "key": api_key
+        },
+        "body": {
+            "ClientCode": client_id
+        }
+    }
+
+    payload = json.dumps(json_data)
+    return get_api_response("/VendorsAPI/Service1.svc/V3/OrderBook",auth,method="POST",payload=payload)
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
+    json_data = {
+        "head": {
+            "key": api_key
+        },
+        "body": {
+            "ClientCode": client_id
+        }
+    }
+
+    payload = json.dumps(json_data)
+    return get_api_response("/VendorsAPI/Service1.svc/V1/TradeBook",auth,method="POST",payload=payload)
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
+    json_data = {
+        "head": {
+            "key": api_key
+        },
+        "body": {
+            "ClientCode": client_id
+        }
+    }
+
+    payload = json.dumps(json_data)
+    return get_api_response("/VendorsAPI/Service1.svc/V2/NetPositionNetWise",auth,method="POST",payload=payload)
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
+    json_data = {
+        "head": {
+            "key": api_key
+        },
+        "body": {
+            "ClientCode": client_id
+        }
+    }
+
+    payload = json.dumps(json_data)
+    return get_api_response("/VendorsAPI/Service1.svc/V3/Holding",auth,method="POST",payload=payload)
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
