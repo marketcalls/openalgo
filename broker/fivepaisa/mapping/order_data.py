@@ -1,5 +1,28 @@
 import json
+import re
+from datetime import datetime, timedelta
 from database.token_db import get_symbol, get_oa_symbol 
+from broker.fivepaisa.mapping.transform_data import reverse_map_exchange
+
+def convert_date_string(date_str):
+    # Extract the timestamp and timezone offset using regular expressions
+    match = re.search(r'/Date\((\d+)([+-]\d{4})\)/', date_str)
+    if match:
+        timestamp = int(match.group(1)) / 1000  # Convert from milliseconds to seconds
+        offset = match.group(2)
+
+        # Convert the timestamp to a datetime object
+        dt = datetime.utcfromtimestamp(timestamp)
+
+        # Apply the timezone offset
+        offset_hours = int(offset[:3])
+        offset_minutes = int(offset[0] + offset[3:])  # Handle the sign correctly
+        dt += timedelta(hours=offset_hours, minutes=offset_minutes)
+
+        # Return the result as a formatted string
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        return "Invalid date format"
 
 def map_order_data(order_data):
     """
@@ -26,23 +49,29 @@ def map_order_data(order_data):
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            symboltoken = order['symboltoken']
-            exchange = order['exchange']
+            symboltoken = order['ScripCode']
+            Exch = order['Exch']
+            ExchType = order['ExchType']
+
+            exchange = reverse_map_exchange(Exch,ExchType)
+            
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
             
+            
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
+                order['ScripName'] = symbol_from_db
+                order['Exch'] = exchange
+                if (order['Exch'] == 'NSE' or order['Exch'] == 'BSE') and order['DelvIntra'] == 'D':
+                    order['DelvIntra'] = 'CNC'
                                
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
+                elif order['DelvIntra'] == 'I':
+                    order['DelvIntra'] = 'MIS'
                 
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                elif order['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['DelvIntra'] == 'D':
+                    order['DelvIntra'] = 'NRML'
             else:
                 print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
@@ -67,18 +96,23 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['transactiontype'] == 'BUY':
+            if order['BuySell'] == 'B':
                 total_buy_orders += 1
-            elif order['transactiontype'] == 'SELL':
+                order['BuySell'] = 'BUY'
+            elif order['BuySell'] == 'S':
                 total_sell_orders += 1
+                order['BuySell'] = 'SELL'
             
             # Count orders based on their status
-            if order['status'] == 'complete':
+            if order['OrderStatus'] == 'Fully Executed':
                 total_completed_orders += 1
-            elif order['status'] == 'open':
+                order['OrderStatus'] = 'complete'
+            elif order['OrderStatus'] == 'Pending':
                 total_open_orders += 1
-            elif order['status'] == 'rejected':
+                order['OrderStatus'] = 'open'
+            elif order['OrderStatus'] == 'Rejected By 5P' or order['OrderStatus'] == 'Rejected by Exch':
                 total_rejected_orders += 1
+                order['OrderStatus'] = 'rejected'
 
     # Compile and return the statistics
     return {
@@ -104,18 +138,33 @@ def transform_order_data(orders):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
+        pricetype = ""
+
+        stoplevel = float(order.get('SLTriggerRate'))
+
+        if order.get("AtMarket") == 'Y' and stoplevel ==0:
+            pricetype = "MARKET"
+        if order.get("AtMarket") == 'N' and stoplevel ==0:
+            pricetype = "LIMIT"
+
+        if order.get("AtMarket") == 'Y' and stoplevel >0:
+            pricetype = "SL-M"
+        if order.get("AtMarket") == 'N' and stoplevel >0:
+            pricetype = "SL"
+
+
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
-            "exchange": order.get("exchange", ""),
-            "action": order.get("transactiontype", ""),
-            "quantity": order.get("quantity", 0),
-            "price": order.get("price", 0.0),
-            "trigger_price": order.get("triggerprice", 0.0),
-            "pricetype": order.get("ordertype", ""),
-            "product": order.get("producttype", ""),
-            "orderid": order.get("orderid", ""),
-            "order_status": order.get("status", ""),
-            "timestamp": order.get("updatetime", "")
+            "symbol": order.get("ScripName", ""),
+            "exchange": order.get("Exch", ""),
+            "action": order.get("BuySell", ""),
+            "quantity": order.get("TradedQty", 0),
+            "price": order.get("Rate", 0.0),
+            "trigger_price": order.get("SLTriggerRate", 0.0),
+            "pricetype": pricetype,
+            "product": order.get("DelvIntra", ""),
+            "orderid": order.get("ExchOrderID", ""),
+            "order_status": order.get("OrderStatus", ""),
+            "timestamp": convert_date_string(order.get("BrokerOrderTime", ""))
         }
 
         transformed_orders.append(transformed_order)
@@ -149,26 +198,38 @@ def map_trade_data(trade_data):
     if trade_data:
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
-            symbol = order['tradingsymbol']
-            exchange = order['exchange']
+            symboltoken = order['ScripCode']
+            Exch = order['Exch']
+            ExchType = order['ExchType']
+
+            exchange = reverse_map_exchange(Exch,ExchType)
+            
             
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
+            symbol_from_db = get_symbol(symboltoken, exchange)
+            
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
+                order['ScripName'] = symbol_from_db
+                order['Exch'] = exchange
+                if (order['Exch'] == 'NSE' or order['Exch'] == 'BSE') and order['DelvIntra'] == 'D':
+                    order['DelvIntra'] = 'CNC'
                                
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
+                elif order['DelvIntra'] == 'I':
+                    order['DelvIntra'] = 'MIS'
                 
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                elif order['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['DelvIntra'] == 'D':
+                    order['DelvIntra'] = 'NRML'
+
+                if order['BuySell'] == 'B':
+                    order['BuySell'] = 'BUY'
+                elif order['BuySell'] == 'S':
+                    order['BuySell'] = 'SELL'
+                
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
+                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+          
     return trade_data
 
 
@@ -177,16 +238,24 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+
+
+        quantity = float(trade.get('Qty', 0))
+        average_price = float(trade.get('Rate', 0.0))
+        trade_value = quantity * average_price
+
+
+
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
-            "exchange": trade.get('exchange', ''),
-            "product": trade.get('producttype', ''),
-            "action": trade.get('transactiontype', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('fillprice', 0.0),
-            "trade_value": trade.get('tradevalue', 0),
-            "orderid": trade.get('orderid', ''),
-            "timestamp": trade.get('filltime', '')
+            "symbol": trade.get('ScripName', ''),
+            "exchange": trade.get('Exch', ''),
+            "product": trade.get('DelvIntra', ''),
+            "action": trade.get('BuySell', ''),
+            "quantity": trade.get('Qty', 0),
+            "average_price": trade.get('Rate', 0.0),
+            "trade_value": trade_value,
+            "orderid": trade.get('ExchOrderID', ''),
+            "timestamp": convert_date_string(trade.get('ExchangeTradeTime', ''))
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -217,45 +286,58 @@ def map_position_data(position_data):
     if position_data:
         for position in position_data:
             # Extract the instrument_token and exchange for the current order
-            exchange_code = position['exchange']
-            segment_code = position['segment']
-            exchange = 'get_exchange(exchange_code, segment_code)'
-            symbol = position['symbol']
-       
+            symboltoken = position['ScripCode']
+            Exch = position['Exch']
+            ExchType = position['ExchType']
+
+            exchange = reverse_map_exchange(Exch,ExchType)
+            
+            
+            # Use the get_symbol function to fetch the symbol from the database
+            symbol_from_db = get_symbol(symboltoken, exchange)
+            
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                position['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
-                position['exchange'] = exchange
-            else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+            if symbol_from_db:
+                position['ScripName'] = symbol_from_db
+                position['Exch'] = exchange
+                position['Exch'] = exchange
+                if (position['Exch'] == 'NSE' or position['Exch'] == 'BSE') and position['OrderFor'] == 'D':
+                    position['OrderFor'] = 'CNC'
+                               
+                elif position['OrderFor'] == 'I':
+                    position['OrderFor'] = 'MIS'
                 
+                elif position['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and position['OrderFor'] == 'D':
+                    position['OrderFor'] = 'NRML'
+             
+                
+            else:
+                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+          
     return position_data
 
 
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
-        transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
-            "product": position.get('producttype', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('avgnetprice', 0.0),
-        }
-        transformed_data.append(transformed_position)
-    return transformed_data
+        average_price = 0.0
+        net_qty = float(position.get('NetQty', 0))
 
-def transform_holdings_data(holdings_data):
-    transformed_data = []
-    for holdings in holdings_data['holdings']:
+        if net_qty > 0:
+            average_price = position.get('BuyAvgRate', 0)
+        else:  # net_qty < 0
+            average_price = position.get('SellAvgRate', 0)
+
+
+
+
         transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": holdings.get('profitandloss', 0.0),
-            "pnlpercent": holdings.get('pnlpercentage', 0.0)
+            "symbol": position.get('ScripName', ''),
+            "exchange": position.get('Exch', ''),
+            "product": position.get('OrderFor', ''),
+            "quantity": position.get('NetQty', 0),
+            "average_price": average_price,
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -279,22 +361,18 @@ def map_portfolio_data(portfolio_data):
         return {}
 
     # Directly work with 'data' for clarity and simplicity
-    data = portfolio_data['body']['Data']
+    data = portfolio_data['body']
 
     # Modify 'product' field for each holding if applicable
-    if data.get('holdings'):
-        for portfolio in data['holdings']:
-            symbol = portfolio['tradingsymbol']
-            exchange = portfolio['exchange']
-            symbol_from_db = get_oa_symbol(symbol, exchange)
+    if data.get('Data'):
+        for portfolio in data['Data']:
             
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                portfolio['tradingsymbol'] = symbol_from_db
-            if portfolio['product'] == 'DELIVERY':
-                portfolio['product'] = 'CNC'  # Modify 'product' field
-            else:
-                print("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+            if(portfolio['Exch']=='N'):
+                portfolio['Exch'] = 'NSE'
+            if(portfolio['Exch']=='B'):
+                portfolio['Exch'] = 'BSE'
+            
+
     
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.
@@ -302,18 +380,54 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
-    totalinvvalue = holdings_data['totalholding']['totalinvvalue']
-    totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
+    total_holding_value = 0
+    total_inv_value = 0
+
+    for holdings in holdings_data['Data']:
+        avg_rate = float(holdings.get('AvgRate', 0.0))
+        current_price = float(holdings.get('CurrentPrice', 0.0))
+        quantity = float(holdings.get('Quantity', 0.0))
+
+        inv_value = avg_rate * quantity
+        holding_value = current_price * quantity
+
+        total_inv_value += inv_value
+        total_holding_value += holding_value
+
+    total_profit_and_loss = total_holding_value - total_inv_value
     
-    # To avoid division by zero in the case when total_investment_value is 0
-    totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
+    # To avoid division by zero in the case when total_inv_value is 0
+    total_pnl_percentage = (total_profit_and_loss / total_inv_value * 100) if total_inv_value != 0 else 0
+
 
     return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
+        'totalholdingvalue': total_holding_value,
+        'totalinvvalue': total_inv_value,
+        'totalprofitandloss': total_profit_and_loss,
+        'totalpnlpercentage': total_pnl_percentage
     }
 
+
+def transform_holdings_data(holdings_data):
+
+    transformed_data = []
+    for holdings in holdings_data['Data']:
+
+        buyvalue = float(holdings.get('AvgRate', 0.0)) * float(holdings.get('Quantity', 0.0))
+        ltpvalue = float(holdings.get('CurrentPrice', 0.0)) * float(holdings.get('Quantity', 0.0))
+
+        pnl = (ltpvalue - buyvalue)
+        pnlpercent = (ltpvalue - buyvalue)/buyvalue * 100
+
+
+        transformed_position = {
+            "symbol": holdings.get('Symbol', ''),
+            "exchange": holdings.get('Exch', ''),
+            "quantity": holdings.get('Quantity', 0),
+            "product": 'CNC',
+            "pnl": round(pnl,2),
+            "pnlpercent": round(pnlpercent,2)
+        }
+        transformed_data.append(transformed_position)
+    return transformed_data
 

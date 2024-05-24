@@ -4,6 +4,7 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.fivepaisa.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type
 
 # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
 broker_api_key = os.getenv('BROKER_API_KEY')
@@ -79,7 +80,7 @@ def get_holdings(auth):
     payload = json.dumps(json_data)
     return get_api_response("/VendorsAPI/Service1.svc/V3/Holding",auth,method="POST",payload=payload)
 
-def get_open_position(tradingsymbol, exchange, producttype,auth):
+def get_open_position(tradingsymbol, exchange, Exch,ExchType , producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
@@ -88,10 +89,10 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
-                net_qty = position.get('netqty', '0')
+    if positions_data and positions_data.get('body'):
+        for position in positions_data['body']['NetPositionDetail']:
+            if position.get('ScripName') == tradingsymbol and position.get('Exch') == Exch and position.get('ExchType') == ExchType and position.get('OrderFor') == producttype:
+                net_qty = position.get('NetQty', '0')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -159,10 +160,13 @@ def place_smartorder_api(data,auth):
     product = data.get("product")
     position_size = int(data.get("position_size", "0"))
 
+    exch = map_exchange(exchange)
+    exchtype = map_exchange_type(exchange)
+
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
+    current_position = int(get_open_position(symbol, exchange, exch, exchtype, map_product_type(product),AUTH_TOKEN))
 
 
     print(f"position_size : {position_size}") 

@@ -104,11 +104,11 @@ def map_product_type(product):
     Maps the new product type to the existing product type.
     """
     product_type_mapping = {
-        "CNC": "DELIVERY",
-        "NRML": "CARRYFORWARD",
-        "MIS": "INTRADAY",
+        "CNC": "D",
+        "NRML": "D",
+        "MIS": "I",
     }
-    return product_type_mapping.get(product, "INTRADAY")  # Default to DELIVERY if not found
+    return product_type_mapping.get(product, "I")  # Default to DELIVERY if not found
 
 
 def map_variety(pricetype):
@@ -122,6 +122,25 @@ def map_variety(pricetype):
         "SL-M": "STOPLOSS"
     }
     return variety_mapping.get(pricetype, "NORMAL")  # Default to DELIVERY if not found
+
+
+
+
+# Function to map Exch and ExchType to exchange names with additional conditions
+def reverse_map_exchange(Exch, ExchType):
+    
+    exchange_mapping = {
+        ('N', 'C'): 'NSE',
+        ('B', 'C'): 'BSE',
+        ('N', 'D'): 'NFO',
+        ('B', 'D'): 'BFO',
+        ('N', 'U'): 'CDS',
+        ('B', 'U'): 'BCD',
+        ('M', 'D'): 'MCX'
+        # Add other mappings as needed
+        }
+
+    return exchange_mapping.get((Exch, ExchType))
 
 
 def reverse_map_product_type(product):
