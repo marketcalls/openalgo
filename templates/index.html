@@ -127,33 +127,9 @@
         </div>
     </div>
 
-    <!-- Footer with Heart Icon -->
-    <footer class="footer">
-        <p class="footer-content">Made with Lots of <img src="{{ url_for('static', filename='images/thumbs-up.png') }}" alt="Heart Icon" width="32" height="32"> from Traders</p>
-    </footer>
 
-    <style>
-    .footer {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        position: fixed;
-        bottom: 0;
-        width: 100%;
-        background-color: white;
-        padding: 8px 0;
-        box-shadow: 0 -4px 6px rgba(0, 0, 0, 0);
-    }
-    .footer-content {
-        display: flex;
-        align-items: center;
-        font-weight: bold;
-    }
-    .footer img {
-        margin: 0 8px; /* Adjust spacing around the image as needed */
-        vertical-align: middle; /* Ensure image is aligned with text */
-    }
-    </style>
+    <!-- Include the footer content -->
+    {% include 'footer.html' %}
 
 </body>
 </html>
