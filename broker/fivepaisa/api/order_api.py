@@ -11,6 +11,15 @@ broker_api_key = os.getenv('BROKER_API_KEY')
 api_secret = os.getenv('BROKER_API_SECRET')
 api_key, user_id, client_id  = broker_api_key.split(':::')
 
+json_data = {
+        "head": {
+            "key": api_key
+        },
+        "body": {
+            "ClientCode": client_id
+        }
+    }
+
 def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
@@ -29,54 +38,18 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-            "ClientCode": client_id
-        }
-    }
-
     payload = json.dumps(json_data)
     return get_api_response("/VendorsAPI/Service1.svc/V3/OrderBook",auth,method="POST",payload=payload)
 
 def get_trade_book(auth):
-    json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-            "ClientCode": client_id
-        }
-    }
-
     payload = json.dumps(json_data)
     return get_api_response("/VendorsAPI/Service1.svc/V1/TradeBook",auth,method="POST",payload=payload)
 
 def get_positions(auth):
-    json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-            "ClientCode": client_id
-        }
-    }
-
     payload = json.dumps(json_data)
     return get_api_response("/VendorsAPI/Service1.svc/V2/NetPositionNetWise",auth,method="POST",payload=payload)
 
 def get_holdings(auth):
-    json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-            "ClientCode": client_id
-        }
-    }
-
     payload = json.dumps(json_data)
     return get_api_response("/VendorsAPI/Service1.svc/V3/Holding",auth,method="POST",payload=payload)
 
@@ -119,7 +92,6 @@ def place_order_api(data,auth):
     newdata = transform_data(data, token)  
     headers = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
         'Authorization': f'bearer {AUTH_TOKEN}'
     }
     
@@ -139,6 +111,9 @@ def place_order_api(data,auth):
     conn = http.client.HTTPSConnection("Openapi.5paisa.com")
     conn.request("POST", "/VendorsAPI/Service1.svc/V1/PlaceOrderRequest", payload, headers)
     res = conn.getresponse()
+    response_content = res.read().decode("utf-8-sig")
+    print("Raw response content:", response_content)
+
     response_data = json.loads(res.read().decode("utf-8"))
     print(response_data)
     if response_data['head']['statusDescription'] == "Success":

@@ -29,7 +29,7 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
 
         json_data = {
             "head": {
-                "key": api_key
+                "Key": api_key
             },
             "body": {
                 "Email_ID": clientcode,
