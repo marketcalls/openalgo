@@ -115,7 +115,7 @@ def place_order_api(data,auth):
     response_data = json.loads(res.read().decode("utf-8"))
     print(response_data)
     if response_data['head']['statusDescription'] == "Success":
-        orderid = response_data['body']['BrokerOrderID']
+        orderid = response_data['body']['ExchOrderID']
     else:
         orderid = None
     return res, response_data, orderid
