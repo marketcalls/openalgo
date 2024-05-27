@@ -158,7 +158,6 @@ def close_position():
         return jsonify({'status': 'error', 'message': f"Failed to close positions"}), 500
 
 
-
 @api_v1_bp.route('/cancelorder', methods=['POST'])
 @limiter.limit(API_RATE_LIMIT)
 def cancel_order_route():
@@ -184,17 +183,18 @@ def cancel_order_route():
             return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
         # Use the dynamically imported module's function to cancel the order
-        response_message, status_code = broker_module.cancel_order(data['orderid'], AUTH_TOKEN)
+        response_message, status_code = broker_module.cancel_order(escape(data['orderid']), AUTH_TOKEN)
 
         socketio.emit('cancel_order_event', {'status': escape(response_message['status']), 'orderid': escape(data['orderid'])})
-        
+
         # Assuming executor and async_log_order are properly defined and set up
         executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
 
         # Sanitize the response_message before returning
         sanitized_response_message = {key: escape(value) if isinstance(value, str) else value for key, value in response_message.items()}
 
-        return jsonify(sanitized_response_message), status_code
+        # Wrap the sanitized response in a JSON response
+        return jsonify({'response': sanitized_response_message}), status_code
 
     except KeyError as e:
         print(e)
@@ -202,7 +202,7 @@ def cancel_order_route():
     except Exception as e:
         print(e)
         socketio.emit('cancel_order_event', {'message': 'Failed to cancel order'})
-        return jsonify({'status': 'error', 'message': f"Order cancellation failed"}), 500
+        return jsonify({'status': 'error', 'message': 'Order cancellation failed'}), 500
 
 
 
