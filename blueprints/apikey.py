@@ -21,8 +21,10 @@ def manage_api_key():
     if request.method == 'GET':
         login_username = session['user']
         current_api_key = get_api_key(login_username)
+        # If there is no API key, use a safe placeholder message
+        display_api_key = current_api_key if current_api_key else "No API Key found"
         # Placeholder for fetching the user's current API key if needed
-        return render_template('apikey.html', login_username=login_username,api_key=current_api_key if current_api_key else "No API Key found")
+        return render_template('apikey.html', login_username=login_username,api_key=display_api_key)
     else:
         user_id = request.json.get('user_id')
         if not user_id:
