@@ -2,9 +2,9 @@ import http.client
 import json
 import os
 from database.auth_db import get_auth_token
-from database.token_db import get_token , get_br_symbol, get_symbol
+from database.token_db import get_token , get_br_symbol, get_symbol, get_oa_symbol
 from broker.fivepaisa.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type
+from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type, reverse_map_exchange
 
 # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
 broker_api_key = os.getenv('BROKER_API_KEY')
@@ -80,20 +80,6 @@ def get_open_position(tradingsymbol, exchange, Exch,ExchType , producttype,auth)
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
     
-    # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
-    broker_api_key = os.getenv('BROKER_API_KEY')
-    api_secret = os.getenv('BROKER_API_SECRET')
-
-    if not broker_api_key or not api_secret:
-        return None, "BROKER_API_KEY or BROKER_API_SECRET not found in environment variables"
-
-    # Split the string to separate the API key and the client ID
-    try:
-        api_key, user_id, client_id  = broker_api_key.split(':::')
-    except ValueError:
-        return None, "BROKER_API_KEY format is incorrect. Expected format: 'api_key:::user_id:::client_id'"
-
-
 
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
@@ -223,12 +209,12 @@ def close_all_positions(current_api_key,auth):
     positions_response = get_positions(AUTH_TOKEN)
 
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    if positions_response['body']['NetPositionDetail'] is None or not positions_response['body']['NetPositionDetail']:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response['body']['NetPositionDetail']:
         # Loop through each position to close
-        for position in positions_response['data']:
+        for position in positions_response['body']['NetPositionDetail']:
             # Skip if net quantity is zero
             if int(position['netqty']) == 0:
                 continue
@@ -237,9 +223,9 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
             quantity = abs(int(position['netqty']))
 
-
+            exchange = reverse_map_exchange(position['Exch'],position['ExchType'])
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['symboltoken'],position['exchange'])
+            symbol = get_oa_symbol(position['ScripName'],exchange)
             print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
@@ -248,9 +234,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": exchange,
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['producttype']),
+                "product": reverse_map_product_type(position['OrderFor'],exchange),
                 "quantity": str(quantity)
             }
 
@@ -273,40 +259,41 @@ def close_all_positions(current_api_key,auth):
 def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+
     
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
+      'Authorization': f'bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
     }
     
     # Prepare the payload
-    payload = json.dumps({
-        "variety": "NORMAL",
-        "orderid": orderid,
-    })
+    json_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": {
+                "ExchOrderID": orderid,
+            }
+        }
+
+    payload = json.dumps(json_data)
+    print(payload)
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")  # Adjust the URL as necessary
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/cancelOrder", payload, headers)
+    conn = http.client.HTTPSConnection("Openapi.5paisa.com")  # Adjust the URL as necessary
+    conn.request("POST", "/VendorsAPI/Service1.svc/V1/CancelOrderRequest", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    print(data)
     
     # Check if the request was successful
-    if data.get("status"):
+    if  data["head"]["status"]=='0' and data["body"]["Status"]==0 :
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+        return {"status": "error", "message": data.get('body', {}).get('Message', 'Failed to cancel order')}, res.status
 
 
 def modify_order(data,auth):
@@ -353,19 +340,19 @@ def cancel_all_orders_api(data,auth):
 
     order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
-    if order_book_response['status'] != True:
+    if order_book_response['body']['OrderBookDetail'] is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+    orders_to_cancel = [order for order in order_book_response['body']['OrderBookDetail']
+                        if order['OrderStatus'] in ['Pending']]
     #print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['orderid']
+        orderid = order['ExchOrderID']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
             canceled_orders.append(orderid)

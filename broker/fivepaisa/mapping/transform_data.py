@@ -144,14 +144,20 @@ def reverse_map_exchange(Exch, ExchType):
     return exchange_mapping.get((Exch, ExchType))
 
 
-def reverse_map_product_type(product):
+def reverse_map_product_type(product, exchange):
     """
-    Maps the new product type to the existing product type.
+    Maps the new product type to the existing product type based on the exchange.
     """
-    reverse_product_type_mapping = {
-        "DELIVERY": "CNC",
-        "CARRYFORWARD": "NRML",
-        "INTRADAY": "MIS",
-    }
-    return reverse_product_type_mapping.get(product)  
+    if exchange in ["NSE", "BSE"]:
+        reverse_product_type_mapping = {
+            "D": "CNC",
+            "I": "MIS",
+        }
+    else:
+        reverse_product_type_mapping = {
+            "D": "NRML",
+            "I": "MIS",
+        }
+    
+    return reverse_product_type_mapping.get(product) 
 
