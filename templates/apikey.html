@@ -54,23 +54,29 @@
         var button = document.querySelector("button[onclick='toggleApiKeyVisibility()']");
         if (apiKeyDisplay.style.display === "none") {
             apiKeyDisplay.style.display = "block";
+            apiKeyDisplay.textContent = "{{ api_key }}" || "No API Key found";
             button.textContent = "Hide API Key";
         } else {
             apiKeyDisplay.style.display = "none";
+            apiKeyDisplay.textContent = "";
             button.textContent = "Show API Key";
         }
     }
 
     function copyApiKeyToClipboard() {
         var apiKey = document.getElementById("apiKeyDisplay").innerText;
-        navigator.clipboard.writeText(apiKey).then(function() {
-            // Show the success alert
-            var alertBox = document.getElementById("copySuccessAlert");
-            alertBox.classList.remove('hidden'); // Make the alert visible
-            setTimeout(() => { alertBox.classList.add('hidden'); }, 3000); // Hide the alert after 3 seconds
-        }, function(err) {
-            console.error('Could not copy text: ', err);
-        });
+        if (apiKey) {
+            navigator.clipboard.writeText(apiKey).then(function() {
+                // Show the success alert
+                var alertBox = document.getElementById("copySuccessAlert");
+                alertBox.classList.remove('hidden'); // Make the alert visible
+                setTimeout(() => { alertBox.classList.add('hidden'); }, 3000); // Hide the alert after 3 seconds
+            }, function(err) {
+                console.error('Could not copy text: ', err);
+            });
+        } else {
+            alert("No API Key to copy");
+        }
     }
 </script>
 {% endblock %}
