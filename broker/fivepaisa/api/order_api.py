@@ -58,13 +58,20 @@ def get_open_position(tradingsymbol, exchange, Exch,ExchType , producttype,auth)
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
 
+    print(Exch)
+    print(ExchType)
+    print(producttype)
+    
+
     print(positions_data)
 
     net_qty = '0'
 
     if positions_data and positions_data.get('body'):
         for position in positions_data['body']['NetPositionDetail']:
-            if position.get('ScripName') == tradingsymbol and position.get('Exch') == Exch and position.get('ExchType') == ExchType and position.get('OrderFor') == producttype:
+   
+
+            if position.get('ScripName').upper() == tradingsymbol and position.get('Exch') == Exch and position.get('ExchType') == ExchType and position.get('OrderFor') == producttype:
                 net_qty = position.get('NetQty', '0')
                 break  # Assuming you need the first match
 
