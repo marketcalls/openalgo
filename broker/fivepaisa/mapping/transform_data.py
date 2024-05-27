@@ -13,17 +13,17 @@ def transform_data(data,token):
         "OrderType": map_action(data["action"].upper()),
         "Exchange": map_exchange(data["exchange"]),
         "ExchangeType": map_exchange_type(data["exchange"]),
-        "ScriCode": token,
+        "ScripCode": token,
         #"ScriData": symbol,
         #"iOrderValidity": "0",
         "Price": float(data.get("price", "0")), 
         "Qty": int(data["quantity"]),
-        #"StopLossPrice": float(data.get("trigger_price", "0")), 
-        #"DisQty": int(data.get("disclosed_quantity", "0")),
-        #"IsIntraday": True if data.get("product") == "MIS" else False,
-        #"AHPlaced": "N",  # AMO Order by default NO
-        #"RemoteOrderID": "OpenAlgo",  
-        #"AppSource": 7044
+        "StopLossPrice": float(data.get("trigger_price", "0")), 
+        "DisQty": int(data.get("disclosed_quantity", "0")),
+        "IsIntraday": True if data.get("product") == "MIS" else False,
+        "AHPlaced": "N",  # AMO Order by default NO
+        "RemoteOrderID": "OpenAlgo" 
+        #"AppSource": "7044"
     }
 
 

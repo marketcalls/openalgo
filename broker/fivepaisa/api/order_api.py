@@ -111,8 +111,6 @@ def place_order_api(data,auth):
     conn = http.client.HTTPSConnection("Openapi.5paisa.com")
     conn.request("POST", "/VendorsAPI/Service1.svc/V1/PlaceOrderRequest", payload, headers)
     res = conn.getresponse()
-    response_content = res.read().decode("utf-8-sig")
-    print("Raw response content:", response_content)
 
     response_data = json.loads(res.read().decode("utf-8"))
     print(response_data)
