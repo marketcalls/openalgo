@@ -107,7 +107,7 @@ def calculate_order_statistics(order_data):
             if order['OrderStatus'] == 'Fully Executed':
                 total_completed_orders += 1
                 order['OrderStatus'] = 'complete'
-            elif order['OrderStatus'] == 'Pending':
+            elif order['OrderStatus'] == 'Pending' or order['OrderStatus'] == 'Modified':
                 total_open_orders += 1
                 order['OrderStatus'] = 'open'
             elif order['OrderStatus'] == 'Rejected By 5P' or order['OrderStatus'] == 'Rejected by Exch' or order['OrderStatus'] == 'Rejected by Exch    ':

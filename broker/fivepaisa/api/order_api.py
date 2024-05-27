@@ -216,17 +216,16 @@ def close_all_positions(current_api_key,auth):
         # Loop through each position to close
         for position in positions_response['body']['NetPositionDetail']:
             # Skip if net quantity is zero
-            if int(position['netqty']) == 0:
+            if int(position['NetQty']) == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
-            quantity = abs(int(position['netqty']))
+            action = 'SELL' if int(position['NetQty']) > 0 else 'BUY'
+            quantity = abs(int(position['NetQty']))
 
             exchange = reverse_map_exchange(position['Exch'],position['ExchType'])
             #get openalgo symbol to send to placeorder function
-            symbol = get_oa_symbol(position['ScripName'],exchange)
-            print(f'The Symbol is {symbol}')
+            symbol = get_oa_symbol(position['ScripName'].upper(),exchange)
 
             # Prepare the order payload
             place_order_payload = {
@@ -300,35 +299,37 @@ def modify_order(data,auth):
 
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
 
-    token = get_token(data['symbol'], data['exchange'])
-    data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
 
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    transformed_data = transform_modify_order_data(data)  # You need to implement this function
     # Set up the request headers
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
-    }
-    payload = json.dumps(transformed_data)
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/modifyOrder", payload, headers)
+    headers = {
+      'Authorization': f'bearer {AUTH_TOKEN}',
+      'Content-Type': 'application/json',
+    }
+
+    # Prepare the payload
+    json_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": transformed_data
+        }
+
+    payload = json.dumps(json_data)
+    print(payload)
+
+    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
+    conn.request("POST", "/VendorsAPI/Service1.svc/V1/ModifyOrderRequest", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    response = print(f'The response is {data}')
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    if data['body']['Message'] == "Success" or data['body']['Message'] == "SUCCESS":
+        return {"status": "success", "orderid": data["body"]["ExchOrderID"]}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+        return {"status": "error", "message":  data.get('body', {}).get('Message', 'Failed to Modify order')}, res.status
 
 
 
@@ -345,7 +346,7 @@ def cancel_all_orders_api(data,auth):
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response['body']['OrderBookDetail']
-                        if order['OrderStatus'] in ['Pending']]
+                        if order['OrderStatus'] in ['Pending','Modified']]
     #print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
