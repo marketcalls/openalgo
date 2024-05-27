@@ -148,14 +148,18 @@ def close_position():
         # Assuming executor and async_log_order are properly defined and set up
         executor.submit(async_log_order, 'squareoff', sqoff_request_data, "All Open Positions Squared Off")
 
-        return jsonify(response_code), status_code
+        # Sanitize the response_code before returning
+        sanitized_response_code = {key: escape(value) if isinstance(value, str) else value for key, value in response_code.items()}
+
+        # Wrap the sanitized response in a JSON response
+        return jsonify({'response': sanitized_response_code}), status_code
 
     except KeyError as e:
         print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400
     except Exception as e:
         print(e)
-        return jsonify({'status': 'error', 'message': f"Failed to close positions"}), 500
+        return jsonify({'status': 'error', 'message': 'Failed to close positions'}), 500
 
 
 @api_v1_bp.route('/cancelorder', methods=['POST'])
@@ -289,12 +293,16 @@ def modify_order_route():
         # Use the dynamically imported module's function to modify the order
         response_message, status_code = broker_module.modify_order(data, AUTH_TOKEN)
 
-        socketio.emit('modify_order_event', {'status': response_message['status'], 'orderid': data['orderid']})
+        socketio.emit('modify_order_event', {'status': escape(response_message['status']), 'orderid': escape(data['orderid'])})
         
         # Assuming executor and async_log_order are properly defined and set up
         executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
 
-        return jsonify(response_message), status_code
+        # Sanitize the response_message before returning
+        sanitized_response_message = {key: escape(value) if isinstance(value, str) else value for key, value in response_message.items()}
+
+        # Wrap the sanitized response in a JSON response
+        return jsonify({'response': sanitized_response_message}), status_code
 
     except KeyError as e:
         print(e)
@@ -302,4 +310,4 @@ def modify_order_route():
     except Exception as e:
         print(e)
         socketio.emit('modify_order_event', {'message': 'Failed to modify order'})
-        return jsonify({'status': 'error', 'message': f"Order modification failed"}), 500
+        return jsonify({'status': 'error', 'message': 'Order modification failed'}), 500
