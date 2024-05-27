@@ -1,0 +1,61 @@
+<nav class="bg-gray-800 p-4">
+    <div class="sm:hidden">
+        <button onclick="toggleMobileMenu()" class="text-white p-2">
+            <div class="space-y-1 bg-gray-600 rounded shadow">
+                <span class="block w-6 h-0.5 bg-gray-100"></span>
+                <span class="block w-6 h-0.5 bg-gray-100"></span>
+                <span class="block w-6 h-0.5 bg-gray-100"></span>
+            </div>
+        </button>
+    </div>
+
+    <div class="hidden sm:flex justify-between items-center">
+        <!-- Navigation Links -->
+        <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+        <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+        <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+        <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+        <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
+        <!-- Profile Picture and Dropdown Menu -->
+        <div class="relative">
+            <button id="profileBtn" class="rounded-full h-10 w-10 flex items-center justify-center bg-gray-700 text-white">
+                {% if session.user %}
+                    {{ session['user'][0]|upper }}
+                {% else %}
+                    O
+                {% endif %}
+            </button>
+            <div id="profileMenu" class="hidden absolute right-0 mt-2 py-2 w-48 bg-white rounded-md shadow-xl z-20">
+                <a href="{{ url_for('auth.change_password') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-red-200">Profile</a>
+                <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">ApiKey</a>
+                <a href="{{ url_for('log_bp.view_logs') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Logs</a>
+                <a href="{{ url_for('search_bp.token') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200">Search</a>
+                <a href="https://docs.openalgo.in" class="block px-4 py-2 text-sm text-gray-800 hover:bg-gray-200" target="_blank">Docs</a>
+                <a href="{{ url_for('auth.logout') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-red-200">Logout</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Menu (hidden by default) -->
+    <div id="mobile-menu" class="sm:hidden fixed top-0 left-0 transform -translate-x-full w-56 bg-gray-800 h-full shadow-md transition-transform duration-300 ease-in-out z-10">
+        <button onclick="closeMobileMenu()" class="text-white text-3xl p-2 rounded-full absolute right-4 top-4 hover:bg-gray-600">
+            &times; <!-- Close Icon -->
+        </button>
+        <div class="flex flex-col items-start p-4">
+            <a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Dashboard</a>
+            <a href="{{ url_for('orders_bp.orderbook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Orderbook</a>
+            <a href="{{ url_for('orders_bp.tradebook') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradebook</a>
+            <a href="{{ url_for('orders_bp.positions') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Positions</a>
+            <a href="{{ url_for('orders_bp.holdings') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Holdings</a>
+            <a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Tradingview</a>
+            <!-- Profile dropdown links for mobile -->
+            <a href="{{ url_for('auth.change_password') }}" class="block px-4 py-2 text-sm text-gray-800 hover:bg-red-200">Profile</a>
+            <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">ApiKey</a>
+            <a href="{{ url_for('log_bp.view_logs') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logs</a>
+            <a href="{{ url_for('search_bp.token') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Search</a>
+            <a href="https://docs.openalgo.in" target="_blank" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Docs</a>
+            <a href="{{ url_for('auth.logout') }}" class="text-white text-lg px-3 py-2 rounded-md font-medium hover:bg-gray-700 w-full text-left">Logout</a>
+        </div>
+    </div>
+</nav>

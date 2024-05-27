@@ -18,6 +18,11 @@
         
         <!-- Brokers Grid -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 text-black">
+            <!-- 5 Paisa (Planned/Inactive) -->
+            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
+                <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5 Paisa Logo" width="100" height="100" class="mb-3">
+                <a href="/fivepaisa/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">5Paisa Login</a>
+            </div>
             <!-- Angel -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/angel.png') }}" alt="Angel Logo" width="100" height="100" class="mb-3">
@@ -33,6 +38,16 @@
                 <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers Logo" width="100" height="100" class="mb-3">
                 <a href="https://api-t1.fyers.in/api/v3/generate-authcode?client_id={{broker_api_key}}&redirect_uri={{ redirect_url }}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Fyers Login</a>
             </div>
+            <!-- ICICI Direct -->
+            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
+                <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI Direct Logo" width="100" height="100" class="mb-3">
+                <a href="https://api.icicidirect.com/apiuser/login?api_key={{broker_api_key}}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Icici Direct Login</a>
+            </div>
+            <!-- Kotak -->
+            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
+                <img src="{{ url_for('static', filename='images/brokers/kotak.png') }}" alt="Kotak Securities Logo" width="100" height="100" class="mb-3">
+                <a href="/kotak/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Kotak Login</a>
+            </div>
             <!-- Upstox -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/upstox.png') }}" alt="Upstox Logo" width="100" height="100" class="mb-3">
@@ -44,31 +59,12 @@
                 <a href="https://kite.trade/connect/login?api_key={{ broker_api_key }}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Zerodha Login</a>    
             </div>
 
-            
-
-                        <!-- 5 Paisa (Planned/Inactive) -->
-                        <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
-                            <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5 Paisa Logo" width="100" height="100" class="mb-3">
-                            <button class="w-full bg-gray-500 text-white py-2 px-4 rounded cursor-not-allowed" disabled>5 Paisa Login</button>
-                        </div>
-                        
-                        
-                        <!-- ICICI Direct (Planned/Inactive) -->
-                        <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
-                            <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI Direct Logo" width="100" height="100" class="mb-3">
-                            <button class="w-full bg-gray-500 text-white py-2 px-4 rounded cursor-not-allowed" disabled>ICICI Direct Login</button>
-                        </div>
-                        <!-- Kotak (Planned/Inactive) -->
-                        <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
-                            <img src="{{ url_for('static', filename='images/brokers/kotak.png') }}" alt="Kotak Securities Logo" width="100" height="100" class="mb-3">
-                            <button class="w-full bg-gray-500 text-white py-2 px-4 rounded cursor-not-allowed" disabled>Kotak Login</button>
-                        </div>
+                                        
                     </div>
                 </div>
-        <!-- Footer Area -->
-    <footer class="bg-gray-800 text-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
-        <p>Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
-    </footer>
+                
+    <!-- Include the footer content -->
+    {% include 'footer.html' %}
     </body>
 </html>
             
