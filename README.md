@@ -9,12 +9,12 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 
 ## Supported Broker
 
-- **5paisa** (in progress)
+- **5paisa**
 - **AngelOne**
 - **Dhan**
 - **Fyers**
-- **ICICI Direct** (in progress)
-- **Kotak** (in progress)
+- **ICICI Direct**
+- **Kotak**
 - **Upstox**
 - **Zerodha**
 
@@ -28,7 +28,15 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 
 ## Documentation
 
+We encourage you to read the OpenAlgo documentation to ensure you understand how the application is working.
+
 For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to [https://docs.openalgo.in](https://docs.openalgo.in)
+
+### Minimum hardware required
+
+To run OpenAlgo we recommend you a cloud instance / Desktop / Laptop with a minimum configuration of:
+
+- Minimal (advised) system requirements: 2GB RAM, 1GB disk space, 2vCPU
 
 ## Contributing
 
@@ -125,4 +133,16 @@ Congratulations! You have successfully set up OpenAlgo. Explore the platform and
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=marketcalls/openalgo&type=Date)](https://star-history.com/#marketcalls/openalgo&Date)
+
+## Disclaimer
+
+This software is for educational purposes only. Do not risk money which
+you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS
+AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+
+## Support
+
+### Help / Discord
+
+For any questions not covered by the documentation or for further information about the openalgo, or to simply engage with like-minded individuals, we encourage you to join the OpenAlgo [discord server](https://discord.com/invite/UPh7QPsNhP).
 
