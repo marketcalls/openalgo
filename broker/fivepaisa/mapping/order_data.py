@@ -253,7 +253,7 @@ def transform_tradebook_data(tradebook_data):
             "action": trade.get('BuySell', ''),
             "quantity": trade.get('Qty', 0),
             "average_price": trade.get('Rate', 0.0),
-            "trade_value": trade_value,
+            "trade_value": round(trade_value,2),
             "orderid": trade.get('ExchOrderID', ''),
             "timestamp": convert_date_string(trade.get('ExchangeTradeTime', ''))
         }
