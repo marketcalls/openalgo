@@ -178,7 +178,7 @@ def process_5paisa_csv(path):
     # Create a new DataFrame in OpenAlgo format
     new_df = pd.DataFrame()
     new_df['symbol'] = filtered_df['TradingSymbol'] 
-    new_df['brsymbol'] = filtered_df['Name'].str.upper()
+    new_df['brsymbol'] = filtered_df['Name'].str.upper().str.rstrip()
     new_df['name'] = filtered_df['FullName'] 
     new_df['exchange'] = filtered_df['exchange'] 
     new_df['brexchange'] = filtered_df['exchange'] 
