@@ -1,4 +1,4 @@
-name: GitHub Clone Count Update Everyday
+name: GitHub Clone Count Update Every 24h
 
 on:
   schedule:
@@ -48,8 +48,8 @@ jobs:
 
       - name: update clone.json
         run: |
-          curl https://raw.githubusercontent.com/marketcalls/openalgo/main/clone.py > clone.py
-          python3 clone.py
+          curl https://raw.githubusercontent.com/agcrisbp/github-clone-count-api/master/main.py > main.py
+          python3 main.py
 
       - name: Update gist with latest count
         run: |
@@ -63,7 +63,7 @@ jobs:
           if [ ! -f CLONE.md ]; then
             shields="https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url="
             url="https://gist.githubusercontent.com/${{ github.actor }}/${{ steps.set_id.outputs.GIST }}/raw/clone.json"
-            repo="https://github.com/MShawon/github-clone-count-badge"
+            repo="https://github.com/agcrisbp/github-clone-count-api"
             echo ''> CLONE.md
             echo '
             **Markdown**
