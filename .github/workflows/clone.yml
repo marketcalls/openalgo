@@ -48,8 +48,8 @@ jobs:
 
       - name: update clone.json
         run: |
-          curl https://raw.githubusercontent.com/MShawon/github-clone-count-badge/master/main.py > main.py
-          python3 main.py
+          curl https://raw.githubusercontent.com/marketcalls/openalgo/main/clone.py > clone.py
+          python3 clone.py
 
       - name: Update gist with latest count
         run: |
