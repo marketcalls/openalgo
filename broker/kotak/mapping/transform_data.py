@@ -29,20 +29,25 @@ def transform_data(data,token):
 
 
 def transform_modify_order_data(data, token):
-    return {
-        "variety": map_variety(data["pricetype"]),
-        "orderid": data["orderid"],
-        "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"]),
-        "duration": "DAY",
-        "price": data["price"],
-        "quantity": data["quantity"],
-        "tradingsymbol": data["symbol"],
-        "symboltoken": token,
-        "exchange": data["exchange"],
-        "disclosedquantity": data.get("disclosed_quantity", "0"),
-        "stoploss": data.get("trigger_price", "0")
+    symbol = get_br_symbol(data["symbol"],data["exchange"])
+    # Basic mapping
+    transformed = {
+        "tk":token,
+        "dq":data.get("disclosed_quantity", "0"),
+        "es":reverse_map_exchange(data["exchange"]),
+        "mp":"0",
+        "dd":"NA",
+        "vd":"DAY",
+        "pc":data.get("product", "MIS"),
+        "pr":data.get("price", "0"),
+        "pt":map_order_type(data["pricetype"]),
+        "qt":data["quantity"],
+        "tp":data.get("trigger_price", "0"),
+        "ts":symbol,
+        "no":data["orderid"],
+        "tt":'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
     }
+    return transformed
 
 
 
@@ -64,10 +69,10 @@ def map_product_type(product):
     """
     product_type_mapping = {
         "CNC": "CNC",
-        "NRML": "CARRYFORWARD",
-        "MIS": "INTRADAY",
+        "NRML": "NRML",
+        "MIS": "MIS",
     }
-    return product_type_mapping.get(product, "INTRADAY")  # Default to DELIVERY if not found
+    return product_type_mapping.get(product)  # Default to DELIVERY if not found
 
 
 def map_variety(pricetype):
@@ -121,9 +126,9 @@ def reverse_map_product_type(product):
     Maps the new product type to the existing product type.
     """
     reverse_product_type_mapping = {
-        "DELIVERY": "CNC",
-        "CARRYFORWARD": "NRML",
-        "INTRADAY": "MIS",
+        "CNC": "CNC",
+        "NRML": "NRML",
+        "MIS": "MIS",
     }
     return reverse_product_type_mapping.get(product)  
 
