@@ -1,3 +1,6 @@
+venopenalgo
+.env
+openalgo.db
 .env
 .flaskenv
 *.pyc
