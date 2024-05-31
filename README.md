@@ -14,7 +14,7 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 - **Dhan**
 - **Fyers**
 - **ICICI Direct**
-- **Kotak** (Pending)
+- **Kotak** 
 - **Upstox**
 - **Zerodha**
 
