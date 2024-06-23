@@ -1,41 +1,49 @@
-    <!-- Footer with Heart Icon -->
-    <footer class="bg-gray-800 text-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
-        <p>Copyright 2024 | <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | Open Source Algo Platform for Everyone</p>
-        <p class="footer-content">Made with Lots of <img src="{{ url_for('static', filename='images/thumbs-up.png') }}" alt="Heart Icon" width="32" height="32"> from Traders</p>
-    </footer>
-
-    <style>
-    .footer {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        position: fixed;
-        bottom: 0;
-        width: 100%;
-        background-color: white;
-        padding: 8px 0;
-        box-shadow: 0 -4px 6px rgba(0, 0, 0, 0);
-    }
-    .footer-content {
-        display: flex;
-        align-items: center;
-        font-weight: bold;
-    }
-    .footer img {
-        margin: 0 8px; /* Adjust spacing around the image as needed */
-        vertical-align: middle; /* Ensure image is aligned with text */
-    }
-    </style>
+<!-- Footer with Heart Icon -->
+<footer class="bg-gray-800 text-white text-center py-4 shadow-lg fixed bottom-0 left-0 right-0">
+    <p>
+        Copyright 2024 | 
+        <a href="https://www.openalgo.in" class="hover:text-blue-400 transition duration-150 ease-in-out" target="_blank">www.openalgo.in</a> | 
+        Open Source Algo Platform for Everyone | ver {{ version }}
+    </p>
+    <p class="footer-content">
+        Made with Lots of 
+        <img src="{{ url_for('static', filename='images/thumbs-up.png') }}" alt="Heart Icon" width="32" height="32"> 
+        from Traders 
+    </p>
+</footer>
 
 <style>
-    .footer-content {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-weight: bold;
-    }
-    .footer-content img {
-        margin: 0 8px; /* Adjust spacing around the image as needed */
-        vertical-align: middle; /* Ensure image is aligned with text */
-    }
-    </style>
+.footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+    background-color: white;
+    padding: 8px 0;
+    box-shadow: 0 -4px 6px rgba(0, 0, 0, 0);
+}
+.footer-content {
+    display: flex;
+    align-items: center;
+    font-weight: bold;
+}
+.footer img {
+    margin: 0 8px; /* Adjust spacing around the image as needed */
+    vertical-align: middle; /* Ensure image is aligned with text */
+}
+</style>
+
+<style>
+.footer-content {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+}
+.footer-content img {
+    margin: 0 8px; /* Adjust spacing around the image as needed */
+    vertical-align: middle; /* Ensure image is aligned with text */
+}
+</style>

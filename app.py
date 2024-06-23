@@ -59,6 +59,10 @@ def create_app():
     @app.errorhandler(404)
     def not_found_error(error):
         return render_template('404.html'), 404
+    
+    @app.context_processor
+    def inject_version():
+        return dict(version=os.getenv('FLASK_APP_VERSION'))
 
     return app
 
