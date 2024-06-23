@@ -1,14 +1,10 @@
-# auth.py
-
 from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from limiter import limiter  # Import the limiter instance
 from dotenv import load_dotenv
 from extensions import socketio
 import os
 from database.auth_db import upsert_auth
-from database.user_db import authenticate_user, User, db_session
-
-
+from database.user_db import authenticate_user, User, db_session, find_user_by_username  # Import the function
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +23,9 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
+
+    if find_user_by_username() is None:
+        return redirect(url_for('core_bp.setup'))
 
     if 'user' in session:
             return redirect(url_for('auth.broker_login'))
@@ -49,8 +48,6 @@ def login():
         else:
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
-
-
 @auth_bp.route('/broker', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
@@ -64,9 +61,9 @@ def broker_login():
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
-        return render_template('broker.html',broker_api_key=BROKER_API_KEY, broker_api_secret=BROKER_API_SECRET,
+        return render_template('broker.html', broker_api_key=BROKER_API_KEY, broker_api_secret=BROKER_API_SECRET,
                                redirect_url=REDIRECT_URL)
-    
+
 @auth_bp.route('/change', methods=['GET', 'POST'])
 def change_password():
     if 'user' not in session:
@@ -100,29 +97,25 @@ def change_password():
 
     return render_template('profile.html', username=session['user'])
 
-
-
 @auth_bp.route('/logout')
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
-        if session.get('logged_in'):
-            username = session['user']
-            
-            #writing to database      
-            inserted_id = upsert_auth(username, "","", revoke=True)
-            if inserted_id is not None:
-                print(f"Database Upserted record with ID: {inserted_id}")
-                print(f'Auth Revoked in the Database')
-            else:
-                print("Failed to upsert auth token")
-            
-            # Remove tokens and user information from session
+    if session.get('logged_in'):
+        username = session['user']
+        
+        #writing to database      
+        inserted_id = upsert_auth(username, "", "", revoke=True)
+        if inserted_id is not None:
+            print(f"Database Upserted record with ID: {inserted_id}")
+            print(f'Auth Revoked in the Database')
+        else:
+            print("Failed to upsert auth token")
+        
+        # Remove tokens and user information from session
+        session.pop('user', None)  # Remove 'user' from session if exists
+        session.pop('broker', None)  # Remove 'user' from session if exists
+        session.pop('logged_in', None)
 
-            session.pop('user', None)  # Remove 'user' from session if exists
-            session.pop('broker', None)  # Remove 'user' from session if exists
-            session.pop('logged_in', None)
-    
-            # Redirect to login page after logout
-        return redirect(url_for('auth.login'))
-
+    # Redirect to login page after logout
+    return redirect(url_for('auth.login'))

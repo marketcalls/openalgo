@@ -12,6 +12,8 @@ import importlib  # Import importlib for dynamic imports
 load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+SMART_ORDER_DELAY = os.getenv("SMART_ORDER_DELAY", "0.5")
+
 
 api_v1_bp = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 
@@ -97,9 +99,17 @@ def place_smart_order():
         if broker_module is None:
             return jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404
 
+        
         # Use the dynamically imported module's functions
         res, response_data, order_id = broker_module.place_smartorder_api(data, AUTH_TOKEN)
         
+        
+
+        
+
+        import time
+        time.sleep(float(SMART_ORDER_DELAY))
+
         if res and res.status == 200:
             socketio.emit('order_event', {'symbol': data['symbol'], 'action': data['action'], 'orderid': order_id})
             order_response_data = {'status': 'success', 'orderid': order_id}
@@ -108,6 +118,9 @@ def place_smart_order():
         else:
             message = response_data.get('message', 'Failed to place smart order')
             return jsonify({'status': 'error', 'message': message}), res.status if res else 500
+    
+        
+    
     except KeyError as e:
         print(e)
         return jsonify({'status': 'error', 'message': 'A required field is missing from the request'}), 400

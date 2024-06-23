@@ -35,6 +35,8 @@ def create_app():
 
     load_dotenv()
 
+    
+
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
@@ -86,4 +88,9 @@ setup_environment(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
-    socketio.run(app, debug=False)
+    # Get environment variables
+    host_ip = os.getenv('FLASK_HOST_IP', '127.0.0.1')  # Default to '127.0.0.1' if not set
+    port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
+    debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
+
+    socketio.run(app, host=host_ip, port=port, debug=debug)
