@@ -26,7 +26,7 @@ def import_broker_module(broker_name):
     except ImportError as error:
         return None
 
-@api.route('/')
+@api.route('/', strict_slashes=False)
 class PlaceOrder(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):

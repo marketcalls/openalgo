@@ -1,3 +1,7 @@
+# Load and check environment variables before anything else
+from utils.env_check import load_and_check_env_variables  # Import the environment check function
+load_and_check_env_variables()
+
 from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
@@ -10,19 +14,13 @@ from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
 from blueprints.core import core_bp  
-
 from restx_api import api_v1_bp
-
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
-
 from utils.plugin_loader import load_broker_auth_functions
-
-from dotenv import load_dotenv
 import os
-
 
 def create_app():
     # Initialize Flask application
@@ -33,8 +31,6 @@ def create_app():
 
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
-
-    load_dotenv()
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
@@ -64,7 +60,6 @@ def create_app():
 
     return app
 
-
 def setup_environment(app):
     with app.app_context():
         # Load broker plugins
@@ -81,7 +76,6 @@ def setup_environment(app):
         from pyngrok import ngrok
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         print(" * ngrok URL: " + public_url + " *")
-
 
 app = create_app()
 
