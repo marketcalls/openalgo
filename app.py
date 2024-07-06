@@ -5,12 +5,13 @@ from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.orders import orders_bp
 from blueprints.search import search_bp
-from blueprints.api_v1 import api_v1_bp
 from blueprints.apikey import api_key_bp
 from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
-from blueprints.core import core_bp  # Import the core blueprint
+from blueprints.core import core_bp  
+
+from restx_api import api_v1_bp
 
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -35,26 +36,23 @@ def create_app():
 
     load_dotenv()
 
-    
-
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
-
-    # Initialize SQLAlchemy
- #   db.init_app(app)
 
     # Register the blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(orders_bp)
     app.register_blueprint(search_bp)
-    app.register_blueprint(api_v1_bp)
     app.register_blueprint(api_key_bp)
     app.register_blueprint(log_bp)
     app.register_blueprint(tv_json_bp)
     app.register_blueprint(brlogin_bp)
     app.register_blueprint(core_bp)  # Register the core blueprint
+    
+    # Register RESTx API blueprint
+    app.register_blueprint(api_v1_bp)
 
     @app.errorhandler(404)
     def not_found_error(error):
@@ -69,9 +67,9 @@ def create_app():
 
 def setup_environment(app):
     with app.app_context():
-
-        #load broker plugins
+        # Load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
+
         # Ensure all the tables exist
         ensure_auth_tables_exists()
         ensure_user_tables_exists()
