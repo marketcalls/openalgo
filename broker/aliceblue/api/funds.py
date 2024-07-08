@@ -6,15 +6,13 @@ import json
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Zerodha's API using the provided auth token."""
-    api_key = os.getenv('BROKER_API_KEY')
-    api_secret = os.getenv('BROKER_API_SECRET')
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    """Fetch margin data from Alice Blue's API using the provided auth token."""
+    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
+    payload = ""
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {auth_token}',
+        'Authorization': f'Bearer {auth_token}',
     }
-    conn.request("GET", "/user/margins", '', headers)
+    conn.request("GET", "/rest/AliceBlueAPIService/api/limits/getRmsLimits", payload, headers)
 
     res = conn.getresponse()
     data = res.read()
@@ -22,50 +20,32 @@ def get_margin_data(auth_token):
 
     print(f"Funds Details: {margin_data}")
 
-    if margin_data.get('status') == 'error':
-        # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
-        return {}
+    # Initialize processed data dictionary
+    processed_margin_data = {
+        "availablecash": "0.00",
+        "collateral": "0.00",
+        "m2munrealized": "0.00",
+        "m2mrealized": "0.00",
+        "utiliseddebits": "0.00",
+    }
 
     try:
-        # Calculate the sum of net values for available margin
-        total_available_margin = sum([
-            margin_data['data']['commodity']['net'],
-            margin_data['data']['equity']['net']
-        ])
-        # Calculate the sum of debits for used margin
-        total_used_margin = sum([
-            margin_data['data']['commodity']['utilised']['debits'],
-            margin_data['data']['equity']['utilised']['debits']
-        ])
+        # Iterate through the list and process each dictionary
+        for item in margin_data:
+            if item['stat'] == 'Not_Ok':
+                # Log the error or return an empty dictionary to indicate failure
+                print(f"Error fetching margin data: {item['emsg']}")
+                return {}
 
-        # Calculate the sum of collateral values
-        total_collateral = sum([
-            margin_data['data']['commodity']['available']['collateral'],
-            margin_data['data']['equity']['available']['collateral']
-        ])
+            # Accumulate values
+            processed_margin_data["availablecash"] = "{:.2f}".format(float(item.get('net', 0)))
+            processed_margin_data["collateral"] = "{:.2f}".format(float(item.get('collateralvalue', 0)))
+            processed_margin_data["m2munrealized"] = "{:.2f}".format(float(item.get('unrealizedMtomPrsnt', 0)))
+            processed_margin_data["m2mrealized"] = "{:.2f}".format(float(item.get('realizedMtomPrsnt', 0)))
+            processed_margin_data["utiliseddebits"] = "{:.2f}".format(float(item.get('scripbasketmargin', 0)))
 
-        # Calculate the sum of m2m_unrealised
-        total_unrealised = sum([
-            margin_data['data']['commodity']['utilised']['m2m_unrealised'],
-            margin_data['data']['equity']['utilised']['m2m_unrealised']
-        ])
-
-        # Calculate the sum of m2m_realised
-        total_realised = sum([
-            margin_data['data']['commodity']['utilised']['m2m_realised'],
-            margin_data['data']['equity']['utilised']['m2m_realised']
-        ])
-
-        # Construct and return the processed margin data
-        processed_margin_data = {
-            "availablecash": "{:.2f}".format(total_available_margin),
-            "collateral": "{:.2f}".format(total_collateral),
-            "m2munrealized": "{:.2f}".format(total_unrealised),
-            "m2mrealized": "{:.2f}".format(total_realised),
-            "utiliseddebits": "{:.2f}".format(total_used_margin),
-        }
         return processed_margin_data
-    except KeyError:
+    except KeyError as e:
         # Return an empty dictionary in case of unexpected data structure
+        print(f"KeyError: {str(e)}")
         return {}
