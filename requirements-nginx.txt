@@ -50,3 +50,4 @@ wrapt==1.16.0
 wsproto==1.2.0
 dnspython>=2.6.1 # not directly required, pinned by Snyk to avoid a vulnerability
 gunicorn
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
