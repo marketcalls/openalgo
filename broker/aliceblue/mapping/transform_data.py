@@ -1,33 +1,32 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
 #Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_token
 
 def transform_data(data):
     """
     Transforms the new API request structure to the current expected structure.
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
+    token = get_token(data['symbol'],data['exchange'])
 
     # Basic mapping
     transformed = {
-        "tradingsymbol" : symbol,
-        "exchange" : data['exchange'],
-        "transaction_type": data['action'].upper(),
-        "order_type": data["pricetype"],
-        "quantity": data["quantity"],
-        "product": data["product"],
+        "complexty": "regular",
+        "discqty": data.get("disclosed_quantity", "0"),
+        "exch": data['exchange'],
+        "pCode": data["product"],
+        "prctyp": map_order_type(data["pricetype"]),
         "price": data.get("price", "0"),
+        "qty": data["quantity"],
+        "ret": "DAY",
+        "symbol_id": token,
+        "transtype": data['action'].upper(),
         "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
-        "validity":"DAY",
-        "tag": "openalgo",
-    }
+        "orderTag": "openalgo",
+        
+        }
 
-
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
     
     return transformed
 
@@ -49,12 +48,12 @@ def map_order_type(pricetype):
     Maps the new pricetype to the existing order type.
     """
     order_type_mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
+        "MARKET": "MKT",
+        "LIMIT": "L",
         "SL": "SL",
         "SL-M": "SL-M"
     }
-    return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
+    return order_type_mapping.get(pricetype, "MKT")  # Default to MARKET if not found
 
 def map_product_type(product):
     """

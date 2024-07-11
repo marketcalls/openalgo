@@ -4,17 +4,17 @@ import os
 import urllib.parse
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
-from broker.zerodha.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-
+from broker.aliceblue.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.config import get_broker_api_key , get_broker_api_secret
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+    'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
+    'Content-Type': 'application/json'
     }
 
     conn.request(method, endpoint, payload, headers)
@@ -23,16 +23,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/orders",auth)
+    return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchOrderBook",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/trades",auth)
+    return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchTradeBook",auth)
 
 def get_positions(auth):
-    return get_api_response("/portfolio/positions",auth)
+    return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/positionBook",auth)
 
 def get_holdings(auth):
-    return get_api_response("/portfolio/holdings",auth)
+    return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, product,auth):
 
@@ -56,45 +56,30 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 def place_order_api(data,auth):
     
     AUTH_TOKEN = auth
-    
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
+
     #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)  
+    newdata = transform_data(data)
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
+    'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
+    'Content-Type': 'application/json'
     }
 
-    payload = {
-        'tradingsymbol': newdata['tradingsymbol'],
-        'exchange': newdata['exchange'],
-        'transaction_type': newdata['transaction_type'],
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'product': newdata['product'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity'],
-        'tag' : newdata['tag']
-    }
+    payload = json.dumps([newdata])
 
     print(payload)
 
-    payload =  urllib.parse.urlencode(payload)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("POST", "/orders/regular", payload, headers)
+    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
+    conn.request("POST", "/rest/AliceBlueAPIService/api/placeOrder/executePlaceOrder", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
 
 
     print(response_data)
+    
+    response_data = response_data[0]
 
-    if response_data['status'] == 'success':
-        orderid = response_data['data']['order_id']
+    if response_data['stat'] == 'Ok':
+        orderid = response_data['NOrdNo']
     else:
         orderid = None
     return res, response_data, orderid
