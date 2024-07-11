@@ -12,27 +12,27 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data['data'] is None:
+    if order_data is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        order_data = order_data['data']
+        order_data = order_data
         
-    #print(order_data)
+    # print(order_data)
 
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            exchange = order['exchange']
-            symbol = order['tradingsymbol']
+            exchange = order['Exchange']
+            symbol = order['Trsym']
        
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['Trsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
                 print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -57,17 +57,17 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['transaction_type'] == 'BUY':
+            if order['Trantype'] == 'B':
                 total_buy_orders += 1
-            elif order['transaction_type'] == 'SELL':
+            elif order['Trantype'] == 'S':
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'COMPLETE':
+            if order['Status'] == 'complete':
                 total_completed_orders += 1
-            elif order['status'] == 'OPEN':
+            elif order['Status'] == 'open':
                 total_open_orders += 1
-            elif order['status'] == 'REJECTED':
+            elif order['Status'] == 'rejected':
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -93,30 +93,33 @@ def transform_order_data(orders):
         if not isinstance(order, dict):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
+    
+        if order['Trantype'] == 'B':
+            trans_type = 'BUY'
+        elif order['Trantype'] == 'S':
+            trans_type = 'SELL'
 
-        if(order.get("status", "")=="COMPLETE"):
-            order_status = "complete"
-        if(order.get("status", "")=="REJECTED"):
-            order_status = "rejected"
-        if(order.get("status", "")=="TRIGGER PENDING"):
-            order_status = "trigger pending"
-        if(order.get("status", "")=="OPEN"):
-            order_status = "open"
-        if(order.get("status", "")=="CANCELLED"):
-            order_status = "cancelled"
+        if order['Prctype'] == 'MKT':
+            order_type = 'MARKET'
+        elif order['Prctype'] == 'L':
+            order_type = 'LIMIT'
+        elif order['Prctype'] == 'SL':
+            order_type = 'SL'
+        elif order['Prctype'] == 'SL-M':
+            order_type = 'SL-M'
 
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
-            "exchange": order.get("exchange", ""),
-            "action": order.get("transaction_type", ""),
-            "quantity": order.get("quantity", 0),
-            "price": order.get("price", 0.0),
-            "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("order_type", ""),
-            "product": order.get("product", ""),
-            "orderid": order.get("order_id", ""),
-            "order_status": order_status,
-            "timestamp": order.get("order_timestamp", "")
+            "symbol": order.get("Trsym", ""),
+            "exchange": order.get("Exchange", ""),
+            "action": trans_type,
+            "quantity": order.get("Qty", 0),
+            "price": order.get("Avgprc", 0.0),
+            "trigger_price": order.get("Trgprc", 0.0),
+            "pricetype": order_type,
+            "product": order.get("Pcode", ""),
+            "orderid": order.get("Nstordno", ""),
+            "order_status": order.get("Status", ""),
+            "timestamp": order.get("orderentrytime", "")
         }
 
         transformed_orders.append(transformed_order)
