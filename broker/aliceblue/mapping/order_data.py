@@ -137,58 +137,101 @@ def transform_order_data(orders):
 
 
 def map_trade_data(trade_data):
-    return map_order_data(trade_data)
+    """
+    Processes and modifies a list of order dictionaries based on specific conditions.
+    
+    Parameters:
+    - trade_data: A list of dictionaries, where each dictionary represents an order.
+    
+    Returns:
+    - The modified trade_data with updated 'tradingsymbol' and 'product' fields.
+    """
+    if isinstance(trade_data, dict):
+        if trade_data['stat'] == 'Not_Ok' :
+            # Handle the case where there is an error in the data
+            # For example, you might want to display an error message to the user
+            # or pass an empty list or dictionary to the template.
+            print(f"Error fetching order data: {trade_data['emsg']}")
+            trade_data = {}
+    else:
+        trade_data = trade_data
+        
+    # print(trade_data)
+
+    if trade_data:
+        for trade in trade_data:
+            # Extract the instrument_token and exchange for the current trade
+            exchange = trade['Exchange']
+            symbol = trade['Tsym']
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current trade
+            if symbol:
+                trade['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+            else:
+                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                
+    return trade_data
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
-     
+
+        # Check if the necessary keys exist in the order
+        # if 'Qty' not in trade or 'Average price' not in trade:
+        #     print("Error: Missing required keys in the order. Skipping this item.")
+        #     continue
+
+        # Ensure quantity and average price are converted to the correct types
+        quantity = int(trade.get('Qty', 0))
+        average_price = float(trade.get('Average price', 0.0))
+        
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol'),
-            "exchange": trade.get('exchange', ''),
-            "product": trade.get('product', ''),
-            "action": trade.get('transaction_type', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('average_price', 0.0),
-            "trade_value": trade.get('quantity', 0) * trade.get('average_price', 0.0),
-            "orderid": trade.get('order_id', ''),
-            "timestamp": trade.get('order_timestamp', '')
+            "symbol": trade.get('Tsym'),
+            "exchange": trade.get('Exchange', ''),
+            "product": trade.get('Pcode', ''),
+            "action": trade.get('Trantype', ''),
+            "quantity": quantity,
+            "average_price": average_price,
+            "trade_value": quantity * average_price,
+            "orderid": trade.get('Nstordno', ''),
+            "timestamp": trade.get('Time', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
 
+
 def map_position_data(position_data):
     """
-    Processes and modifies a list of OpenPosition dictionaries based on specific conditions.
+    Processes and modifies a list of order dictionaries based on specific conditions.
     
     Parameters:
-    - position_data: A list of dictionaries, where each dictionary represents an Open Position.
+    - position_data: A list of dictionaries, where each dictionary represents an order.
     
     Returns:
-    - The modified order_data with updated 'tradingsymbol'
+    - The modified position_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if position_data['data']['net'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
+    if isinstance(position_data, dict):
+        if position_data['stat'] == 'Not_Ok' :
+            # Handle the case where there is an error in the data
+            # For example, you might want to display an error message to the user
+            # or pass an empty list or dictionary to the template.
+            print(f"Error fetching order data: {position_data['emsg']}")
+            position_data = {}
     else:
-        position_data = position_data['data']['net']
+        position_data = position_data
         
-    #print(order_data)
+    # print(order_data)
 
     if position_data:
         for position in position_data:
             # Extract the instrument_token and exchange for the current order
-            exchange = position['exchange']
-            symbol = position['tradingsymbol']
+            exchange = position['Exchange']
+            symbol = position['Tsym']
        
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
                 print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -199,14 +242,23 @@ def transform_positions_data(positions_data):
     transformed_data = [] 
 
     for position in positions_data:
+        netqty = float(position.get('Netqty', 0))
+        if netqty > 0 :
+            net_amount = float(position.get('NetBuyavgprc', 0))
+        elif netqty < 0:
+            net_amount = float(position.get('NetSellavgprc', 0))
+        else:
+            net_amount = 0
+        
+        average_price = net_amount    
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(float(position.get('average_price', 0.0)))
+        average_price_formatted = "{:.2f}".format(average_price)
 
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
-            "product": position.get('product', ''),
-            "quantity": position.get('quantity', '0'),
+            "symbol": position.get('Tsym', ''),
+            "exchange": position.get('Exchange', ''),
+            "product": position.get('Pcode', ''),
+            "quantity": position.get('Netqty', '0'),
             "average_price": average_price_formatted,
         }
         transformed_data.append(transformed_position)

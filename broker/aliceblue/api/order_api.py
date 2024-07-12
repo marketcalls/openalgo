@@ -16,20 +16,26 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
     'Content-Type': 'application/json'
     }
-
+    
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
+    print(data)
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
     return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchOrderBook",auth)
 
 def get_trade_book(auth):
+
     return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchTradeBook",auth)
 
 def get_positions(auth):
-    return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/positionBook",auth)
+    payload = json.dumps({
+    "ret": "NET"
+    })
+    
+    return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/positionBook",auth,"POST",payload=payload)
 
 def get_holdings(auth):
     return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/holdings",auth)

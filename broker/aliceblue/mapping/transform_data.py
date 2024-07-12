@@ -22,7 +22,7 @@ def transform_data(data):
         "ret": "DAY",
         "symbol_id": token,
         "transtype": data['action'].upper(),
-        "trigger_price": data.get("trigger_price", "0"),
+        "trigPrice": data.get("trigger_price", "0"),
         "orderTag": "openalgo",
         
         }
