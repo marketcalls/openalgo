@@ -11,13 +11,13 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-
-    if order_data['stat'] == 'Not_Ok':
-        # Handle the case where there is an error in the data
-        # For example, you might want to display an error message to the user
-        # or pass an empty list or dictionary to the template.
-        print(f"Error fetching order data: {order_data['emsg']}")
-        order_data = {}
+    if isinstance(order_data, dict):
+        if order_data['stat'] == 'Not_Ok' :
+            # Handle the case where there is an error in the data
+            # For example, you might want to display an error message to the user
+            # or pass an empty list or dictionary to the template.
+            print(f"Error fetching order data: {order_data['emsg']}")
+            order_data = {}
     else:
         order_data = order_data
         
@@ -122,7 +122,7 @@ def transform_order_data(orders):
             "exchange": order.get("Exchange", ""),
             "action": trans_type,
             "quantity": order.get("Qty", 0),
-            "price": order.get("Avgprc", 0.0),
+            "price": order.get("Prc", 0.0),
             "trigger_price": order.get("Trgprc", 0.0),
             "pricetype": order_type,
             "product": order.get("Pcode", ""),
