@@ -13,7 +13,7 @@ def authenticate_broker(userid, encKey):
         conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
 
         # Generating the checksum as a SHA-256 hash of concatenated api_key, request_token, and api_secret
-        checksum_input = f"{userid}{BROKER_API_KEY}{encKey}"
+        checksum_input = f"{userid}{BROKER_API_SECRET}{encKey}"
         checksum = hashlib.sha256(checksum_input.encode()).hexdigest()
 
         payload_session = json.dumps({

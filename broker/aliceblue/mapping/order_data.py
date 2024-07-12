@@ -11,13 +11,13 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if order_data is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
+
+    if order_data['stat'] == 'Not_Ok':
+        # Handle the case where there is an error in the data
+        # For example, you might want to display an error message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
+        print(f"Error fetching order data: {order_data['emsg']}")
+        order_data = {}
     else:
         order_data = order_data
         
@@ -87,17 +87,24 @@ def transform_order_data(orders):
         orders = [orders]
 
     transformed_orders = []
-    
+    print(orders)
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
-    
+        
+        # Check if the necessary keys exist in the order
+        if 'Trantype' not in order or 'Prctype' not in order:
+            print("Error: Missing required keys in the order. Skipping this item.")
+            continue
+        
         if order['Trantype'] == 'B':
             trans_type = 'BUY'
         elif order['Trantype'] == 'S':
             trans_type = 'SELL'
+        else:
+            trans_type = 'UNKNOWN'
 
         if order['Prctype'] == 'MKT':
             order_type = 'MARKET'
@@ -107,6 +114,8 @@ def transform_order_data(orders):
             order_type = 'SL'
         elif order['Prctype'] == 'SL-M':
             order_type = 'SL-M'
+        else:
+            order_type = 'UNKNOWN'
 
         transformed_order = {
             "symbol": order.get("Trsym", ""),
@@ -125,6 +134,7 @@ def transform_order_data(orders):
         transformed_orders.append(transformed_order)
 
     return transformed_orders
+
 
 def map_trade_data(trade_data):
     return map_order_data(trade_data)

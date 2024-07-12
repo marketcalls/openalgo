@@ -13,7 +13,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
     conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
     headers = {
-    'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
+    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
     'Content-Type': 'application/json'
     }
 
@@ -60,7 +60,7 @@ def place_order_api(data,auth):
     #token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data)
     headers = {
-    'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
+    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
     'Content-Type': 'application/json'
     }
 
