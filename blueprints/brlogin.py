@@ -148,44 +148,50 @@ def broker_callback(broker,para=None):
         return handle_auth_failure(error_message, forward_url=forward_url)
     
 
+
 @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_loginflow(broker):
-    print(f'Broker is {broker}')
     if broker == 'kotak':
         mobilenumber = request.form.get('mobilenumber')
         password = request.form.get('password')
         conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
         payload = json.dumps({
-        "mobileNumber": mobilenumber,
-        "password": password
+            "mobileNumber": mobilenumber,
+            "password": password
         })
         api_secret = get_broker_api_secret()
         headers = {
-        'accept': '*/*',
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_secret}'
+            'accept': '*/*',
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_secret}'
         }
         conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
         res = conn.getresponse()
         data = res.read().decode("utf-8")
+
         data_dict = json.loads(data)
+        print(data_dict)
+
+        if 'data' in data_dict:
+            token = data_dict['data']['token']
+            sid = data_dict['data']['sid']
+            decode_jwt = jwt.decode(token, options={"verify_signature": False})
+            userid = decode_jwt.get("sub")
+
+            para = {
+                "token": token,
+                "sid": sid,
+                "userid": userid
+            }
+            getKotakOTP(userid, api_secret)
+            return render_template('kotakotp.html', para=para)
+        else:
+            error_message = data_dict.get('message', 'Unknown error occurred')
+            return render_template('kotak.html', error_message=error_message)
         
-        token = data_dict['data']['token']
-        sid = data_dict['data']['sid']
-        decode_jwt = jwt.decode(token, options={"verify_signature": False})
-        userid = decode_jwt.get("sub")
-        
-        para = {
-            "token": token,
-            "sid": sid,
-            "userid": userid
-        }
-        getKotakOTP(userid,api_secret)
-        return render_template('kotakotp.html',para=para)
-        
-    return 
+    return
 
 
 def getKotakOTP(userid,token):
