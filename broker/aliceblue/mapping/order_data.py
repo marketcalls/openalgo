@@ -299,12 +299,13 @@ def map_portfolio_data(portfolio_data):
     """
     
         # Check if 'data' is None
-    if portfolio_data['HoldingVal'] is None:
+    if isinstance(portfolio_data, dict):
+        if portfolio_data['stat'] == 'Not_Ok' :
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
+            print("No data available.")
+            portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['HoldingVal']
         
