@@ -6,6 +6,7 @@ from utils.auth_utils import handle_auth_success, handle_auth_failure
 import http.client
 import json
 import jwt
+import hashlib
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -59,6 +60,35 @@ def broker_callback(broker,para=None):
             totp_code = request.form.get('totp')
             auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
+    
+    elif broker == 'aliceblue':
+        if request.method == 'GET':
+            if 'user' not in session:
+                return redirect(url_for('auth.login'))
+            return render_template('aliceblue.html')
+        
+        elif request.method == 'POST':
+            print('Aliceblue Login Flow')
+            userid = request.form.get('userid')
+            conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
+            payload = json.dumps({
+                "userId": userid
+            })
+            headers = {
+                'Content-Type': 'application/json'
+            }
+            try:
+                conn.request("POST", "/rest/AliceBlueAPIService/api/customer/getAPIEncpkey", payload, headers)
+                res = conn.getresponse()
+                data = res.read().decode("utf-8")
+                data_dict = json.loads(data)
+                print(data_dict)
+                auth_token, error_message = auth_function(userid, data_dict['encKey'])
+                forward_url = 'aliceblue.html'
+            
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
     elif broker=='fyers':
         code = request.args.get('auth_code')
         print(f'The code is {code}')
@@ -122,6 +152,7 @@ def broker_callback(broker,para=None):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_loginflow(broker):
+    print(f'Broker is {broker}')
     if broker == 'kotak':
         mobilenumber = request.form.get('mobilenumber')
         password = request.form.get('password')
@@ -154,8 +185,6 @@ def broker_loginflow(broker):
         getKotakOTP(userid,api_secret)
         return render_template('kotakotp.html',para=para)
         
-        
-       
     return 
 
 
