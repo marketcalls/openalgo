@@ -267,17 +267,24 @@ def transform_positions_data(positions_data):
 def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:
+        ltp = float(holdings.get('Ltp', 0))
+        price = float(holdings.get('Price', 0.0))
+        quantity = int(holdings.get('Holdqty', 0))
+
+        pnl = round(ltp - price, 2)
+        pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
+
         transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
-        
+            "symbol": holdings.get('Bsetsym', ''),
+            "exchange": holdings.get('ExchSeg1', ''),
+            "quantity": quantity,
+            "product": holdings.get('Pcode', ''),
+            "pnl": pnl,  # Rounded to two decimals
+            "pnlpercent": pnlpercent  # Rounded to two decimals
         }
         transformed_data.append(transformed_position)
     return transformed_data
+
 
     
 def map_portfolio_data(portfolio_data):
@@ -290,35 +297,38 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - The modified portfolio_data with  'product' fields.
     """
+    
         # Check if 'data' is None
-    if portfolio_data['data'] is None:
+    if portfolio_data['HoldingVal'] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        portfolio_data = portfolio_data['data']
+        portfolio_data = portfolio_data['HoldingVal']
         
-
+    print(portfolio_data)
 
     if portfolio_data:
         for portfolio in portfolio_data:
-            if portfolio['product'] == 'CNC':
-                portfolio['product'] = 'CNC'
+            if portfolio['Pcode'] == 'CNC':
+                portfolio['Pcode'] = 'CNC'
 
             else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
+                print(f"AliceBlue Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 
-
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item['last_price'] * item['quantity'] for item in holdings_data)
-    totalinvvalue = sum(item['average_price'] * item['quantity'] for item in holdings_data)
-    totalprofitandloss = sum(item['pnl'] for item in holdings_data)
     
-    # To avoid division by zero in the case when total_investment_value is 0
+    totalholdingvalue = sum(float(item['Ltp']) * int(item['HUqty']) for item in holdings_data)
+    totalinvvalue = sum(float(item['Price']) * int(item['HUqty']) for item in holdings_data)
+    totalprofitandloss = sum((float(item['Ltp']) - float(item['Price'])) * int(item['HUqty']) for item in holdings_data)
+    
+    for item in holdings_data:
+        print((item['Ltp'],item['Price'],item['HUqty']))
+    # To avoid division by zero in the case when totalinvvalue is 0
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
 
     return {
@@ -327,5 +337,6 @@ def calculate_portfolio_statistics(holdings_data):
         'totalprofitandloss': totalprofitandloss,
         'totalpnlpercentage': totalpnlpercentage
     }
+
 
 

@@ -17,11 +17,16 @@
         <h2 class="text-3xl font-bold mb-6 text-center">Broker Authentication</h2>
         
         <!-- Brokers Grid -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 text-black">
+        <div class="grid grid-cols-2 lg:grid-cols-3 gap-4 text-black">
             <!-- 5 Paisa (Planned/Inactive) -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5 Paisa Logo" width="100" height="100" class="mb-3">
                 <a href="/fivepaisa/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">5Paisa Login</a>
+            </div>
+            <!-- AliceBlue -->
+            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
+                <img src="{{ url_for('static', filename='images/brokers/aliceblue.png') }}" alt="Aliceblue Logo" width="100" height="100" class="mb-3">
+                <a href="/aliceblue/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">AliceBlue Login</a>    
             </div>
             <!-- Angel -->
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
@@ -57,11 +62,6 @@
             <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
                 <img src="{{ url_for('static', filename='images/brokers/zerodha.png') }}" alt="Zerodha Logo" width="100" height="100" class="mb-3">
                 <a href="https://kite.trade/connect/login?api_key={{ broker_api_key }}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">Zerodha Login</a>    
-            </div>
-            <!-- AliceBlue -->
-            <div class="bg-gray rounded shadow p-4 flex flex-col items-center">
-                <img src="{{ url_for('static', filename='images/brokers/aliceblue.png') }}" alt="Aliceblue Logo" width="100" height="100" class="mb-3">
-                <a href="/aliceblue/callback" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline text-center">AliceBlue Login</a>    
             </div>
                                         
                     </div>

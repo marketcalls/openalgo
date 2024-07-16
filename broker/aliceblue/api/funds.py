@@ -42,7 +42,7 @@ def get_margin_data(auth_token):
             processed_margin_data["collateral"] = "{:.2f}".format(float(item.get('collateralvalue', 0)))
             processed_margin_data["m2munrealized"] = "{:.2f}".format(float(item.get('unrealizedMtomPrsnt', 0)))
             processed_margin_data["m2mrealized"] = "{:.2f}".format(float(item.get('realizedMtomPrsnt', 0)))
-            processed_margin_data["utiliseddebits"] = "{:.2f}".format(float(item.get('scripbasketmargin', 0)))
+            processed_margin_data["utiliseddebits"] = "{:.2f}".format(float(item.get('cncMarginUsed', 0)))
 
         return processed_margin_data
     except KeyError as e:

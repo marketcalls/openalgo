@@ -328,23 +328,18 @@ def process_aliceblue_bfo_csv(path):
 
         # Convert 'Expiry Date' column to datetime format
     df['Expiry Date'] = pd.to_datetime(df['Expiry Date'])
-
-    # Define the function to reformat symbol details
-    def reformat_symbol_detail(row):
-        if row['Strike Price'].is_integer():
-            Strike_price = int(row['Strike Price'])
-        else:
-            Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+    
+    df.loc[df['Instrument Type'] == 'SF', 'Option Type'] = 'XX'
+    df.loc[df['Instrument Type'] == 'IF', 'Option Type'] = 'XX'
 
     # Apply the function to rows where 'Option Type' is 'XX'
-    df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
+    df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Formatted Ins Name'].str.replace(' ', '')
 
     # Apply the function to rows where 'Option Type' is 'CE'
-    df.loc[df['Option Type'] == 'CE', 'symbol'] = df.apply(lambda row: reformat_symbol_detail(row) + 'CE', axis=1)
+    df.loc[df['Option Type'] == 'CE', 'symbol'] = df['Formatted Ins Name'].str.replace(' ', '')
 
     # Apply the function to rows where 'Option Type' is 'PE'
-    df.loc[df['Option Type'] == 'PE', 'symbol'] = df.apply(lambda row: reformat_symbol_detail(row) + 'PE', axis=1)
+    df.loc[df['Option Type'] == 'PE', 'symbol'] = df['Formatted Ins Name'].str.replace(' ', '')
 
     # Create token_df with the relevant columns
     token_df = df[['symbol']].copy()
@@ -384,7 +379,6 @@ def process_aliceblue_mcx_csv(path):
     # Drop rows where the 'Exch Seg' column has the value 'mcx_idx'
     df = df[df['Exchange Segment'] != 'mcx_idx']
 
-        # Convert 'Expiry Date' column to datetime format
     df['Expiry Date'] = pd.to_datetime(df['Expiry Date'])
 
     # Define the function to reformat symbol details
@@ -395,17 +389,17 @@ def process_aliceblue_mcx_csv(path):
             Strike_price = float(row['Strike Price'])
         return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
 
+    df.loc[df['Instrument Type'] == 'FUTCOM', 'Option Type'] = 'XX'
+    df.loc[df['Instrument Type'] == 'FUTIDX', 'Option Type'] = 'XX'
+
     # Apply the function to rows where 'Option Type' is 'XX'
-    df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
+    df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'FUT'
 
     # Apply the function to rows where 'Option Type' is 'CE'
     df.loc[df['Option Type'] == 'CE', 'symbol'] = df.apply(lambda row: reformat_symbol_detail(row) + 'CE', axis=1)
 
     # Apply the function to rows where 'Option Type' is 'PE'
     df.loc[df['Option Type'] == 'PE', 'symbol'] = df.apply(lambda row: reformat_symbol_detail(row) + 'PE', axis=1)
-
-
-
 
     # Create token_df with the relevant columns
     token_df = df[['symbol']].copy()
@@ -428,9 +422,9 @@ def process_aliceblue_mcx_csv(path):
     token_df['tick_size'] = df['Tick Size'].values
 
     # Drop rows where 'symbol' is NaN
-    token_df_cleaned = token_df.dropna(subset=['symbol'])
+    # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
-    return token_df_cleaned
+    return token_df
 
 def process_aliceblue_bcd_csv(path):
     """
@@ -452,6 +446,9 @@ def process_aliceblue_bcd_csv(path):
             Strike_price = float(row['Strike Price'])
         return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
 
+    df.loc[df['Instrument Type'] == 'FUTCUR', 'Option Type'] = 'XX'
+    df.loc[df['Instrument Type'] == 'FUTCUR', 'Strike Price'] = 1
+
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
 
@@ -482,9 +479,9 @@ def process_aliceblue_bcd_csv(path):
     token_df['tick_size'] = df['Tick Size'].values
 
     # Drop rows where 'symbol' is NaN
-    token_df_cleaned = token_df.dropna(subset=['symbol'])
+    # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
-    return token_df_cleaned
+    return token_df
 
 
 def process_aliceblue_indices_csv(path):

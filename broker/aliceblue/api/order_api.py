@@ -46,14 +46,25 @@ def get_open_position(tradingsymbol, exchange, product,auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     
 
-    positions_data = get_positions(auth)
+    position_data = get_positions(auth)
+
+    if isinstance(position_data, dict):
+        if position_data['stat'] == 'Not_Ok' :
+            # Handle the case where there is an error in the data
+            # For example, you might want to display an error message to the user
+            # or pass an empty list or dictionary to the template.
+            print(f"Error fetching order data: {position_data['emsg']}")
+            position_data = {}
+    else:
+        position_data = position_data
+
     net_qty = '0'
     #print(positions_data['data']['net'])
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']['net']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
-                net_qty = position.get('quantity', '0')
+    if position_data :
+        for position in position_data:
+            if position.get('Tsym') == tradingsymbol and position.get('Exchange') == exchange and position.get('Pcode') == product:
+                net_qty = position.get('Netqty', '0')
                 print(f'Net Quantity {net_qty}')
                 break  # Assuming you need the first match
 
@@ -181,33 +192,46 @@ def close_all_positions(current_api_key,auth):
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
 
+    if isinstance(positions_response, dict):
+        if positions_response['stat'] == 'Not_Ok' :
+            # Handle the case where there is an error in the data
+            # For example, you might want to display an error message to the user
+            # or pass an empty list or dictionary to the template.
+            print(f"Error fetching order data: {positions_response['emsg']}")
+            positions_response = {}
+    else:
+        positions_response = positions_response
+
+
     #print(positions_response)
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    if positions_response is None or not positions_response:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+
+
+    if positions_response:
         # Loop through each position to close
-        for position in positions_response['data']['net']:
+        for position in positions_response:
             # Skip if net quantity is zero
-            if int(position['quantity']) == 0:
+            if int(position['Netqty']) == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
-            quantity = abs(int(position['quantity']))
+            action = 'SELL' if int(position['Netqty']) > 0 else 'BUY'
+            quantity = abs(int(position['Netqty']))
 
             #Get OA Symbol before sending to Place Order
-            symbol = get_oa_symbol(position['tradingsymbol'],position['exchange'])
+            symbol = get_oa_symbol(position['Tsym'],position['Exchange'])
             # Prepare the order payload
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": position['Exchange'],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'],position['product']),
+                "product": position['Pcode'],
                 "quantity": str(quantity)
             }
 
