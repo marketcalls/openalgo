@@ -37,17 +37,16 @@ pytz==2024.1
 PyYAML==6.0.1
 requests==2.32.3
 rich==13.7.1
-setuptools==70.2.0
+setuptools
 simple-websocket==1.0.0
 six==1.16.0
 SQLAlchemy==2.0.31
 typing_extensions==4.12.2
 tzdata==2024.1
 urllib3==2.2.2
-Werkzeug==3.0.3
-wheel==0.43.0
+Werkzeug
+wheel
 wrapt==1.16.0
 wsproto==1.2.0
-zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
-dnspython>=2.6.1 # not directly required, pinned by Snyk to avoid a vulnerability
+zipp
 gunicorn
