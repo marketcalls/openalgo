@@ -5,11 +5,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const storedTheme = localStorage.getItem('theme');
     if (storedTheme) {
         document.documentElement.setAttribute('data-theme', storedTheme);
-        themeController.checked = storedTheme === 'synthwave';
+        themeController.checked = storedTheme === 'light';
     }
 
     themeController.addEventListener('change', (event) => {
-        const theme = event.target.checked ? 'synthwave' : 'dark';
+        const theme = event.target.checked ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('theme', theme);
     });

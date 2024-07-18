@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenDash</title>
+    <title>OpenAlgo</title>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.tailwindcss.com/3.4.4"></script>
     <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
@@ -24,7 +24,7 @@
     <div class="flex flex-col min-h-screen">
         <nav class="bg-base-300 p-4">
             <div class="container mx-auto flex justify-between">
-                <a href="/" class="text-lg font-bold gradient-text">OpenDash</a>
+                <a href="/" class="text-lg font-bold gradient-text">OpenAlgo</a>
                 <div class="flex space-x-4">
                     {% if current_user.is_authenticated %}
                         <a href="/dashboard" class="btn btn-sm">Dashboard</a>
@@ -53,7 +53,7 @@
             {% block content %}{% endblock %}
         </main>
         <footer class="bg-base-300 p-4 text-center">
-            <p>OpenDash, &copy; copyright {{ current_year }}</p>
+            <p>OpenAlgo, &copy; copyright {{ current_year }}</p>
         </footer>
     </div>
     <script src="{{ url_for('static', filename='theme.js') }}"></script>
