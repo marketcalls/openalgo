@@ -89,7 +89,7 @@ def generate_otp():
     return ''.join(random.choices('0123456789', k=6))
 
 def send_welcome_email(to):
-    msg = Message('Welcome to OpenDash', recipients=[to])
+    msg = Message('Welcome to OpenAlgo', recipients=[to])
     msg.html = render_template('email/welcome.html')
     mail.send(msg)
 
