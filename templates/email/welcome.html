@@ -6,42 +6,64 @@
     <title>Welcome to OpenAlgo</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
             margin: 0;
             padding: 0;
         }
         .container {
             width: 100%;
             max-width: 600px;
-            margin: 0 auto;
+            margin: 20px auto;
             background-color: #ffffff;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
         }
         .header {
+            background-color: #4a90e2;
+            color: #ffffff;
             text-align: center;
-            padding: 20px 0;
+            padding: 30px 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
         }
         .content {
-            padding: 20px;
-            text-align: center;
+            padding: 30px;
+            text-align: left;
         }
-        .content h1 {
+        .content h2 {
             color: #333333;
+            font-size: 22px;
+            margin-bottom: 20px;
         }
         .content p {
-            color: #666666;
+            color: #555555;
             line-height: 1.6;
+            margin-bottom: 15px;
+        }
+        .feature {
+            background-color: #f0f4f8;
+            border-left: 4px solid #4a90e2;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .feature h3 {
+            color: #4a90e2;
+            margin-top: 0;
         }
         .footer {
+            background-color: #333333;
+            color: #ffffff;
             text-align: center;
             padding: 20px;
-            color: #999999;
-            font-size: 12px;
+            font-size: 14px;
         }
         .footer a {
-            color: #0066cc;
+            color: #4a90e2;
             text-decoration: none;
         }
     </style>
@@ -52,9 +74,20 @@
             <h1>Welcome to OpenAlgo!</h1>
         </div>
         <div class="content">
-            <p>Thank you for registering with us. We're thrilled to have you on board!</p>
-            <p>At OpenAlgo, we are dedicated to providing you with the best tools and resources to enhance your trading strategies. Our platform is designed to be intuitive and powerful, offering a range of features to help you succeed.</p>
-            <p>If you have any questions or need assistance, feel free to reach out to our support team. We're here to help!</p>
+            <h2>Dear Trader,</h2>
+            <p>Thank you for joining OpenAlgo! We're excited to have you on board and can't wait to see how our platform will enhance your trading experience.</p>
+            
+            <div class="feature">
+                <h3>Powerful Tools at Your Fingertips</h3>
+                <p>Our intuitive platform offers a range of features designed to optimize your trading strategies and boost your performance.</p>
+            </div>
+            
+            <div class="feature">
+                <h3>Expert Support</h3>
+                <p>Our dedicated team is here to assist you every step of the way. Don't hesitate to reach out if you have any questions!</p>
+            </div>
+            
+            <p>We look forward to helping you achieve your trading goals with OpenAlgo. If you have any questions or need assistance getting started, please don't hesitate to contact our support team.</p>
         </div>
         <div class="footer">
             <p>Best Regards,<br>The OpenAlgo Team</p>
