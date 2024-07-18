@@ -3,73 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="OpenAlgo is your premier open source algorithmic trading platform, offering a robust and secure environment for developing and executing trading strategies.">
-    <title>OpenAlgo</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
-
-    <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
-
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-
-    <!-- Favicon and touch icons for various devices -->
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
-
-    <!-- Meta tags for color settings on mobile browsers -->
-    <meta name="msapplication-TileColor" content="#da532c">
-    <meta name="theme-color" content="#ffffff">
-
+    <title>OpenDash</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com/3.4.4"></script>
+    <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@heroicons/react/outline/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@heroicons/react/solid/index.js"></script>
     <style>
-        /* Style in base.html to control the flash message container's spacing */
-        .flash-message-container {
-            margin-bottom: 0; /* Remove bottom margin */
-            padding-bottom: 0; /* Remove bottom padding */
+        body, html {
+            height: 100%;
+        }
+        .gradient-text {
+            background: linear-gradient(90deg, #00C6FF, #0072FF, #8733FF, #FF5C7C, #FF00C6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
     </style>
-
-    {% block head %}{% endblock %}
 </head>
-<body class="bg-white-100">
-    {% include 'navbar.html' %}
-
-    <!-- Flash Messages Display Area -->
-    <div class="container mx-auto mt-4 flash-message-container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <div class="w-full px-4 py-3 mx-auto">
-                    {% for category, message in messages %}
-                        <div class="
-                            {{ 'bg-green-100 text-green-800' if category == 'success' else 'bg-red-100 text-red-800' }}
-                            px-4 py-3 rounded relative text-center" role="alert">
-                            <strong class="font-bold">{{ message }}</strong>
-                            <!-- Optional close button for the alert, if you want it -->
-                        </div>
-                    {% endfor %}
+<body class="bg-base-200 text-base-content">
+    <div class="flex flex-col min-h-screen">
+        <nav class="bg-base-300 p-4">
+            <div class="container mx-auto flex justify-between">
+                <a href="/" class="text-lg font-bold gradient-text">OpenDash</a>
+                <div class="flex space-x-4">
+                    {% if current_user.is_authenticated %}
+                        <a href="/dashboard" class="btn btn-sm">Dashboard</a>
+                        <a href="/screener" class="btn btn-sm">Screener</a>
+                        <a href="/charts" class="btn btn-sm">Charts</a>
+                        <a href="/logout" class="btn btn-sm btn-secondary">Logout</a>
+                    {% else %}
+                        <a href="/login" class="btn btn-sm btn-primary">Login</a>
+                        <a href="/register" class="btn btn-sm btn-secondary">Register</a>
+                    {% endif %}
                 </div>
-            {% endif %}
-        {% endwith %}
+            </div>
+        </nav>
+        <main class="flex-grow container mx-auto p-4">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="alert-container space-y-2">
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            {% block content %}{% endblock %}
+        </main>
+        <footer class="bg-base-300 p-4 text-center">
+            <p>OpenDash, &copy; copyright {{ current_year }}</p>
+        </footer>
     </div>
-
-    <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
-    <div class="container mx-auto mt-24">
-        {% block content %}{% endblock %}
-    </div>
-
-    <!-- Include the footer content -->
-    {% include 'footer.html' %}
-
-    <script>
-    document.getElementById('profileBtn').addEventListener('click', function() {
-        var dropdown = document.getElementById('profileMenu');
-        dropdown.classList.toggle('hidden');
-    });
-    </script>        
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </body>
 </html>

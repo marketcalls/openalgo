@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mx-auto mt-8">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold mb-4">{{ symbol }} Indicators</h1>
+            <h2 class="text-4xl text-green-500">LTP: {{ ltp }}</h2>
+            <h3 class="text-2xl {% if percentage_change >= 0 %}text-green-500{% else %}text-red-500{% endif %}">({{ percentage_change }}%)</h3>
+        </div>
+        <div>
+            <form action="{{ url_for('dashboard.dashboard') }}" method="post" class="flex flex-col items-center space-x-2">
+                {{ form.hidden_tag() }}
+                <input type="text" name="symbol" placeholder="Enter Stock Symbol" class="input input-bordered input-primary w-full max-w-xs text-center" required>
+                <button type="submit" class="btn btn-primary mt-2">Get Data</button>
+            </form>
+        </div>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-3-3v6" />
+                    </svg>
+                    <h2 class="card-title">RSI</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.RSI }}</p>
+                <p class="text-sm">Relative Strength Index</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                    </svg>
+                    <h2 class="card-title">EMA</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.EMA }}</p>
+                <p class="text-sm">Exponential Moving Average</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                    </svg>
+                    <h2 class="card-title">SMA</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.SMA }}</p>
+                <p class="text-sm">Simple Moving Average</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-red-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    <h2 class="card-title">Williams %R</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.WILLR }}</p>
+                <p class="text-sm">Williams %R</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-teal-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3" />
+                    </svg>
+                    <h2 class="card-title">TEMA</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.TEMA }}</p>
+                <p class="text-sm">Triple EMA</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    <h2 class="card-title">ATR</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.ATR }}</p>
+                <p class="text-sm">Average True Range</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3" />
+                    </svg>
+                    <h2 class="card-title">CCI</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.CCI }}</p>
+                <p class="text-sm">Commodity Channel Index</p>
+            </div>
+        </div>
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <div class="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-orange-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3" />
+                    </svg>
+                    <h2 class="card-title">MFI</h2>
+                </div>
+                <p class="text-4xl">{{ indicators.MFI }}</p>
+                <p class="text-sm">Money Flow Index</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

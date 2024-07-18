@@ -1,137 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Explore OpenAlgo, your gateway to advanced algorithmic trading. Our platform offers a seamless integration with sophisticated trading algorithms, and a user-friendly interface designed for both novice and experienced traders. Unlock the potential of automated trading strategies with OpenAlgo. Start your journey towards smarter, more efficient trading today.">
+{% extends 'base.html' %}
 
-    <!-- Page Title & Favicon -->
-    <title>OpenAlgo - OpenSource Algo Platform for Everyone</title>
-    <link rel="icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
-
-    <!-- Tailwind CSS and Custom Font -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
-        body {
-            font-family: 'Open Sans', sans-serif;
-        }
-        .custom-blue {
-            color: #307AFF; /* Adjusted blue color, placeholder for actual color */
-        }
-        .highlight {
-            background-color: #eff6ff; /* This is a placeholder for the actual highlight color */
-            padding: 8px 16px; /* Adjust padding as needed */
-            display: inline-block;
-            border-radius: 4px; /* Optional: if you want rounded corners */
-        }
-        .info-box {
-            background-color: #2d3748; /* Gray-800 background */
-            color: white;
-            padding: 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-top: 24px; /* Space between buttons and boxes */
-            flex: 1; /* Allow boxes to grow and shrink equally */
-            max-width: 300px; /* Optional: limit max width for each box */
-            margin: 8px; /* Space between boxes */
-        }
-        .info-box h3 {
-            font-size: 1.5rem;
-            margin-bottom: 8px;
-        }
-        .info-container {
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            flex-wrap: wrap; /* Allow boxes to wrap on smaller screens */
-            margin-top: 24px;
-        }
-        .brokers-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 16px; /* Space between broker images */
-            margin-top: 24px;
-        }
-        .spacer {
-            height: 20px; /* Adjust the height as needed */
-        }
-
-        .greyscale img {
-            filter: grayscale(100%);
-            transition: filter 0.3s ease; /* Smooth transition */
-        }
-        .greyscale img:hover {
-            filter: grayscale(0%);
-        }
-    </style>
-
-    <!-- Favicon and touch icons for various devices (Already included) -->
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
-    
-    <!-- Meta tags for color settings on mobile browsers -->
-    <meta name="msapplication-TileColor" content="#da532c">
-    <meta name="theme-color" content="#ffffff">
-</head>
-<body class="bg-white h-screen">
-    <div class="flex flex-col justify-center items-center h-full px-4 text-center">
-        <!-- Logo Image centered -->
-        <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="mb-6 mx-auto">
-
-        <h1 class="text-4xl text-gray-800 mb-2">Take Control of Your Algo Platform</h1>
-        <p class="mb-6">
-            <span class="highlight text-xl font-semibold">OpenSource Algo Platform for <span class="custom-blue">Everyone</span></span>
-        </p>
-
-        <!-- Buttons side by side with horizontal padding -->
-        <div class="flex justify-center items-center gap-4 mb-6">
-            <a href="https://docs.openalgo.in" class="px-6 py-3 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300" target="_blank" rel="noopener noreferrer">Documentation</a>
-            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-300">Login</a>
+{% block content %}
+<div class="flex items-center justify-center h-full">
+    <div class="text-center mt-40">
+        <h1 class="text-8xl font-bold mb-2 gradient-text">OpenDash</h1>
+        <p class="text-sm mb-8">Trading Dashboard for Everyone</p>
+        <div class="flex justify-center space-x-4 mb-8">
+            <a href="/login" class="btn btn-primary btn-sm">Login</a>
+            <a href="/register" class="btn btn-secondary btn-sm">Register</a>
         </div>
-        <div class="spacer"></div>
-        <div class="spacer"></div>
-        <div class="spacer"></div>
-        
-        <!-- New Content Boxes Container -->
-        <!-- <div class="info-container flex justify-center items-start gap-16 mt-6">
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Algorithmic Strategies</h3>
-                <p>Create and execute algorithmic trading strategies seamlessly using OpenAlgo. Easily integrate with trading platforms like Amibroker, TradingView, Python, Chartink, and MetaTrader.</p>
-            </div>
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Seamless Integration</h3>
-                <p>OpenAlgo connects with popular trading platforms and supports self-hosting on Windows, macOS, and Linux. Host on your desktop or servers for maximum flexibility and control.</p>
-            </div>
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Open Source</h3>
-                <p>OpenAlgo is 100% Free and Open Source, supported by a dedicated community of traders & developers. Benefit from continuous updates & community-driven enhancements. Join our community to contribute.</p>
-            </div>
-        </div> -->
-
-        <!-- Brokers Images Container -->
-        <div class="brokers-container greyscale gap-16 mt-6">
-            <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5Paisa" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/aliceblue.png') }}" alt="5Paisa" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/angel.png') }}" alt="Angel" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/dhan.png') }}" alt="Dhan" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/kotak.png') }}" alt="Kotak" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/upstox.png') }}" alt="Upstox" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/zerodha.png') }}" alt="Zerodha" width="64" height="64">
-
+        <div class="flex justify-center items-center">
+            <span class="mr-2">Dark</span>
+            <input type="checkbox" value="synthwave" class="toggle theme-controller" />
+            <span class="ml-2">Synthwave</span>
         </div>
     </div>
-
-
-    <!-- Include the footer content -->
-    {% include 'footer.html' %}
-
-</body>
-</html>
+</div>
+{% endblock %}

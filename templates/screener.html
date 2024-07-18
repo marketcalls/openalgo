@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Screener{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl mb-5">Two EMA Crossover Intraday Scanner</h1>
+<form action="/screener" method="POST" class="space-y-4">
+    <div class="mb-4">
+        <label for="tickers" class="block text-sm font-medium text-gray-300">Tickers (comma separated):</label>
+        <input type="text" name="tickers" id="tickers" value="HDFCBANK.NS, TATASTEEL.NS, WIPRO.NS, ICICIBANK.NS, RELIANCE.NS" class="input input-bordered w-1/2 bg-gray-800 text-white border-gray-600">
+    </div>
+    <div class="mb-4 flex space-x-4">
+        <div>
+            <label for="start_time" class="block text-sm font-medium text-gray-300">Start Time:</label>
+            <input type="time" name="start_time" id="start_time" value="09:30" class="input input-bordered bg-gray-800 text-white border-gray-600">
+        </div>
+        <div>
+            <label for="end_time" class="block text-sm font-medium text-gray-300">End Time:</label>
+            <input type="time" name="end_time" id="end_time" value="15:00" class="input input-bordered bg-gray-800 text-white border-gray-600">
+        </div>
+    </div>
+    <div class="mb-4">
+        <button type="submit" class="btn btn-primary w-full">Scan</button>
+    </div>
+</form>
+{% if results %}
+    <h2 class="text-2xl mb-4">Scan Results</h2>
+    <div class="overflow-x-auto">
+        <table class="table w-full">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Ticker</th>
+                    <th>Crossover Type</th>
+                    <th>Close</th>
+                    <th>EMA10</th>
+                    <th>EMA20</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in results %}
+                    <tr class="{{ loop.cycle('bg-base-200', '') }}">
+                        <td>{{ row['Date'] }}</td>
+                        <td>{{ row['Time'] }}</td>
+                        <td>{{ row['Ticker'] }}</td>
+                        <td>
+                            {% if row['Crossover Type'] == 'Positive EMA Crossover' %}
+                                <span class="badge badge-primary">{{ row['Crossover Type'] }}</span>
+                            {% else %}
+                                <span class="badge badge-secondary">{{ row['Crossover Type'] }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ row['Close']|round(2) }}</td>
+                        <td>{{ row['EMA10']|round(2) }}</td>
+                        <td>{{ row['EMA20']|round(2) }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %}
+{% endblock %}

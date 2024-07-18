@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="flex items-center justify-center h-full">
+    <div class="text-center mt-20">
+        <h2 class="text-2xl font-bold mb-4">Verify OTP</h2>
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="mb-4">
+                {{ form.otp.label(class="block text-gray-700 text-sm font-bold mb-2") }}
+                {{ form.otp(class="input input-bordered input-primary w-full max-w-xs") }}
+            </div>
+            <div class="mb-4">
+                {{ form.submit(class="btn btn-primary") }}
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

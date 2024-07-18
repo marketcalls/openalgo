@@ -3,22 +3,23 @@
 {% block content %}
 <div class="flex items-center justify-center h-full">
     <div class="text-center mt-20">
-        <h2 class="text-2xl font-bold mb-4">Login</h2>
+        <h2 class="text-2xl font-bold mb-4">Register</h2>
         <form method="POST">
             {{ form.hidden_tag() }}
             <div class="mb-4">
                 {{ form.email.label(class="block text-gray-700 text-sm font-bold mb-2") }}
-                {{ form.email(class="input input-bordered input-primary w-full max-w-xs") }}
+                {{ form.email(class="input input-bordered input-accent w-full max-w-xs") }}
             </div>
             <div class="mb-4">
                 {{ form.password.label(class="block text-gray-700 text-sm font-bold mb-2") }}
-                {{ form.password(class="input input-bordered input-primary w-full max-w-xs") }}
+                {{ form.password(class="input input-bordered input-accent w-full max-w-xs") }}
             </div>
             <div class="mb-4">
-                {{ form.submit(class="btn btn-primary") }}
+                {{ form.confirm_password.label(class="block text-gray-700 text-sm font-bold mb-2") }}
+                {{ form.confirm_password(class="input input-bordered input-accent w-full max-w-xs") }}
             </div>
             <div class="mb-4">
-                <a href="{{ url_for('auth.forgot_password') }}" class="text-sm text-blue-500">Forgot Password?</a>
+                {{ form.submit(class="btn btn-secondary") }}
             </div>
         </form>
     </div>

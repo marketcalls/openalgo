@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mx-auto mt-8">
+    <div class="flex justify-between items-center mb-4">
+        <div class="text-left">
+            <h2 class="text-4xl text-green-500">LTP: {{ ltp }}</h2>
+            <h3 class="text-2xl {% if percentage_change >= 0 %}text-green-500{% else %}text-red-500{% endif %}">({{ percentage_change }}%)</h3>
+        </div>
+        <div class="text-right">
+            <form method="POST" action="{{ url_for('charts.charts') }}">
+                {{ form.hidden_tag() }}
+                <div class="form-control">
+                    <label class="input-group">
+                        {{ form.symbol(class="input input-bordered", placeholder="Enter symbol") }}
+                        <button type="submit" class="btn btn-primary">Submit</button>
+                    </label>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="chart" class="mb-4">
+        {{ graph_html|safe }}
+    </div>
+</div>
+{% endblock %}
