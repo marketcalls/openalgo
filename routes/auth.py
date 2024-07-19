@@ -1,10 +1,13 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask import Blueprint, render_template, redirect, url_for, flash, request, session
 from flask_login import login_user, logout_user, login_required, current_user
 from extensions import db, mail, bcrypt
 from forms import RegistrationForm, LoginForm, ForgotPasswordForm, VerifyOTPForm, ChangePasswordForm
 from models import User
 from flask_mail import Message
+from utils.session import get_session_expiry_time  # Import the session expiry function
 import random
+from datetime import datetime, timedelta
+import pytz
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -28,6 +31,8 @@ def login():
         user = User.query.filter_by(email=form.email.data).first()
         if user and bcrypt.check_password_hash(user.password, form.password.data):
             login_user(user)
+            expiry_seconds = get_session_expiry_time()
+            session['expiry_time'] = (datetime.now(pytz.timezone('UTC')) + timedelta(seconds=expiry_seconds)).timestamp()  # Set session expiry time as a timestamp
             flash('Login Successful', 'success')
             return redirect(url_for('dashboard.dashboard'))
         else:
@@ -38,6 +43,7 @@ def login():
 @login_required
 def logout():
     logout_user()
+    session.clear()
     flash('You have been logged out', 'info')
     return redirect(url_for('auth.login'))
 
