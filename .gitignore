@@ -11,6 +11,7 @@ Thumbs.db
 .vscode/
 .idea/
 .python-version
+config.ini
 
 
 #DB Files and Log/Tmp Files

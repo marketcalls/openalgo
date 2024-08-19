@@ -61,7 +61,32 @@
                     </div>
                 </div>
             </div>
+            <div class="text-center mt-8">
+                <button onclick="launchTradingTool()" id="launchButton" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition duration-300 ease-in-out transform hover:scale-105">
+                    Launch FastScalper
+                </button>
+            </div>
         </div>
     </div>
 </div>
+
+<script>
+    function launchTradingTool() {
+        fetch('/launch', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                const button = document.getElementById('launchButton');
+                if (data.message === "FastScalper Launched") {
+                    button.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+                    button.classList.add('bg-green-500', 'hover:bg-green-600');
+                    button.textContent = 'FastScalper Launched';
+                } else if (data.message === "Trading Tool is already running") {
+                    button.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+                    button.classList.add('bg-red-500', 'hover:bg-red-600');
+                    button.textContent = 'Trading Tool Already Running';
+                }
+            })
+            .catch(error => console.error('Error:', error));
+    }
+</script>
 {% endblock %}
