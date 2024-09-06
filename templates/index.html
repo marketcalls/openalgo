@@ -3,135 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Explore OpenAlgo, your gateway to advanced algorithmic trading. Our platform offers a seamless integration with sophisticated trading algorithms, and a user-friendly interface designed for both novice and experienced traders. Unlock the potential of automated trading strategies with OpenAlgo. Start your journey towards smarter, more efficient trading today.">
+    <meta name="description" content="OpenAlgo: The OpenSource Algo Platform for Everyone. Create, execute, and control algorithmic trading strategies with ease.">
 
-    <!-- Page Title & Favicon -->
     <title>OpenAlgo - OpenSource Algo Platform for Everyone</title>
     <link rel="icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
 
-    <!-- Tailwind CSS and Custom Font -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
-            font-family: 'Open Sans', sans-serif;
-        }
-        .custom-blue {
-            color: #307AFF; /* Adjusted blue color, placeholder for actual color */
+            font-family: 'Inter', sans-serif;
         }
         .highlight {
-            background-color: #eff6ff; /* This is a placeholder for the actual highlight color */
-            padding: 8px 16px; /* Adjust padding as needed */
-            display: inline-block;
-            border-radius: 4px; /* Optional: if you want rounded corners */
-        }
-        .info-box {
-            background-color: #2d3748; /* Gray-800 background */
-            color: white;
-            padding: 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-top: 24px; /* Space between buttons and boxes */
-            flex: 1; /* Allow boxes to grow and shrink equally */
-            max-width: 300px; /* Optional: limit max width for each box */
-            margin: 8px; /* Space between boxes */
-        }
-        .info-box h3 {
-            font-size: 1.5rem;
-            margin-bottom: 8px;
-        }
-        .info-container {
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            flex-wrap: wrap; /* Allow boxes to wrap on smaller screens */
-            margin-top: 24px;
-        }
-        .brokers-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 16px; /* Space between broker images */
-            margin-top: 24px;
-        }
-        .spacer {
-            height: 20px; /* Adjust the height as needed */
-        }
-
-        .greyscale img {
-            filter: grayscale(100%);
-            transition: filter 0.3s ease; /* Smooth transition */
-        }
-        .greyscale img:hover {
-            filter: grayscale(0%);
+            color: #8B5CF6;
         }
     </style>
 
-    <!-- Favicon and touch icons for various devices (Already included) -->
+    <!-- Favicon and touch icons -->
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
     <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
-    
-    <!-- Meta tags for color settings on mobile browsers -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
 </head>
-<body class="bg-white h-screen">
-    <div class="flex flex-col justify-center items-center h-full px-4 text-center">
-        <!-- Logo Image centered -->
-        <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="mb-6 mx-auto">
+<body class="bg-white text-gray-900 flex flex-col min-h-screen">
+    <header class="p-4 flex justify-end space-x-4">
+        <a href="https://github.com/marketcalls/openalgo" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+            <svg class="w-6 h-6 text-gray-600 hover:text-gray-900" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        </a>
+        <a href="https://discord.com/invite/UPh7QPsNhP" target="_blank" rel="noopener noreferrer" aria-label="Discord">
+            <svg class="w-6 h-6 text-gray-600 hover:text-gray-900" fill="currentColor" viewBox="0 0 24 24"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>
+        </a>
+        <a href="https://x.com/openalgoHQ" target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
+            <svg class="w-6 h-6 text-gray-600 hover:text-gray-900" fill="currentColor" viewBox="0 0 24 24"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>
+        </a>
+        <a href="https://www.youtube.com/@openalgo" target="_blank" rel="noopener noreferrer" aria-label="YouTube">
+            <svg class="w-6 h-6 text-gray-600 hover:text-gray-900" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+        </a>
+    </header>
 
-        <h1 class="text-4xl text-gray-800 mb-2">Take Control of Your Algo Platform</h1>
-        <p class="mb-6">
-            <span class="highlight text-xl font-semibold">OpenSource Algo Platform for <span class="custom-blue">Everyone</span></span>
+    <main class="flex-grow flex flex-col items-center justify-center px-4 text-center">
+        <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="w-24 h-24 mb-8">
+
+        <h1 class="text-5xl font-bold mb-4">
+            Create, Run & Control
+            <br>
+            <span class="highlight">Algo Strategies</span>
+        </h1>
+
+        <p class="text-xl text-gray-600 mb-8 max-w-2xl">
+            Power Your Trading with a Self-Hosted, Cross-Platform Algo Solution. Run Seamlessly on Windows, Mac, Linux, or the Cloud.
         </p>
 
-        <!-- Buttons side by side with horizontal padding -->
-        <div class="flex justify-center items-center gap-4 mb-6">
-            <a href="https://docs.openalgo.in" class="px-6 py-3 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300" target="_blank" rel="noopener noreferrer">Documentation</a>
-            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-300">Login</a>
+        <div class="flex flex-col sm:flex-row gap-4 mb-12">
+            <a href="https://docs.openalgo.in" class="px-6 py-3 bg-gray-900 text-white font-semibold rounded-full hover:bg-gray-800 transition duration-300 flex items-center justify-center" target="_blank" rel="noopener noreferrer">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                Documentation
+            </a>
+            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-white text-gray-900 font-semibold rounded-full border-2 border-gray-900 hover:bg-gray-100 transition duration-300 flex items-center justify-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                Login
+            </a>
         </div>
-        <div class="spacer"></div>
-        <div class="spacer"></div>
-        <div class="spacer"></div>
-        
-        <!-- New Content Boxes Container -->
-        <!-- <div class="info-container flex justify-center items-start gap-16 mt-6">
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Algorithmic Strategies</h3>
-                <p>Create and execute algorithmic trading strategies seamlessly using OpenAlgo. Easily integrate with trading platforms like Amibroker, TradingView, Python, Chartink, and MetaTrader.</p>
-            </div>
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Seamless Integration</h3>
-                <p>OpenAlgo connects with popular trading platforms and supports self-hosting on Windows, macOS, and Linux. Host on your desktop or servers for maximum flexibility and control.</p>
-            </div>
-            <div class="info-box flex-1 max-w-xs p-4">
-                <h3 class="font-semibold text-white">Open Source</h3>
-                <p>OpenAlgo is 100% Free and Open Source, supported by a dedicated community of traders & developers. Benefit from continuous updates & community-driven enhancements. Join our community to contribute.</p>
-            </div>
-        </div> -->
+    </main>
 
-        <!-- Brokers Images Container -->
-        <div class="brokers-container greyscale gap-16 mt-6">
-            <img src="{{ url_for('static', filename='images/brokers/5paisa.png') }}" alt="5Paisa" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/aliceblue.png') }}" alt="5Paisa" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/angel.png') }}" alt="Angel" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/dhan.png') }}" alt="Dhan" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/fyers.png') }}" alt="Fyers" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/icici.png') }}" alt="ICICI" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/kotak.png') }}" alt="Kotak" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/upstox.png') }}" alt="Upstox" width="64" height="64">
-            <img src="{{ url_for('static', filename='images/brokers/zerodha.png') }}" alt="Zerodha" width="64" height="64">
-
-        </div>
-    </div>
-
-
-    <!-- Include the footer content -->
+    <!-- Footer -->
     {% include 'footer.html' %}
-
 </body>
 </html>
