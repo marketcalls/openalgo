@@ -38,6 +38,7 @@
                     <option value="icici">ICICI Direct</option>
                     <option value="kotak">Kotak Securities</option>
                     <option value="upstox">Upstox</option>
+                    <option value="zebu">Zebu</option>
                     <option value="zerodha">Zerodha</option>
                 </select>
             </div>
@@ -80,6 +81,9 @@
                     break;
                 case 'upstox':
                     loginUrl = 'https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={{broker_api_key}}&redirect_uri={{ redirect_url }}';
+                    break;
+                case 'zebu':
+                    loginUrl = '/zebu/callback';
                     break;
                 case 'zerodha':
                     loginUrl = 'https://kite.trade/connect/login?api_key={{broker_api_key}}';

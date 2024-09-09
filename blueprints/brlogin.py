@@ -109,12 +109,27 @@ def broker_callback(broker,para=None):
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker == 'zebu':  
+        if request.method == 'GET':
+            if 'user' not in session:
+                return redirect(url_for('auth.login'))
+            return render_template('zebu.html')
+        
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            auth_token, error_message = auth_function(userid, password, totp_code)
+            forward_url = 'zebu.html'
+
     elif broker=='kotak':
         print(f"The Broker is {broker}")
         if request.method == 'GET':
             if 'user' not in session:
                 return redirect(url_for('auth.login'))
             return render_template('kotak.html')
+        
 
         elif request.method == 'POST':
             otp = request.form.get('otp')
@@ -126,6 +141,8 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(otp,token,sid,userid,api_secret)
 
             forward_url = 'kotak.html'
+
+   
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
