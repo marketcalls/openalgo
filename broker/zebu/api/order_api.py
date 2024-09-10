@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.zebu.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
@@ -64,39 +64,17 @@ def place_order_api(data,auth):
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': newdata['apikey']
-    }
-    payload = json.dumps({
-        "variety": newdata.get('variety', 'NORMAL'),
-        "tradingsymbol": newdata['tradingsymbol'],
-        "symboltoken": newdata['symboltoken'],
-        "transactiontype": newdata['transactiontype'],
-        "exchange": newdata['exchange'],
-        "ordertype": newdata.get('ordertype', 'MARKET'),
-        "producttype": newdata.get('producttype', 'INTRADAY'),
-        "duration": newdata.get('duration', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "triggerprice": newdata.get('triggerprice', '0'),
-        "squareoff": newdata.get('squareoff', '0'),
-        "stoploss": newdata.get('stoploss', '0'),
-        "quantity": newdata['quantity']
-    })
+    'Content-Type': 'application/x-www-form-urlencoded' }
+    
+    payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
     print(payload)
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
+    conn = http.client.HTTPSConnection("go.mynt.in")
+    conn.request("POST", "/NorenWClientTP/PlaceOrder", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
-    if response_data['status'] == True:
-        orderid = response_data['data']['orderid']
+    if response_data['stat'] == "Ok":
+        orderid = response_data['norenordno']
     else:
         orderid = None
     return res, response_data, orderid
