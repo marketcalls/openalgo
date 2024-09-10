@@ -12,37 +12,47 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data['data'] is None:
+    if order_data is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        order_data = order_data['data']
+        order_data = order_data
         
 
 
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            symboltoken = order['symboltoken']
-            exchange = order['exchange']
+            symboltoken = order['token']
+            exchange = order['exch']
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
+                order['tsym'] = symbol_from_db
+                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
+                    order['prd'] = 'CNC'
                                
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
+                elif order['prd'] == 'I':
+                    order['prd'] = 'MIS'
                 
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
+                    order['prd'] = 'NRML'
+
+                if(order['prctyp']=="MKT"):
+                    order['prctyp']="MARKET"
+                elif(order['prctyp']=="LMT"):
+                    order['prctyp']="LIMIT"
+                elif(order['prctyp']=="SL-MKT"):
+                    order['prctyp']="SL-M"
+                elif(order['prctyp']=="SL-LMT"):
+                    order['prctyp']="SL"
+                
             else:
                 print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
@@ -67,17 +77,19 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['transactiontype'] == 'BUY':
+            if order['trantype'] == 'B':
+                order['trantype'] = 'BUY'
                 total_buy_orders += 1
-            elif order['transactiontype'] == 'SELL':
+            elif order['trantype'] == 'S':
+                order['trantype'] = 'SELL'
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'complete':
+            if order['status'] == 'COMPLETE':
                 total_completed_orders += 1
-            elif order['status'] == 'open':
+            elif order['status'] == 'OPEN':
                 total_open_orders += 1
-            elif order['status'] == 'rejected':
+            elif order['status'] == 'REJECTED':
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -91,10 +103,7 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
-    # Directly handling a dictionary assuming it's the structure we expect
-    if isinstance(orders, dict):
-        # Convert the single dictionary into a list of one dictionary
-        orders = [orders]
+    
 
     transformed_orders = []
     
@@ -105,17 +114,17 @@ def transform_order_data(orders):
             continue
 
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
-            "exchange": order.get("exchange", ""),
-            "action": order.get("transactiontype", ""),
-            "quantity": order.get("quantity", 0),
-            "price": order.get("price", 0.0),
-            "trigger_price": order.get("triggerprice", 0.0),
-            "pricetype": order.get("ordertype", ""),
-            "product": order.get("producttype", ""),
-            "orderid": order.get("orderid", ""),
-            "order_status": order.get("status", ""),
-            "timestamp": order.get("updatetime", "")
+            "symbol": order.get("tsym", ""),
+            "exchange": order.get("exch", ""),
+            "action": order.get("trantype", ""),
+            "quantity": order.get("qty", 0),
+            "price": order.get("prc", 0.0),
+            "trigger_price": order.get("trgprc", 0.0),
+            "pricetype": order.get("prctyp", ""),
+            "product": order.get("prd", ""),
+            "orderid": order.get("norenordno", ""),
+            "order_status": order.get("status", "").lower(),
+            "timestamp": order.get("norentm", "")
         }
 
         transformed_orders.append(transformed_order)
@@ -135,37 +144,44 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data['data'] is None:
+    if trade_data is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         print("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
-        trade_data = trade_data['data']
+        trade_data = trade_data
         
 
 
     if trade_data:
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
-            symbol = order['tradingsymbol']
-            exchange = order['exchange']
+            symbol = order['tsym']
+            exchange = order['exch']
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_oa_symbol(symbol, exchange)
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
+                order['tsym'] = symbol_from_db
+                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
+                    order['prd'] = 'CNC'
                                
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
+                elif order['prd'] == 'I':
+                    order['prd'] = 'MIS'
                 
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
+                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
+                    order['prd'] = 'NRML'
+
+                if(order['trantype']=="B"):
+                    order['trantype']="BUY"
+                elif(order['trantype']=="S"):
+                    order['trantype']="SELL"
+                
+                
             else:
                 print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
@@ -178,50 +194,77 @@ def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
-            "exchange": trade.get('exchange', ''),
-            "product": trade.get('producttype', ''),
-            "action": trade.get('transactiontype', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('fillprice', 0.0),
-            "trade_value": trade.get('tradevalue', 0),
-            "orderid": trade.get('orderid', ''),
-            "timestamp": trade.get('filltime', '')
+            "symbol": trade.get('tsym', ''),
+            "exchange": trade.get('exch', ''),
+            "product": trade.get('prd', ''),
+            "action": trade.get('trantype', ''),
+            "quantity": trade.get('qty', 0),
+            "average_price": trade.get('avgprc', 0.0),
+            "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
+            "orderid": trade.get('norenordno', ''),
+            "timestamp": trade.get('norentm', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
 
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+
+    if position_data is None:
+        # Handle the case where there is no data
+        # For example, you might want to display a message to the user
+        # or pass an empty list or dictionary to the template.
+        print("No data available.")
+        position_data = {}  # or set it to an empty list if it's supposed to be a list
+    else:
+        position_data = position_data
+        
+
+
+    if position_data:
+        for order in position_data:
+            # Extract the instrument_token and exchange for the current order
+            symbol = order['tsym']
+            exchange = order['exch']
+            
+            # Use the get_symbol function to fetch the symbol from the database
+            symbol_from_db = get_oa_symbol(symbol, exchange)
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            if symbol_from_db:
+                order['tsym'] = symbol_from_db
+                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
+                    order['prd'] = 'CNC'
+                               
+                elif order['prd'] == 'I':
+                    order['prd'] = 'MIS'
+                
+                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
+                    order['prd'] = 'NRML'
+
+
+                
+                
+            else:
+                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                
+    return position_data
 
 
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
-            "product": position.get('producttype', ''),
+            "symbol": position.get('tsym', ''),
+            "exchange": position.get('exch', ''),
+            "product": position.get('prd', ''),
             "quantity": position.get('netqty', 0),
-            "average_price": position.get('avgnetprice', 0.0),
+            "average_price": position.get('netavgprc', 0.0),
         }
         transformed_data.append(transformed_position)
     return transformed_data
 
-def transform_holdings_data(holdings_data):
-    transformed_data = []
-    for holdings in holdings_data['holdings']:
-        transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": holdings.get('profitandloss', 0.0),
-            "pnlpercent": holdings.get('pnlpercentage', 0.0)
-        }
-        transformed_data.append(transformed_position)
-    return transformed_data
+
 
 def map_portfolio_data(portfolio_data):
     """
@@ -236,49 +279,46 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
     """
     # Check if 'data' is None or doesn't contain 'holdings'
-    if portfolio_data.get('data') is None or 'holdings' not in portfolio_data['data']:
+    if not portfolio_data:
         print("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 
     # Directly work with 'data' for clarity and simplicity
-    data = portfolio_data['data']
+    portfolio_data = portfolio_data
 
     # Modify 'product' field for each holding if applicable
-    if data.get('holdings'):
-        for portfolio in data['holdings']:
-            symbol = portfolio['tradingsymbol']
-            exchange = portfolio['exchange']
+    for portfolio in portfolio_data:
+        exch_tsym_list = portfolio.get('exch_tsym', [])
+        
+        # Process each symbol in the 'exch_tsym' list
+        for exch_tsym in exch_tsym_list:
+            symbol = exch_tsym.get('tsym', '')
+            exchange = exch_tsym.get('exch', '')
+
+            # Replace 'get_oa_symbol' function with your actual symbol fetching logic
             symbol_from_db = get_oa_symbol(symbol, exchange)
             
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            # Check if a symbol was found; if so, update the trading symbol in the current holding
             if symbol_from_db:
-                portfolio['tradingsymbol'] = symbol_from_db
-            if portfolio['product'] == 'DELIVERY':
-                portfolio['product'] = 'CNC'  # Modify 'product' field
+                exch_tsym['tsym'] = symbol_from_db
             else:
-                print("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
-    # The function already works with 'data', which includes 'holdings' and 'totalholding',
-    # so we can return 'data' directly without additional modifications.
-    return data
+    # Directly returning the modified portfolio data
+    return portfolio_data
+    
+
 
 
 def calculate_portfolio_statistics(holdings_data):
-
-    if holdings_data['totalholding'] is None:
+    if not holdings_data:
+        print("No data available.")
         totalholdingvalue = 0
         totalinvvalue = 0
         totalprofitandloss = 0
         totalpnlpercentage = 0
-    else:
-
-        totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
-        totalinvvalue = holdings_data['totalholding']['totalinvvalue']
-        totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
-        
-        # To avoid division by zero in the case when total_investment_value is 0
-        totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
+  
 
     return {
         'totalholdingvalue': totalholdingvalue,
@@ -288,3 +328,16 @@ def calculate_portfolio_statistics(holdings_data):
     }
 
 
+def transform_holdings_data(holdings_data):
+    transformed_data = []
+    for holdings in holdings_data:
+        transformed_position = {
+            "symbol": holdings.get('tradingsymbol', ''),
+            "exchange": holdings.get('exchange', ''),
+            "quantity": holdings.get('quantity', 0),
+            "product": holdings.get('product', ''),
+            "pnl": holdings.get('profitandloss', 0.0),
+            "pnlpercent": holdings.get('pnlpercentage', 0.0)
+        }
+        transformed_data.append(transformed_position)
+    return transformed_data

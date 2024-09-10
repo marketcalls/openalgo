@@ -12,18 +12,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     api_key = os.getenv('BROKER_API_KEY')
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
-    }
+    data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
+
+    if(endpoint == "/NorenWClientTP/Holdings"):
+        data = f'{{"uid": "{api_key}", "actid": "{api_key}", "prd": "C"}}'
+
+    payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
+
+    conn = http.client.HTTPSConnection("go.mynt.in")
+    headers = {'Content-Type': 'application/json'}
+
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
@@ -31,16 +29,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
+    return get_api_response("/NorenWClientTP/OrderBook",auth,method="POST")
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
+    return get_api_response("/NorenWClientTP/TradeBook",auth,method="POST")
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
+    return get_api_response("/NorenWClientTP/PositionBook",auth,method="POST")
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
+    return get_api_response("/NorenWClientTP/Holdings",auth,method="POST")
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
