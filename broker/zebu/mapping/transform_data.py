@@ -75,27 +75,15 @@ def map_product_type(product):
     return product_type_mapping.get(product, "I")  # Default to DELIVERY if not found
 
 
-def map_variety(pricetype):
-    """
-    Maps the pricetype to the existing order variety.
-    """
-    variety_mapping = {
-        "MARKET": "NORMAL",
-        "LIMIT": "NORMAL",
-        "SL": "STOPLOSS",
-        "SL-M": "STOPLOSS"
-    }
-    return variety_mapping.get(pricetype, "NORMAL")  # Default to DELIVERY if not found
-
 
 def reverse_map_product_type(product):
     """
     Maps the new product type to the existing product type.
     """
     reverse_product_type_mapping = {
-        "DELIVERY": "CNC",
-        "CARRYFORWARD": "NRML",
-        "INTRADAY": "MIS",
+        "C": "CNC",
+        "M": "NRML",
+        "I": "MIS",
     }
     return reverse_product_type_mapping.get(product)  
 

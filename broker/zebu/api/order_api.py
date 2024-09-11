@@ -49,9 +49,9 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
+    if positions_data:
+        for position in positions_data:
+            if position.get('tsym') == tradingsymbol and position.get('exch') == exchange and position.get('prd') == producttype:
                 net_qty = position.get('netqty', '0')
                 break  # Assuming you need the first match
 
@@ -65,7 +65,7 @@ def place_order_api(data,auth):
     newdata = transform_data(data, token)  
     headers = {
     'Content-Type': 'application/x-www-form-urlencoded' }
-    
+
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
     print(payload)
@@ -172,12 +172,12 @@ def close_all_positions(current_api_key,auth):
     positions_response = get_positions(AUTH_TOKEN)
 
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    if positions_response is None or positions_response[0]['stat'] == "Not_Ok":
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response:
         # Loop through each position to close
-        for position in positions_response['data']:
+        for position in positions_response:
             # Skip if net quantity is zero
             if int(position['netqty']) == 0:
                 continue
@@ -188,7 +188,7 @@ def close_all_positions(current_api_key,auth):
 
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['symboltoken'],position['exchange'])
+            symbol = get_symbol(position['token'],position['exch'])
             print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
@@ -197,9 +197,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": position['exch'],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['producttype']),
+                "product": reverse_map_product_type(position['prd']),
                 "quantity": str(quantity)
             }
 
