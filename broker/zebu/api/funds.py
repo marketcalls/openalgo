@@ -48,15 +48,15 @@ def get_margin_data(auth_token):
     try:
         # Calculate total_available_margin as the sum of 'cash' and 'payin'
         total_available_margin = float(margin_data['cash']) + float(margin_data['payin'])
-        
-        total_used_margin = 0.00
-        total_realised = 0.00
-        total_unrealised = 0.00
+        total_collateral = float(margin_data['brkcollamt'])
+        total_used_margin = float(margin_data['marginused'])
+        total_realised = float(margin_data['rpnl'])
+        total_unrealised = float(margin_data['urmtom'])
 
         # Construct and return the processed margin data
         processed_margin_data = {
             "availablecash": "{:.2f}".format(total_available_margin),
-            "collateral": "0.00",  # Zebu does not provide collateral data in the response
+            "collateral": "{:.2f}".format(total_collateral),
             "m2munrealized": "{:.2f}".format(total_unrealised),
             "m2mrealized": "{:.2f}".format(total_realised),
             "utiliseddebits": "{:.2f}".format(total_used_margin),
