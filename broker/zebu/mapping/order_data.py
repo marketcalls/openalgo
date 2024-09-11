@@ -12,7 +12,7 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if not order_data or order_data['stat'] == "Not_Ok":
+    if order_data is None or (order_data[0]['stat'] == "Not_Ok"):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -144,7 +144,7 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if not trade_data or trade_data['stat'] == "Not_Ok":
+    if trade_data is None or (trade_data[0]['stat'] == "Not_Ok"):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -210,7 +210,7 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
 
-    if not position_data or position_data['stat'] == "Not_Ok":
+    if  position_data is None or (position_data[0]['stat'] == "Not_Ok"):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
