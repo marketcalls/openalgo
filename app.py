@@ -1,3 +1,8 @@
+# Load and check environment variables before anything else
+from utils.env_check import load_and_check_env_variables  # Import the environment check function
+load_and_check_env_variables()
+
+
 from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
