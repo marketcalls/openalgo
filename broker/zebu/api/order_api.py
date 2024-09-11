@@ -63,8 +63,7 @@ def place_order_api(data,auth):
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
-    headers = {
-    'Content-Type': 'application/x-www-form-urlencoded' }
+    headers = {'Content-Type': 'application/json'}
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
@@ -223,34 +222,25 @@ def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
+    data = {"uid": api_key, "norenordno": orderid}
     
+
+    payload = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
     # Set up the request headers
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
-    }
+    headers = {'Content-Type': 'application/json'}
+
     
-    # Prepare the payload
-    payload = json.dumps({
-        "variety": "NORMAL",
-        "orderid": orderid,
-    })
+
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")  # Adjust the URL as necessary
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/cancelOrder", payload, headers)
+    conn = http.client.HTTPSConnection("go.mynt.in")  # Adjust the URL as necessary
+    conn.request("POST", "/NorenWClientTP/CancelOrder", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
+    print(data)
     
     # Check if the request was successful
-    if data.get("status"):
+    if data.get("stat")=='Ok':
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
@@ -266,31 +256,23 @@ def modify_order(data,auth):
 
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
+    data["apikey"] = api_key
 
     transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
     # Set up the request headers
-    headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
-    }
-    payload = json.dumps(transformed_data)
+    headers = {'Content-Type': 'application/json'}
+    payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/modifyOrder", payload, headers)
+
+    conn = http.client.HTTPSConnection("go.mynt.in")
+    conn.request("POST", "/NorenWClientTP/ModifyOrder", payload, headers)
     res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    response = json.loads(res.read().decode("utf-8"))
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    if response.get("stat")=='Ok':
+        return {"status": "success", "orderid": data["orderid"]}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+        return {"status": "error", "message": response.get("emsg", "Failed to modify order")}, res.status
 
 
 
@@ -302,19 +284,19 @@ def cancel_all_orders_api(data,auth):
 
     order_book_response = get_order_book(AUTH_TOKEN)
     #print(order_book_response)
-    if order_book_response['status'] != True:
+    if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+    orders_to_cancel = [order for order in order_book_response
+                        if order['status'] in ['OPEN', 'TRIGGER PENDING']]
     #print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['orderid']
+        orderid = order['norenordno']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
             canceled_orders.append(orderid)

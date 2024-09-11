@@ -35,18 +35,17 @@ def transform_data(data,token):
 
 def transform_modify_order_data(data, token):
     return {
-        "variety": map_variety(data["pricetype"]),
-        "orderid": data["orderid"],
-        "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"]),
-        "duration": "DAY",
-        "price": data["price"],
-        "quantity": data["quantity"],
-        "tradingsymbol": data["symbol"],
-        "symboltoken": token,
-        "exchange": data["exchange"],
-        "disclosedquantity": data.get("disclosed_quantity", "0"),
-        "stoploss": data.get("trigger_price", "0")
+        "exch": data["exchange"],
+        "norenordno": data["orderid"],
+        "prctyp": map_order_type(data["pricetype"]),
+        "prc": data["price"],
+        "qty": data["quantity"],
+        "tsym": data["symbol"],
+        "ret": "DAY",
+        "mkt_protection": "0",
+        "trdprc": data.get("trigger_price", "0"),
+        "dscqty": data.get("disclosed_quantity", "0"),
+        "uid": data["apikey"]
     }
 
 
