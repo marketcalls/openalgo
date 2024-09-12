@@ -324,23 +324,44 @@ def calculate_portfolio_statistics(holdings_data):
         if holding.get('stat') != 'Ok':
             print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
             continue
-        
-        # Process the 'exch_tsym' list inside each portfolio entry (handling multiple exchanges)
-        for exch_tsym in holding.get('exch_tsym', []):
-            quantity = float(holding.get('holdqty', 0))
-            upload_price = float(holding.get('upldprc', 0))
-            market_price = float(exch_tsym.get('pp', 0))  # Assuming 'pp' is the market price for this exchange
 
-            # Calculate investment value and holding value for this specific exchange
-            inv_value = quantity * upload_price
-            holding_value = quantity * market_price
-            profit_and_loss = holding_value - inv_value
-            pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
+        # Filter out the NSE entry and ignore BSE for the same symbol
+        nse_entry = next((exch for exch in holding.get('exch_tsym', []) if exch.get('exch') == 'NSE'), None)
+        if not nse_entry:
+            continue  # Skip if no NSE entry is found
 
-            # Accumulate the totals
-            totalholdingvalue += holding_value
-            totalinvvalue += inv_value
-            totalprofitandloss += profit_and_loss
+        # Process only the NSE entry
+        quantity = float(holding.get('holdqty', 0)) + max(float(holding.get('npoadt1qty', 0)) , float(holding.get('dpqty', 0)))
+        upload_price = float(holding.get('upldprc', 0))
+        market_price = float(nse_entry.get('upldprc', 0))  # Assuming 'pp' is the market price for NSE
+
+        # Calculate investment value and holding value for NSE
+        inv_value = quantity * upload_price
+        holding_value = quantity * upload_price
+        profit_and_loss = holding_value - inv_value
+        pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
+
+        # Accumulate the totals
+        #totalholdingvalue += holding_value
+        totalinvvalue += inv_value
+        totalprofitandloss += profit_and_loss
+
+        # Valuation formula from API
+        holdqty = float(holding.get('holdqty', 0))
+        btstqty = float(holding.get('btstqty', 0))
+        brkcolqty = float(holding.get('brkcolqty', 0))
+        unplgdqty = float(holding.get('unplgdqty', 0))
+        benqty = float(holding.get('benqty', 0))
+        npoadqty = float(holding.get('npoadt1qty', 0))
+        dpqty = float(holding.get('dpqty', 0))
+        usedqty = float(holding.get('usedqty', 0))
+
+        # Valuation formula from API
+        valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
+        print("test valuation :"+str(npoadqty))
+        print("test valuation :"+str(upload_price))
+        # Accumulate total valuation
+        totalholdingvalue += valuation
 
     # Calculate overall P&L percentage
     totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
@@ -362,7 +383,7 @@ def transform_holdings_data(holdings_data):
                 transformed_position = {
                     "symbol": exch_tsym.get('tsym', ''),
                     "exchange": exch_tsym.get('exch', ''),
-                    "quantity": holding.get('holdqty', 0),
+                    "quantity": int(holding.get('holdqty', 0)) + max(int(holding.get('npoadt1qty', 0)) , int(holding.get('dpqty', 0))),
                     "product": exch_tsym.get('product', 'CNC'),
                     "pnl": holding.get('profitandloss', 0.0),
                     "pnlpercent": holding.get('pnlpercentage', 0.0)
