@@ -12,7 +12,7 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data is None or (order_data[0]['stat'] == "Not_Ok"):
+    if order_data is None or (isinstance(order_data, dict) and (order_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -144,7 +144,7 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data is None or (trade_data[0]['stat'] == "Not_Ok"):
+    if trade_data is None or (isinstance(trade_data, dict) and (trade_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -210,7 +210,7 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
 
-    if  position_data is None or (position_data[0]['stat'] == "Not_Ok"):
+    if  position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -312,14 +312,17 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    if not holdings_data:
-        print("No data available.")
-        totalholdingvalue = 0
-        totalinvvalue = 0
-        totalprofitandloss = 0
-        totalpnlpercentage = 0
-  
+    
+    totalholdingvalue = 0
+    totalinvvalue = 0
+    totalprofitandloss = 0
+    totalpnlpercentage = 0
 
+    
+
+    if holdings_data is None or (isinstance(holdings_data, dict) and (holdings_data['stat'] == "Not_Ok")):
+        print("No data available.")
+        
     return {
         'totalholdingvalue': totalholdingvalue,
         'totalinvvalue': totalinvvalue,

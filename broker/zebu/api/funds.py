@@ -39,6 +39,8 @@ def get_margin_data(auth_token):
     # Parse the response
     margin_data = json.loads(data.decode("utf-8"))
 
+    print(margin_data)
+
     # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
         # Log the error or return an empty dictionary to indicate failure
@@ -48,10 +50,10 @@ def get_margin_data(auth_token):
     try:
         # Calculate total_available_margin as the sum of 'cash' and 'payin'
         total_available_margin = float(margin_data['cash']) + float(margin_data['payin'])
-        total_collateral = float(margin_data['brkcollamt'])
-        total_used_margin = float(margin_data['marginused'])
-        total_realised = float(margin_data['rpnl'])
-        total_unrealised = float(margin_data['urmtom'])
+        total_collateral = float(margin_data.get('brkcollamt',0))
+        total_used_margin = float(margin_data.get('marginused',0))
+        total_realised = float(margin_data.get('rpnl',0))
+        total_unrealised = float(margin_data.get('urmtom',0))
 
         # Construct and return the processed margin data
         processed_margin_data = {
