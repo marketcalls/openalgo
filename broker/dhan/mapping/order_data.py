@@ -202,7 +202,7 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with  'product' fields.
     """
     # Check if 'portfolio_data' is empty
-    if portfolio_data is None or (
+    if portfolio_data is None or isinstance(portfolio_data,dict) and (
         portfolio_data.get('errorCode') == "DHOLDING_ERROR" or
         portfolio_data.get('internalErrorCode') == "DH-1111" or
         portfolio_data.get('internalErrorMessage') == "No holdings available"):
