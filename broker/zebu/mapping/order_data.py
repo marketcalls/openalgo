@@ -333,14 +333,15 @@ def calculate_portfolio_statistics(holdings_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    for holdings in holdings_data:
-        transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": holdings.get('profitandloss', 0.0),
-            "pnlpercent": holdings.get('pnlpercentage', 0.0)
-        }
-        transformed_data.append(transformed_position)
+    if(isinstance(holdings_data, list)):
+        for holdings in holdings_data[0]['exch_tsym']:
+            transformed_position = {
+                "symbol": holdings.get('tsym', ''),
+                "exchange": holdings.get('exch', ''),
+                "quantity": holdings.get('quantity', 0),
+                "product": holdings.get('product', ''),
+                "pnl": holdings.get('profitandloss', 0.0),
+                "pnlpercent": holdings.get('pnlpercentage', 0.0)
+            }
+            transformed_data.append(transformed_position)
     return transformed_data
