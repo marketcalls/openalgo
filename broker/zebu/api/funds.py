@@ -49,7 +49,7 @@ def get_margin_data(auth_token):
 
     try:
         # Calculate total_available_margin as the sum of 'cash' and 'payin'
-        total_available_margin = float(margin_data['cash']) + float(margin_data['payin'])
+        total_available_margin = float(margin_data.get('cash',0)) + float(margin_data.get('payin',0)) - float(margin_data.get('marginused',0))
         total_collateral = float(margin_data.get('brkcollamt',0))
         total_used_margin = float(margin_data.get('marginused',0))
         total_realised = float(margin_data.get('rpnl',0))

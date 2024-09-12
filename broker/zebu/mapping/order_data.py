@@ -264,65 +264,87 @@ def transform_positions_data(positions_data):
         transformed_data.append(transformed_position)
     return transformed_data
 
-
-
 def map_portfolio_data(portfolio_data):
     """
     Processes and modifies a list of Portfolio dictionaries based on specific conditions and
     ensures both holdings and totalholding parts are transmitted in a single response.
     
     Parameters:
-    - portfolio_data: A dictionary, where keys are 'holdings' and 'totalholding',
-                      and values are lists/dictionaries representing the portfolio information.
+    - portfolio_data: A list of dictionaries, where each dictionary represents portfolio information.
     
     Returns:
     - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
     """
-    # Check if 'data' is None or doesn't contain 'holdings'
-    if not portfolio_data:
-        print("No data available.")
-        # Return an empty structure or handle this scenario as needed
-        return {}
+    # Check if 'portfolio_data' is a list
+    if not portfolio_data or not isinstance(portfolio_data, list):
+        print("No data available or incorrect data format.")
+        return []
 
-    # Directly work with 'data' for clarity and simplicity
-    portfolio_data = portfolio_data
-
-    # Modify 'product' field for each holding if applicable
+    # Iterate over the portfolio_data list and process each entry
     for portfolio in portfolio_data:
-        exch_tsym_list = portfolio.get('exch_tsym', [])
-        
-        # Process each symbol in the 'exch_tsym' list
-        for exch_tsym in exch_tsym_list:
+        # Ensure 'stat' is 'Ok' before proceeding
+        if portfolio.get('stat') != 'Ok':
+            print(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
+            continue
+
+        # Process the 'exch_tsym' list inside each portfolio entry
+        for exch_tsym in portfolio.get('exch_tsym', []):
             symbol = exch_tsym.get('tsym', '')
             exchange = exch_tsym.get('exch', '')
 
             # Replace 'get_oa_symbol' function with your actual symbol fetching logic
             symbol_from_db = get_oa_symbol(symbol, exchange)
             
-            # Check if a symbol was found; if so, update the trading symbol in the current holding
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
                 print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
-    # Directly returning the modified portfolio data
     return portfolio_data
-    
-
-
 
 def calculate_portfolio_statistics(holdings_data):
-    
     totalholdingvalue = 0
     totalinvvalue = 0
     totalprofitandloss = 0
     totalpnlpercentage = 0
 
-    
+    # Check if the data is valid or contains an error
+    if not holdings_data or not isinstance(holdings_data, list):
+        print("Error: Invalid or missing holdings data.")
+        return {
+            'totalholdingvalue': totalholdingvalue,
+            'totalinvvalue': totalinvvalue,
+            'totalprofitandloss': totalprofitandloss,
+            'totalpnlpercentage': totalpnlpercentage
+        }
 
-    if holdings_data is None or (isinstance(holdings_data, dict) and (holdings_data['stat'] == "Not_Ok")):
-        print("No data available.")
+    # Iterate over the list of holdings
+    for holding in holdings_data:
+        # Ensure 'stat' is 'Ok' before proceeding
+        if holding.get('stat') != 'Ok':
+            print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
+            continue
         
+        # Process the 'exch_tsym' list inside each portfolio entry (handling multiple exchanges)
+        for exch_tsym in holding.get('exch_tsym', []):
+            quantity = float(holding.get('holdqty', 0))
+            upload_price = float(holding.get('upldprc', 0))
+            market_price = float(exch_tsym.get('pp', 0))  # Assuming 'pp' is the market price for this exchange
+
+            # Calculate investment value and holding value for this specific exchange
+            inv_value = quantity * upload_price
+            holding_value = quantity * market_price
+            profit_and_loss = holding_value - inv_value
+            pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
+
+            # Accumulate the totals
+            totalholdingvalue += holding_value
+            totalinvvalue += inv_value
+            totalprofitandloss += profit_and_loss
+
+    # Calculate overall P&L percentage
+    totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
+
     return {
         'totalholdingvalue': totalholdingvalue,
         'totalinvvalue': totalinvvalue,
@@ -330,18 +352,20 @@ def calculate_portfolio_statistics(holdings_data):
         'totalpnlpercentage': totalpnlpercentage
     }
 
-
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    if(isinstance(holdings_data, list)):
-        for holdings in holdings_data[0]['exch_tsym']:
-            transformed_position = {
-                "symbol": holdings.get('tsym', ''),
-                "exchange": holdings.get('exch', ''),
-                "quantity": holdings.get('quantity', 0),
-                "product": holdings.get('product', ''),
-                "pnl": holdings.get('profitandloss', 0.0),
-                "pnlpercent": holdings.get('pnlpercentage', 0.0)
-            }
-            transformed_data.append(transformed_position)
+    if isinstance(holdings_data, list):
+        for holding in holdings_data:
+            # Filter out only NSE exchange
+            nse_entries = [exch for exch in holding.get('exch_tsym', []) if exch.get('exch') == 'NSE']
+            for exch_tsym in nse_entries:
+                transformed_position = {
+                    "symbol": exch_tsym.get('tsym', ''),
+                    "exchange": exch_tsym.get('exch', ''),
+                    "quantity": holding.get('holdqty', 0),
+                    "product": exch_tsym.get('product', 'CNC'),
+                    "pnl": holding.get('profitandloss', 0.0),
+                    "pnlpercent": holding.get('pnlpercentage', 0.0)
+                }
+                transformed_data.append(transformed_position)
     return transformed_data
