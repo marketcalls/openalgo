@@ -49,7 +49,12 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
     net_qty = '0'
 
-    if positions_data:
+    if positions_data is None or (isinstance(positions_data, dict) and (positions_data['stat'] == "Not_Ok")):
+        # Handle the case where there is no data
+        print("No data available.")
+        net_qty = '0'
+
+    if positions_data and isinstance(positions_data, list):
         for position in positions_data:
             if position.get('tsym') == tradingsymbol and position.get('exch') == exchange and position.get('prd') == producttype:
                 net_qty = position.get('netqty', '0')
