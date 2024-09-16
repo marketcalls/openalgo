@@ -4,8 +4,7 @@ from importlib import import_module
 import multiprocessing
 import sys
 
-# Import the launch_trading_app function from fastscalper.py
-from blueprints.fastscalper import launch_trading_app
+
 
 def dynamic_import(broker):
     try:
@@ -42,31 +41,3 @@ def dashboard():
     margin_data = get_margin_data_func(AUTH_TOKEN)
     return render_template('dashboard.html', margin_data=margin_data)
 
-@dashboard_bp.route('/launch', methods=['POST'])
-def launch_trading_tool():
-    global scalper_process
-
-    if not session.get('logged_in'):
-        return redirect(url_for('auth.login'))
-    
-    login_username = session['user']
-    AUTH_TOKEN = get_auth_token(login_username)
-    
-    if AUTH_TOKEN is None:
-        return redirect(url_for('auth.logout'))
-
-    broker = session.get('broker')
-    if not broker:
-        return "Broker not set in session", 400
-
-    # Terminate the previous process if it is still running
-    if scalper_process and scalper_process.is_alive():
-        scalper_process.terminate()
-        scalper_process.join()
-
-    if sys.platform.startswith('win'):
-        multiprocessing.freeze_support()
-
-    scalper_process = multiprocessing.Process(target=launch_trading_app)
-    scalper_process.start()
-    return jsonify({"message": "FastScalper Launched"}), 200
