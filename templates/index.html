@@ -30,12 +30,6 @@
         }
     </style>
 
-    <!-- Favicon and touch icons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
 </head>
@@ -45,12 +39,27 @@
             <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8 mr-2">
             <span class="text-xl font-bold">OpenAlgo</span>
         </a>
-        <nav class="flex items-center">
+
+        <!-- Burger Menu Button -->
+        <button id="menu-toggle" class="block md:hidden focus:outline-none">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+            </svg>
+        </button>
+
+        <nav id="menu" class="hidden md:flex items-center">
             <ul class="flex space-x-6">
                 <li><a href="/" class="menu-item active">Home</a></li>
                 <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
             </ul>
             <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
+        </nav>
+
+        <!-- Mobile Menu -->
+        <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
+            <a href="/" class="menu-item active">Home</a>
+            <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
         </nav>
     </header>
 
@@ -76,5 +85,13 @@
 
     <!-- Footer -->
     {% include 'footer.html' %}
+
+    <!-- JavaScript for Toggle Menu -->
+    <script>
+        document.getElementById('menu-toggle').addEventListener('click', function() {
+            const mobileMenu = document.getElementById('mobile-menu');
+            mobileMenu.classList.toggle('hidden');
+        });
+    </script>
 </body>
 </html>
