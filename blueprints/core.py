@@ -9,6 +9,10 @@ core_bp = Blueprint('core_bp', __name__)
 def home():
     return render_template('index.html')
 
+@core_bp.route('/download')
+def download():
+    return render_template('download.html')
+
 @core_bp.route('/setup', methods=['GET', 'POST'])
 def setup():
     if find_user_by_username() is not None:
