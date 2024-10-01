@@ -86,7 +86,7 @@ class ClosePosition(Resource):
             logger.error(f"KeyError: Missing field {missing_field}")
             return make_response(jsonify({
                 'status': 'error',
-                'message': f'A required field is missing: {missing_field}'
+                'message': f"A required field is missing: {missing_field}"
             }), 400)
         except Exception as e:
             logger.error("An unexpected error occurred in ClosePosition endpoint.")

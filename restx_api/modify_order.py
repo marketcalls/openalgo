@@ -49,7 +49,7 @@ class ModifyOrder(Resource):
                 logger.warning(f"Missing mandatory fields: {', '.join(missing_fields)}")
                 return make_response(jsonify({
                     'status': 'error',
-                    'message': f'Missing mandatory field(s): {', '.join(missing_fields)}'
+                    'message': f"Missing mandatory field(s): {', '.join(missing_fields)}"
                 }), 400)
 
             api_key = data['apikey']
