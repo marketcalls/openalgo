@@ -6,6 +6,8 @@ load_and_check_env_variables()
 from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
+from cors import cors        # Import the CORS instance
+
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.orders import orders_bp
@@ -38,6 +40,9 @@ def create_app():
 
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
+
+    # Initialize Flask-CORS with the app object
+    cors.init_app(app)
 
     load_dotenv()
 
