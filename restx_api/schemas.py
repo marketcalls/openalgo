@@ -6,12 +6,12 @@ class OrderSchema(Schema):
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
     action = fields.Str(required=True)
-    quantity = fields.Int(required=True)
+    quantity = fields.Str(required=True)  # Changed from Int to Str
     pricetype = fields.Str(missing='MARKET')
     product = fields.Str(missing='MIS')
-    price = fields.Float(missing=0.0)
-    trigger_price = fields.Float(missing=0.0)
-    disclosed_quantity = fields.Int(missing=0)
+    price = fields.Str(missing='0.0')  # Changed from Float to Str
+    trigger_price = fields.Str(missing='0.0')  # Changed from Float to Str
+    disclosed_quantity = fields.Str(missing='0')  # Changed from Int to Str
 
 class SmartOrderSchema(Schema):
     apikey = fields.Str(required=True)
@@ -19,13 +19,13 @@ class SmartOrderSchema(Schema):
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
     action = fields.Str(required=True)
-    quantity = fields.Int(required=True)
-    position_size = fields.Float(required=True)
+    quantity = fields.Str(required=True)  # Changed from Int to Str
+    position_size = fields.Str(required=True)  # Changed from Float to Str
     pricetype = fields.Str(missing='MARKET')
     product = fields.Str(missing='MIS')
-    price = fields.Float(missing=0.0)
-    trigger_price = fields.Float(missing=0.0)
-    disclosed_quantity = fields.Int(missing=0)
+    price = fields.Str(missing='0.0')  # Changed from Float to Str
+    trigger_price = fields.Str(missing='0.0')  # Changed from Float to Str
+    disclosed_quantity = fields.Str(missing='0')  # Changed from Int to Str
 
 class ModifyOrderSchema(Schema):
     apikey = fields.Str(required=True)
@@ -36,10 +36,10 @@ class ModifyOrderSchema(Schema):
     action = fields.Str(required=True)
     product = fields.Str(required=True)
     pricetype = fields.Str(required=True)
-    price = fields.Float(required=True)
-    quantity = fields.Int(required=True)
-    disclosed_quantity = fields.Int(required=True)
-    trigger_price = fields.Float(required=True)
+    price = fields.Str(required=True)  # Changed from Float to Str
+    quantity = fields.Str(required=True)  # Changed from Int to Str
+    disclosed_quantity = fields.Str(required=True)  # Changed from Int to Str
+    trigger_price = fields.Str(required=True)  # Changed from Float to Str
 
 class CancelOrderSchema(Schema):
     apikey = fields.Str(required=True)
