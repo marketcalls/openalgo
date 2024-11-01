@@ -109,6 +109,59 @@ eventlet or gevent (in this app we are using eventlet).
 
 In case of running using Gunicorn, -w 1 specifies that you should only use one worker process. This is important because WebSocket connections are persistent and stateful; having more than one worker would mean that a user could be switched between different workers, which would break the connection.
 
+### Docker Installation
+This document provides steps for installing Docker, building and running your containers with Docker Compose, and clearing data stored in SQLite.
+
+**Prerequisites**
+
+Ensure your system has:
+  * Docker: A platform to build, ship, and run distributed applications in containers.
+  * Docker Compose: A tool to define and manage multi-container Docker applications.
+Step 1: Install Docker and Docker Compose
+Installing Docker
+Download and Install Docker:
+
+For Windows and Mac: Visit [Docker Desktop](https://www.docker.com/products/docker-desktop/) and download the installer.
+
+For Linux: Visit [Linux | Docker Docs](https://docs.docker.com/desktop/install/linux/) and follow the steps.
+
+**Installing Docker Compose**
+
+On Windows: No Need
+
+On Linux: Visit [Linux | Compose Docs](https://docs.docker.com/compose/install/) and follow the steps.
+
+**Using Docker Compose to Build and Run the Application**
+
+**Build Docker Images**
+
+To build the images for your containers as defined in the `docker-compose.yml` file:
+```
+docker-compose build
+```
+**Start the Containers**
+```
+docker-compose up 
+```
+**Start the containers in detached mode (runs in the background):**
+```
+docker-compose up -d
+```
+Note: If you want to see logs directly in your terminal, run docker-compose up without the -d flag.
+
+**Stop the Containers**
+
+To stop the containers without removing the data:
+```
+docker-compose down
+```
+**Clear All SQLite Data**
+
+If you want to stop the containers and remove all associated data, use the -v flag. This command will remove volumes (including the SQLite database data volume):
+```
+docker-compose down -v
+```
+Warning: This action is irreversible and will delete all data stored in the Docker volumes, including your SQLite database.
 
 ### Accessing OpenAlgo
 
