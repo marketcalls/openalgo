@@ -117,9 +117,10 @@ This document provides steps for installing Docker, building and running your co
 Ensure your system has:
   * Docker: A platform to build, ship, and run distributed applications in containers.
   * Docker Compose: A tool to define and manage multi-container Docker applications.
-Step 1: Install Docker and Docker Compose
-Installing Docker
-Download and Install Docker:
+
+**Step 1:** Install Docker and Docker Compose
+
+**Installing Docker**
 
 For Windows and Mac: Visit [Docker Desktop](https://www.docker.com/products/docker-desktop/) and download the installer.
 
