@@ -1,0 +1,16 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+env/
+venv/
+.env*
+!.env.example
+*.sqlite
+.git
+.gitignore
+.docker
+Dockerfile
+README.md
+*.sock
