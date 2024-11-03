@@ -2,53 +2,245 @@
 
 {% block head %}
     <title>Search Results</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Add any additional head content for search.html here -->
+    <style>
+        .table-container {
+            overflow-x: auto;
+            margin-top: 1rem;
+            background: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+        
+        .table-header {
+            position: sticky;
+            top: 0;
+            background-color: #f8fafc;
+            z-index: 10;
+        }
+        
+        .hover-row:hover {
+            background-color: #f8fafc;
+        }
+        
+        .search-header {
+            background-color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            padding: 1rem;
+            gap: 0.5rem;
+        }
+        
+        .pagination-button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            background-color: white;
+            color: #4a5568;
+        }
+        
+        .pagination-button:hover {
+            background-color: #f7fafc;
+        }
+        
+        .pagination-button.active {
+            background-color: #4299e1;
+            color: white;
+            border-color: #4299e1;
+        }
+        
+        .pagination-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        @media (max-width: 640px) {
+            .table-container {
+                font-size: 0.875rem;
+            }
+        }
+    </style>
 {% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 bg-gray-100 min-h-screen">
-    <h1 class="text-xl font-semibold text-center mb-4">Search Results</h1>
-    <p class="text-center mb-4">Found {{ results|length }} matching symbols.</p>
-    <div class="overflow-x-auto">
-        <table class="table-auto w-full text-left whitespace-no-wrap">
-            <thead>
-                <tr class="text-xs font-semibold tracking-wide text-left text-gray-500 uppercase border-b bg-gray-50">
-                    
-                    <th class="px-4 py-3">OpenAlgo Symbol</th>
-                    <th class="px-4 py-3">Broker Symbol</th>
-                    <th class="px-4 py-3">Name</th>
-                    <th class="px-4 py-3">OpenAlgo Exchange</th>
-                    <th class="px-4 py-3">Broker Exchange</th>
-                    <th class="px-4 py-3">Token</th>
-                    <th class="px-4 py-3">Expiry</th>
-                    <th class="px-4 py-3">Strike</th>
-                    <th class="px-4 py-3">Lot Size</th>
-                    <!-- <th class="px-4 py-3">Instrument Type</th> -->
-                    <!-- <th class="px-4 py-3">Tick Size</th> -->
+<div class="container mx-auto px-4 bg-gray-50 min-h-screen py-6">
+    <div class="search-header">
+        <div class="flex justify-between items-center">
+            <h1 class="text-xl font-semibold">Search Results</h1>
+            <a href="{{ url_for('search_bp.token') }}" class="text-blue-500 hover:text-blue-700 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                New Search
+            </a>
+        </div>
+        <p class="text-gray-600 mt-2">Found {{ results|length }} matching symbols</p>
+    </div>
+
+    <div class="table-container">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="table-header">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Broker Symbol</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Exchange</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Broker Exchange</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Token</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiry</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strike</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lot Size</th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y">
+            <tbody class="bg-white divide-y divide-gray-200">
                 {% for row in results %}
-                <tr class="text-gray-700">
-                    <td class="px-4 py-3">{{ row.symbol }}</td>
-                    <td class="px-4 py-3">{{ row.brsymbol }}</td>
-                    <td class="px-4 py-3">{{ row.name }}</td>
-                    <td class="px-4 py-3">{{ row.exchange }}</td>
-                    <td class="px-4 py-3">{{ row.brexchange }}</td>
-                    <td class="px-4 py-3">{{ row.token }}</td>
-                    <td class="px-4 py-3">{{ row.expiry }}</td>
-                    <td class="px-4 py-3">{{ row.strike }}</td>
-                    <td class="px-4 py-3">{{ row.lotsize }}</td>
-                    <!-- <td class="px-4 py-3">{{ row.instrumenttype }}</td> -->
-                    <!-- <td class="px-4 py-3">{{ row.tick_size }}</td> -->
+                <tr class="hover-row">
+                    <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{{ row.symbol }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.brsymbol }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.name }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.exchange }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.brexchange }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.token }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.expiry }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.strike }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-gray-700">{{ row.lotsize }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-    <div class="text-center mt-4">
-        <a href="{{ url_for('search_bp.token') }}" class="text-blue-500 hover:underline">New search</a>
+
+    {% if results|length > 10 %}
+    <div class="mt-4">
+        <div id="pagination" class="pagination">
+            <!-- Pagination will be populated by JavaScript -->
+        </div>
     </div>
+    {% endif %}
 </div>
+
+<script>
+// Table sorting functionality
+document.querySelectorAll('th').forEach(header => {
+    header.addEventListener('click', () => {
+        const table = header.closest('table');
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const index = Array.from(header.parentElement.children).indexOf(header);
+        const isNumeric = header.textContent.trim().toLowerCase().includes('size') || 
+                         header.textContent.trim().toLowerCase().includes('strike') ||
+                         header.textContent.trim().toLowerCase().includes('token');
+
+        // Toggle sort direction
+        const currentDirection = header.getAttribute('data-sort-direction') || 'asc';
+        const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+        
+        // Remove sort indicators from all headers
+        document.querySelectorAll('th').forEach(th => {
+            th.removeAttribute('data-sort-direction');
+        });
+        
+        // Set new sort direction
+        header.setAttribute('data-sort-direction', newDirection);
+
+        // Sort the rows
+        rows.sort((a, b) => {
+            const aValue = a.children[index].textContent.trim();
+            const bValue = b.children[index].textContent.trim();
+            
+            if (isNumeric) {
+                return (newDirection === 'asc' ? 1 : -1) * (parseFloat(aValue) - parseFloat(bValue));
+            } else {
+                return (newDirection === 'asc' ? 1 : -1) * aValue.localeCompare(bValue);
+            }
+        });
+
+        // Clear and repopulate tbody
+        tbody.innerHTML = '';
+        rows.forEach(row => tbody.appendChild(row));
+    });
+});
+
+// Pagination functionality
+const rowsPerPage = 10;
+const rows = document.querySelectorAll('tbody tr');
+const totalPages = Math.ceil(rows.length / rowsPerPage);
+
+function showPage(pageNumber) {
+    rows.forEach((row, index) => {
+        row.style.display = (index >= (pageNumber - 1) * rowsPerPage && index < pageNumber * rowsPerPage) 
+            ? '' 
+            : 'none';
+    });
+}
+
+function setupPagination() {
+    const pagination = document.getElementById('pagination');
+    if (!pagination) return;
+    
+    pagination.innerHTML = '';
+    
+    // Previous button
+    const prevButton = document.createElement('button');
+    prevButton.className = 'pagination-button';
+    prevButton.innerHTML = '&laquo;';
+    prevButton.addEventListener('click', () => {
+        if (currentPage > 1) {
+            currentPage--;
+            updatePagination();
+        }
+    });
+    pagination.appendChild(prevButton);
+
+    // Page buttons
+    for (let i = 1; i <= totalPages; i++) {
+        const button = document.createElement('button');
+        button.className = 'pagination-button';
+        button.textContent = i;
+        button.addEventListener('click', () => {
+            currentPage = i;
+            updatePagination();
+        });
+        pagination.appendChild(button);
+    }
+
+    // Next button
+    const nextButton = document.createElement('button');
+    nextButton.className = 'pagination-button';
+    nextButton.innerHTML = '&raquo;';
+    nextButton.addEventListener('click', () => {
+        if (currentPage < totalPages) {
+            currentPage++;
+            updatePagination();
+        }
+    });
+    pagination.appendChild(nextButton);
+}
+
+let currentPage = 1;
+
+function updatePagination() {
+    showPage(currentPage);
+    
+    // Update button states
+    document.querySelectorAll('.pagination-button').forEach(button => {
+        button.classList.remove('active');
+        if (button.textContent == currentPage) {
+            button.classList.add('active');
+        }
+    });
+}
+
+// Initialize pagination if needed
+if (rows.length > rowsPerPage) {
+    setupPagination();
+    showPage(1);
+}
+</script>
 {% endblock %}
