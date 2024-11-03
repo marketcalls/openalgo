@@ -109,7 +109,6 @@ eventlet or gevent (in this app we are using eventlet).
 
 In case of running using Gunicorn, -w 1 specifies that you should only use one worker process. This is important because WebSocket connections are persistent and stateful; having more than one worker would mean that a user could be switched between different workers, which would break the connection.
 
-
 ### Accessing OpenAlgo
 
 After completing the setup, access the OpenAlgo platform by navigating to [http://127.0.0.1:5000](http://127.0.0.1:5000) in your web browser. Setup the account using  [http://127.0.0.1:5000/setup](http://127.0.0.1:5000/setup)
