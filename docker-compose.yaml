@@ -1,16 +1,17 @@
-version: '3'
+version: '3.8'
+
 services:
-  app:
-    container_name: openalgo-container
+  web:
     build: .
-    command: python app.py
-    env_file: .env
     ports:
       - "5000:5000"
     volumes:
-      - sqlite-data:/db  # Mount volume to store the SQLite database file persistently
-    restart: always
-
-volumes:
-  sqlite-data:
-    driver: local
+      - .:/app
+      - ./db:/app/db
+    env_file:
+      - .env
+    environment:
+      - FLASK_DEBUG=True
+      - FLASK_ENV=development
+      - DATABASE_URL=sqlite:///db/openalgo.db
+    restart: unless-stopped
