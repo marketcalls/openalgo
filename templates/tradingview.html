@@ -1,4 +1,3 @@
-<!-- templates/tradingview.html -->
 {% extends 'base.html' %}
 
 {% block head %}
@@ -6,243 +5,356 @@
 <link href="{{ url_for('static', filename='css/prism.css') }}" rel="stylesheet" />
 
 <style>
-
     .vertical-space {
-        height: 20px; /* or you can use margin */
+        height: 20px;
     }
 
     .margin-bottom {
-    margin-bottom: 20px; /* Add space below the element */
+        margin-bottom: 20px;
     }
 
     #json-output-container {
-        display: none; /* Initially hide the Prism output container */
-        width: 100%; /* Full width */
-        max-width: 700px; /* Maximum width, but you can adjust this value */
-        margin: left; /* left align the container */
+        display: none;
+        width: 100%;
+        max-width: 700px;
+        margin: left;
     }
 
     #symbol, #product, #exchange {
-        width: 100%; /* Full width */
-        max-width: 300px; /* Maximum width, but you can adjust this value */
-        margin: auto; /* Align left */
+        width: 100%;
+        max-width: 300px;
+        margin: auto;
     }
 
     #webhook-info {
-        width: 100%; /* Full width */
-        max-width: 700px; /* Maximum width, adjust this value as needed */
-        margin: left; /* left align */
+        width: 100%;
+        max-width: 700px;
+        margin: left;
     }
 
     #copy-success-alert {
-        display: none; /* Initially hide the copy success alert */
-        color: green; /* Set the color of the success message */
-        padding-left: 1rem; /* Space between button and alert message */
-        line-height: 2.5rem; /* Align with the button height */
+        display: none;
+        color: green;
+        padding-left: 1rem;
+        line-height: 2.5rem;
     }
 
-    /* Container for the copy button and the alert message */
     .copy-container {
         display: flex;
-        align-items: center; /* Align button and message vertically */
+        align-items: center;
         margin-top: 1rem;
     }
 
-    /* Extend the width of the Prism output box */
     pre[class*="language-"] {
         max-width: none;
+    }
+
+    /* Symbol Search Specific Styles */
+    .search-results {
+        position: absolute;
+        width: 100%;
+        max-width: 300px;
+        max-height: 300px;
+        overflow-y: auto;
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
+        display: none;
+        margin-top: 2px;
+    }
+
+    .result-item {
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        border-bottom: 1px solid #f3f4f6;
+        transition: background-color 0.2s;
+    }
+
+    .result-item:last-child {
+        border-bottom: none;
+    }
+
+    .result-item:hover {
+        background-color: #f3f4f6;
+    }
+
+    .symbol-search-container {
+        position: relative;
+    }
+
+    .loading-indicator {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: none;
     }
 
     /* Adjustments for mobile devices */
     @media (max-width: 768px) {
         #json-output-container, #symbol, #product, #webhook-info {
-            max-width: 100%; /* Full width on smaller screens */
+            max-width: 100%;
             margin: auto;
         }
         
         .copy-container, #webhook-info {
-            flex-direction: column; /* Stack elements vertically */
+            flex-direction: column;
         }
         
         #copy-success-alert, #copyAlert {
-            margin-top: 0.5rem; /* Space above the success message */
+            margin-top: 0.5rem;
         }
         
-        /* Adjust the form input and select fields to be full width on mobile */
         #symbol, #product, #exchange {
             max-width: 100%;
         }
         
-        /* Make the generate JSON button full width */
         #tradingview-form button[type="submit"] {
             width: 100%;
-            margin-top: 1rem; /* Margin above the button */
+            margin-top: 1rem;
         }
         
-        /* Adjust the margin for the webhook info */
         #webhook-info {
-            margin-top: 2rem; /* Space above the webhook info */
+            margin-top: 2rem;
         }
     }
- 
-
-
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="max-w-4xl mx-auto py-8">
     <h1 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h1> 
-<form id="tradingview-form">
-    <div class="mb-4">
-        <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
-        <input type="text" id="symbol" name="symbol" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-    </div>
-    <div class="mb-4">
-        <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
-        <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
-            <option value="MIS">MIS</option>
-            <option value="NRML">NRML</option>
-            <option value="CNC">CNC</option>
-        </select>
-    </div>
-    <div class="mb-4">
-        <!-- Corrected placement of div for Exchange dropdown menu -->
-        <label for="exchange" class="block text-gray-700 text-sm font-bold mb-2">Exchange:</label>
-        <select id="exchange" name="exchange" class="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-            <option value="">Select Exchange</option>
-            <option value="NSE">NSE</option>
-            <option value="NFO">NFO</option>
-            <option value="BSE">BSE</option>
-            <option value="BFO">BFO</option>
-            <option value="CDS">CDS</option>
-            <option value="MCX">MCX</option>
-        </select>
-    </div>
-    <!-- Include other fields for strategy details and quantity as needed -->
-    <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Generate JSON</button>
-</form>
+    <form id="tradingview-form">
+        <div class="mb-4">
+            <div class="symbol-search-container">
+                <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
+                <input type="text" 
+                       id="symbol" 
+                       name="symbol" 
+                       class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
+                       required
+                       autocomplete="off"
+                       placeholder="Enter symbol, name, or token">
+                <div class="loading-indicator">
+                    <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+                <div id="searchResults" class="search-results"></div>
+            </div>
+        </div>
 
+        <div class="mb-4">
+            <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
+            <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
+                <option value="MIS">MIS</option>
+                <option value="NRML">NRML</option>
+                <option value="CNC">CNC</option>
+            </select>
+        </div>
 
-    <!-- Space before the div -->
+        <div class="mb-4">
+            <label for="exchange" class="block text-gray-700 text-sm font-bold mb-2">Exchange:</label>
+            <select id="exchange" name="exchange" class="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
+                <option value="">Select Exchange</option>
+                <option value="NSE">NSE</option>
+                <option value="NFO">NFO</option>
+                <option value="BSE">BSE</option>
+                <option value="BFO">BFO</option>
+                <option value="CDS">CDS</option>
+                <option value="MCX">MCX</option>
+            </select>
+        </div>
+
+        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+            Generate JSON
+        </button>
+    </form>
+
+    <!-- Webhook Info Section -->
     <div class="vertical-space"></div>
-
-    <!-- Tradingview Webhook URL Information -->
     <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4 relative" role="alert">
         <p class="font-bold">Tradingview Webhook URL</p>
         <div class="flex items-center space-x-2">
             <p id="webhookURL" class="flex-1">{{host}}/api/v1/placesmartorder</p>
-            <button onclick="copyToClipboard('#webhookURL', '#copyAlert')" class="bg-green-100 hover:bg-green-200 text-green-700 font-semibold py-2 px-4 border border-green-400 rounded transition-colors duration-300">
+            <button onclick="copyToClipboard('#webhookURL', '#copyAlert')" 
+                    class="bg-green-100 hover:bg-green-200 text-green-700 font-semibold py-2 px-4 border border-green-400 rounded transition-colors duration-300">
                 <img src="{{ url_for('static', filename='images/copy-icon.png') }}" alt="Copy" class="h-4 w-4"/>
             </button>
             <span id="copyAlert" class="text-green-500"></span>
         </div>
     </div>
 
-
-
+    <!-- JSON Output Section -->
     <div id="json-output-container">
         <pre class="language-json"><code id="json-output"></code></pre>
-        
-    <div class="copy-container">
-        <button id="copy-json" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Copy JSON</button>
-        <div id="copy-success-alert">Copied to clipboard!</div> <!-- Success alert -->
+        <div class="copy-container">
+            <button id="copy-json" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+                Copy JSON
+            </button>
+            <div id="copy-success-alert">Copied to clipboard!</div>
+        </div>
     </div>
 
-    <!-- Space after the div -->
     <div class="margin-bottom"></div>
     <div class="margin-bottom"></div>
+</div>
+
+<script>
+let debounceTimeout;
+const loadingIndicator = document.querySelector('.loading-indicator');
+
+// Symbol search functionality
+document.getElementById('symbol').addEventListener('input', function(e) {
+    clearTimeout(debounceTimeout);
+    const query = e.target.value.trim();
+    const exchange = document.getElementById('exchange').value;
     
-
-<script>
-    document.getElementById('tradingview-form').addEventListener('submit', function(e) {
-        e.preventDefault();
-        
-        // Collect data from the form
-        var symbol = document.getElementById('symbol').value;
-        var product = document.getElementById('product').value;
-        var exchange = document.getElementById('exchange').value;
-        // Prepare the data to be sent to the server
-        var formData = {
-            symbol: symbol,
-            product: product,
-            exchange: exchange
-        };
-
-        // AJAX POST request to the /tradingview route
-        fetch('/tradingview/', {
-            method: 'POST',
-            body: JSON.stringify(formData),
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok ' + response.statusText);
-            }
-            return response.json();
-        })
-        .then(data => {
-            // Reconstruct the JSON object in the correct order
-            let orderedData = {
-                "apikey": data.apikey,
-                "strategy": data.strategy,
-                "symbol": data.symbol,
-                "action": data.action,
-                "exchange": data.exchange,
-                "pricetype": data.pricetype,
-                "product": data.product,
-                "quantity": data.quantity,
-                "position_size": data.position_size
-            };
-            // Update the display with the ordered and beautified jsonData
-            document.getElementById('json-output-container').style.display = 'block';
-            var jsonOutput = document.getElementById('json-output');
-            jsonOutput.textContent = JSON.stringify(orderedData, null, 2);
-            Prism.highlightElement(jsonOutput);
-        })
-        .catch(error => {
-            console.error('There has been a problem with your fetch operation:', error);
-        });
-    });
-
-    document.getElementById('copy-json').addEventListener('click', function() {
-        var jsonOutput = document.getElementById('json-output').textContent;
-        navigator.clipboard.writeText(jsonOutput).then(function() {
-            // Show the success alert
-            var alertBox = document.getElementById("copy-success-alert");
-            alertBox.style.display = 'inline'; // Use 'inline' instead of 'block' to flow in line with the button
-            setTimeout(() => { alertBox.style.display = 'none'; }, 3000); // Hide the alert after 3 seconds
-        }, function(err) {
-            console.error('Could not copy text: ', err);
-        });
-    });
-</script>
-
-<script>
-    function copyToClipboard(selector, alertSelector) {
-        var text = document.querySelector(selector).textContent;
-        navigator.clipboard.writeText(text).then(function() {
-            // Show the success alert
-            var alertBox = document.querySelector(alertSelector);
-            alertBox.textContent = 'Copied!'; // Set the alert text
-            alertBox.style.display = 'inline'; // Show the alert
-            setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000); // Hide the alert after 3 seconds
-        }, function(err) {
-            // In case of an error
-            var alertBox = document.querySelector(alertSelector);
-            alertBox.textContent = 'Failed to copy'; // Set the alert text
-            alertBox.style.display = 'inline'; // Show the alert
-            setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000); // Hide the alert after 3 seconds
-        });
+    if (query.length < 2) {
+        document.getElementById('searchResults').style.display = 'none';
+        return;
     }
+    
+    debounceTimeout = setTimeout(() => {
+        fetchSearchResults(query, exchange);
+    }, 300);
+});
+
+document.getElementById('exchange').addEventListener('change', function(e) {
+    const query = document.getElementById('symbol').value.trim();
+    if (query.length >= 2) {
+        fetchSearchResults(query, e.target.value);
+    }
+});
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('#symbol') && !e.target.closest('#searchResults')) {
+        document.getElementById('searchResults').style.display = 'none';
+    }
+});
+
+async function fetchSearchResults(query, exchange) {
+    try {
+        loadingIndicator.style.display = 'block';
+        const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
+        const data = await response.json();
+        
+        const resultsDiv = document.getElementById('searchResults');
+        resultsDiv.innerHTML = '';
+        
+        if (data.results.length > 0) {
+            data.results.forEach(result => {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                div.innerHTML = `
+                    <div class="font-medium">${result.symbol}</div>
+                    <div class="text-sm text-gray-600">${result.name || ''}</div>
+                    <div class="text-xs text-gray-500">${result.exchange} | ${result.token}</div>
+                `;
+                div.addEventListener('click', () => {
+                    document.getElementById('symbol').value = result.symbol;
+                    document.getElementById('exchange').value = result.exchange;
+                    resultsDiv.style.display = 'none';
+                });
+                resultsDiv.appendChild(div);
+            });
+            resultsDiv.style.display = 'block';
+        } else {
+            resultsDiv.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error fetching search results:', error);
+    } finally {
+        loadingIndicator.style.display = 'none';
+    }
+}
+
+// Form submission handler
+document.getElementById('tradingview-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    // Collect data from the form
+    var symbol = document.getElementById('symbol').value;
+    var product = document.getElementById('product').value;
+    var exchange = document.getElementById('exchange').value;
+    
+    // Prepare the data to be sent to the server
+    var formData = {
+        symbol: symbol,
+        product: product,
+        exchange: exchange
+    };
+
+    // AJAX POST request to the /tradingview route
+    fetch('/tradingview/', {
+        method: 'POST',
+        body: JSON.stringify(formData),
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok ' + response.statusText);
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Reconstruct the JSON object in the correct order
+        let orderedData = {
+            "apikey": data.apikey,
+            "strategy": data.strategy,
+            "symbol": data.symbol,
+            "action": data.action,
+            "exchange": data.exchange,
+            "pricetype": data.pricetype,
+            "product": data.product,
+            "quantity": data.quantity,
+            "position_size": data.position_size
+        };
+        // Update the display with the ordered and beautified jsonData
+        document.getElementById('json-output-container').style.display = 'block';
+        var jsonOutput = document.getElementById('json-output');
+        jsonOutput.textContent = JSON.stringify(orderedData, null, 2);
+        Prism.highlightElement(jsonOutput);
+    })
+    .catch(error => {
+        console.error('There has been a problem with your fetch operation:', error);
+    });
+});
+
+// Copy JSON button handler
+document.getElementById('copy-json').addEventListener('click', function() {
+    var jsonOutput = document.getElementById('json-output').textContent;
+    navigator.clipboard.writeText(jsonOutput).then(function() {
+        var alertBox = document.getElementById("copy-success-alert");
+        alertBox.style.display = 'inline';
+        setTimeout(() => { alertBox.style.display = 'none'; }, 3000);
+    }, function(err) {
+        console.error('Could not copy text: ', err);
+    });
+});
+
+// Webhook URL copy function
+function copyToClipboard(selector, alertSelector) {
+    var text = document.querySelector(selector).textContent;
+    navigator.clipboard.writeText(text).then(function() {
+        var alertBox = document.querySelector(alertSelector);
+        alertBox.textContent = 'Copied!';
+        alertBox.style.display = 'inline';
+        setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000);
+    }, function(err) {
+        var alertBox = document.querySelector(alertSelector);
+        alertBox.textContent = 'Failed to copy';
+        alertBox.style.display = 'inline';
+        setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000);
+    });
+}
 </script>
-
-
 
 <!-- Include Prism JS -->
 <script src="{{ url_for('static', filename='js/prism.js') }}"></script>
-
-
 {% endblock %}
