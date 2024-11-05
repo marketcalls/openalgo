@@ -17,6 +17,22 @@
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
+
+    <style>
+        .disabled-option {
+            color: #6B7280;
+            background-color: #374151;
+            cursor: not-allowed;
+        }
+        .enabled-option {
+            color: white;
+            background-color: #1F2937;
+        }
+        select option:disabled::after {
+            content: " (Disabled)";
+            color: #9CA3AF;
+        }
+    </style>
 </head>
 <body class="bg-gray-900 flex flex-col items-center justify-center min-h-screen text-white">
     <div class="p-8 rounded-lg shadow-lg max-w-md w-full bg-gray-800">
@@ -30,16 +46,16 @@
                 <label for="platform-select" class="block text-sm font-medium text-gray-300 mb-2">Login with your Broker</label>
                 <select id="platform-select" name="platform" class="block w-full px-3 py-2 text-base border border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-gray-700 text-white">
                     <option value="" selected disabled>Select a Broker</option>
-                    <option value="fivepaisa">5 Paisa</option>
-                    <option value="aliceblue">Alice Blue</option>
-                    <option value="angel">Angel One</option>
-                    <option value="dhan">Dhan</option>
-                    <option value="fyers">Fyers</option>
-                    <option value="icici">ICICI Direct</option>
-                    <option value="kotak">Kotak Securities</option>
-                    <option value="upstox">Upstox</option>
-                    <option value="zebu">Zebu</option>
-                    <option value="zerodha">Zerodha</option>
+                    <option value="fivepaisa" class="{{ 'enabled-option' if broker_name == 'fivepaisa' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'fivepaisa' }}>5 Paisa {{ '(Disabled)' if broker_name != 'fivepaisa' }}</option>
+                    <option value="aliceblue" class="{{ 'enabled-option' if broker_name == 'aliceblue' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
+                    <option value="angel" class="{{ 'enabled-option' if broker_name == 'angel' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
+                    <option value="dhan" class="{{ 'enabled-option' if broker_name == 'dhan' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'dhan' }}>Dhan {{ '(Disabled)' if broker_name != 'dhan' }}</option>
+                    <option value="fyers" class="{{ 'enabled-option' if broker_name == 'fyers' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
+                    <option value="icici" class="{{ 'enabled-option' if broker_name == 'icici' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
+                    <option value="kotak" class="{{ 'enabled-option' if broker_name == 'kotak' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
+                    <option value="upstox" class="{{ 'enabled-option' if broker_name == 'upstox' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'upstox' }}>Upstox {{ '(Disabled)' if broker_name != 'upstox' }}</option>
+                    <option value="zebu" class="{{ 'enabled-option' if broker_name == 'zebu' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'zebu' }}>Zebu {{ '(Disabled)' if broker_name != 'zebu' }}</option>
+                    <option value="zerodha" class="{{ 'enabled-option' if broker_name == 'zerodha' else 'disabled-option' }}" {{ 'disabled' if broker_name != 'zerodha' }}>Zerodha {{ '(Disabled)' if broker_name != 'zerodha' }}</option>
                 </select>
             </div>
             <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
@@ -95,6 +111,15 @@
 
             window.location.href = loginUrl;
         });
+
+        // Auto-select the enabled broker
+        window.onload = function() {
+            const select = document.getElementById('platform-select');
+            const enabledOption = select.querySelector('.enabled-option');
+            if (enabledOption) {
+                enabledOption.selected = true;
+            }
+        };
     </script>
 </body>
 </html>

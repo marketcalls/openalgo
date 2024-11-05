@@ -5,6 +5,7 @@ from extensions import socketio
 import os
 from database.auth_db import upsert_auth
 from database.user_db import authenticate_user, User, db_session, find_user_by_username  # Import the function
+import re
 
 # Load environment variables
 load_dotenv()
@@ -56,13 +57,30 @@ def broker_login():
         return redirect(url_for('dashboard_bp.dashboard'))
     if request.method == 'GET':
         if 'user' not in session:
-            # Environment variables
             return redirect(url_for('auth.login'))
+            
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
-        return render_template('broker.html', broker_api_key=BROKER_API_KEY, broker_api_secret=BROKER_API_SECRET,
-                               redirect_url=REDIRECT_URL)
+        
+        if not REDIRECT_URL:
+            flash('REDIRECT_URL is not configured in .env file', 'error')
+            return redirect(url_for('auth.login'))
+            
+        # Extract broker name from REDIRECT_URL
+        # Expected format: http://127.0.0.1:5000/broker_name/callback
+        match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
+        if not match:
+            flash('Invalid REDIRECT_URL format in .env file', 'error')
+            return redirect(url_for('auth.login'))
+            
+        broker_name = match.group(1)
+        
+        return render_template('broker.html', 
+                             broker_api_key=BROKER_API_KEY, 
+                             broker_api_secret=BROKER_API_SECRET,
+                             redirect_url=REDIRECT_URL,
+                             broker_name=broker_name)
 
 @auth_bp.route('/change', methods=['GET', 'POST'])
 def change_password():
