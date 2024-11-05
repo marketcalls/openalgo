@@ -58,7 +58,7 @@ SQLAlchemy==2.0.31
 typing_extensions==4.12.2
 tzdata==2024.1
 urllib3==2.2.2
-Werkzeug==3.0.3
+Werkzeug==3.1.2
 wheel==0.43.0
 wrapt==1.16.0
 wsproto==1.2.0
