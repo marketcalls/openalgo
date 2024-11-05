@@ -234,9 +234,11 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
+    print("Holdings Data")
+    print(holdings_data)
     for holding in holdings_data:
         transformed_position = {
-            "symbol": holding.get('symbol', ''),
+            "symbol": holding.get('displaySymbol', ''),
             "exchange": holding.get('exchangeSegment', ''),
             "quantity": holding.get('quantity', 0),
             "product": holding.get('instrumentType', ''),
@@ -244,6 +246,8 @@ def transform_holdings_data(holdings_data):
             "pnlpercent": round((float(holding.get('mktValue', 0.0)) - float(holding.get('holdingCost', 0.0)))/float(holding.get('holdingCost', 0.0))*100,2)
         }
         transformed_data.append(transformed_position)
+    print("Holdings Data")
+    print(transformed_data)
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
@@ -282,7 +286,7 @@ def map_portfolio_data(portfolio_data):
         if portfolio['instrumentType'] == 'Equity':
             portfolio['instrumentType'] = 'CNC'  # Modify 'product' field
         else:
-            print("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+            print("Kotak Portfolio - Product Value for Delivery Not Found or Changed.")
     
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.
@@ -296,8 +300,7 @@ def calculate_portfolio_statistics(holdings_data):
     totalinvvalue = sum(item['holdingCost'] for item in holdings_data)
     totalprofitandloss = sum(item['mktValue'] - item['holdingCost'] for item in holdings_data)
     
-    totalpnlpercentage = sum((item['mktValue'] - item['holdingCost']) / item['holdingCost'] * 100 for item in holdings_data)
-    
+    totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
     
     # To avoid division by zero in the case when total_investment_value is 0
     totalpnlpercentage = round(totalpnlpercentage, 2)
