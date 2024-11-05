@@ -69,9 +69,27 @@
     {% include 'footer.html' %}
 
     <script>
-    document.getElementById('profileBtn').addEventListener('click', function() {
-        var dropdown = document.getElementById('profileMenu');
-        dropdown.classList.toggle('hidden');
+    document.addEventListener('DOMContentLoaded', function() {
+        const profileBtn = document.getElementById('profileBtn');
+        const profileMenu = document.getElementById('profileMenu');
+
+        // Toggle menu when profile button is clicked
+        profileBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            profileMenu.classList.toggle('hidden');
+        });
+
+        // Close menu when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!profileBtn.contains(e.target) && !profileMenu.contains(e.target)) {
+                profileMenu.classList.add('hidden');
+            }
+        });
+
+        // Prevent menu from closing when clicking inside it
+        profileMenu.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
     });
     </script>        
 </body>
