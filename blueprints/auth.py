@@ -68,14 +68,39 @@ def broker_login():
             return redirect(url_for('auth.login'))
             
         # Extract broker name from REDIRECT_URL
-        # Expected format: http://127.0.0.1:5000/broker_name/callback
-        match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
-        if not match:
-            flash('Invalid REDIRECT_URL format in .env file', 'error')
+        # Handles all valid formats:
+        # - http://127.0.0.1:5000/broker_name/callback
+        # - http://yourdomain.com/broker_name/callback
+        # - https://yourdomain.com/broker_name/callback
+        # - https://sub.yourdomain.com/broker_name/callback
+        # - http://sub.yourdomain.com/broker_name/callback
+        try:
+            # This pattern looks for the broker name between the last two forward slashes
+            # It works regardless of the domain format or protocol
+            match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
+            if not match:
+                raise ValueError("Invalid URL format")
+                
+            broker_name = match.group(1)
+            
+            # Validate broker name is one of the supported brokers
+            valid_brokers = {'fivepaisa', 'aliceblue', 'angel', 'dhan', 'fyers', 
+                           'icici', 'kotak', 'upstox', 'zebu', 'zerodha'}
+            if broker_name not in valid_brokers:
+                raise ValueError(f"Invalid broker name: {broker_name}")
+                
+        except ValueError as e:
+            flash(f'Invalid REDIRECT_URL format in .env file: {str(e)}. Expected format examples:\n'
+                  '- http://127.0.0.1:5000/broker_name/callback\n'
+                  '- http://yourdomain.com/broker_name/callback\n'
+                  '- https://yourdomain.com/broker_name/callback\n'
+                  '- https://sub.yourdomain.com/broker_name/callback\n'
+                  '- http://sub.yourdomain.com/broker_name/callback', 'error')
+            return redirect(url_for('auth.login'))
+        except Exception as e:
+            flash(f'Error processing REDIRECT_URL: {str(e)}', 'error')
             return redirect(url_for('auth.login'))
             
-        broker_name = match.group(1)
-        
         return render_template('broker.html', 
                              broker_api_key=BROKER_API_KEY, 
                              broker_api_secret=BROKER_API_SECRET,
