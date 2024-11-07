@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, redirect, request, url_for, session
 from database.user_db import add_user, find_user_by_username
-from utils.session import check_session_validity
+from utils.session import invalidate_session_if_invalid
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,10 +8,12 @@ logger = logging.getLogger(__name__)
 core_bp = Blueprint('core_bp', __name__)
 
 @core_bp.route('/')
+@invalidate_session_if_invalid
 def home():
     return render_template('index.html')
 
 @core_bp.route('/download')
+@invalidate_session_if_invalid
 def download():
     return render_template('download.html')
 

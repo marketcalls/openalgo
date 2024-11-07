@@ -6,6 +6,7 @@ import os
 from database.auth_db import upsert_auth
 from database.user_db import authenticate_user, User, db_session, find_user_by_username  # Import the function
 import re
+from utils.session import check_session_validity
 
 # Load environment variables
 load_dotenv()
@@ -108,6 +109,7 @@ def broker_login():
                              broker_name=broker_name)
 
 @auth_bp.route('/change', methods=['GET', 'POST'])
+@check_session_validity
 def change_password():
     if 'user' not in session:
         # If the user is not logged in, redirect to login page

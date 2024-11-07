@@ -76,3 +76,13 @@ def check_session_validity(f):
         logger.debug("Session validated successfully")
         return f(*args, **kwargs)
     return decorated_function
+
+def invalidate_session_if_invalid(f):
+    """Decorator to invalidate session if invalid without redirecting"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not is_session_valid():
+            logger.info("Invalid session detected - clearing session")
+            session.clear()
+        return f(*args, **kwargs)
+    return decorated_function
