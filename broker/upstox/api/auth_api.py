@@ -10,7 +10,7 @@ def authenticate_broker(code):
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
-        url = 'https://api.upstox.com/v2/login/authorization/token'
+        url = 'https://api-v2.upstox.com/login/authorization/token'
         data = {
             'code': code,
             'client_id': BROKER_API_KEY,
