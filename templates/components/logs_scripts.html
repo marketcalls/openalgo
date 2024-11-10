@@ -38,31 +38,17 @@ document.addEventListener('DOMContentLoaded', function() {
         updateURL(params);
     }
 
-    function exportLogs() {
+    window.exportLogs = function() {
         var params = new URLSearchParams({
             start_date: document.getElementById('start_date').value,
             end_date: document.getElementById('end_date').value,
             search: document.getElementById('search').value
         }).toString();
 
-        // Show loading state
-        showLoading();
-
-        // Create download link
-        var link = document.createElement('a');
-        link.href = `/logs/export?${params}`;
-        link.download = 'openalgo_logs.csv';
-        document.body.appendChild(link);
-        
-        // Start download
-        link.click();
-        
-        // Clean up
-        document.body.removeChild(link);
-        
-        // Hide loading after a short delay
-        setTimeout(hideLoading, 1000);
-    }
+        // Create and click a temporary link
+        var downloadUrl = `/logs/export?${params}`;
+        window.location.href = downloadUrl;
+    };
     
     // Set up event listeners
     document.querySelectorAll('.toggle-details').forEach(function(button) {
@@ -110,8 +96,5 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('start_date').value = today;
         document.getElementById('end_date').value = today;
     }
-
-    // Make exportLogs function globally available
-    window.exportLogs = exportLogs;
 });
 </script>

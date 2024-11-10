@@ -1,6 +1,6 @@
 # blueprints/log.py
 
-from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify, send_file
+from flask import Blueprint, render_template, session, redirect, url_for, request, jsonify, Response
 from database.apilog_db import OrderLog
 from utils.session import check_session_validity
 from sqlalchemy import func
@@ -10,7 +10,7 @@ import logging
 import json
 import csv
 import io
-import os
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +27,26 @@ def sanitize_request_data(data):
             # Remove apikey if present
             sanitized.pop('apikey', None)
             return sanitized
-    except:
-        return data
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON: {data}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error sanitizing data: {str(e)}")
+        return {}
     return data
 
 def format_log_entry(log, ist):
     """Format a single log entry"""
     try:
         request_data = sanitize_request_data(log.request_data)
-        response_data = json.loads(log.response_data) if log.response_data else {}
+        try:
+            response_data = json.loads(log.response_data) if log.response_data else {}
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding response JSON for log {log.id}")
+            response_data = {}
+        except Exception as e:
+            logger.error(f"Error processing response data for log {log.id}: {str(e)}")
+            response_data = {}
         
         # Extract strategy from request data
         strategy = request_data.get('strategy', 'Unknown') if isinstance(request_data, dict) else 'Unknown'
@@ -49,93 +60,113 @@ def format_log_entry(log, ist):
             'created_at': log.created_at.astimezone(ist).strftime('%Y-%m-%d %I:%M:%S %p')
         }
     except Exception as e:
-        logger.error(f"Error formatting log {log.id}: {str(e)}")
+        logger.error(f"Error formatting log {log.id}: {str(e)}\n{traceback.format_exc()}")
         return {
             'id': log.id,
             'api_type': log.api_type,
-            'request_data': log.request_data,
-            'response_data': log.response_data,
+            'request_data': {},
+            'response_data': {},
             'strategy': 'Unknown',
             'created_at': log.created_at.astimezone(ist).strftime('%Y-%m-%d %I:%M:%S %p')
         }
 
-def get_filtered_logs(start_date=None, end_date=None, search_query=None, page=1, per_page=20):
+def get_filtered_logs(start_date=None, end_date=None, search_query=None, page=None, per_page=None):
     """Get filtered logs with pagination"""
     ist = pytz.timezone('Asia/Kolkata')
     query = OrderLog.query
 
-    # Apply date filters if provided
-    if start_date:
-        if isinstance(start_date, str):
-            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-        query = query.filter(func.date(OrderLog.created_at) >= start_date)
-    if end_date:
-        if isinstance(end_date, str):
-            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-        query = query.filter(func.date(OrderLog.created_at) <= end_date)
-    
-    # If no dates provided, default to today
-    if not start_date and not end_date:
-        today_ist = datetime.now(ist).date()
-        query = query.filter(func.date(OrderLog.created_at) == today_ist)
+    try:
+        # Apply date filters if provided
+        if start_date:
+            if isinstance(start_date, str):
+                start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+            query = query.filter(func.date(OrderLog.created_at) >= start_date)
+        if end_date:
+            if isinstance(end_date, str):
+                end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+            query = query.filter(func.date(OrderLog.created_at) <= end_date)
+        
+        # If no dates provided, default to today
+        if not start_date and not end_date:
+            today_ist = datetime.now(ist).date()
+            query = query.filter(func.date(OrderLog.created_at) == today_ist)
 
-    # Apply search filter if provided
-    if search_query:
-        search = f"%{search_query}%"
-        query = query.filter(
-            (OrderLog.api_type.ilike(search)) |
-            (OrderLog.request_data.ilike(search)) |
-            (OrderLog.response_data.ilike(search))
-        )
+        # Apply search filter if provided
+        if search_query:
+            search = f"%{search_query}%"
+            query = query.filter(
+                (OrderLog.api_type.ilike(search)) |
+                (OrderLog.request_data.ilike(search)) |
+                (OrderLog.response_data.ilike(search))
+            )
 
-    # Get total count for pagination
-    total_logs = query.count()
-    total_pages = (total_logs + per_page - 1) // per_page
+        # Get total count
+        total_logs = query.count()
 
-    # Apply pagination if requested
-    if page and per_page:
-        query = query.order_by(OrderLog.created_at.desc())\
-                    .offset((page - 1) * per_page)\
-                    .limit(per_page)
-    else:
-        query = query.order_by(OrderLog.created_at.desc())
+        # Calculate total pages only if pagination is enabled
+        if page is not None and per_page is not None:
+            total_pages = (total_logs + per_page - 1) // per_page
+            # Apply pagination
+            query = query.order_by(OrderLog.created_at.desc())\
+                       .offset((page - 1) * per_page)\
+                       .limit(per_page)
+        else:
+            total_pages = 1
+            query = query.order_by(OrderLog.created_at.desc())
 
-    # Format logs
-    logs = [format_log_entry(log, ist) for log in query.all()]
+        # Format logs
+        logs = [format_log_entry(log, ist) for log in query.all()]
+        logger.info(f"Retrieved {len(logs)} logs")
 
-    return logs, total_pages, total_logs
+        return logs, total_pages, total_logs
+
+    except Exception as e:
+        logger.error(f"Error in get_filtered_logs: {str(e)}\n{traceback.format_exc()}")
+        return [], 1, 0
 
 def generate_csv(logs):
     """Generate CSV file from logs"""
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Write headers
-    headers = ['ID', 'Timestamp', 'API Type', 'Strategy', 'Action', 'Exchange', 'Symbol', 
-              'Product', 'Price Type', 'Quantity', 'Price', 'Order ID']
-    writer.writerow(headers)
-    
-    # Write data
-    for log in logs:
-        request_data = log['request_data']
-        row = [
-            log['id'],
-            log['created_at'],
-            log['api_type'],
-            log['strategy'],
-            request_data.get('action', ''),
-            request_data.get('exchange', ''),
-            request_data.get('symbol', ''),
-            request_data.get('product', ''),
-            request_data.get('pricetype', ''),
-            request_data.get('quantity', ''),
-            request_data.get('price', ''),
-            request_data.get('orderid', '')
-        ]
-        writer.writerow(row)
-    
-    output.seek(0)
-    return output
+    try:
+        si = io.StringIO()
+        writer = csv.writer(si)
+        
+        # Write headers
+        headers = ['ID', 'Timestamp', 'API Type', 'Strategy', 'Action', 'Exchange', 'Symbol', 
+                  'Product', 'Price Type', 'Quantity', 'Price', 'Order ID']
+        writer.writerow(headers)
+        
+        # Write data
+        for log in logs:
+            try:
+                request_data = log['request_data']
+                if not isinstance(request_data, dict):
+                    request_data = {}
+                
+                row = [
+                    log['id'],
+                    log['created_at'],
+                    log['api_type'],
+                    log['strategy'],
+                    request_data.get('action', ''),
+                    request_data.get('exchange', ''),
+                    request_data.get('symbol', ''),
+                    request_data.get('product', ''),
+                    request_data.get('pricetype', ''),
+                    request_data.get('quantity', ''),
+                    request_data.get('price', ''),
+                    request_data.get('orderid', '')
+                ]
+                writer.writerow(row)
+                logger.debug(f"Wrote row: {row}")
+            except Exception as e:
+                logger.error(f"Error writing row for log {log.get('id')}: {str(e)}")
+                continue
+        
+        return si.getvalue()
+
+    except Exception as e:
+        logger.error(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
+        raise
 
 @log_bp.route('/')
 @check_session_validity
@@ -175,7 +206,7 @@ def view_logs():
                              end_date=end_date)
         
     except Exception as e:
-        logger.error(f"Error fetching logs: {str(e)}")
+        logger.error(f"Error in view_logs: {str(e)}\n{traceback.format_exc()}")
         return render_template('logs.html', 
                              logs=[],
                              total_pages=1,
@@ -188,13 +219,17 @@ def view_logs():
 @check_session_validity
 def export_logs():
     try:
+        logger.info("Starting log export")
+        
         # Get parameters
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         search_query = request.args.get('search', '').strip()
 
+        logger.info(f"Export parameters - start_date: {start_date}, end_date: {end_date}, search: {search_query}")
+
         # Get all logs without pagination
-        logs, _, _ = get_filtered_logs(
+        logs, _, total = get_filtered_logs(
             start_date=start_date,
             end_date=end_date,
             search_query=search_query,
@@ -202,20 +237,27 @@ def export_logs():
             per_page=None
         )
 
-        # Generate CSV
-        output = generate_csv(logs)
+        logger.info(f"Retrieved {total} logs for export")
+
+        # Generate CSV content
+        csv_output = generate_csv(logs)
         
         # Generate filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'openalgo_logs_{timestamp}.csv'
 
-        return send_file(
-            io.BytesIO(output.getvalue().encode('utf-8')),
+        logger.info(f"Generated CSV file: {filename}")
+
+        return Response(
+            csv_output,
             mimetype='text/csv',
-            as_attachment=True,
-            download_name=filename
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Content-Type': 'text/csv'
+            }
         )
 
     except Exception as e:
-        logger.error(f"Error exporting logs: {str(e)}")
-        return jsonify({'error': 'Failed to export logs'}), 500
+        error_msg = f"Error exporting logs: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return jsonify({'error': error_msg}), 500
