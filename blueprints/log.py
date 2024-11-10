@@ -130,9 +130,25 @@ def generate_csv(logs):
         si = io.StringIO()
         writer = csv.writer(si)
         
-        # Write headers
-        headers = ['ID', 'Timestamp', 'API Type', 'Strategy', 'Action', 'Exchange', 'Symbol', 
-                  'Product', 'Price Type', 'Quantity', 'Price', 'Order ID']
+        # Write headers - include all possible fields from all request types
+        headers = [
+            'ID', 
+            'Timestamp', 
+            'API Type', 
+            'Strategy',
+            'Exchange',
+            'Symbol',
+            'Action',
+            'Product',
+            'Price Type',
+            'Quantity',
+            'Position Size',  # For placesmartorder
+            'Price',
+            'Trigger Price',
+            'Disclosed Quantity',
+            'Order ID',  # For modifyorder, cancelorder
+            'Response'
+        ]
         writer.writerow(headers)
         
         # Write data
@@ -142,19 +158,31 @@ def generate_csv(logs):
                 if not isinstance(request_data, dict):
                     request_data = {}
                 
+                # Format response data for CSV
+                response_data = log['response_data']
+                if isinstance(response_data, dict):
+                    response_str = json.dumps(response_data)
+                else:
+                    response_str = str(response_data)
+                
+                # Build row with all possible fields
                 row = [
                     log['id'],
                     log['created_at'],
                     log['api_type'],
                     log['strategy'],
-                    request_data.get('action', ''),
                     request_data.get('exchange', ''),
                     request_data.get('symbol', ''),
+                    request_data.get('action', ''),
                     request_data.get('product', ''),
                     request_data.get('pricetype', ''),
                     request_data.get('quantity', ''),
+                    request_data.get('position_size', ''),  # Only for placesmartorder
                     request_data.get('price', ''),
-                    request_data.get('orderid', '')
+                    request_data.get('trigger_price', ''),
+                    request_data.get('disclosed_quantity', ''),
+                    request_data.get('orderid', ''),  # For modifyorder, cancelorder
+                    response_str
                 ]
                 writer.writerow(row)
                 logger.debug(f"Wrote row: {row}")
