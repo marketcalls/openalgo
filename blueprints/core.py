@@ -17,6 +17,11 @@ def home():
 def download():
     return render_template('download.html')
 
+@core_bp.route('/faq')
+@invalidate_session_if_invalid
+def faq():
+    return render_template('faq.html')
+
 @core_bp.route('/setup', methods=['GET', 'POST'])
 def setup():
     if find_user_by_username() is not None:

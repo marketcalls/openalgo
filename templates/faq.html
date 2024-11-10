@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="OpenAlgo: The OpenSource Algo Platform for Everyone. Frequently Asked Questions about features, setup, and usage.">
+
+    <title>FAQ - OpenAlgo</title>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
+    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .highlight {
+            color: #8B5CF6;
+        }
+        .menu-item {
+            @apply px-4 py-2 text-gray-700 hover:text-gray-900 transition duration-300;
+        }
+        .menu-item.active {
+            @apply text-purple-600 font-semibold;
+        }
+    </style>
+
+    <meta name="msapplication-TileColor" content="#da532c">
+    <meta name="theme-color" content="#ffffff">
+</head>
+<body class="bg-white text-gray-900 flex flex-col min-h-screen">
+    <header class="p-4 flex justify-between items-center">
+        <a href="/" class="flex items-center hover:opacity-80 transition duration-300">
+            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8 mr-2">
+            <span class="text-xl font-bold">OpenAlgo</span>
+        </a>
+
+        <!-- Burger Menu Button -->
+        <button id="menu-toggle" class="block md:hidden focus:outline-none">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+            </svg>
+        </button>
+
+        <nav id="menu" class="hidden md:flex items-center">
+            <ul class="flex space-x-6">
+                <li><a href="/" class="menu-item">Home</a></li>
+                <li><a href="/faq" class="menu-item active">FAQ</a></li>
+                <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
+            </ul>
+            <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
+        </nav>
+
+        <!-- Mobile Menu -->
+        <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
+            <a href="/" class="menu-item">Home</a>
+            <a href="/faq" class="menu-item active">FAQ</a>
+            <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
+        </nav>
+    </header>
+
+    <main class="flex-grow px-4">
+        <div class="max-w-4xl mx-auto py-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-8">Frequently Asked Questions</h1>
+
+            <!-- Important Links Section -->
+            <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-3">Important Links</h2>
+                <div class="space-y-3">
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-purple-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"></path>
+                            <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"></path>
+                        </svg>
+                        <a href="https://docs.openalgo.in/" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-800">OpenAlgo Documentation</a>
+                    </div>
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-purple-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"></path>
+                            <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"></path>
+                        </svg>
+                        <a href="https://docs.openalgo.in/getting-started" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-800">Installation Instructions</a>
+                    </div>
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-purple-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 .333A9.911 9.911 0 0 0 6.866 19.65c.5.092.678-.215.678-.477 0-.237-.01-1.017-.014-1.845-2.757.6-3.338-1.169-3.338-1.169a2.627 2.627 0 0 0-1.1-1.451c-.9-.615.07-.6.07-.6a2.084 2.084 0 0 1 1.518 1.021 2.11 2.11 0 0 0 2.884.823c.044-.503.268-.973.63-1.325-2.2-.25-4.516-1.1-4.516-4.9A3.832 3.832 0 0 1 4.7 7.068a3.56 3.56 0 0 1 .095-2.623s.832-.266 2.726 1.016a9.409 9.409 0 0 1 4.962 0c1.89-1.282 2.717-1.016 2.717-1.016.366.83.402 1.768.1 2.623a3.827 3.827 0 0 1 1.02 2.659c0 3.807-2.319 4.644-4.525 4.889a2.366 2.366 0 0 1 .673 1.834c0 1.326-.012 2.394-.012 2.72 0 .263.18.572.681.475A9.911 9.911 0 0 0 10 .333Z"></path>
+                        </svg>
+                        <a href="https://github.com/marketcalls/openalgo" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-800">GitHub Repository</a>
+                    </div>
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-purple-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M14.243 5.757a6 6 0 10-.986 9.284 1 1 0 111.087 1.678A8 8 0 1118 10a3 3 0 01-4.8 2.401A4 4 0 1114 10a1 1 0 102 0c0-1.537-.586-3.07-1.757-4.243zM12 10a2 2 0 10-4 0 2 2 0 004 0z"></path>
+                        </svg>
+                        <a href="https://docs.openalgo.in/" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-800">Join Discord Community</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <!-- What is OpenAlgo -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">What is OpenAlgo?</h2>
+                    <p class="text-gray-700">
+                        OpenAlgo is an open-source algorithmic trading platform that acts as a bridge between various trading platforms and brokers. It's a web-based, self-hostable application that can run on Windows, Mac, Linux, or cloud environments. OpenAlgo currently supports connecting to your personal trading account and can interact with multiple popular trading platforms like Amibroker, MetaTrader, Python, NodeJS, Excel, and Google Spreadsheet.
+                    </p>
+                </div>
+
+                <!-- Supported Brokers -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">Which brokers are supported?</h2>
+                    <p class="text-gray-700">
+                        OpenAlgo currently supports integration with 10 popular brokers in the Indian market:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>5paisa</li>
+                        <li>Angel One</li>
+                        <li>Aliceblue</li>
+                        <li>Fyers</li>
+                        <li>ICICI Direct</li>
+                        <li>Upstox</li>
+                        <li>Zebu</li>
+                        <li>Zerodha</li>
+                        <li>And more being added regularly</li>
+                    </ul>
+                </div>
+
+                <!-- System Requirements -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">What are the system requirements?</h2>
+                    <p class="text-gray-700">
+                        The minimum requirements are:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>2GB RAM minimum</li>
+                        <li>Stable internet connection</li>
+                        <li>Python 3.10 or higher</li>
+                        <li>Any modern operating system (Windows, Mac, or Linux)</li>
+                    </ul>
+                </div>
+
+                <!-- Hosting Options -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">Where can I host OpenAlgo?</h2>
+                    <p class="text-gray-700">
+                        OpenAlgo can be hosted in multiple environments:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>Locally on your Windows PC, Mac, or Linux machine</li>
+                        <li>On cloud servers (AWS, Digital Ocean, etc.)</li>
+                        <li>On your own private domain</li>
+                        <li>For best performance with Indian markets, it's recommended to host on servers located in India to minimize latency</li>
+                    </ul>
+                </div>
+
+                <!-- Costs -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">What are the costs involved?</h2>
+                    <p class="text-gray-700">
+                        OpenAlgo itself is completely free and open-source. However, there may be associated costs:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>Trading platform costs (if using TradingView, Amibroker, etc.)</li>
+                        <li>Broker API charges (varies by broker, many are free)</li>
+                        <li>Real-time data feed subscription</li>
+                        <li>Server hosting costs (if using cloud servers, typically $6-12/month for basic setups)</li>
+                        <li>Standard trading costs (brokerage, STT, GST, etc.)</li>
+                    </ul>
+                </div>
+
+                <!-- Security -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">How secure is OpenAlgo?</h2>
+                    <p class="text-gray-700">
+                        OpenAlgo prioritizes security with features like:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>Self-hosted environment - you control your infrastructure</li>
+                        <li>Support for broker-specific security requirements (TOTP, 2FA)</li>
+                        <li>Secure storage of API keys and credentials</li>
+                        <li>Regular security updates and improvements</li>
+                        <li>Open-source code that can be audited for security</li>
+                    </ul>
+                </div>
+
+                <!-- Updates and Support -->
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">How do I get updates and support?</h2>
+                    <p class="text-gray-700">
+                        To update OpenAlgo, use these commands:
+                    </p>
+                    <pre class="bg-gray-100 p-3 rounded mt-2 text-sm">
+git pull
+pip install -r requirements.txt</pre>
+                    <p class="mt-3 text-gray-700">
+                        For support:
+                    </p>
+                    <ul class="list-disc ml-6 mt-2 text-gray-700">
+                        <li>Join the Discord community for community support</li>
+                        <li>Check the documentation at docs.openalgo.in</li>
+                        <li>Follow announcements for new features and updates</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Extra padding at bottom -->
+            <div class="h-24"></div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    {% include 'footer.html' %}
+
+    <!-- JavaScript for Toggle Menu -->
+    <script>
+        document.getElementById('menu-toggle').addEventListener('click', function() {
+            const mobileMenu = document.getElementById('mobile-menu');
+            mobileMenu.classList.toggle('hidden');
+        });
+    </script>
+</body>
+</html>

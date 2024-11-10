@@ -17,6 +17,12 @@
         .highlight {
             color: #8B5CF6;
         }
+        .menu-item {
+            @apply px-4 py-2 text-gray-700 hover:text-gray-900 transition duration-300;
+        }
+        .menu-item.active {
+            @apply text-purple-600 font-semibold;
+        }
     </style>
 </head>
 <body class="bg-white text-gray-900 flex flex-col min-h-screen">
@@ -35,7 +41,8 @@
 
         <nav id="menu" class="hidden md:flex items-center">
             <ul class="flex space-x-6">
-                <li><a href="/" class="menu-item active">Home</a></li>
+                <li><a href="/" class="menu-item">Home</a></li>
+                <li><a href="/faq" class="menu-item">FAQ</a></li>
                 <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
             </ul>
             <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
@@ -43,7 +50,8 @@
 
         <!-- Mobile Menu -->
         <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
-            <a href="/" class="menu-item active">Home</a>
+            <a href="/" class="menu-item">Home</a>
+            <a href="/faq" class="menu-item">FAQ</a>
             <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
             <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
         </nav>
