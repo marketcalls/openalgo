@@ -1,0 +1,117 @@
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize variables
+    var searchTimeout = null;
+    var loading = document.getElementById('loading');
+    var logsContainer = document.getElementById('logs-container');
+    
+    // Helper functions
+    function showLoading() {
+        loading.classList.remove('hidden');
+        logsContainer.classList.add('opacity-50');
+    }
+    
+    function hideLoading() {
+        loading.classList.add('hidden');
+        logsContainer.classList.remove('opacity-50');
+    }
+    
+    function updateURL(params) {
+        var url = new URL(window.location);
+        Object.keys(params).forEach(function(key) {
+            if (params[key]) {
+                url.searchParams.set(key, params[key]);
+            } else {
+                url.searchParams.delete(key);
+            }
+        });
+        window.location.href = url.toString();
+    }
+    
+    function loadPage(page) {
+        var params = {
+            page: page,
+            start_date: document.getElementById('start_date').value,
+            end_date: document.getElementById('end_date').value,
+            search: document.getElementById('search').value
+        };
+        updateURL(params);
+    }
+
+    function exportLogs() {
+        var params = new URLSearchParams({
+            start_date: document.getElementById('start_date').value,
+            end_date: document.getElementById('end_date').value,
+            search: document.getElementById('search').value
+        }).toString();
+
+        // Show loading state
+        showLoading();
+
+        // Create download link
+        var link = document.createElement('a');
+        link.href = `/logs/export?${params}`;
+        link.download = 'openalgo_logs.csv';
+        document.body.appendChild(link);
+        
+        // Start download
+        link.click();
+        
+        // Clean up
+        document.body.removeChild(link);
+        
+        // Hide loading after a short delay
+        setTimeout(hideLoading, 1000);
+    }
+    
+    // Set up event listeners
+    document.querySelectorAll('.toggle-details').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var content = this.closest('div').nextElementSibling;
+            if (content.classList.contains('order-details')) {
+                content = content.nextElementSibling;
+            }
+            content.classList.toggle('hidden');
+            
+            // Update icon
+            var svg = this.querySelector('svg');
+            if (content.classList.contains('hidden')) {
+                svg.innerHTML = '<path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>';
+            } else {
+                svg.innerHTML = '<path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd"/>';
+            }
+        });
+    });
+    
+    document.querySelectorAll('.page-button').forEach(function(button) {
+        button.addEventListener('click', function() {
+            loadPage(this.dataset.page);
+        });
+    });
+    
+    document.getElementById('start_date').addEventListener('change', function() {
+        loadPage(1);
+    });
+    
+    document.getElementById('end_date').addEventListener('change', function() {
+        loadPage(1);
+    });
+    
+    document.getElementById('search').addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(function() {
+            loadPage(1);
+        }, 500);
+    });
+    
+    // Initialize date inputs
+    if (!document.getElementById('start_date').value) {
+        var today = new Date().toISOString().split('T')[0];
+        document.getElementById('start_date').value = today;
+        document.getElementById('end_date').value = today;
+    }
+
+    // Make exportLogs function globally available
+    window.exportLogs = exportLogs;
+});
+</script>

@@ -1,0 +1,17 @@
+{% if total_pages > 1 %}
+<div class="flex justify-center mt-8">
+    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+        {% for page_num in range(1, total_pages + 1) %}
+        <button type="button" data-page="{{ page_num }}"
+                class="relative inline-flex items-center px-4 py-2 border text-sm font-medium page-button
+                       {% if page_num == current_page %}
+                       z-10 bg-indigo-50 border-indigo-500 text-indigo-600
+                       {% else %}
+                       bg-white border-gray-300 text-gray-500 hover:bg-gray-50
+                       {% endif %}">
+            {{ page_num }}
+        </button>
+        {% endfor %}
+    </nav>
+</div>
+{% endif %}

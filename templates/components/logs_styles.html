@@ -1,0 +1,95 @@
+<style>
+.json-content pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.badge-container {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+}
+.badge-function {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.2);
+}
+.badge-strategy {
+    background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px rgba(20, 184, 166, 0.2);
+}
+.badge-buy {
+    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+    color: white;
+}
+.badge-sell {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    color: white;
+}
+.badge-exchange {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white;
+}
+.badge-symbol {
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    color: white;
+}
+.badge-product {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+    color: white;
+}
+.log-card {
+    transition: all 0.3s ease;
+    border: 1px solid rgba(229, 231, 235, 1);
+}
+.log-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+.timestamp {
+    background: linear-gradient(135deg, #475569 0%, #334155 100%);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.order-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.detail-item {
+    background: rgba(243, 244, 246, 1);
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+}
+.detail-label {
+    font-size: 0.75rem;
+    color: #6b7280;
+    margin-bottom: 0.25rem;
+}
+.detail-value {
+    font-size: 0.875rem;
+    color: #111827;
+    font-weight: 500;
+}
+.api-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-right: 0.5rem;
+}
+</style>
