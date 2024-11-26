@@ -1,43 +1,63 @@
-<div class="navbar bg-base-100 shadow-lg sticky top-0 z-50">
+<div class="navbar bg-base-100">
     <!-- Mobile Menu Button -->
     <div class="navbar-start">
-        <div class="dropdown">
-            <label tabindex="0" class="btn btn-ghost lg:hidden">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
-                </svg>
-            </label>
-            <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
-                <li><a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-base">Dashboard</a></li>
-                <li><a href="{{ url_for('orders_bp.orderbook') }}" class="text-base">Orderbook</a></li>
-                <li><a href="{{ url_for('orders_bp.tradebook') }}" class="text-base">Tradebook</a></li>
-                <li><a href="{{ url_for('orders_bp.positions') }}" class="text-base">Positions</a></li>
-                <li><a href="{{ url_for('orders_bp.holdings') }}" class="text-base">Holdings</a></li>
-                <li><a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-base">Tradingview</a></li>
-            </ul>
-        </div>
-        <a href="/" class="btn btn-ghost normal-case text-xl">
-            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8 mr-2">
-            OpenAlgo
+        <label for="main-drawer" class="btn btn-ghost drawer-button lg:hidden">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
+            </svg>
+        </label>
+        <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8">
+            <span class="hidden sm:inline">OpenAlgo</span>
         </a>
     </div>
 
     <!-- Desktop Menu -->
     <div class="navbar-center hidden lg:flex">
-        <ul class="menu menu-horizontal px-1">
-            <li><a href="{{ url_for('dashboard_bp.dashboard') }}" class="text-base">Dashboard</a></li>
-            <li><a href="{{ url_for('orders_bp.orderbook') }}" class="text-base">Orderbook</a></li>
-            <li><a href="{{ url_for('orders_bp.tradebook') }}" class="text-base">Tradebook</a></li>
-            <li><a href="{{ url_for('orders_bp.positions') }}" class="text-base">Positions</a></li>
-            <li><a href="{{ url_for('orders_bp.holdings') }}" class="text-base">Holdings</a></li>
-            <li><a href="{{ url_for('tv_json_bp.tradingview_json') }}" class="text-base">Tradingview</a></li>
+        <ul class="menu menu-horizontal px-1 gap-1">
+            <li>
+                <a href="{{ url_for('dashboard_bp.dashboard') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'dashboard_bp.dashboard' }}">
+                    Dashboard
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('orders_bp.orderbook') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.orderbook' }}">
+                    Orderbook
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('orders_bp.tradebook') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.tradebook' }}">
+                    Tradebook
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('orders_bp.positions') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.positions' }}">
+                    Positions
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('orders_bp.holdings') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.holdings' }}">
+                    Holdings
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
+                    Tradingview
+                </a>
+            </li>
         </ul>
     </div>
 
     <!-- Right Side - Profile & Theme -->
-    <div class="navbar-end">
+    <div class="navbar-end gap-2">
         <!-- Theme Toggle -->
-        <label class="swap swap-rotate mr-4">
+        <label class="swap swap-rotate btn btn-ghost btn-circle">
             <input type="checkbox" class="theme-controller" />
             <!-- sun icon -->
             <svg class="swap-on fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -52,17 +72,60 @@
         <!-- Profile Dropdown -->
         <div class="dropdown dropdown-end">
             <label tabindex="0" class="btn btn-ghost btn-circle avatar placeholder">
-                <div class="bg-neutral text-neutral-content rounded-full w-10">
+                <div class="bg-primary text-primary-content rounded-full w-10">
                     <span class="text-xl">{{ session['user'][0]|upper if session.user else 'O' }}</span>
                 </div>
             </label>
-            <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
-                <li><a href="{{ url_for('auth.change_password') }}" class="text-base">Profile</a></li>
-                <li><a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-base">API Key</a></li>
-                <li><a href="{{ url_for('log_bp.view_logs') }}" class="text-base">Logs</a></li>
-                <li><a href="{{ url_for('search_bp.token') }}" class="text-base">Search</a></li>
-                <li><a href="https://docs.openalgo.in" target="_blank" class="text-base">Docs</a></li>
-                <li><a href="{{ url_for('auth.logout') }}" class="text-base text-error">Logout</a></li>
+            <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow-lg bg-base-100 rounded-box w-52">
+                <li>
+                    <a href="{{ url_for('auth.change_password') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                        Profile
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('api_key_bp.manage_api_key') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                        </svg>
+                        API Key
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('log_bp.view_logs') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        Logs
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('search_bp.token') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        Search
+                    </a>
+                </li>
+                <li>
+                    <a href="https://docs.openalgo.in" target="_blank" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        Docs
+                    </a>
+                </li>
+                <div class="divider my-1"></div>
+                <li>
+                    <a href="{{ url_for('auth.logout') }}" class="text-base text-error">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                        Logout
+                    </a>
+                </li>
             </ul>
         </div>
     </div>

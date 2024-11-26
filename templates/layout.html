@@ -32,16 +32,49 @@
                 extend: {
                     colors: {
                         primary: 'hsl(var(--p))',
+                        'primary-focus': 'hsl(var(--pf))',
+                        'primary-content': 'hsl(var(--pc))',
                         secondary: 'hsl(var(--s))',
+                        'secondary-focus': 'hsl(var(--sf))',
+                        'secondary-content': 'hsl(var(--sc))',
                         accent: 'hsl(var(--a))',
+                        'accent-focus': 'hsl(var(--af))',
+                        'accent-content': 'hsl(var(--ac))',
                         neutral: 'hsl(var(--n))',
+                        'neutral-focus': 'hsl(var(--nf))',
+                        'neutral-content': 'hsl(var(--nc))',
                         'base-100': 'hsl(var(--b1))',
+                        'base-200': 'hsl(var(--b2))',
+                        'base-300': 'hsl(var(--b3))',
+                        'base-content': 'hsl(var(--bc))',
                     }
                 }
             },
             plugins: [require("daisyui")],
             daisyui: {
-                themes: ["light", "dark"],
+                themes: [
+                    {
+                        light: {
+                            ...require("daisyui/src/theming/themes")["light"],
+                            primary: "#2563eb",    // Blue-600
+                            secondary: "#7c3aed",  // Violet-600
+                            accent: "#0891b2",     // Cyan-600
+                            neutral: "#1f2937",    // Gray-800
+                            "base-100": "#ffffff",
+                            "base-200": "#f3f4f6",
+                            "base-300": "#e5e7eb",
+                        },
+                        dark: {
+                            ...require("daisyui/src/theming/themes")["dark"],
+                            primary: "#3b82f6",    // Blue-500
+                            secondary: "#8b5cf6",   // Violet-500
+                            accent: "#06b6d4",     // Cyan-500
+                            "base-100": "#1f2937", // Gray-800
+                            "base-200": "#111827", // Gray-900
+                            "base-300": "#0f172a", // Gray-950
+                        }
+                    }
+                ],
                 darkTheme: "dark",
             }
         }
@@ -68,42 +101,59 @@
 
     {% block head %}{% endblock %}
 </head>
-<body class="min-h-screen bg-base-100 flex flex-col">
-    <div class="flex flex-col min-h-screen">
-        <!-- Fixed Navbar -->
-        <div class="fixed top-0 left-0 right-0 z-50 bg-base-100">
-            {% include 'public_navbar.html' %}
-        </div>
-
-        <!-- Flash Messages -->
-        <div class="container mx-auto mt-16">
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert {{ 'alert-success' if category == 'success' else 'alert-error' }} mb-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                                {% if category == 'success' %}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                {% else %}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                {% endif %}
-                            </svg>
-                            <span>{{ message }}</span>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-        </div>
-
-        <!-- Main Content -->
-        <main class="flex-grow bg-base-100 mt-16">
-            <div class="container mx-auto px-4">
-                {% block content %}{% endblock %}
+<body class="min-h-screen bg-base-100">
+    <div class="drawer">
+        <input id="main-drawer" type="checkbox" class="drawer-toggle" />
+        <div class="drawer-content flex flex-col min-h-screen">
+            <!-- Fixed Navbar -->
+            <div class="sticky top-0 z-30 flex h-16 w-full justify-center bg-base-100 bg-opacity-90 backdrop-blur transition-all duration-100">
+                <nav class="navbar w-full">
+                    {% include 'public_navbar.html' %}
+                </nav>
             </div>
-        </main>
 
-        <!-- Footer -->
-        {% include 'footer.html' %}
+            <!-- Toast Container for Notifications -->
+            <div class="toast toast-top toast-end z-50">
+                <!-- Notifications will be dynamically added here -->
+            </div>
+
+            <!-- Flash Messages -->
+            <div class="container mx-auto px-4 mt-4">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert {{ 'alert-success' if category == 'success' else 'alert-error' }} shadow-lg mb-4">
+                                <div class="flex items-center">
+                                    {% if category == 'success' %}
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    {% else %}
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    {% endif %}
+                                    <span>{{ message }}</span>
+                                    <button onclick="this.parentElement.parentElement.remove()" class="btn btn-ghost btn-sm btn-circle ml-auto">✕</button>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+            </div>
+
+            <!-- Main Content -->
+            <main class="flex-grow bg-base-100 mt-6">
+                <div class="container mx-auto px-4">
+                    {% block content %}{% endblock %}
+                </div>
+            </main>
+
+            <!-- Footer -->
+            <footer class="mt-auto bg-base-200">
+                {% include 'footer.html' %}
+            </footer>
+        </div>
     </div>
 
     <script>
@@ -118,20 +168,46 @@
                     setTheme(newTheme);
                 });
             }
-
-            // Mobile menu functionality
-            const mobileMenuButton = document.querySelector('[onclick="document.getElementById(\'mobile-menu\').classList.toggle(\'hidden\')"]');
-            const mobileMenu = document.getElementById('mobile-menu');
-            
-            if (mobileMenuButton && mobileMenu) {
-                document.addEventListener('click', function(event) {
-                    const isClickInside = mobileMenuButton.contains(event.target) || mobileMenu.contains(event.target);
-                    if (!isClickInside && !mobileMenu.classList.contains('hidden')) {
-                        mobileMenu.classList.add('hidden');
-                    }
-                });
-            }
         });
+
+        // Toast notification function
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type} shadow-lg mb-4`;
+            
+            const content = document.createElement('div');
+            content.className = 'flex items-center';
+            
+            // Icon based on type
+            let icon = '';
+            switch(type) {
+                case 'success':
+                    icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+                    break;
+                case 'error':
+                    icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+                    break;
+                default:
+                    icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+            }
+            
+            content.innerHTML = `
+                ${icon}
+                <span>${message}</span>
+                <button onclick="this.parentElement.parentElement.remove()" class="btn btn-ghost btn-sm btn-circle ml-auto">✕</button>
+            `;
+            
+            toast.appendChild(content);
+            document.querySelector('.toast').appendChild(toast);
+
+            // Remove toast after 3 seconds
+            setTimeout(() => {
+                toast.classList.add('animate-out');
+                setTimeout(() => {
+                    toast.remove();
+                }, 300);
+            }, 3000);
+        }
     </script>
 </body>
 </html>
