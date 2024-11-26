@@ -1,70 +1,119 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="pt-1">
-    <div class="flex flex-wrap -m-4">
-        <div class="w-full px-4">
-            <div class="text-2xl font-semibold text-gray-700 mb-2 text-center sm:text-left">
-                OpenAlgo Trading Dashboard
+<!-- Dashboard Header -->
+<div class="mb-12">
+    <h1 class="text-3xl font-bold text-base-content">Trading Dashboard</h1>
+    <p class="text-base-content/60 mt-2">Overview of your trading account and market positions</p>
+</div>
+
+<!-- Stats Grid -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
+    <!-- Available Balance -->
+    <div class="stat-card">
+        <div class="stat">
+            <div class="stat-title">Available Balance</div>
+            <div class="stat-value text-primary">
+                {{ margin_data['availablecash'] }}
             </div>
-            <div class="bg-white p-5 rounded-lg shadow-lg">
-                <div class="flex flex-wrap -m-4 text-center">
-                    <div class="p-4 w-full sm:w-1/5">
-                        <div class="border-2 border-blue-500 rounded-lg p-4 h-full flex flex-col justify-between">
-                            <div class="text-lg text-blue-700 font-medium">
-                                {{ margin_data['availablecash'] }}
-                            </div>
-                            <div class="text-sm text-gray-500">
-                                Available Balance
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-4 w-full sm:w-1/5">
-                        <div class="border-2 border-green-500 rounded-lg p-4 h-full flex flex-col justify-between">
-                            <div class="text-lg text-green-700 font-medium">
-                                {{ margin_data['collateral'] }}
-                            </div>
-                            <div class="text-sm text-gray-500">
-                                Collateral
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-4 w-full sm:w-1/5">
-                        <div class="border-2 border-yellow-500 rounded-lg p-4 h-full flex flex-col justify-between">
-                            <div class="text-lg text-yellow-700 font-medium">
-                                {{ margin_data['m2munrealized'] }}
-                            </div>
-                            <div class="text-sm text-gray-500">
-                                Unrealized PNL
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-4 w-full sm:w-1/5">
-                        <div class="border-2 border-red-500 rounded-lg p-4 h-full flex flex-col justify-between">
-                            <div class="text-lg text-red-700 font-medium">
-                                {{ margin_data['m2mrealized'] }}
-                            </div>
-                            <div class="text-sm text-gray-500">
-                                Realized PNL
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-4 w-full sm:w-1/5">
-                        <div class="border-2 border-gray-500 rounded-lg p-4 h-full flex flex-col justify-between">
-                            <div class="text-lg text-gray-700 font-medium">
-                                {{ margin_data['utiliseddebits'] }}
-                            </div>
-                            <div class="text-sm text-gray-500">
-                                Utilised Margin
-                            </div>
-                        </div>
-                    </div>
+            <div class="stat-desc mt-2">
+                <div class="badge badge-neutral">Cash Balance</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collateral -->
+    <div class="stat-card">
+        <div class="stat">
+            <div class="stat-title">Collateral</div>
+            <div class="stat-value text-secondary">
+                {{ margin_data['collateral'] }}
+            </div>
+            <div class="stat-desc mt-2">
+                <div class="badge badge-neutral">Total Collateral</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Unrealized P&L -->
+    <div class="stat-card">
+        <div class="stat">
+            <div class="stat-title">Unrealized P&L</div>
+            <div class="stat-value {% if margin_data['m2munrealized']|float > 0 %}text-success{% elif margin_data['m2munrealized']|float < 0 %}text-error{% else %}text-neutral{% endif %}">
+                {{ margin_data['m2munrealized'] }}
+            </div>
+            <div class="stat-desc mt-2">
+                <div class="badge {% if margin_data['m2munrealized']|float > 0 %}badge-success{% elif margin_data['m2munrealized']|float < 0 %}badge-error{% else %}badge-neutral{% endif %}">
+                    Mark to Market
                 </div>
             </div>
-            
+        </div>
+    </div>
+
+    <!-- Realized P&L -->
+    <div class="stat-card">
+        <div class="stat">
+            <div class="stat-title">Realized P&L</div>
+            <div class="stat-value {% if margin_data['m2mrealized']|float > 0 %}text-success{% elif margin_data['m2mrealized']|float < 0 %}text-error{% else %}text-neutral{% endif %}">
+                {{ margin_data['m2mrealized'] }}
+            </div>
+            <div class="stat-desc mt-2">
+                <div class="badge {% if margin_data['m2mrealized']|float > 0 %}badge-success{% elif margin_data['m2mrealized']|float < 0 %}badge-error{% else %}badge-neutral{% endif %}">
+                    Booked P&L
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
+<!-- Quick Actions Grid -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
+    <!-- Search Symbols -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                Search Symbols
+            </h2>
+            <p class="text-base-content/70">Search for trading symbols across different exchanges</p>
+            <div class="card-actions justify-end mt-4">
+                <a href="{{ url_for('search_bp.token') }}" class="btn btn-primary">Search Now</a>
+            </div>
+        </div>
+    </div>
 
+    <!-- View Logs -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                View Logs
+            </h2>
+            <p class="text-base-content/70">Monitor your trading activity and system logs</p>
+            <div class="card-actions justify-end mt-4">
+                <a href="{{ url_for('log_bp.view_logs') }}" class="btn btn-primary">View Logs</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Documentation -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+                Documentation
+            </h2>
+            <p class="text-base-content/70">Access detailed guides and API documentation</p>
+            <div class="card-actions justify-end mt-4">
+                <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" class="btn btn-primary">View Docs</a>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

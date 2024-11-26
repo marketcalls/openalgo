@@ -1,76 +1,94 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="py-5">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <!-- Heading -->
-        <div class="mb-6">
-            <h1 class="text-2xl font-semibold text-gray-900">Investor Summary</h1>
+<div class="w-full">
+    <!-- Header -->
+    <div class="section-header">
+        <h1 class="text-2xl font-semibold text-base-content">Investor Summary</h1>
+    </div>
+
+    <!-- Holdings Summary Dashboard Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- Total Holding Value Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Holding Value</div>
+                <div class="stat-value text-primary">
+                    {{ portfolio_stats.totalholdingvalue| round(2) }}
+                </div>
+            </div>
         </div>
 
-        <!-- Holdings Summary Dashboard Cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-center mb-8">
-            <!-- Total Holding Value Card -->
-            <div class="p-4 md:p-6 bg-blue-500 rounded-lg shadow-lg">
-                <div class="text-white text-3xl font-bold">
-                    
-                    {{ portfolio_stats.totalholdingvalue| round(2) }}
-                    
+        <!-- Total Investment Value Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Investment Value</div>
+                <div class="stat-value text-secondary">
+                    {{ portfolio_stats.totalinvvalue| round(2) }}
                 </div>
-                <div class="text-white mt-2">Total Holding Value</div>
             </div>
+        </div>
 
-            <!-- Total Investment Value Card -->
-            <div class="p-4 md:p-6 bg-green-500 rounded-lg shadow-lg">
-                <div class="text-white text-3xl font-bold">
-                     {{ portfolio_stats.totalinvvalue| round(2) }}
-                </div>
-                <div class="text-white mt-2">Total Investment Value</div>
-            </div>
-
-            <!-- Total Profit and Loss Card -->
-            <div class="p-4 md:p-6 bg-yellow-500 rounded-lg shadow-lg">
-                <div class="text-white text-3xl font-bold">
+        <!-- Total Profit and Loss Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Profit and Loss</div>
+                <div class="stat-value {% if portfolio_stats.totalprofitandloss > 0 %}text-success{% else %}text-error{% endif %}">
                     {{ portfolio_stats.totalprofitandloss| round(2) }}
-                 </div>
-                <div class="text-white mt-2">Total Profit and Loss</div>
+                </div>
             </div>
+        </div>
 
-            <!-- Total PnL Percentage Card -->
-            <div class="p-4 md:p-6 bg-red-500 rounded-lg shadow-lg">
-                <div class="text-white text-3xl font-bold">
+        <!-- Total PnL Percentage Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total PnL Percentage</div>
+                <div class="stat-value {% if portfolio_stats.totalpnlpercentage > 0 %}text-success{% else %}text-error{% endif %}">
                     {{ portfolio_stats.totalpnlpercentage| round(2) }}%
                 </div>
-                <div class="text-white mt-2">Total PnL Percentage</div>
             </div>
         </div>
+    </div>
 
-        <!-- Holdings Table -->
-        <div class="overflow-x-auto relative shadow-md sm:rounded-lg">
-            <table class="w-full text-sm text-left text-gray-500">
-                <thead class="text-xs text-gray-700 uppercase bg-gray-50">
-                    <tr>
-                        <th scope="col" class="py-3 px-6">Trading Symbol</th>
-                        <th scope="col" class="py-3 px-6">Exchange</th>
-                        <th scope="col" class="py-3 px-6">Quantity</th>
-                        <th scope="col" class="py-3 px-6">Product</th>
-                        <th scope="col" class="py-3 px-6">Profit and Loss</th>
-                        <th scope="col" class="py-3 px-6">PnL Percentage</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for holding in holdings_data %}
-                    <tr class="bg-white border-b">
-                        <td class="py-4 px-6">{{ holding.symbol }}</td>
-                        <td class="py-4 px-6">{{ holding.exchange }}</td>
-                        <td class="py-4 px-6">{{ holding.quantity }}</td>
-                        <td class="py-4 px-6">{{ holding.product }}</td>
-                        <td class="py-4 px-6">{{ holding.pnl }}</td>
-                        <td class="py-4 px-6">{{ '{:.2f}'.format(holding.pnlpercent) }}%</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    <!-- Holdings Table -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <div class="overflow-x-auto">
+                <table class="table w-full">
+                    <thead>
+                        <tr>
+                            <th>Trading Symbol</th>
+                            <th>Exchange</th>
+                            <th>Quantity</th>
+                            <th>Product</th>
+                            <th>Profit and Loss</th>
+                            <th>PnL Percentage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for holding in holdings_data %}
+                        <tr class="hover">
+                            <td class="font-medium">{{ holding.symbol }}</td>
+                            <td>
+                                <span class="badge badge-{{ holding.exchange.lower() }}">
+                                    {{ holding.exchange }}
+                                </span>
+                            </td>
+                            <td>{{ holding.quantity }}</td>
+                            <td>
+                                <div class="badge badge-ghost">{{ holding.product }}</div>
+                            </td>
+                            <td class="{% if holding.pnl > 0 %}text-success{% elif holding.pnl < 0 %}text-error{% endif %}">
+                                {{ holding.pnl }}
+                            </td>
+                            <td class="{% if holding.pnlpercent > 0 %}text-success{% elif holding.pnlpercent < 0 %}text-error{% endif %}">
+                                {{ '{:.2f}'.format(holding.pnlpercent) }}%
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>

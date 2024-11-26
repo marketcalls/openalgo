@@ -1,87 +1,216 @@
 {% extends "base.html" %}
 
 {% block head %}
-<title>Order Book</title>
-<!-- Tailwind CSS is included in base.html -->
+<style>
+    .stat-card {
+        @apply bg-base-100 rounded-lg shadow-lg p-6 transition-all duration-300;
+    }
+    
+    .stat-card:hover {
+        @apply shadow-xl transform -translate-y-1;
+    }
+
+    .table-container {
+        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg;
+    }
+
+    .table-header {
+        @apply sticky top-0 bg-base-200 z-10;
+    }
+
+    .order-status {
+        @apply badge font-semibold;
+    }
+
+    .order-status-complete {
+        @apply badge-success;
+    }
+
+    .order-status-rejected {
+        @apply badge-error;
+    }
+
+    .order-status-open {
+        @apply badge-warning;
+    }
+
+    .order-type-buy {
+        @apply text-success font-semibold;
+    }
+
+    .order-type-sell {
+        @apply text-error font-semibold;
+    }
+</style>
 {% endblock %}
 
 {% block content %}
+<div class="w-full">
+    <!-- Header Section -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Order Book</h1>
+        <p class="text-base-content/60">Track and manage your trading orders</p>
+    </div>
 
-<div class="mb-8">
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <!-- Total Buy Orders -->
-        <div class="border border-blue-300 bg-white p-4 md:p-6 rounded-lg shadow-sm">
-            <h2 class="text-sm font-semibold text-blue-800">Buy Orders</h2>
-            <p class="text-lg font-bold text-blue-800">{{ order_stats.total_buy_orders }}</p>
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+        <!-- Buy Orders -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Buy Orders</div>
+                <div class="stat-value text-success">{{ order_stats.total_buy_orders }}</div>
+                <div class="stat-desc mt-2">
+                    <div class="badge badge-success">Long Positions</div>
+                </div>
+            </div>
         </div>
-        <!-- Total Sell Orders -->
-        <div class="border border-red-300 bg-white p-4 md:p-6 rounded-lg shadow-sm">
-            <h2 class="text-sm font-semibold text-red-800">Sell Orders</h2>
-            <p class="text-lg font-bold text-red-800">{{ order_stats.total_sell_orders }}</p>
+
+        <!-- Sell Orders -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Sell Orders</div>
+                <div class="stat-value text-error">{{ order_stats.total_sell_orders }}</div>
+                <div class="stat-desc mt-2">
+                    <div class="badge badge-error">Short Positions</div>
+                </div>
+            </div>
         </div>
-        <!-- Total Completed Orders -->
-        <div class="border border-green-300 bg-white p-4 md:p-6 rounded-lg shadow-sm">
-            <h2 class="text-sm font-semibold text-green-800">Completed Orders</h2>
-            <p class="text-lg font-bold text-green-800">{{ order_stats.total_completed_orders }}</p>
+
+        <!-- Completed Orders -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Completed Orders</div>
+                <div class="stat-value text-success">{{ order_stats.total_completed_orders }}</div>
+                <div class="stat-desc mt-2">
+                    <div class="badge badge-success">Executed</div>
+                </div>
+            </div>
         </div>
-        <!-- Total Open Orders -->
-        <div class="border border-yellow-300 bg-white p-4 md:p-6 rounded-lg shadow-sm">
-            <h2 class="text-sm font-semibold text-yellow-800">Open Orders</h2>
-            <p class="text-lg font-bold text-yellow-800">{{ order_stats.total_open_orders }}</p>
+
+        <!-- Open Orders -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Open Orders</div>
+                <div class="stat-value text-warning">{{ order_stats.total_open_orders }}</div>
+                <div class="stat-desc mt-2">
+                    <div class="badge badge-warning">Pending</div>
+                </div>
+            </div>
         </div>
-        <!-- Total Rejected Orders -->
-        <div class="border border-pink-300 bg-white p-4 md:p-6 rounded-lg shadow-sm">
-            <h2 class="text-sm font-semibold text-pink-800">Rejected Orders</h2>
-            <p class="text-lg font-bold text-pink-800">{{ order_stats.total_rejected_orders }}</p>
+
+        <!-- Rejected Orders -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Rejected Orders</div>
+                <div class="stat-value text-error">{{ order_stats.total_rejected_orders }}</div>
+                <div class="stat-desc mt-2">
+                    <div class="badge badge-error">Failed</div>
+                </div>
+            </div>
         </div>
+    </div>
+
+    <!-- Orders Table -->
+    <div class="table-container">
+        <table class="table w-full">
+            <thead class="table-header">
+                <tr>
+                    <th class="cursor-pointer hover:bg-base-300">
+                        Trading Symbol
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                    </th>
+                    <th>Exchange</th>
+                    <th>Transaction Type</th>
+                    <th>Quantity</th>
+                    <th>Price</th>
+                    <th>Trigger Price</th>
+                    <th>Order Type</th>
+                    <th>Product Type</th>
+                    <th>Order ID</th>
+                    <th>Status</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for order in order_data %}
+                <tr class="hover:bg-base-200">
+                    <td class="font-medium">{{ order.symbol }}</td>
+                    <td>
+                        <div class="badge badge-ghost">{{ order.exchange }}</div>
+                    </td>
+                    <td>
+                        <span class="{% if order.action == 'BUY' %}order-type-buy{% else %}order-type-sell{% endif %}">
+                            {{ order.action }}
+                        </span>
+                    </td>
+                    <td class="font-mono">{{ order.quantity }}</td>
+                    <td class="font-mono">{{ order.price }}</td>
+                    <td class="font-mono">{{ order.trigger_price }}</td>
+                    <td>
+                        <div class="badge badge-outline">{{ order.pricetype }}</div>
+                    </td>
+                    <td>
+                        <div class="badge badge-outline">{{ order.product }}</div>
+                    </td>
+                    <td class="font-mono text-sm">{{ order.orderid }}</td>
+                    <td>
+                        <div class="order-status 
+                            {% if order.order_status == 'complete' %}order-status-complete
+                            {% elif order.order_status == 'rejected' %}order-status-rejected
+                            {% elif order.order_status == 'open' %}order-status-open{% endif %}">
+                            {{ order.order_status }}
+                        </div>
+                    </td>
+                    <td class="text-sm">{{ order.timestamp }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 </div>
 
-
-<div class="overflow-x-auto relative shadow-md sm:rounded-lg">
-    <table class="w-full text-sm text-left text-gray-500">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50">
-            <tr>
-                <th scope="col" class="py-3 px-6">Trading Symbol</th>
-                <th scope="col" class="py-3 px-6">Exchange</th>
-                <th scope="col" class="py-3 px-6">Transaction Type</th>
-                <th scope="col" class="py-3 px-6">Quantity</th>
-                <th scope="col" class="py-3 px-6">Price</th>
-                <th scope="col" class="py-3 px-6">Trigger Price</th>
-                <th scope="col" class="py-3 px-6">Order Type</th>
-                <th scope="col" class="py-3 px-6">Product Type</th>
-                <th scope="col" class="py-3 px-6">Order ID</th>
-                <th scope="col" class="py-3 px-6">Status</th>
-                <th scope="col" class="py-3 px-6">Time</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for order in order_data %}
-            <tr class="bg-white border-b">
-                <td class="py-4 px-6">{{ order.symbol }}</td>
-                <td class="py-4 px-6">{{ order.exchange }}</td>
-                <td class="py-4 px-6">
-                    <div class="{{ 'bg-green-100 text-green-800' if order.action == 'BUY' else 'bg-red-100 text-red-800' }} px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full">
-                        {{ order.action }}
-                    </div>
-                </td>
-                <td class="py-4 px-6">{{ order.quantity }}</td>
-                <td class="py-4 px-6">{{ order.price }}</td>
-                <td class="py-4 px-6">{{ order.trigger_price }}</td>
-                <td class="py-4 px-6">{{ order.pricetype }}</td>
-                <td class="py-4 px-6">{{ order.product }}</td>
-                <td class="py-4 px-6">{{ order.orderid }}</td>
-                <td class="py-4 px-6 
-                    {% if order.order_status == 'complete' %}text-green-500
-                    {% elif order.order_status == 'rejected' %}text-red-500
-                    {% elif order.order_status == 'open' %}text-orange-500
-                    {% else %}text-blue-500{% endif %}">
-                    {{ order.order_status }}
-                </td>
-                <td class="py-4 px-6">{{ order.timestamp }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add sorting functionality to table headers
+    document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
+        headerCell.addEventListener('click', () => {
+            const table = headerCell.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
+            
+            // Get current sort direction
+            const currentDirection = headerCell.getAttribute('data-sort') || 'asc';
+            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+            
+            // Update sort direction
+            headerCell.setAttribute('data-sort', newDirection);
+            
+            // Sort rows
+            rows.sort((a, b) => {
+                const aValue = a.children[index].textContent.trim();
+                const bValue = b.children[index].textContent.trim();
+                
+                // Check if values are numbers
+                const aNum = parseFloat(aValue);
+                const bNum = parseFloat(bValue);
+                
+                if (!isNaN(aNum) && !isNaN(bNum)) {
+                    return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
+                }
+                
+                return newDirection === 'asc' 
+                    ? aValue.localeCompare(bValue)
+                    : bValue.localeCompare(aValue);
+            });
+            
+            // Clear and repopulate tbody
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
+});
+</script>
 {% endblock %}

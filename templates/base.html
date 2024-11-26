@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="OpenAlgo is your premier open source algorithmic trading platform, offering a robust and secure environment for developing and executing trading strategies.">
     <title>OpenAlgo</title>
 
-    <!-- Favicon and touch icons for various devices -->
+    <!-- Favicon and touch icons -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
@@ -14,83 +14,151 @@
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     
+    <!-- DaisyUI and Tailwind -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <!-- Audio for alerts -->
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
+    <!-- Custom Scripts -->
     <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
     <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
 
+    <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
-    
-
-    <!-- Meta tags for color settings on mobile browsers -->
+    <!-- Meta tags for color settings -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
 
-    <style>
-        /* Style in base.html to control the flash message container's spacing */
-        .flash-message-container {
-            margin-bottom: 0; /* Remove bottom margin */
-            padding-bottom: 0; /* Remove bottom padding */
+    <!-- Theme Configuration -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'hsl(var(--p))',
+                        secondary: 'hsl(var(--s))',
+                        accent: 'hsl(var(--a))',
+                        neutral: 'hsl(var(--n))',
+                        'base-100': 'hsl(var(--b1))',
+                    }
+                }
+            },
+            plugins: [require("daisyui")],
+            daisyui: {
+                themes: ["light", "dark"],
+                darkTheme: "dark",
+            }
         }
-    </style>
+    </script>
+
+    <!-- Theme Initialization -->
+    <script>
+        // Initialize theme from localStorage
+        function initializeTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            return savedTheme;
+        }
+
+        // Set theme and persist to localStorage
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+        }
+
+        // Initialize theme immediately to prevent flash
+        const currentTheme = initializeTheme();
+    </script>
 
     {% block head %}{% endblock %}
 </head>
-<body class="bg-white-100">
-    {% include 'navbar.html' %}
+<body class="min-h-screen bg-base-100 flex flex-col">
+    <div class="flex flex-col min-h-screen">
+        <!-- Fixed Navbar -->
+        <div class="fixed top-0 left-0 right-0 z-50 bg-base-100 shadow-sm">
+            {% include 'navbar.html' %}
+        </div>
 
-    <!-- Flash Messages Display Area -->
-    <div class="container mx-auto mt-4 flash-message-container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <div class="w-full px-4 py-3 mx-auto">
+        <!-- Toast Container for Notifications -->
+        <div id="toast-container" class="toast toast-end z-50">
+            <!-- Notifications will be dynamically added here -->
+        </div>
+
+        <!-- Flash Messages -->
+        <div class="container mx-auto mt-24">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
                     {% for category, message in messages %}
-                        <div class="
-                            {{ 'bg-green-100 text-green-800' if category == 'success' else 'bg-red-100 text-red-800' }}
-                            px-4 py-3 rounded relative text-center" role="alert">
-                            <strong class="font-bold">{{ message }}</strong>
-                            <!-- Optional close button for the alert, if you want it -->
+                        <div class="alert {{ 'alert-success' if category == 'success' else 'alert-error' }} mb-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                {% if category == 'success' %}
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                {% else %}
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                {% endif %}
+                            </svg>
+                            <span>{{ message }}</span>
                         </div>
                     {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
+
+        <!-- Main Content -->
+        <main class="flex-grow bg-base-100 mt-24">
+            <div class="container mx-auto px-4 py-8">
+                <div class="space-y-8">
+                    {% block content %}{% endblock %}
                 </div>
-            {% endif %}
-        {% endwith %}
-    </div>
+            </div>
+        </main>
 
-    <!-- Adjusted Main Content Area to avoid overlap with the new navbar -->
-    <div class="container mx-auto mt-24">
-        {% block content %}{% endblock %}
+        <!-- Footer -->
+        {% include 'footer.html' %}
     </div>
-
-    <!-- Include the footer content -->
-    {% include 'footer.html' %}
 
     <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const profileBtn = document.getElementById('profileBtn');
-        const profileMenu = document.getElementById('profileMenu');
-
-        // Toggle menu when profile button is clicked
-        profileBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            profileMenu.classList.toggle('hidden');
-        });
-
-        // Close menu when clicking outside
-        document.addEventListener('click', function(e) {
-            if (!profileBtn.contains(e.target) && !profileMenu.contains(e.target)) {
-                profileMenu.classList.add('hidden');
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set initial state of theme toggle if it exists
+            const themeToggle = document.querySelector('.theme-controller');
+            if (themeToggle) {
+                themeToggle.checked = currentTheme === 'dark';
+                
+                themeToggle.addEventListener('change', function(e) {
+                    const newTheme = e.target.checked ? 'dark' : 'light';
+                    setTheme(newTheme);
+                });
             }
         });
 
-        // Prevent menu from closing when clicking inside it
-        profileMenu.addEventListener('click', function(e) {
-            e.stopPropagation();
-        });
-    });
-    </script>        
+        // Toast notification function
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type} mb-2`;
+            toast.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>${message}</span>
+            `;
+            
+            const container = document.getElementById('toast-container');
+            container.appendChild(toast);
+
+            // Remove toast after 3 seconds
+            setTimeout(() => {
+                toast.classList.add('fade-out');
+                setTimeout(() => {
+                    toast.remove();
+                }, 300);
+            }, 3000);
+        }
+    </script>
 </body>
 </html>

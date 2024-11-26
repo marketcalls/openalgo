@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup OpenAlgo Account</title>
-    <!-- Favicon and touch icons for various devices -->
+    
+    <!-- Favicon and touch icons -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
@@ -12,79 +13,257 @@
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     
+    <!-- Tailwind CSS and DaisyUI -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
+
+    <style>
+        .requirement-item {
+            @apply flex items-center gap-2 text-sm;
+        }
+
+        .requirement-met {
+            @apply text-success;
+        }
+
+        .requirement-not-met {
+            @apply text-base-content/60;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen bg-base-200">
+    <!-- Header -->
+    <header class="navbar bg-base-100 shadow-lg px-4">
+        <div class="flex-1">
+            <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+                <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
+                OpenAlgo
+            </a>
+        </div>
+    </header>
+
+    <div class="hero min-h-[calc(100vh-4rem)]">
+        <div class="hero-content flex-col lg:flex-row-reverse gap-8 max-w-6xl">
+            <!-- Info Section -->
+            <div class="text-center lg:text-left lg:w-1/2">
+                <h1 class="text-4xl font-bold">Initial Setup</h1>
+                <p class="py-6">Welcome to OpenAlgo! Create your administrator account to get started with algorithmic trading. This account will have full access to manage the platform.</p>
+                
+                <div class="alert alert-info shadow-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">First Time Setup</h3>
+                        <div class="text-sm">This form will create the initial administrator account.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Setup Form -->
+            <div class="card flex-shrink-0 w-full max-w-lg shadow-2xl bg-base-100">
+                <div class="card-body">
+                    <form id="setupForm" action="{{ url_for('core_bp.setup') }}" method="post" class="space-y-4">
+                        <!-- Username -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Username</span>
+                            </label>
+                            <input type="text" 
+                                   id="username" 
+                                   name="username" 
+                                   required 
+                                   class="input input-bordered" 
+                                   placeholder="Choose a username">
+                        </div>
+
+                        <!-- Email -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Email</span>
+                            </label>
+                            <input type="email" 
+                                   id="email" 
+                                   name="email" 
+                                   required 
+                                   class="input input-bordered" 
+                                   placeholder="Enter your email">
+                        </div>
+
+                        <!-- Mobile Number -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Mobile Number</span>
+                            </label>
+                            <input type="tel" 
+                                   id="mobile_number" 
+                                   name="mobile_number" 
+                                   required 
+                                   pattern="[0-9]{10,15}" 
+                                   class="input input-bordered" 
+                                   placeholder="Enter your mobile number">
+                        </div>
+
+                        <!-- Password -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Password</span>
+                            </label>
+                            <input type="password" 
+                                   id="password" 
+                                   name="password" 
+                                   required 
+                                   class="input input-bordered" 
+                                   placeholder="Choose a password">
+                        </div>
+
+                        <!-- Confirm Password -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Confirm Password</span>
+                            </label>
+                            <input type="password" 
+                                   id="confirm_password" 
+                                   name="confirm_password" 
+                                   required 
+                                   class="input input-bordered" 
+                                   placeholder="Confirm your password">
+                            <div id="passwordMatchMessage" class="label-text-alt mt-1"></div>
+                        </div>
+
+                        <!-- Password Requirements -->
+                        <div class="bg-base-200 p-4 rounded-lg">
+                            <h3 class="font-semibold mb-2">Password Requirements:</h3>
+                            <div class="space-y-2">
+                                <div id="req-length" class="requirement-item requirement-not-met">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>Minimum 8 characters</span>
+                                </div>
+                                <div id="req-uppercase" class="requirement-item requirement-not-met">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>At least 1 uppercase letter (A-Z)</span>
+                                </div>
+                                <div id="req-lowercase" class="requirement-item requirement-not-met">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>At least 1 lowercase letter (a-z)</span>
+                                </div>
+                                <div id="req-number" class="requirement-item requirement-not-met">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>At least 1 number (0-9)</span>
+                                </div>
+                                <div id="req-special" class="requirement-item requirement-not-met">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>At least 1 special character (@#$%^&*)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="form-control mt-6">
+                            <button type="submit" class="btn btn-primary" id="submitButton" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Create Account
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Include the footer -->
+    {% include 'footer.html' %}
+
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', function() {
             const password = document.getElementById('password');
             const confirmPassword = document.getElementById('confirm_password');
-            const validationMessage = document.getElementById('validation-message');
-            const submitButton = document.querySelector('button[type="submit"]');
-            
-            function validatePasswordPolicy(password) {
-                return /^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/.test(password);
+            const passwordMatchMessage = document.getElementById('passwordMatchMessage');
+            const submitButton = document.getElementById('submitButton');
+            const requirements = {
+                length: document.getElementById('req-length'),
+                uppercase: document.getElementById('req-uppercase'),
+                lowercase: document.getElementById('req-lowercase'),
+                number: document.getElementById('req-number'),
+                special: document.getElementById('req-special')
+            };
+
+            function checkPasswordRequirements(password) {
+                const checks = {
+                    length: password.length >= 8,
+                    uppercase: /[A-Z]/.test(password),
+                    lowercase: /[a-z]/.test(password),
+                    number: /[0-9]/.test(password),
+                    special: /[!@#$%^&*]/.test(password)
+                };
+
+                // Update requirement indicators
+                Object.keys(checks).forEach(req => {
+                    const element = requirements[req];
+                    if (checks[req]) {
+                        element.classList.remove('requirement-not-met');
+                        element.classList.add('requirement-met');
+                    } else {
+                        element.classList.remove('requirement-met');
+                        element.classList.add('requirement-not-met');
+                    }
+                });
+
+                return Object.values(checks).every(Boolean);
             }
 
-            function handleValidation() {
+            function validateForm() {
                 const passwordsMatch = password.value === confirmPassword.value;
-                const passwordIsValid = validatePasswordPolicy(password.value);
+                const meetsRequirements = checkPasswordRequirements(password.value);
+                const allFieldsFilled = Array.from(document.querySelectorAll('input[required]'))
+                    .every(input => input.value.trim() !== '');
 
-                if (passwordsMatch && passwordIsValid) {
-                    validationMessage.textContent = "Password matched";
-                    validationMessage.style.color = "green";
+                if (passwordsMatch && meetsRequirements && allFieldsFilled) {
                     submitButton.disabled = false;
+                    passwordMatchMessage.textContent = 'Passwords match';
+                    passwordMatchMessage.className = 'label-text-alt mt-1 text-success';
                 } else {
-                    validationMessage.textContent = passwordsMatch ? "Password does not meet policy" : "Password not matched";
-                    validationMessage.style.color = "red";
                     submitButton.disabled = true;
+                    if (!passwordsMatch && confirmPassword.value) {
+                        passwordMatchMessage.textContent = 'Passwords do not match';
+                        passwordMatchMessage.className = 'label-text-alt mt-1 text-error';
+                    } else if (!meetsRequirements) {
+                        passwordMatchMessage.textContent = 'Password does not meet requirements';
+                        passwordMatchMessage.className = 'label-text-alt mt-1 text-warning';
+                    } else {
+                        passwordMatchMessage.textContent = '';
+                    }
                 }
-
-                document.getElementById('password-policy').style.display = passwordIsValid ? 'none' : 'block';
             }
 
-            password.onchange = handleValidation;
-            confirmPassword.onkeyup = handleValidation;
+            // Add event listeners
+            password.addEventListener('input', validateForm);
+            confirmPassword.addEventListener('input', validateForm);
+            document.querySelectorAll('input[required]').forEach(input => {
+                input.addEventListener('input', validateForm);
+            });
+
+            // Form submission handler
+            document.getElementById('setupForm').addEventListener('submit', function(event) {
+                if (!checkPasswordRequirements(password.value) || password.value !== confirmPassword.value) {
+                    event.preventDefault();
+                    validateForm();
+                }
+            });
         });
     </script>
-</head>
-<body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">
-    <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-sm w-full">
-        <h2 class="text-3xl font-bold mb-6 text-center">Setup OpenAlgo Account</h2>
-        <form action="{{ url_for('core_bp.setup') }}" method="post" class="space-y-6" id="setupForm">
-            <div>
-                <label for="username" class="block text-sm font-medium text-gray-300">Username</label>
-                <input type="text" id="username" name="username" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
-            </div>
-            <div>
-                <label for="password" class="block text-sm font-medium text-gray-300">Password</label>
-                <input type="password" id="password" name="password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500" pattern="^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$" title="Password must contain at least 8 characters, including 1 uppercase, 1 lowercase, 1 number and 1 special character.">
-            </div>
-            <div>
-                <label for="confirm_password" class="block text-sm font-medium text-gray-300">Confirm Password</label>
-                <input type="password" id="confirm_password" name="confirm_password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
-                <span id="validation-message"></span>
-            </div>
-            <div>
-                <label for="email" class="block text-sm font-medium text-gray-300">Email</label>
-                <input type="email" id="email" name="email" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
-            </div>
-            <div>
-                <label for="mobile_number" class="block text-sm font-medium text-gray-300">Mobile Number</label>
-                <input type="tel" id="mobile_number" name="mobile_number" required pattern="[0-9]{10,15}" class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
-            </div>
-            <div class="flex items-center justify-center">
-                <button type="submit" disabled class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Setup</button>
-            </div>
-            <div id="password-policy" class="text-sm mt-4" style="color: yellow;">
-                <p>Password Policy Guidelines:</p>
-                <ul class="list-disc pl-5">
-                    <li>Minimum 8 characters</li>
-                    <li>At least 1 uppercase letter (A-Z)</li>
-                    <li>At least 1 lowercase letter (a-z)</li>
-                    <li>At least 1 number (0-9)</li>
-                    <li>At least 1 special symbol (@, #, $, etc.)</li>
-                </ul>
-            </div>
-        </form>
-    </div>
 </body>
 </html>

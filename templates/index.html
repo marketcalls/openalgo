@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="OpenAlgo: The OpenSource Algo Platform for Everyone. Create, execute, and control algorithmic trading strategies with ease.">
 
     <title>OpenAlgo - OpenSource Algo Platform for Everyone</title>
+    
+    <!-- Favicon and touch icons -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
@@ -13,87 +15,155 @@
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
 
+    <!-- Tailwind CSS and DaisyUI -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-        .highlight {
-            color: #8B5CF6;
-        }
-        .menu-item {
-            @apply px-4 py-2 text-gray-700 hover:text-gray-900 transition duration-300;
-        }
-        .menu-item.active {
-            @apply text-purple-600 font-semibold;
-        }
-    </style>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
 
-    <meta name="msapplication-TileColor" content="#da532c">
-    <meta name="theme-color" content="#ffffff">
-</head>
-<body class="bg-white text-gray-900 flex flex-col min-h-screen">
-    <header class="p-4 flex justify-between items-center">
-        <a href="/" class="flex items-center hover:opacity-80 transition duration-300">
-            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8 mr-2">
-            <span class="text-xl font-bold">OpenAlgo</span>
-        </a>
-
-        <!-- Burger Menu Button -->
-        <button id="menu-toggle" class="block md:hidden focus:outline-none">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
-            </svg>
-        </button>
-
-        <nav id="menu" class="hidden md:flex items-center">
-            <ul class="flex space-x-6">
-                <li><a href="/" class="menu-item active">Home</a></li>
-                <li><a href="/faq" class="menu-item">FAQ</a></li>
-                <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
-            </ul>
-            <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
-        </nav>
-
-        <!-- Mobile Menu -->
-        <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
-            <a href="/" class="menu-item active">Home</a>
-            <a href="/faq" class="menu-item">FAQ</a>
-            <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
-            <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
-        </nav>
-    </header>
-
-    <main class="flex-grow flex flex-col items-center justify-center px-4 text-center">
-        <h1 class="text-5xl font-bold mb-4">
-            Your Personal
-            <br>
-            <span class="highlight">Algo Trading Platform</span>
-        </h1>
-
-        <p class="text-xl text-gray-600 mb-8 max-w-2xl">
-            Connect your algo strategies seamlessly with top Indian brokers. Run your strategies from any platform - Amibroker, TradingView, Python, MetaTrader, Excel, or Google Sheets.
-        </p>
-
-        <div class="flex flex-col sm:flex-row gap-4 mb-12">
-            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-white text-gray-900 font-semibold rounded-full border-2 border-gray-900 hover:bg-gray-100 transition duration-300 flex items-center justify-center">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
-                Login
-            </a>
-        </div>
-
-    </main>
-
-    <!-- Footer -->
-    {% include 'footer.html' %}
-
-    <!-- JavaScript for Toggle Menu -->
+    <!-- Theme Configuration -->
     <script>
-        document.getElementById('menu-toggle').addEventListener('click', function() {
-            const mobileMenu = document.getElementById('mobile-menu');
-            mobileMenu.classList.toggle('hidden');
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'hsl(var(--p))',
+                        secondary: 'hsl(var(--s))',
+                        accent: 'hsl(var(--a))',
+                        neutral: 'hsl(var(--n))',
+                        'base-100': 'hsl(var(--b1))',
+                    }
+                }
+            },
+            plugins: [require("daisyui")],
+            daisyui: {
+                themes: ["light", "dark"],
+                darkTheme: "dark",
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
         });
     </script>
+</head>
+
+<body class="min-h-screen bg-base-200">
+    <!-- Header -->
+    <header class="navbar bg-base-100 shadow-lg px-4">
+        <div class="flex-1">
+            <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+                <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
+                OpenAlgo
+            </a>
+        </div>
+        
+        <!-- Desktop Navigation -->
+        <div class="flex-none hidden md:flex gap-4">
+            <a href="/" class="btn btn-ghost">Home</a>
+            <a href="/faq" class="btn btn-ghost">FAQ</a>
+            <a href="https://docs.openalgo.in" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="btn btn-primary">Download</a>
+        </div>
+
+        <!-- Mobile Menu Button -->
+        <div class="flex-none md:hidden">
+            <button class="btn btn-square btn-ghost" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-5 h-5 stroke-current">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="hidden md:hidden bg-base-100 p-4 shadow-lg">
+        <div class="flex flex-col gap-2">
+            <a href="/" class="btn btn-ghost w-full justify-start">Home</a>
+            <a href="/faq" class="btn btn-ghost w-full justify-start">FAQ</a>
+            <a href="https://docs.openalgo.in" class="btn btn-ghost w-full justify-start" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="btn btn-primary w-full justify-start">Download</a>
+        </div>
+    </div>
+
+    <!-- Hero Section -->
+    <div class="hero min-h-[70vh] bg-base-200">
+        <div class="hero-content text-center">
+            <div class="max-w-3xl">
+                <h1 class="text-5xl font-bold mb-8">
+                    Your Personal
+                    <span class="text-primary">Algo Trading Platform</span>
+                </h1>
+                <p class="text-xl mb-8 opacity-80">
+                    Connect your algo strategies seamlessly with top Indian brokers. Run your strategies from any platform - Amibroker, TradingView, Python, MetaTrader, Excel, or Google Sheets.
+                </p>
+                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                    <a href="{{ url_for('auth.login') }}" class="btn btn-primary">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path>
+                        </svg>
+                        Login
+                    </a>
+                    <a href="/download" class="btn btn-outline">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Download
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <div class="py-16 bg-base-100">
+        <div class="container mx-auto px-4">
+            <h2 class="text-3xl font-bold text-center mb-12">Key Features</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <!-- Feature 1 -->
+                <div class="card bg-base-200 shadow-xl">
+                    <div class="card-body">
+                        <h3 class="card-title">Multi-Broker Support</h3>
+                        <p>Connect with top Indian brokers including Zerodha, Angel One, ICICI Direct, and more.</p>
+                    </div>
+                </div>
+                <!-- Feature 2 -->
+                <div class="card bg-base-200 shadow-xl">
+                    <div class="card-body">
+                        <h3 class="card-title">Platform Integration</h3>
+                        <p>Seamlessly integrate with Amibroker, TradingView, Python, MetaTrader, and spreadsheets.</p>
+                    </div>
+                </div>
+                <!-- Feature 3 -->
+                <div class="card bg-base-200 shadow-xl">
+                    <div class="card-body">
+                        <h3 class="card-title">Open Source</h3>
+                        <p>Free and open source platform with complete control over your trading infrastructure.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Theme Toggle -->
+    <div class="fixed top-4 right-4">
+        <label class="swap swap-rotate">
+            <input type="checkbox" onchange="(e) => {
+                const theme = e.target.checked ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+            }" />
+            <!-- sun icon -->
+            <svg class="swap-on fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
+            </svg>
+            <!-- moon icon -->
+            <svg class="swap-off fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/>
+            </svg>
+        </label>
+    </div>
+
+    <!-- Include the footer content -->
+    {% include 'footer.html' %}
 </body>
 </html>

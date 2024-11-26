@@ -1,38 +1,173 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kotak Authentication</title>
+    <title>Kotak Securities OTP Verification - OpenAlgo</title>
+    
+    <!-- Favicon and touch icons -->
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
+    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+    
+    <!-- Tailwind CSS and DaisyUI -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
+
+    <!-- Theme Configuration -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'hsl(var(--p))',
+                        secondary: 'hsl(var(--s))',
+                        accent: 'hsl(var(--a))',
+                        neutral: 'hsl(var(--n))',
+                        'base-100': 'hsl(var(--b1))',
+                    }
+                }
+            },
+            plugins: [require("daisyui")],
+            daisyui: {
+                themes: ["light", "dark"],
+                darkTheme: "dark",
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        });
+    </script>
 </head>
 
-<body class="bg-gray-900 flex flex-col items-center justify-center h-screen text-white">
-    <div class="bg-gray-800 p-8 rounded-lg shadow-lg max-w-sm w-full">
-        <div class="flex justify-center mb-6">
-            <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+<body class="min-h-screen bg-base-200">
+    <div class="hero min-h-screen">
+        <div class="hero-content flex-col lg:flex-row-reverse">
+            <div class="text-center lg:text-left lg:ml-8">
+                <h1 class="text-4xl font-bold">OTP Verification</h1>
+                <p class="py-6">Enter the OTP sent to your registered mobile number and email to complete the authentication process.</p>
+                <div class="alert alert-info shadow-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">Check Your Messages</h3>
+                        <div class="text-sm">An OTP has been sent to your registered mobile number and email address.</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card flex-shrink-0 w-full max-w-sm shadow-2xl bg-base-100">
+                <div class="card-body">
+                    <div class="flex justify-center mb-4">
+                        <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+                    </div>
+
+                    <form action="/kotak/callback" method="POST" class="space-y-4">
+                        <!-- Hidden fields for session data -->
+                        <input type="hidden" name="token" value="{{ para.token }}">
+                        <input type="hidden" name="sid" value="{{ para.sid }}">
+                        <input type="hidden" name="userid" value="{{ para.userid }}">
+
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">OTP</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="Enter the OTP sent to your mobile and email">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="password" 
+                                   id="otp" 
+                                   name="otp" 
+                                   required 
+                                   class="input input-bordered text-center text-2xl tracking-[1em]" 
+                                   placeholder="••••••"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   inputmode="numeric"
+                                   autocomplete="one-time-code" />
+                            <label class="label">
+                                <span class="label-text-alt text-info">Enter the 6-digit OTP</span>
+                            </label>
+                        </div>
+
+                        {% if error_message %}
+                        <div class="alert alert-error">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ error_message }}</span>
+                        </div>
+                        {% endif %}
+
+                        <div class="form-control mt-6">
+                            <button type="submit" class="btn btn-primary">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                </svg>
+                                Verify OTP
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="divider">OR</div>
+
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
+                        </svg>
+                        Back to Broker Selection
+                    </a>
+                </div>
+            </div>
         </div>
-        <h2 class="text-3xl font-bold mb-6 text-center">Broker Authentication</h2>
-        <form action="/kotak/callback" method="POST" class="space-y-6">
-            <div>
-                <input type="hidden" name="token" value="{{ para.token }}">
-                <input type="hidden" name="sid" value="{{ para.sid }}">
-                <input type="hidden" name="userid" value="{{ para.userid }}">
-                <label for="totp" class="block text-sm font-medium text-gray-300">OTP</label>
-                <input type="password" id="otp" name="otp" required class="mt-1 block w-full px-3 py-2 bg-gray-700 text-gray-300 border-gray-600 rounded-md shadow-sm focus:outline-none focus:border-indigo-500 focus:ring-indigo-500">
-            </div>
-            <div class="flex items-center justify-center">
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">OTP</button>
-            </div>
-            {% if error_message %}
-            <div class="alert alert-danger" role="alert">
-            {{ error_message }}
-            </div>
-            {% endif %}
-        </form>
+    </div>
+
+    <!-- Theme Toggle -->
+    <div class="fixed top-4 right-4">
+        <label class="swap swap-rotate">
+            <input type="checkbox" onchange="(e) => {
+                const theme = e.target.checked ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+            }" />
+            <!-- sun icon -->
+            <svg class="swap-on fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
+            </svg>
+            <!-- moon icon -->
+            <svg class="swap-off fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/>
+            </svg>
+        </label>
     </div>
 
     <!-- Include the footer content -->
     {% include 'footer.html' %}
+
+    <script>
+        // Auto-focus OTP input on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('otp').focus();
+        });
+
+        // Format OTP input
+        document.getElementById('otp').addEventListener('input', function(e) {
+            // Remove any non-numeric characters
+            this.value = this.value.replace(/[^0-9]/g, '');
+            
+            // Limit to 6 digits
+            if (this.value.length > 6) {
+                this.value = this.value.slice(0, 6);
+            }
+        });
+    </script>
 </body>
 </html>

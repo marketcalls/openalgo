@@ -1,169 +1,138 @@
 {% extends "base.html" %}
 
 {% block head %}
-    <title>Symbol Search</title>
-    <style>
-        .page-container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
-        .header-section {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        .search-card {
-            background: white;
-            border-radius: 1rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            padding: 2rem;
-        }
-        .search-results {
-            position: absolute;
-            width: 100%;
-            max-height: 300px;
-            overflow-y: auto;
-            background: white;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.75rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            z-index: 1000;
-            display: none;
-        }
-        .result-item {
-            padding: 0.75rem 1rem;
-            cursor: pointer;
-            border-bottom: 1px solid #f3f4f6;
-            transition: all 0.2s ease;
-        }
-        .result-item:last-child {
-            border-bottom: none;
-        }
-        .result-item:hover {
-            background-color: #f8fafc;
-            transform: translateX(4px);
-        }
-        .loading-indicator {
-            position: absolute;
-            right: 12px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: none;
-        }
-        .input-group {
-            margin-bottom: 1.5rem;
-        }
-        .input-label {
-            display: block;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: #374151;
-            margin-bottom: 0.5rem;
-        }
-        .search-input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.5rem;
-            font-size: 1rem;
-            transition: all 0.2s ease;
-        }
-        .search-input:focus {
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-            outline: none;
-        }
-        .exchange-select {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.5rem;
-            font-size: 1rem;
-            background-color: white;
-            cursor: pointer;
-        }
-        .search-button {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            background-color: #3b82f6;
-            color: white;
-            border: none;
-            border-radius: 0.5rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .search-button:hover {
-            background-color: #2563eb;
-            transform: translateY(-1px);
-        }
-        .search-button:active {
-            transform: translateY(0);
-        }
-    </style>
+<style>
+    .search-results {
+        @apply absolute w-full max-h-[300px] overflow-y-auto bg-base-100 border border-base-200 rounded-lg shadow-lg z-50;
+        display: none;
+        top: 100%;
+        margin-top: 4px;
+    }
+
+    .result-item {
+        @apply p-4 border-b border-base-200 hover:bg-base-200 cursor-pointer transition-all duration-200;
+    }
+
+    .result-item:last-child {
+        @apply border-b-0;
+    }
+
+    .loading-indicator {
+        @apply absolute right-3 top-1/2 -translate-y-1/2;
+        display: none;
+    }
+
+    .search-tips {
+        @apply mt-8 p-4 bg-base-200 rounded-lg;
+    }
+
+    .search-tips ul {
+        @apply mt-2 space-y-2;
+    }
+
+    .search-tips li {
+        @apply flex items-center gap-2;
+    }
+
+    .search-tips li::before {
+        content: "•";
+        @apply text-primary;
+    }
+</style>
 {% endblock %}
 
 {% block content %}
-<div class="page-container">
-    <div class="header-section">
-        <h1 class="text-3xl font-bold text-gray-900 mb-2">Symbol Search</h1>
-        <p class="text-gray-600">Search for symbols across different exchanges to get detailed information</p>
+<div class="max-w-3xl mx-auto">
+    <!-- Header -->
+    <div class="section-header text-center">
+        <h1 class="text-3xl font-bold">Symbol Search</h1>
+        <p class="text-base-content/60 mt-2">Search for symbols across different exchanges to get detailed information</p>
     </div>
 
-    <div class="search-card">
-        <form action="/search" method="get" class="flex flex-col gap-4" id="searchForm">
-            <div class="input-group relative">
-                <label for="symbolSearch" class="input-label">Symbol, Name, or Token</label>
-                <input 
-                    type="text" 
-                    name="symbol" 
-                    id="symbolSearch"
-                    placeholder="Enter your search query..." 
-                    required 
-                    class="search-input"
-                    autocomplete="off">
-                <div class="loading-indicator">
-                    <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+    <!-- Search Form -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <form action="/search" method="get" id="searchForm" class="space-y-6">
+                <!-- Symbol Search -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Symbol, Name, or Token</span>
+                    </label>
+                    <div class="relative">
+                        <input type="text" 
+                               name="symbol" 
+                               id="symbolSearch" 
+                               required 
+                               class="input input-bordered w-full pr-10" 
+                               placeholder="Enter your search query..."
+                               autocomplete="off">
+                        <div class="loading-indicator">
+                            <span class="loading loading-spinner loading-sm"></span>
+                        </div>
+                        <div id="searchResults" class="search-results"></div>
+                    </div>
                 </div>
-                <div id="searchResults" class="search-results mt-1"></div>
+
+                <!-- Exchange Select -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Exchange</span>
+                    </label>
+                    <select name="exchange" id="exchangeSelect" required class="select select-bordered w-full">
+                        <option value="">Select Exchange</option>
+                        <option value="NSE">NSE - National Stock Exchange</option>
+                        <option value="NFO">NFO - NSE Futures & Options</option>
+                        <option value="BSE">BSE - Bombay Stock Exchange</option>
+                        <option value="BFO">BFO - BSE Futures & Options</option>
+                        <option value="CDS">CDS - Currency Derivatives</option>
+                        <option value="MCX">MCX - Multi Commodity Exchange</option>
+                    </select>
+                </div>
+
+                <!-- Search Button -->
+                <button type="submit" class="btn btn-primary w-full gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    Search Symbol
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Search Tips -->
+    <div class="search-tips">
+        <div class="flex items-start gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+                <h3 class="font-bold text-lg">Search Tips</h3>
+                <ul class="text-base-content/70">
+                    <li>Search by symbol name (e.g., RELIANCE, INFY)</li>
+                    <li>Search by company name (e.g., Reliance Industries)</li>
+                    <li>Search by token number</li>
+                    <li>Select appropriate exchange for accurate results</li>
+                </ul>
             </div>
-            
-            <div class="input-group">
-                <label for="exchangeSelect" class="input-label">Exchange</label>
-                <select name="exchange" id="exchangeSelect" required class="exchange-select">
-                    <option value="">Select Exchange</option>
-                    <option value="NSE">NSE - National Stock Exchange</option>
-                    <option value="NFO">NFO - NSE Futures & Options</option>
-                    <option value="BSE">BSE - Bombay Stock Exchange</option>
-                    <option value="BFO">BFO - BSE Futures & Options</option>
-                    <option value="CDS">CDS - Currency Derivatives</option>
-                    <option value="MCX">MCX - Multi Commodity Exchange</option>
-                    <option value="NSE_INDEX">NSE INDEX</option>
-                    <option value="BSE_INDEX">BSE INDEX</option>
-                </select>
-            </div>
-            
-            <button type="submit" class="search-button">
-                Search Symbol
-            </button>
-        </form>
+        </div>
     </div>
 </div>
 
 <script>
 let debounceTimeout;
 const loadingIndicator = document.querySelector('.loading-indicator');
+const symbolInput = document.getElementById('symbolSearch');
+const searchResults = document.getElementById('searchResults');
+const exchangeSelect = document.getElementById('exchangeSelect');
 
-document.getElementById('symbolSearch').addEventListener('input', function(e) {
+symbolInput.addEventListener('input', function(e) {
     clearTimeout(debounceTimeout);
     const query = e.target.value.trim();
-    const exchange = document.getElementById('exchangeSelect').value;
+    const exchange = exchangeSelect.value;
     
     if (query.length < 2) {
-        document.getElementById('searchResults').style.display = 'none';
+        searchResults.style.display = 'none';
         return;
     }
     
@@ -172,16 +141,16 @@ document.getElementById('symbolSearch').addEventListener('input', function(e) {
     }, 300);
 });
 
-document.getElementById('exchangeSelect').addEventListener('change', function(e) {
-    const query = document.getElementById('symbolSearch').value.trim();
+exchangeSelect.addEventListener('change', function(e) {
+    const query = symbolInput.value.trim();
     if (query.length >= 2) {
         fetchSearchResults(query, e.target.value);
     }
 });
 
 document.addEventListener('click', function(e) {
-    if (!e.target.closest('#symbolSearch') && !e.target.closest('#searchResults')) {
-        document.getElementById('searchResults').style.display = 'none';
+    if (!symbolInput.contains(e.target) && !searchResults.contains(e.target)) {
+        searchResults.style.display = 'none';
     }
 });
 
@@ -191,35 +160,34 @@ async function fetchSearchResults(query, exchange) {
         const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
         const data = await response.json();
         
-        const resultsDiv = document.getElementById('searchResults');
-        resultsDiv.innerHTML = '';
+        searchResults.innerHTML = '';
         
         if (data.results.length > 0) {
             data.results.forEach(result => {
                 const div = document.createElement('div');
                 div.className = 'result-item';
                 div.innerHTML = `
-                    <div class="font-semibold text-gray-900">${result.symbol}</div>
-                    <div class="text-sm text-gray-600 mt-1">${result.name || ''}</div>
-                    <div class="text-xs text-gray-500 mt-1 flex items-center gap-2">
-                        <span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded">${result.exchange}</span>
-                        <span class="text-gray-400">|</span>
-                        <span>Token: ${result.token}</span>
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">${result.symbol}</span>
+                        <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
                     </div>
+                    <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
+                    <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
                 `;
                 div.addEventListener('click', () => {
-                    document.getElementById('symbolSearch').value = result.symbol;
-                    document.getElementById('exchangeSelect').value = result.exchange;
-                    resultsDiv.style.display = 'none';
+                    symbolInput.value = result.symbol;
+                    exchangeSelect.value = result.exchange;
+                    searchResults.style.display = 'none';
                 });
-                resultsDiv.appendChild(div);
+                searchResults.appendChild(div);
             });
-            resultsDiv.style.display = 'block';
+            searchResults.style.display = 'block';
         } else {
-            resultsDiv.style.display = 'none';
+            searchResults.style.display = 'none';
         }
     } catch (error) {
-        console.error('Error fetching search results:', error);
+        console.error('Error:', error);
+        showToast('Error fetching search results', 'error');
     } finally {
         loadingIndicator.style.display = 'none';
     }

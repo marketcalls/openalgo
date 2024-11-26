@@ -1,28 +1,214 @@
 {% extends 'base.html' %}
 
+{% block head %}
+<style>
+    .stat-card {
+        @apply bg-base-100 rounded-lg shadow-lg p-6 transition-all duration-300;
+    }
+    
+    .stat-card:hover {
+        @apply shadow-xl transform -translate-y-1;
+    }
+
+    .table-container {
+        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg mt-8;
+    }
+
+    .table-header {
+        @apply sticky top-0 bg-base-200 z-10;
+    }
+
+    .position-long {
+        @apply text-success font-semibold;
+    }
+
+    .position-short {
+        @apply text-error font-semibold;
+    }
+
+    .position-neutral {
+        @apply text-base-content font-semibold;
+    }
+
+    .quick-action-btn {
+        @apply btn btn-sm;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="overflow-x-auto relative shadow-md sm:rounded-lg">
-    <table class="w-full text-sm text-left text-gray-500">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50">
-            <tr>
-                <th scope="col" class="py-3 px-6">Trading Symbol</th>
-                <th scope="col" class="py-3 px-6">Exchange</th>
-                <th scope="col" class="py-3 px-6">Product Type</th>
-                <th scope="col" class="py-3 px-6">Net Qty</th>
-                <th scope="col" class="py-3 px-6">Avg Net Price</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for position in positions_data %}
-            <tr class="bg-white border-b">
-                <td class="py-4 px-6">{{ position.symbol }}</td>
-                <td class="py-4 px-6">{{ position.exchange }}</td>
-                <td class="py-4 px-6">{{ position.product }}</td>
-                <td class="py-4 px-6">{{ position.quantity }}</td>
-                <td class="py-4 px-6">{{ position.average_price }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="w-full">
+    <!-- Header Section -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Trading Positions</h1>
+        <p class="text-base-content/60">Monitor and manage your active trading positions</p>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card bg-base-100 shadow-lg mb-8">
+        <div class="card-body">
+            <h2 class="card-title text-lg mb-4">Quick Actions</h2>
+            <div class="flex flex-wrap gap-4">
+                <button class="quick-action-btn btn-error">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Exit All Positions
+                </button>
+                <button class="quick-action-btn btn-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Square Off MIS Positions
+                </button>
+                <button class="quick-action-btn btn-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Convert to CNC
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Positions Table -->
+    <div class="table-container">
+        <table class="table w-full">
+            <thead class="table-header">
+                <tr>
+                    <th class="cursor-pointer hover:bg-base-300">
+                        Trading Symbol
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                    </th>
+                    <th>Exchange</th>
+                    <th>Product Type</th>
+                    <th>Net Qty</th>
+                    <th>Avg Price</th>
+                    <th>LTP</th>
+                    <th>P&L</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for position in positions_data %}
+                <tr class="hover:bg-base-200">
+                    <td class="font-medium">{{ position.symbol }}</td>
+                    <td>
+                        <div class="badge badge-ghost">{{ position.exchange }}</div>
+                    </td>
+                    <td>
+                        <div class="badge badge-outline">{{ position.product }}</div>
+                    </td>
+                    <td class="{% if position.quantity|int > 0 %}position-long{% elif position.quantity|int < 0 %}position-short{% else %}position-neutral{% endif %}">
+                        {{ position.quantity }}
+                    </td>
+                    <td class="font-mono">{{ position.average_price }}</td>
+                    <td class="font-mono">{{ position.ltp if position.ltp is defined else 'N/A' }}</td>
+                    <td class="{% if position.pnl|default(0)|float > 0 %}position-long{% elif position.pnl|default(0)|float < 0 %}position-short{% else %}position-neutral{% endif %}">
+                        {{ position.pnl if position.pnl is defined else '0.00' }}
+                    </td>
+                    <td>
+                        <div class="dropdown dropdown-end">
+                            <label tabindex="0" class="btn btn-ghost btn-xs">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                </svg>
+                            </label>
+                            <ul tabindex="0" class="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-52">
+                                <li>
+                                    <a href="#" class="text-error" onclick="exitPosition('{{ position.symbol }}', '{{ position.exchange }}')">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                        Exit Position
+                                    </a>
+                                </li>
+                                <li>
+                                    <a href="#" class="text-warning" onclick="modifyPosition('{{ position.symbol }}', '{{ position.exchange }}')">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                        Modify
+                                    </a>
+                                </li>
+                                <li>
+                                    <a href="#" class="text-info" onclick="convertPosition('{{ position.symbol }}', '{{ position.exchange }}')">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>
+                                        Convert
+                                    </a>
+                                </li>
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add sorting functionality to table headers
+    document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
+        headerCell.addEventListener('click', () => {
+            const table = headerCell.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
+            
+            // Get current sort direction
+            const currentDirection = headerCell.getAttribute('data-sort') || 'asc';
+            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+            
+            // Update sort direction
+            headerCell.setAttribute('data-sort', newDirection);
+            
+            // Sort rows
+            rows.sort((a, b) => {
+                const aValue = a.children[index].textContent.trim();
+                const bValue = b.children[index].textContent.trim();
+                
+                // Check if values are numbers
+                const aNum = parseFloat(aValue);
+                const bNum = parseFloat(bValue);
+                
+                if (!isNaN(aNum) && !isNaN(bNum)) {
+                    return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
+                }
+                
+                return newDirection === 'asc' 
+                    ? aValue.localeCompare(bValue)
+                    : bValue.localeCompare(aValue);
+            });
+            
+            // Clear and repopulate tbody
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
+});
+
+// Position management functions
+function exitPosition(symbol, exchange) {
+    if (confirm(`Are you sure you want to exit position for ${symbol}?`)) {
+        // Implement position exit logic
+        console.log(`Exiting position for ${symbol} on ${exchange}`);
+    }
+}
+
+function modifyPosition(symbol, exchange) {
+    // Implement position modification logic
+    console.log(`Modifying position for ${symbol} on ${exchange}`);
+}
+
+function convertPosition(symbol, exchange) {
+    // Implement position conversion logic
+    console.log(`Converting position for ${symbol} on ${exchange}`);
+}
+</script>
 {% endblock %}

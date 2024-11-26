@@ -1,196 +1,270 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="FastScalper: Download FastScalper Binaries.">
 
     <title>OpenAlgo Downloads</title>
+    
+    <!-- Favicon and touch icons -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
+    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+
+    <!-- Tailwind CSS and DaisyUI -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs" defer></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
+
+    <!-- Theme Configuration -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'hsl(var(--p))',
+                        secondary: 'hsl(var(--s))',
+                        accent: 'hsl(var(--a))',
+                        neutral: 'hsl(var(--n))',
+                        'base-100': 'hsl(var(--b1))',
+                    }
+                }
+            },
+            plugins: [require("daisyui")],
+            daisyui: {
+                themes: ["light", "dark"],
+                darkTheme: "dark",
+            }
         }
-        .highlight {
-            color: #8B5CF6;
-        }
-        .menu-item {
-            @apply px-4 py-2 text-gray-700 hover:text-gray-900 transition duration-300;
-        }
-        .menu-item.active {
-            @apply text-purple-600 font-semibold;
-        }
-    </style>
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        });
+    </script>
 </head>
-<body class="bg-white text-gray-900 flex flex-col min-h-screen">
-    <header class="p-4 flex justify-between items-center">
-        <a href="/" class="flex items-center hover:opacity-80 transition duration-300">
-            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8 mr-2">
-            <span class="text-xl font-bold">OpenAlgo</span>
-        </a>
 
-        <!-- Burger Menu Button -->
-        <button id="menu-toggle" class="block md:hidden focus:outline-none">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
-            </svg>
-        </button>
+<body class="min-h-screen bg-base-200">
+    <!-- Header -->
+    <header class="navbar bg-base-100 shadow-lg px-4">
+        <div class="flex-1">
+            <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+                <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
+                OpenAlgo
+            </a>
+        </div>
+        
+        <!-- Desktop Navigation -->
+        <div class="flex-none hidden md:flex gap-4">
+            <a href="/" class="btn btn-ghost">Home</a>
+            <a href="/faq" class="btn btn-ghost">FAQ</a>
+            <a href="https://docs.openalgo.in" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="btn btn-primary">Download</a>
+        </div>
 
-        <nav id="menu" class="hidden md:flex items-center">
-            <ul class="flex space-x-6">
-                <li><a href="/" class="menu-item">Home</a></li>
-                <li><a href="/faq" class="menu-item">FAQ</a></li>
-                <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
-            </ul>
-            <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
-        </nav>
-
-        <!-- Mobile Menu -->
-        <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
-            <a href="/" class="menu-item">Home</a>
-            <a href="/faq" class="menu-item">FAQ</a>
-            <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
-            <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
-        </nav>
+        <!-- Mobile Menu Button -->
+        <div class="flex-none md:hidden">
+            <button class="btn btn-square btn-ghost" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-5 h-5 stroke-current">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
+            </button>
+        </div>
     </header>
 
-    <main class="flex-grow flex flex-col items-center justify-center px-4 text-center">
-        <h1 class="text-5xl font-bold mb-8">FastScalper <span class="highlight">Desktop</span></h1>
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="hidden md:hidden bg-base-100 p-4 shadow-lg">
+        <div class="flex flex-col gap-2">
+            <a href="/" class="btn btn-ghost w-full justify-start">Home</a>
+            <a href="/faq" class="btn btn-ghost w-full justify-start">FAQ</a>
+            <a href="https://docs.openalgo.in" class="btn btn-ghost w-full justify-start" target="_blank" rel="noopener noreferrer">Docs</a>
+            <a href="/download" class="btn btn-primary w-full justify-start">Download</a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        <h1 class="text-4xl font-bold text-center mb-8">FastScalper <span class="text-primary">Desktop</span></h1>
         
-        <div x-data="{ activeTab: 'mac', version: '0.1.0' }" class="space-y-6 w-full max-w-4xl">
-            <div class="flex flex-col md:flex-row items-center justify-between mb-4">
-                <h2 class="text-3xl font-bold">Binaries</h2>
-                <div class="relative mt-4 md:mt-0 w-full md:w-auto">
-                    <select x-model="version" class="block w-full bg-white border border-gray-400 hover:border-gray-500 px-4 py-2 pr-8 rounded shadow leading-tight focus:outline-none focus:shadow-outline">
-                        <option>0.1.0</option>
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <!-- Version Selector -->
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="card-title">Available Downloads</h2>
+                    <select class="select select-bordered w-full max-w-xs" id="versionSelect">
+                        <option value="0.1.0">Version 0.1.0</option>
                     </select>
-                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
-                        <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                    </div>
                 </div>
-            </div>
 
-            <!-- Tabs -->
-            <div class="flex flex-col md:flex-row justify-start mb-6 space-y-4 md:space-y-0 md:space-x-4">
-                <button @click="activeTab = 'mac'" :class="{ 'bg-orange-500 text-white': activeTab === 'mac', 'bg-gray-200 text-gray-700': activeTab !== 'mac' }" class="px-6 py-2 rounded-lg font-semibold transition duration-300 flex items-center">
-                    <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83', fileName: 'fastscalper_${version}_x64.dmg'"></path></svg>
-                    Mac
-                </button>
-                <button @click="activeTab = 'linux'" :class="{ 'bg-gray-800 text-white': activeTab === 'linux', 'bg-gray-200 text-gray-700': activeTab !== 'linux' }" class="px-6 py-2 rounded-lg font-semibold transition duration-300 flex items-center">
-                    <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 7a5 5 0 110 10 5 5 0 010-10z"></path></svg>
-                    Linux
-                </button>
-                <button @click="activeTab = 'windows'" :class="{ 'bg-blue-600 text-white': activeTab === 'windows', 'bg-gray-200 text-gray-700': activeTab !== 'windows' }" class="px-6 py-2 rounded-lg font-semibold transition duration-300 flex items-center">
-                    <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 12V6.75L9 5.43V11.91L3 12M20 3V11.75L10 11.9V5.21L20 3M3 13L9 13.09V19.9L3 18.75V13M20 13.25V22L10 20.09V13.1L20 13.25Z"></path></svg>
-                    Windows
-                </button>
-            </div>
+                <!-- Platform Tabs -->
+                <div class="tabs tabs-boxed mb-6">
+                    <a class="tab tab-active" data-platform="mac">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83"/>
+                        </svg>
+                        macOS
+                    </a>
+                    <a class="tab" data-platform="linux">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/>
+                        </svg>
+                        Linux
+                    </a>
+                    <a class="tab" data-platform="windows">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M3 12V6.75L9 5.43V11.91L3 12M20 3V11.75L10 11.9V5.21L20 3M3 13L9 13.09V19.9L3 18.75V13M20 13.25V22L10 20.09V13.1L20 13.25Z"/>
+                        </svg>
+                        Windows
+                    </a>
+                </div>
 
-            <!-- Download Table -->
-            <div class="bg-white rounded-lg shadow-lg overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Platform</th>
-                            <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Version</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Download</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        <!-- Mac Downloads -->
-                        <template x-if="activeTab === 'mac'">
-                            <template x-for="(file, index) in [
-                                { platform: 'Mac x64', icon: 'M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83', fileName: 'fastscalper_${version}_universal.dmg' },
-                                { platform: 'Mac x64 (Portable)', icon: 'M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83', fileName: 'fastscalper_${version}_universal_mac.zip' },
-                                { platform: 'Mac Apple Silicon', icon: 'M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83', fileName: 'fastscalper_${version}_aarch64.dmg' },
-                                { platform: 'Mac Apple Silicon (Portable)', icon: 'M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83', fileName: 'fastscalper_${version}_arm64_mac.zip' }
-                            ]">
-                                <tr>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <svg class="flex-shrink-0 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" x-bind:d="file.icon"></path>
-                                            </svg>
-                                            <div class="ml-4">
-                                                <div class="text-sm font-medium text-gray-900" x-text="file.platform"></div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">v<span x-text="version"></span></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
-                                        <a :href="`https://github.com/marketcalls/fastscalper-tauri/releases/download/v${version}/${file.fileName.replace('${version}', version)}`" class="text-blue-600 hover:text-blue-900">Download</a>
-                                    </td>
-                                </tr>
-                            </template>
-                        </template>
+                <!-- Download Tables -->
+                <div id="macDownloads" class="overflow-x-auto">
+                    <table class="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Platform</th>
+                                <th>Version</th>
+                                <th>Download</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Mac Universal</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal.dmg" class="btn btn-sm btn-primary">
+                                        Download DMG
+                                    </a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Mac Universal (Portable)</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal_mac.zip" class="btn btn-sm btn-primary">
+                                        Download ZIP
+                                    </a>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
 
-                        <!-- Linux Downloads -->
-                        <template x-if="activeTab === 'linux'">
-                            <template x-for="(file, index) in [
-                                { platform: 'Ubuntu / Debian', icon: 'M12 7a5 5 0 110 10 5 5 0 010-10z', fileName: 'fastscalper_${version}_amd64.deb' },
-                                { platform: 'Fedora / Red Hat / SUSE', icon: 'M12 7a5 5 0 110 10 5 5 0 010-10z', fileName: 'fastscalper-${version}-1.x86_64.rpm' },
-                                { platform: 'Linux AppImage', icon: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H6a2 2 0 01-2-2V6z', fileName: 'fastscalper_${version}_amd64.AppImage' }
-                            ]">
-                                <tr>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <svg class="flex-shrink-0 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" x-bind:d="file.icon"></path>
-                                            </svg>
-                                            <div class="ml-4">
-                                                <div class="text-sm font-medium text-gray-900" x-text="file.platform"></div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">v<span x-text="version"></span></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
-                                        <a :href="`https://github.com/marketcalls/fastscalper-tauri/releases/download/v${version}/${file.fileName.replace('${version}', version)}`" class="text-blue-600 hover:text-blue-900">Download</a>
-                                    </td>
-                                </tr>
-                            </template>
-                        </template>
+                <div id="linuxDownloads" class="overflow-x-auto hidden">
+                    <table class="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Platform</th>
+                                <th>Version</th>
+                                <th>Download</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Ubuntu / Debian</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.deb" class="btn btn-sm btn-primary">
+                                        Download DEB
+                                    </a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Fedora / Red Hat</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper-0.1.0-1.x86_64.rpm" class="btn btn-sm btn-primary">
+                                        Download RPM
+                                    </a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>AppImage</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.AppImage" class="btn btn-sm btn-primary">
+                                        Download AppImage
+                                    </a>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
 
-                        <!-- Windows Downloads -->
-                        <template x-if="activeTab === 'windows'">
-                            <template x-for="(file, index) in [
-                                { platform: 'Windows x64 (MSI Installer)', icon: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z', fileName: 'fastscalper_${version}_x64_en-US.msi' },
-                                { platform: 'Windows x64', icon: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z', fileName: 'fastscalper_${version}_x64-setup.exe' }
-                            ]">
-                                <tr>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <svg class="flex-shrink-0 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" x-bind:d="file.icon"></path>
-                                            </svg>
-                                            <div class="ml-4">
-                                                <div class="text-sm font-medium text-gray-900" x-text="file.platform"></div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">v<span x-text="version"></span></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
-                                        <a :href="`https://github.com/marketcalls/fastscalper-tauri/releases/download/v${version}/${file.fileName.replace('${version}', version)}`" class="text-blue-600 hover:text-blue-900">Download</a>
-                                    </td>
-                                </tr>
-                            </template>
-                        </template>
-                    </tbody>
-                </table>
+                <div id="windowsDownloads" class="overflow-x-auto hidden">
+                    <table class="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Platform</th>
+                                <th>Version</th>
+                                <th>Download</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Windows (MSI)</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64_en-US.msi" class="btn btn-sm btn-primary">
+                                        Download MSI
+                                    </a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Windows (EXE)</td>
+                                <td>v0.1.0</td>
+                                <td>
+                                    <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64-setup.exe" class="btn btn-sm btn-primary">
+                                        Download EXE
+                                    </a>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </main>
 
-    <!-- Footer -->
+    <!-- Theme Toggle -->
+    <div class="fixed top-4 right-4">
+        <label class="swap swap-rotate">
+            <input type="checkbox" onchange="(e) => {
+                const theme = e.target.checked ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+            }" />
+            <!-- sun icon -->
+            <svg class="swap-on fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
+            </svg>
+            <!-- moon icon -->
+            <svg class="swap-off fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/>
+            </svg>
+        </label>
+    </div>
+
+    <!-- Include the footer content -->
     {% include 'footer.html' %}
 
-    <!-- JavaScript for Toggle Menu -->
     <script>
-        document.getElementById('menu-toggle').addEventListener('click', function() {
-            const mobileMenu = document.getElementById('mobile-menu');
-            mobileMenu.classList.toggle('hidden');
+        // Platform tabs functionality
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Update active tab
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
+                tab.classList.add('tab-active');
+
+                // Show corresponding downloads
+                const platform = tab.dataset.platform;
+                document.querySelectorAll('[id$="Downloads"]').forEach(div => div.classList.add('hidden'));
+                document.getElementById(`${platform}Downloads`).classList.remove('hidden');
+            });
         });
     </script>
 </body>
