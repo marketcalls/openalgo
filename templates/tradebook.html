@@ -10,32 +10,12 @@
         @apply sticky top-0 bg-base-200 z-10;
     }
 
-    .trade-buy {
-        @apply text-success font-semibold;
-    }
-
-    .trade-sell {
-        @apply text-error font-semibold;
-    }
-
-    .trade-value {
-        @apply font-mono;
+    .numeric-cell {
+        @apply font-mono text-right;
     }
 
     .trade-time {
         @apply text-sm text-base-content/70;
-    }
-
-    .trade-action {
-        @apply badge font-semibold;
-    }
-
-    .trade-action-buy {
-        @apply badge-success;
-    }
-
-    .trade-action-sell {
-        @apply badge-error;
     }
 </style>
 {% endblock %}
@@ -61,7 +41,14 @@
             <div class="stat-value text-success">
                 {{ tradebook_data|selectattr('action', 'equalto', 'BUY')|list|length }}
             </div>
-            <div class="stat-desc text-success">Long positions</div>
+            <div class="stat-desc">
+                <div class="badge badge-success gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                    Long positions
+                </div>
+            </div>
         </div>
         
         <div class="stat">
@@ -69,7 +56,14 @@
             <div class="stat-value text-error">
                 {{ tradebook_data|selectattr('action', 'equalto', 'SELL')|list|length }}
             </div>
-            <div class="stat-desc text-error">Short positions</div>
+            <div class="stat-desc">
+                <div class="badge badge-error gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                    Short positions
+                </div>
+            </div>
         </div>
     </div>
 
@@ -99,19 +93,43 @@
                 <tr class="hover:bg-base-200">
                     <td class="font-medium">{{ trade.symbol }}</td>
                     <td>
-                        <div class="badge badge-ghost">{{ trade.exchange }}</div>
+                        {% set exchange_colors = {
+                            'NSE': 'badge-accent',
+                            'BSE': 'badge-neutral',
+                            'NFO': 'badge-secondary',
+                            'MCX': 'badge-primary'
+                        } %}
+                        <div class="badge {{ exchange_colors.get(trade.exchange, 'badge-ghost') }}">
+                            {{ trade.exchange }}
+                        </div>
                     </td>
                     <td>
-                        <div class="badge badge-outline">{{ trade.product }}</div>
+                        {% set product_type_colors = {
+                            'CNC': 'badge-secondary',
+                            'MIS': 'badge-accent',
+                            'NRML': 'badge-neutral'
+                        } %}
+                        <div class="badge {{ product_type_colors.get(trade.product, 'badge-ghost') }}">
+                            {{ trade.product }}
+                        </div>
                     </td>
                     <td>
-                        <div class="trade-action {{ 'trade-action-buy' if trade.action == 'BUY' else 'trade-action-sell' }}">
+                        <div class="badge {% if trade.action == 'BUY' %}badge-success{% else %}badge-error{% endif %} gap-2">
+                            {% if trade.action == 'BUY' %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                            </svg>
+                            {% else %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                            </svg>
+                            {% endif %}
                             {{ trade.action }}
                         </div>
                     </td>
-                    <td class="trade-value">{{ trade.quantity }}</td>
-                    <td class="trade-value">{{ trade.average_price }}</td>
-                    <td class="trade-value">{{ trade.trade_value }}</td>
+                    <td class="numeric-cell">{{ trade.quantity }}</td>
+                    <td class="numeric-cell">{{ trade.average_price }}</td>
+                    <td class="numeric-cell">{{ trade.trade_value }}</td>
                     <td class="font-mono text-sm">{{ trade.orderid }}</td>
                     <td class="trade-time">{{ trade.timestamp }}</td>
                 </tr>
@@ -124,13 +142,13 @@
     <div class="flex justify-end mt-6 gap-4">
         <button class="btn btn-outline btn-sm gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" />
             </svg>
             Export CSV
         </button>
         <button class="btn btn-outline btn-sm gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
             </svg>
             Export PDF
         </button>
@@ -183,17 +201,6 @@ document.addEventListener('DOMContentLoaded', function() {
             tbody.innerHTML = '';
             rows.forEach(row => tbody.appendChild(row));
         });
-    });
-
-    // Export functionality
-    document.querySelector('button:contains("Export CSV")').addEventListener('click', function() {
-        // Implement CSV export
-        console.log('Exporting to CSV...');
-    });
-
-    document.querySelector('button:contains("Export PDF")').addEventListener('click', function() {
-        // Implement PDF export
-        console.log('Exporting to PDF...');
     });
 });
 </script>

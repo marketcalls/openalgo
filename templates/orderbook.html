@@ -18,28 +18,8 @@
         @apply sticky top-0 bg-base-200 z-10;
     }
 
-    .order-status {
-        @apply badge font-semibold;
-    }
-
-    .order-status-complete {
-        @apply badge-success;
-    }
-
-    .order-status-rejected {
-        @apply badge-error;
-    }
-
-    .order-status-open {
-        @apply badge-warning;
-    }
-
-    .order-type-buy {
-        @apply text-success font-semibold;
-    }
-
-    .order-type-sell {
-        @apply text-error font-semibold;
+    .numeric-cell {
+        @apply font-mono text-right;
     }
 </style>
 {% endblock %}
@@ -138,28 +118,65 @@
                 <tr class="hover:bg-base-200">
                     <td class="font-medium">{{ order.symbol }}</td>
                     <td>
-                        <div class="badge badge-ghost">{{ order.exchange }}</div>
+                        {% set exchange_colors = {
+                            'NSE': 'badge-accent',
+                            'BSE': 'badge-neutral',
+                            'NFO': 'badge-secondary',
+                            'MCX': 'badge-primary'
+                        } %}
+                        <div class="badge {{ exchange_colors.get(order.exchange, 'badge-ghost') }}">
+                            {{ order.exchange }}
+                        </div>
                     </td>
                     <td>
-                        <span class="{% if order.action == 'BUY' %}order-type-buy{% else %}order-type-sell{% endif %}">
+                        <div class="badge {% if order.action == 'BUY' %}badge-success{% else %}badge-error{% endif %} gap-2">
+                            {% if order.action == 'BUY' %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                            </svg>
+                            {% else %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                            </svg>
+                            {% endif %}
                             {{ order.action }}
-                        </span>
+                        </div>
                     </td>
-                    <td class="font-mono">{{ order.quantity }}</td>
-                    <td class="font-mono">{{ order.price }}</td>
-                    <td class="font-mono">{{ order.trigger_price }}</td>
+                    <td class="numeric-cell">{{ order.quantity }}</td>
+                    <td class="numeric-cell">{{ order.price }}</td>
+                    <td class="numeric-cell">{{ order.trigger_price }}</td>
                     <td>
-                        <div class="badge badge-outline">{{ order.pricetype }}</div>
+                        {% set order_type_colors = {
+                            'MARKET': 'badge-primary',
+                            'LIMIT': 'badge-info',
+                            'SL': 'badge-warning',
+                            'SL-M': 'badge-warning'
+                        } %}
+                        <div class="badge {{ order_type_colors.get(order.pricetype, 'badge-ghost') }}">
+                            {{ order.pricetype }}
+                        </div>
                     </td>
                     <td>
-                        <div class="badge badge-outline">{{ order.product }}</div>
+                        {% set product_type_colors = {
+                            'CNC': 'badge-secondary',
+                            'MIS': 'badge-accent',
+                            'NRML': 'badge-neutral'
+                        } %}
+                        <div class="badge {{ product_type_colors.get(order.product, 'badge-ghost') }}">
+                            {{ order.product }}
+                        </div>
                     </td>
                     <td class="font-mono text-sm">{{ order.orderid }}</td>
                     <td>
-                        <div class="order-status 
-                            {% if order.order_status == 'complete' %}order-status-complete
-                            {% elif order.order_status == 'rejected' %}order-status-rejected
-                            {% elif order.order_status == 'open' %}order-status-open{% endif %}">
+                        {% set status_colors = {
+                            'complete': 'badge-success',
+                            'rejected': 'badge-error',
+                            'cancelled': 'badge-error',
+                            'open': 'badge-warning',
+                            'pending': 'badge-warning',
+                            'trigger pending': 'badge-info'
+                        } %}
+                        <div class="badge {{ status_colors.get(order.order_status|lower, 'badge-ghost') }}">
                             {{ order.order_status }}
                         </div>
                     </td>
