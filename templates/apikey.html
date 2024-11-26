@@ -1,82 +1,150 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div id="userInfo" data-login-username="{{ login_username }}" style="display:none;"></div>
+<div id="userInfo" data-login-username="{{ login_username }}" class="hidden"></div>
 
 <div class="py-6">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg p-5">
-            <div class="flex">
-                <div class="w-full">
-                    <h3 class="text-lg leading-6 font-medium text-gray-900">
-                        API Key Management
-                    </h3>
-                    <p class="mt-1 max-w-2xl text-sm text-gray-500">
-                        Your API key is shown below. Use it to authenticate your requests.
-                    </p>
-                    <!-- API Key Display -->
-                    <div class="mt-3 bg-gray-100 p-3 rounded">
-                        <p id="apiKeyDisplay" style="display:none;">{{ api_key }}</p>
-                        <button onclick="toggleApiKeyVisibility()" class="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-2 px-4 rounded inline-flex items-center">
-                            Show API Key
-                        </button>
-                        <!-- Copy to Clipboard Button -->
-                        <button onclick="copyApiKeyToClipboard()" class="ml-2 text-sm bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded inline-flex items-center">
-                            Copy
-                        </button>
-                        <!-- Success Alert Placeholder (Initially Hidden) -->
-                        <div id="copySuccessAlert" class="hidden flex items-center p-4 mb-4 mt-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400" role="alert">
-                          <svg class="flex-shrink-0 inline w-4 h-4 me-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                          </svg>
-                          <span class="sr-only">Success:</span>
-                          <div>
-                            <span class="font-medium">Copied!</span> The API key has been copied to your clipboard.
-                          </div>
+    <div class="container mx-auto px-4">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">API Key Management</h2>
+                <p class="text-base-content/70">
+                    Your API key is shown below. Use it to authenticate your requests.
+                </p>
+
+                <!-- API Key Display -->
+                <div class="mt-4">
+                    <div class="collapse bg-base-200 rounded-box">
+                        <input type="checkbox" id="apiKeyCollapse" /> 
+                        <div class="collapse-title font-medium">
+                            <div class="flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                </svg>
+                                Click to Show/Hide API Key
+                            </div>
+                        </div>
+                        <div class="collapse-content"> 
+                            <div class="font-mono bg-base-300 p-4 rounded-box mt-2">
+                                {{ api_key }}
+                            </div>
                         </div>
                     </div>
-                    <!-- Regenerate API Key Button -->
-                    <button onclick="regenerateApiKey()" class="mt-4 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-                        Regenerate API Key
-                    </button>
+
+                    <!-- Copy Button -->
+                    <div class="mt-4 flex gap-2">
+                        <button onclick="copyApiKeyToClipboard()" class="btn btn-primary gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                            </svg>
+                            Copy API Key
+                        </button>
+
+                        <!-- Regenerate Button -->
+                        <button onclick="document.getElementById('confirm-modal').showModal()" class="btn btn-secondary gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Regenerate API Key
+                        </button>
+                    </div>
+
+                    <!-- Success Alert -->
+                    <div id="copySuccessAlert" class="alert alert-success mt-4 hidden">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">Copied!</h3>
+                            <div class="text-sm">The API key has been copied to your clipboard.</div>
+                        </div>
+                    </div>
+
+                    <!-- Error Alert -->
+                    <div id="errorAlert" class="alert alert-error mt-4 hidden">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">Error!</h3>
+                            <div class="text-sm" id="errorMessage">Failed to regenerate API key. Please try again.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Confirmation Modal -->
+<dialog id="confirm-modal" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Confirm Regeneration</h3>
+        <p class="py-4">Are you sure you want to regenerate your API key? The current key will be invalidated and any applications using it will need to be updated.</p>
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-ghost">Cancel</button>
+            </form>
+            <button onclick="regenerateApiKey()" class="btn btn-primary">Regenerate</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block head %}
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
-    function toggleApiKeyVisibility() {
-        var apiKeyDisplay = document.getElementById("apiKeyDisplay");
-        var button = document.querySelector("button[onclick='toggleApiKeyVisibility()']");
-        if (apiKeyDisplay.style.display === "none") {
-            apiKeyDisplay.style.display = "block";
-            apiKeyDisplay.textContent = "{{ api_key }}" || "No API Key found";
-            button.textContent = "Hide API Key";
-        } else {
-            apiKeyDisplay.style.display = "none";
-            apiKeyDisplay.textContent = "";
-            button.textContent = "Show API Key";
-        }
-    }
-
     function copyApiKeyToClipboard() {
-        var apiKey = document.getElementById("apiKeyDisplay").innerText;
+        const apiKey = "{{ api_key }}";
         if (apiKey) {
             navigator.clipboard.writeText(apiKey).then(function() {
                 // Show the success alert
-                var alertBox = document.getElementById("copySuccessAlert");
-                alertBox.classList.remove('hidden'); // Make the alert visible
-                setTimeout(() => { alertBox.classList.add('hidden'); }, 3000); // Hide the alert after 3 seconds
+                const alertBox = document.getElementById("copySuccessAlert");
+                alertBox.classList.remove('hidden');
+                setTimeout(() => { alertBox.classList.add('hidden'); }, 3000);
             }, function(err) {
                 console.error('Could not copy text: ', err);
+                showError('Failed to copy API key to clipboard');
             });
-        } else {
-            alert("No API Key to copy");
         }
+    }
+
+    function showError(message) {
+        const errorAlert = document.getElementById("errorAlert");
+        const errorMessage = document.getElementById("errorMessage");
+        errorMessage.textContent = message;
+        errorAlert.classList.remove('hidden');
+        setTimeout(() => { errorAlert.classList.add('hidden'); }, 3000);
+    }
+
+    function regenerateApiKey() {
+        // Close the modal
+        document.getElementById('confirm-modal').close();
+        
+        fetch('/apikey', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                user_id: "{{ login_username }}"
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.api_key) {
+                window.location.reload();
+            } else {
+                showError(data.error || 'Failed to regenerate API key');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showError('Failed to regenerate API key. Please try again.');
+        });
     }
 </script>
 {% endblock %}

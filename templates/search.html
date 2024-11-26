@@ -2,32 +2,8 @@
 
 {% block head %}
 <style>
-    .search-header {
-        @apply bg-base-100 p-4 rounded-lg shadow-lg mb-6;
-    }
-
-    .table-container {
-        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg;
-    }
-
     .table-header {
         @apply sticky top-0 bg-base-200 z-10;
-    }
-
-    .table-row {
-        @apply hover:bg-base-200 transition-colors duration-200;
-    }
-
-    .pagination {
-        @apply flex justify-center gap-2 mt-6;
-    }
-
-    .pagination-button {
-        @apply btn btn-ghost btn-sm;
-    }
-
-    .pagination-button.active {
-        @apply btn-primary;
     }
 
     .sort-icon {
@@ -43,15 +19,11 @@
     }
 
     .name-cell {
-        @apply text-base-content/70;
+        @apply opacity-70;
     }
 
     .token-cell {
         @apply font-mono text-sm;
-    }
-
-    .exchange-badge {
-        @apply badge badge-ghost;
     }
 
     .numeric-cell {
@@ -63,68 +35,74 @@
 {% block content %}
 <div class="w-full">
     <!-- Search Header -->
-    <div class="search-header">
-        <div class="flex justify-between items-center mb-4">
-            <h1 class="text-2xl font-bold">Search Results</h1>
-            <a href="{{ url_for('search_bp.token') }}" class="btn btn-ghost btn-sm gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                New Search
-            </a>
-        </div>
-        <div class="stats shadow w-full">
-            <div class="stat">
-                <div class="stat-title">Found</div>
-                <div class="stat-value text-primary">{{ results|length }}</div>
-                <div class="stat-desc">matching symbols</div>
+    <div class="card bg-base-100 shadow-lg mb-6">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h1 class="text-2xl font-bold">Search Results</h1>
+                <a href="{{ url_for('search_bp.token') }}" class="btn btn-ghost btn-sm gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    New Search
+                </a>
+            </div>
+            <div class="stats shadow">
+                <div class="stat">
+                    <div class="stat-title">Found</div>
+                    <div class="stat-value text-primary">{{ results|length }}</div>
+                    <div class="stat-desc">matching symbols</div>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Results Table -->
-    <div class="table-container">
-        <table class="table w-full">
-            <thead class="table-header">
-                <tr>
-                    <th class="sortable" data-sort="symbol">
-                        Symbol
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                        </svg>
-                    </th>
-                    <th class="sortable" data-sort="brsymbol">Broker Symbol</th>
-                    <th class="sortable" data-sort="name">Name</th>
-                    <th class="sortable" data-sort="exchange">Exchange</th>
-                    <th class="sortable" data-sort="brexchange">Broker Exchange</th>
-                    <th class="sortable" data-sort="token">Token</th>
-                    <th class="sortable" data-sort="expiry">Expiry</th>
-                    <th class="sortable" data-sort="strike">Strike</th>
-                    <th class="sortable" data-sort="lotsize">Lot Size</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in results %}
-                <tr class="table-row">
-                    <td class="symbol-cell">{{ row.symbol }}</td>
-                    <td>{{ row.brsymbol }}</td>
-                    <td class="name-cell">{{ row.name }}</td>
-                    <td><div class="exchange-badge">{{ row.exchange }}</div></td>
-                    <td><div class="exchange-badge">{{ row.brexchange }}</div></td>
-                    <td class="token-cell">{{ row.token }}</td>
-                    <td>{{ row.expiry or '-' }}</td>
-                    <td class="numeric-cell">{{ row.strike or '-' }}</td>
-                    <td class="numeric-cell">{{ row.lotsize or '-' }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="card bg-base-100 shadow-lg overflow-x-auto">
+        <div class="card-body p-0">
+            <table class="table table-zebra w-full">
+                <thead class="table-header">
+                    <tr>
+                        <th class="sortable" data-sort="symbol">
+                            Symbol
+                            <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                            </svg>
+                        </th>
+                        <th class="sortable" data-sort="brsymbol">Broker Symbol</th>
+                        <th class="sortable" data-sort="name">Name</th>
+                        <th class="sortable" data-sort="exchange">Exchange</th>
+                        <th class="sortable" data-sort="brexchange">Broker Exchange</th>
+                        <th class="sortable" data-sort="token">Token</th>
+                        <th class="sortable" data-sort="expiry">Expiry</th>
+                        <th class="sortable" data-sort="strike">Strike</th>
+                        <th class="sortable" data-sort="lotsize">Lot Size</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in results %}
+                    <tr>
+                        <td class="symbol-cell">{{ row.symbol }}</td>
+                        <td>{{ row.brsymbol }}</td>
+                        <td class="name-cell">{{ row.name }}</td>
+                        <td><div class="badge badge-ghost">{{ row.exchange }}</div></td>
+                        <td><div class="badge badge-ghost">{{ row.brexchange }}</div></td>
+                        <td class="token-cell">{{ row.token }}</td>
+                        <td>{{ row.expiry or '-' }}</td>
+                        <td class="numeric-cell">{{ row.strike or '-' }}</td>
+                        <td class="numeric-cell">{{ row.lotsize or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- Pagination -->
     {% if results|length > 10 %}
-    <div id="pagination" class="pagination">
-        <!-- Pagination will be populated by JavaScript -->
+    <div id="pagination" class="flex justify-center mt-8">
+        <div class="join">
+            <!-- Pagination will be populated by JavaScript -->
+        </div>
     </div>
     {% endif %}
 </div>
@@ -196,14 +174,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function setupPagination() {
-        const pagination = document.getElementById('pagination');
+        const pagination = document.getElementById('pagination').querySelector('.join');
         if (!pagination) return;
         
         pagination.innerHTML = '';
         
         // Previous button
         const prevButton = document.createElement('button');
-        prevButton.className = 'pagination-button';
+        prevButton.className = 'join-item btn btn-sm';
         prevButton.innerHTML = '«';
         prevButton.addEventListener('click', () => {
             if (currentPage > 1) {
@@ -216,7 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Page buttons
         for (let i = 1; i <= totalPages; i++) {
             const button = document.createElement('button');
-            button.className = `pagination-button ${i === currentPage ? 'active' : ''}`;
+            button.className = `join-item btn btn-sm ${i === currentPage ? 'btn-active' : ''}`;
             button.textContent = i;
             button.addEventListener('click', () => {
                 currentPage = i;
@@ -227,7 +205,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Next button
         const nextButton = document.createElement('button');
-        nextButton.className = 'pagination-button';
+        nextButton.className = 'join-item btn btn-sm';
         nextButton.innerHTML = '»';
         nextButton.addEventListener('click', () => {
             if (currentPage < totalPages) {
@@ -242,10 +220,10 @@ document.addEventListener('DOMContentLoaded', function() {
         showPage(currentPage);
         
         // Update button states
-        document.querySelectorAll('.pagination-button').forEach(button => {
-            button.classList.remove('active');
+        document.querySelectorAll('.join-item').forEach(button => {
+            button.classList.remove('btn-active');
             if (button.textContent == currentPage) {
-                button.classList.add('active');
+                button.classList.add('btn-active');
             }
         });
     }
