@@ -1,275 +1,167 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="light">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="OpenAlgo: The OpenSource Algo Platform for Everyone. Frequently Asked Questions about features, setup, and usage.">
+{% extends "layout.html" %}
 
-    <title>FAQ - OpenAlgo</title>
-    
-    <!-- Favicon and touch icons -->
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+{% block title %}FAQ - OpenAlgo{% endblock %}
 
-    <!-- Tailwind CSS and DaisyUI -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
+{% block content %}
+<h1 class="text-4xl font-bold text-center mb-12">Frequently Asked Questions</h1>
 
-    <!-- Theme Configuration -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: 'hsl(var(--p))',
-                        secondary: 'hsl(var(--s))',
-                        accent: 'hsl(var(--a))',
-                        neutral: 'hsl(var(--n))',
-                        'base-100': 'hsl(var(--b1))',
-                    }
-                }
-            },
-            plugins: [require("daisyui")],
-            daisyui: {
-                themes: ["light", "dark"],
-                darkTheme: "dark",
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            const savedTheme = localStorage.getItem('theme') || 'light';
-            document.documentElement.setAttribute('data-theme', savedTheme);
-        });
-    </script>
-</head>
-
-<body class="min-h-screen bg-base-200">
-    <!-- Header -->
-    <header class="navbar bg-base-100 shadow-lg px-4">
-        <div class="flex-1">
-            <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
-                <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
-                OpenAlgo
+<!-- Important Links Card -->
+<div class="card bg-base-100 shadow-xl mb-8">
+    <div class="card-body">
+        <h2 class="card-title">Important Links</h2>
+        <div class="space-y-4">
+            <a href="https://docs.openalgo.in/" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                </svg>
+                Documentation
+            </a>
+            <a href="https://docs.openalgo.in/getting-started" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+                Installation Guide
+            </a>
+            <a href="https://github.com/marketcalls/openalgo" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
+                </svg>
+                GitHub Repository
+            </a>
+            <a href="https://discord.com/invite/UPh7QPsNhP" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"></path>
+                </svg>
+                Join Discord Community
             </a>
         </div>
-        
-        <!-- Desktop Navigation -->
-        <div class="flex-none hidden md:flex gap-4">
-            <a href="/" class="btn btn-ghost">Home</a>
-            <a href="/faq" class="btn btn-ghost btn-active">FAQ</a>
-            <a href="https://docs.openalgo.in" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">Docs</a>
-            <a href="/download" class="btn btn-primary">Download</a>
-        </div>
+    </div>
+</div>
 
-        <!-- Mobile Menu Button -->
-        <div class="flex-none md:hidden">
-            <button class="btn btn-square btn-ghost" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-5 h-5 stroke-current">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-                </svg>
-            </button>
+<!-- FAQ Sections -->
+<div class="space-y-4">
+    <!-- What is OpenAlgo -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" checked="checked" /> 
+        <div class="collapse-title text-xl font-medium">
+            What is OpenAlgo?
         </div>
-    </header>
-
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="hidden md:hidden bg-base-100 p-4 shadow-lg">
-        <div class="flex flex-col gap-2">
-            <a href="/" class="btn btn-ghost w-full justify-start">Home</a>
-            <a href="/faq" class="btn btn-ghost w-full justify-start btn-active">FAQ</a>
-            <a href="https://docs.openalgo.in" class="btn btn-ghost w-full justify-start" target="_blank" rel="noopener noreferrer">Docs</a>
-            <a href="/download" class="btn btn-primary w-full justify-start">Download</a>
+        <div class="collapse-content">
+            <p>OpenAlgo is an open-source algorithmic trading platform that acts as a bridge between various trading platforms and brokers. It's a web-based, self-hostable application that can run on Windows, Mac, Linux, or cloud environments. OpenAlgo currently supports connecting to your personal trading account and can interact with multiple popular trading platforms like Amibroker, MetaTrader, Python, NodeJS, Excel, and Google Spreadsheet.</p>
         </div>
     </div>
 
-    <!-- Main Content -->
-    <main class="container mx-auto px-4 py-8">
-        <h1 class="text-4xl font-bold text-center mb-12">Frequently Asked Questions</h1>
-
-        <!-- Important Links Card -->
-        <div class="card bg-base-100 shadow-xl mb-8">
-            <div class="card-body">
-                <h2 class="card-title">Important Links</h2>
-                <div class="space-y-4">
-                    <a href="https://docs.openalgo.in/" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
-                        </svg>
-                        Documentation
-                    </a>
-                    <a href="https://docs.openalgo.in/getting-started" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
-                        Installation Guide
-                    </a>
-                    <a href="https://github.com/marketcalls/openalgo" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
-                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
-                        </svg>
-                        GitHub Repository
-                    </a>
-                    <a href="https://discord.com/invite/UPh7QPsNhP" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-block justify-start gap-2">
-                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"></path>
-                        </svg>
-                        Join Discord Community
-                    </a>
-                </div>
-            </div>
+    <!-- Supported Brokers -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            Which brokers are supported?
         </div>
+        <div class="collapse-content">
+            <p class="mb-4">OpenAlgo currently supports integration with 10 popular brokers in the Indian market:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>5paisa</li>
+                <li>Angel One</li>
+                <li>Aliceblue</li>
+                <li>Fyers</li>
+                <li>ICICI Direct</li>
+                <li>Upstox</li>
+                <li>Zebu</li>
+                <li>Zerodha</li>
+                <li>And more being added regularly</li>
+            </ul>
+        </div>
+    </div>
 
-        <!-- FAQ Sections -->
-        <div class="space-y-4">
-            <!-- What is OpenAlgo -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" checked="checked" /> 
-                <div class="collapse-title text-xl font-medium">
-                    What is OpenAlgo?
-                </div>
-                <div class="collapse-content">
-                    <p>OpenAlgo is an open-source algorithmic trading platform that acts as a bridge between various trading platforms and brokers. It's a web-based, self-hostable application that can run on Windows, Mac, Linux, or cloud environments. OpenAlgo currently supports connecting to your personal trading account and can interact with multiple popular trading platforms like Amibroker, MetaTrader, Python, NodeJS, Excel, and Google Spreadsheet.</p>
-                </div>
-            </div>
+    <!-- System Requirements -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            What are the system requirements?
+        </div>
+        <div class="collapse-content">
+            <p class="mb-4">The minimum requirements are:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>2GB RAM minimum</li>
+                <li>Stable internet connection</li>
+                <li>Python 3.10 or higher</li>
+                <li>Any modern operating system (Windows, Mac, or Linux)</li>
+            </ul>
+        </div>
+    </div>
 
-            <!-- Supported Brokers -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    Which brokers are supported?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">OpenAlgo currently supports integration with 10 popular brokers in the Indian market:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>5paisa</li>
-                        <li>Angel One</li>
-                        <li>Aliceblue</li>
-                        <li>Fyers</li>
-                        <li>ICICI Direct</li>
-                        <li>Upstox</li>
-                        <li>Zebu</li>
-                        <li>Zerodha</li>
-                        <li>And more being added regularly</li>
-                    </ul>
-                </div>
-            </div>
+    <!-- Hosting Options -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            Where can I host OpenAlgo?
+        </div>
+        <div class="collapse-content">
+            <p class="mb-4">OpenAlgo can be hosted in multiple environments:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>Locally on your Windows PC, Mac, or Linux machine</li>
+                <li>On cloud servers (AWS, Digital Ocean, etc.)</li>
+                <li>On your own private domain</li>
+                <li>For best performance with Indian markets, it's recommended to host on servers located in India to minimize latency</li>
+            </ul>
+        </div>
+    </div>
 
-            <!-- System Requirements -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    What are the system requirements?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">The minimum requirements are:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>2GB RAM minimum</li>
-                        <li>Stable internet connection</li>
-                        <li>Python 3.10 or higher</li>
-                        <li>Any modern operating system (Windows, Mac, or Linux)</li>
-                    </ul>
-                </div>
-            </div>
+    <!-- Costs -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            What are the costs involved?
+        </div>
+        <div class="collapse-content">
+            <p class="mb-4">OpenAlgo itself is completely free and open-source. However, there may be associated costs:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>Trading platform costs (if using TradingView, Amibroker, etc.)</li>
+                <li>Broker API charges (varies by broker, many are free)</li>
+                <li>Real-time data feed subscription</li>
+                <li>Server hosting costs (if using cloud servers, typically $6-12/month for basic setups)</li>
+                <li>Standard trading costs (brokerage, STT, GST, etc.)</li>
+            </ul>
+        </div>
+    </div>
 
-            <!-- Hosting Options -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    Where can I host OpenAlgo?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">OpenAlgo can be hosted in multiple environments:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>Locally on your Windows PC, Mac, or Linux machine</li>
-                        <li>On cloud servers (AWS, Digital Ocean, etc.)</li>
-                        <li>On your own private domain</li>
-                        <li>For best performance with Indian markets, it's recommended to host on servers located in India to minimize latency</li>
-                    </ul>
-                </div>
-            </div>
+    <!-- Security -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            How secure is OpenAlgo?
+        </div>
+        <div class="collapse-content">
+            <p class="mb-4">OpenAlgo prioritizes security with features like:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>Self-hosted environment - you control your infrastructure</li>
+                <li>Support for broker-specific security requirements (TOTP, 2FA)</li>
+                <li>Secure storage of API keys and credentials</li>
+                <li>Regular security updates and improvements</li>
+                <li>Open-source code that can be audited for security</li>
+            </ul>
+        </div>
+    </div>
 
-            <!-- Costs -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    What are the costs involved?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">OpenAlgo itself is completely free and open-source. However, there may be associated costs:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>Trading platform costs (if using TradingView, Amibroker, etc.)</li>
-                        <li>Broker API charges (varies by broker, many are free)</li>
-                        <li>Real-time data feed subscription</li>
-                        <li>Server hosting costs (if using cloud servers, typically $6-12/month for basic setups)</li>
-                        <li>Standard trading costs (brokerage, STT, GST, etc.)</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Security -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    How secure is OpenAlgo?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">OpenAlgo prioritizes security with features like:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>Self-hosted environment - you control your infrastructure</li>
-                        <li>Support for broker-specific security requirements (TOTP, 2FA)</li>
-                        <li>Secure storage of API keys and credentials</li>
-                        <li>Regular security updates and improvements</li>
-                        <li>Open-source code that can be audited for security</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Updates and Support -->
-            <div class="collapse collapse-plus bg-base-100">
-                <input type="radio" name="faq-accordion" />
-                <div class="collapse-title text-xl font-medium">
-                    How do I get updates and support?
-                </div>
-                <div class="collapse-content">
-                    <p class="mb-4">To update OpenAlgo, use these commands:</p>
-                    <div class="mockup-code mb-4">
-                        <pre><code>git pull
+    <!-- Updates and Support -->
+    <div class="collapse collapse-plus bg-base-100">
+        <input type="radio" name="faq-accordion" />
+        <div class="collapse-title text-xl font-medium">
+            How do I get updates and support?
+        </div>
+        <div class="collapse-content">
+            <p class="mb-4">To update OpenAlgo, use these commands:</p>
+            <div class="mockup-code mb-4">
+                <pre><code>git pull
 pip install -r requirements.txt</code></pre>
-                    </div>
-                    <p class="mb-4">For support:</p>
-                    <ul class="list-disc list-inside space-y-2">
-                        <li>Join the Discord community for community support</li>
-                        <li>Check the documentation at docs.openalgo.in</li>
-                        <li>Follow announcements for new features and updates</li>
-                    </ul>
-                </div>
             </div>
+            <p class="mb-4">For support:</p>
+            <ul class="list-disc list-inside space-y-2">
+                <li>Join the Discord community for community support</li>
+                <li>Check the documentation at docs.openalgo.in</li>
+                <li>Follow announcements for new features and updates</li>
+            </ul>
         </div>
-    </main>
-
-    <!-- Theme Toggle -->
-    <div class="fixed top-4 right-4">
-        <label class="swap swap-rotate">
-            <input type="checkbox" onchange="(e) => {
-                const theme = e.target.checked ? 'dark' : 'light';
-                document.documentElement.setAttribute('data-theme', theme);
-                localStorage.setItem('theme', theme);
-            }" />
-            <!-- sun icon -->
-            <svg class="swap-on fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                <path d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
-            </svg>
-            <!-- moon icon -->
-            <svg class="swap-off fill-current w-8 h-8" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                <path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/>
-            </svg>
-        </label>
     </div>
-
-    <!-- Include the footer content -->
-    {% include 'footer.html' %}
-</body>
-</html>
+</div>
+{% endblock %}

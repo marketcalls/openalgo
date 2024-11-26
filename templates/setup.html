@@ -1,55 +1,112 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="light">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Setup OpenAlgo Account</title>
-    
-    <!-- Favicon and touch icons -->
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
-    
-    <!-- Tailwind CSS and DaisyUI -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
+{% extends "layout.html" %}
 
-    <style>
-        .requirement-item {
-            @apply flex items-center gap-2 text-sm;
+{% block title %}Setup OpenAlgo Account{% endblock %}
+
+{% block head %}
+<style>
+    .requirement-item {
+        @apply flex items-center gap-2 text-sm;
+    }
+
+    .requirement-met {
+        @apply text-success;
+    }
+
+    .requirement-not-met {
+        @apply text-base-content/60;
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const password = document.getElementById('password');
+        const confirmPassword = document.getElementById('confirm_password');
+        const passwordMatchMessage = document.getElementById('passwordMatchMessage');
+        const submitButton = document.getElementById('submitButton');
+        const requirements = {
+            length: document.getElementById('req-length'),
+            uppercase: document.getElementById('req-uppercase'),
+            lowercase: document.getElementById('req-lowercase'),
+            number: document.getElementById('req-number'),
+            special: document.getElementById('req-special')
+        };
+
+        function checkPasswordRequirements(password) {
+            const checks = {
+                length: password.length >= 8,
+                uppercase: /[A-Z]/.test(password),
+                lowercase: /[a-z]/.test(password),
+                number: /[0-9]/.test(password),
+                special: /[!@#$%^&*]/.test(password)
+            };
+
+            // Update requirement indicators
+            Object.keys(checks).forEach(req => {
+                const element = requirements[req];
+                if (checks[req]) {
+                    element.classList.remove('requirement-not-met');
+                    element.classList.add('requirement-met');
+                } else {
+                    element.classList.remove('requirement-met');
+                    element.classList.add('requirement-not-met');
+                }
+            });
+
+            return Object.values(checks).every(Boolean);
         }
 
-        .requirement-met {
-            @apply text-success;
+        function validateForm() {
+            const passwordsMatch = password.value === confirmPassword.value;
+            const meetsRequirements = checkPasswordRequirements(password.value);
+            const allFieldsFilled = Array.from(document.querySelectorAll('input[required]'))
+                .every(input => input.value.trim() !== '');
+
+            if (passwordsMatch && meetsRequirements && allFieldsFilled) {
+                submitButton.disabled = false;
+                passwordMatchMessage.textContent = 'Passwords match';
+                passwordMatchMessage.className = 'label-text-alt mt-1 text-success';
+            } else {
+                submitButton.disabled = true;
+                if (!passwordsMatch && confirmPassword.value) {
+                    passwordMatchMessage.textContent = 'Passwords do not match';
+                    passwordMatchMessage.className = 'label-text-alt mt-1 text-error';
+                } else if (!meetsRequirements) {
+                    passwordMatchMessage.textContent = 'Password does not meet requirements';
+                    passwordMatchMessage.className = 'label-text-alt mt-1 text-warning';
+                } else {
+                    passwordMatchMessage.textContent = '';
+                }
+            }
         }
 
-        .requirement-not-met {
-            @apply text-base-content/60;
-        }
-    </style>
-</head>
+        // Add event listeners
+        password.addEventListener('input', validateForm);
+        confirmPassword.addEventListener('input', validateForm);
+        document.querySelectorAll('input[required]').forEach(input => {
+            input.addEventListener('input', validateForm);
+        });
 
-<body class="min-h-screen bg-base-200">
-    <!-- Header -->
-    <header class="navbar bg-base-100 shadow-lg px-4">
-        <div class="flex-1">
-            <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
-                <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
-                OpenAlgo
-            </a>
-        </div>
-    </header>
+        // Form submission handler
+        document.getElementById('setupForm').addEventListener('submit', function(event) {
+            if (!checkPasswordRequirements(password.value) || password.value !== confirmPassword.value) {
+                event.preventDefault();
+                validateForm();
+            }
+        });
+    });
+</script>
+{% endblock %}
 
-    <div class="hero min-h-[calc(100vh-4rem)]">
-        <div class="hero-content flex-col lg:flex-row-reverse gap-8 max-w-6xl">
-            <!-- Info Section -->
-            <div class="text-center lg:text-left lg:w-1/2">
-                <h1 class="text-4xl font-bold">Initial Setup</h1>
-                <p class="py-6">Welcome to OpenAlgo! Create your administrator account to get started with algorithmic trading. This account will have full access to manage the platform.</p>
-                
+{% block content %}
+<div class="min-h-[calc(100vh-8rem)] flex items-center justify-center">
+    <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row items-center justify-between gap-16">
+            <!-- Left side content -->
+            <div class="flex-1 max-w-xl">
+                <h1 class="text-5xl font-bold mb-6">Initial <span class="text-primary">Setup</span></h1>
+                <p class="text-xl mb-8 opacity-80">
+                    Welcome to OpenAlgo! Create your administrator account to get started with algorithmic trading. This account will have full access to manage the platform.
+                </p>
                 <div class="alert alert-info shadow-lg">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -61,7 +118,7 @@
                 </div>
             </div>
 
-            <!-- Setup Form -->
+            <!-- Right side setup form -->
             <div class="card flex-shrink-0 w-full max-w-lg shadow-2xl bg-base-100">
                 <div class="card-body">
                     <form id="setupForm" action="{{ url_for('core_bp.setup') }}" method="post" class="space-y-4">
@@ -171,7 +228,7 @@
 
                         <!-- Submit Button -->
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary" id="submitButton" disabled>
+                            <button type="submit" class="btn btn-primary w-full" id="submitButton" disabled>
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                                 </svg>
@@ -183,87 +240,5 @@
             </div>
         </div>
     </div>
-
-    <!-- Include the footer -->
-    {% include 'footer.html' %}
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const password = document.getElementById('password');
-            const confirmPassword = document.getElementById('confirm_password');
-            const passwordMatchMessage = document.getElementById('passwordMatchMessage');
-            const submitButton = document.getElementById('submitButton');
-            const requirements = {
-                length: document.getElementById('req-length'),
-                uppercase: document.getElementById('req-uppercase'),
-                lowercase: document.getElementById('req-lowercase'),
-                number: document.getElementById('req-number'),
-                special: document.getElementById('req-special')
-            };
-
-            function checkPasswordRequirements(password) {
-                const checks = {
-                    length: password.length >= 8,
-                    uppercase: /[A-Z]/.test(password),
-                    lowercase: /[a-z]/.test(password),
-                    number: /[0-9]/.test(password),
-                    special: /[!@#$%^&*]/.test(password)
-                };
-
-                // Update requirement indicators
-                Object.keys(checks).forEach(req => {
-                    const element = requirements[req];
-                    if (checks[req]) {
-                        element.classList.remove('requirement-not-met');
-                        element.classList.add('requirement-met');
-                    } else {
-                        element.classList.remove('requirement-met');
-                        element.classList.add('requirement-not-met');
-                    }
-                });
-
-                return Object.values(checks).every(Boolean);
-            }
-
-            function validateForm() {
-                const passwordsMatch = password.value === confirmPassword.value;
-                const meetsRequirements = checkPasswordRequirements(password.value);
-                const allFieldsFilled = Array.from(document.querySelectorAll('input[required]'))
-                    .every(input => input.value.trim() !== '');
-
-                if (passwordsMatch && meetsRequirements && allFieldsFilled) {
-                    submitButton.disabled = false;
-                    passwordMatchMessage.textContent = 'Passwords match';
-                    passwordMatchMessage.className = 'label-text-alt mt-1 text-success';
-                } else {
-                    submitButton.disabled = true;
-                    if (!passwordsMatch && confirmPassword.value) {
-                        passwordMatchMessage.textContent = 'Passwords do not match';
-                        passwordMatchMessage.className = 'label-text-alt mt-1 text-error';
-                    } else if (!meetsRequirements) {
-                        passwordMatchMessage.textContent = 'Password does not meet requirements';
-                        passwordMatchMessage.className = 'label-text-alt mt-1 text-warning';
-                    } else {
-                        passwordMatchMessage.textContent = '';
-                    }
-                }
-            }
-
-            // Add event listeners
-            password.addEventListener('input', validateForm);
-            confirmPassword.addEventListener('input', validateForm);
-            document.querySelectorAll('input[required]').forEach(input => {
-                input.addEventListener('input', validateForm);
-            });
-
-            // Form submission handler
-            document.getElementById('setupForm').addEventListener('submit', function(event) {
-                if (!checkPasswordRequirements(password.value) || password.value !== confirmPassword.value) {
-                    event.preventDefault();
-                    validateForm();
-                }
-            });
-        });
-    </script>
-</body>
-</html>
+</div>
+{% endblock %}
