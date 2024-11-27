@@ -164,6 +164,92 @@
                 {% include 'footer.html' %}
             </footer>
         </div>
+
+        <!-- Drawer Side (Mobile Menu) -->
+        <div class="drawer-side">
+            <label for="main-drawer" aria-label="close sidebar" class="drawer-overlay"></label>
+            <div class="menu p-4 w-80 min-h-full bg-base-200 text-base-content">
+                <!-- Sidebar content here -->
+                <div class="flex items-center gap-2 mb-8">
+                    <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8">
+                    <span class="text-xl font-semibold">OpenAlgo</span>
+                </div>
+                <ul class="menu menu-lg gap-2">
+                    <li>
+                        <a href="{{ url_for('dashboard_bp.dashboard') }}" 
+                           class="{{ 'active' if request.endpoint == 'dashboard_bp.dashboard' }}">
+                            Dashboard
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('orders_bp.orderbook') }}" 
+                           class="{{ 'active' if request.endpoint == 'orders_bp.orderbook' }}">
+                            Orderbook
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('orders_bp.tradebook') }}" 
+                           class="{{ 'active' if request.endpoint == 'orders_bp.tradebook' }}">
+                            Tradebook
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('orders_bp.positions') }}" 
+                           class="{{ 'active' if request.endpoint == 'orders_bp.positions' }}">
+                            Positions
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('orders_bp.holdings') }}" 
+                           class="{{ 'active' if request.endpoint == 'orders_bp.holdings' }}">
+                            Holdings
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
+                           class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
+                            Tradingview
+                        </a>
+                    </li>
+                    <div class="divider"></div>
+                    <li>
+                        <a href="{{ url_for('auth.change_password') }}" 
+                           class="{{ 'active' if request.endpoint == 'auth.change_password' }}">
+                            Profile
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('api_key_bp.manage_api_key') }}" 
+                           class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
+                            API Key
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('log_bp.view_logs') }}" 
+                           class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
+                            Logs
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('search_bp.token') }}" 
+                           class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
+                            Search
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.openalgo.in" target="_blank">
+                            Docs
+                        </a>
+                    </li>
+                    <div class="divider"></div>
+                    <li>
+                        <a href="{{ url_for('auth.logout') }}" class="text-error">
+                            Logout
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
     </div>
 
     <script>
