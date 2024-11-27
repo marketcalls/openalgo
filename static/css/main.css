@@ -122,8 +122,14 @@ main {
 .table th {
     position: sticky;
     top: 0;
-    @apply bg-base-100;
+    @apply bg-base-200;
     z-index: 10;
+}
+
+/* Specific styles for table headers in drawer/mobile menu */
+.drawer-side .table th {
+    @apply bg-base-300;
+    border-bottom: 1px solid hsl(var(--b2));
 }
 
 /* Toast notifications */
