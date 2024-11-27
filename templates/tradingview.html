@@ -3,6 +3,14 @@
 {% block head %}
 <link href="{{ url_for('static', filename='css/prism.css') }}" rel="stylesheet" />
 <link href="{{ url_for('static', filename='css/tradingview.css') }}" rel="stylesheet" />
+<style>
+.webhook-url {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+</style>
 {% endblock %}
 
 {% block content %}
@@ -24,10 +32,10 @@
                     <p class="text-base-content/60">Use this URL in your TradingView alerts</p>
                     
                     <div class="alert bg-base-200 mt-4">
-                        <div id="webhookURL" class="flex-1 font-mono text-sm break-all">
-                            {{host}}/api/v1/placesmartorder
+                        <div class="flex-1 font-mono text-sm webhook-url tooltip" data-tip="{{host}}/api/v1/placesmartorder">
+                            .../api/v1/placesmartorder
                         </div>
-                        <button id="copy-webhook" class="btn btn-secondary btn-sm gap-2">
+                        <button id="copy-webhook" class="btn btn-secondary btn-sm gap-2" onclick="copyWebhook('{{host}}/api/v1/placesmartorder')">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
@@ -154,4 +162,15 @@
 <!-- Include Prism JS and TradingView JS -->
 <script src="{{ url_for('static', filename='js/prism.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tradingview.js') }}"></script>
+<script>
+function copyWebhook(url) {
+    navigator.clipboard.writeText(url).then(() => {
+        const alert = document.getElementById('webhookCopyAlert');
+        alert.classList.remove('hidden');
+        setTimeout(() => {
+            alert.classList.add('hidden');
+        }, 2000);
+    });
+}
+</script>
 {% endblock %}

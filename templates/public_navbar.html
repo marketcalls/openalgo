@@ -12,9 +12,9 @@
         </a>
     </div>
     
-    <!-- Desktop Navigation -->
-    <div class="navbar-center hidden lg:flex">
-        <ul class="menu menu-horizontal px-1 gap-2">
+    <!-- Desktop Navigation (moved to end) -->
+    <div class="navbar-end hidden lg:flex items-center">
+        <ul class="menu menu-horizontal px-1 gap-2 mr-4">
             <li>
                 <a href="/" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/' }}">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -48,10 +48,8 @@
                 </a>
             </li>
         </ul>
-    </div>
 
-    <!-- Right Side - Theme Toggle -->
-    <div class="navbar-end">
+        <!-- Theme Toggle -->
         <label class="swap swap-rotate btn btn-ghost btn-circle">
             <input type="checkbox" class="theme-controller" />
             <!-- sun icon -->
