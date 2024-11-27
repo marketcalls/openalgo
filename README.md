@@ -22,11 +22,47 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 
 ## Features
 
+- **Modern UI with DaisyUI**: 
+  - Sleek and responsive interface built with DaisyUI components
+  - Light and dark theme support with instant switching
+  - Theme-aware color system that adapts to user preference
+  - Mobile-friendly layout with drawer navigation
+
+- **Real-Time Trading Updates**:
+  - Instant order book updates via WebSocket
+  - Live trade book monitoring with automatic refresh
+  - Real-time position tracking
+  - Dynamic log updates for trade activities
+  - Contextual notifications with sound alerts
+
 - **Comprehensive Integration**: Seamlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for smooth data and strategy transition.
+
 - **User-Friendly Interface**: A straightforward Flask-based application interface accessible to traders of all levels of expertise.
+
 - **Real-Time Execution**: Implement your trading strategies in real time, ensuring immediate action to capitalize on market opportunities.
+
 - **Customizable Strategies**: Easily adapt and tailor your trading strategies to meet your specific needs, with extensive options for customization and automation.
+
 - **Secure and Reliable**: With a focus on security and reliability, OpenAlgo provides a dependable platform for your algotrading activities, safeguarding your data and trades.
+
+## Tech Stack
+
+### Backend
+- **Python 3.10/3.11**: Core programming language
+- **Flask**: Web framework for building the application
+- **SQLite**: Database for storing user data and trading information
+- **Socket.IO**: Real-time bidirectional event-based communication
+- **Limiter**: Rate limiting middleware for protecting against brute-force attacks
+
+
+### Frontend
+- **HTML5/CSS3**: Structure and styling
+- **JavaScript**: Client-side programming
+- **TailwindCSS**: Utility-first CSS framework
+- **DaisyUI**: Component library built on top of TailwindCSS
+- **Socket.IO Client**: Real-time client-side communication
+
+
 
 ## Documentation
 
@@ -146,4 +182,3 @@ AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
 ### Help / Discord
 
 For any questions not covered by the documentation or for further information about the openalgo, or to simply engage with like-minded individuals, we encourage you to join the OpenAlgo [discord server](https://discord.com/invite/UPh7QPsNhP).
-
