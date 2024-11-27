@@ -6,7 +6,6 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 [![What is OpenAlgo](https://img.youtube.com/vi/Afthm49vtAA/0.jpg)](https://www.youtube.com/watch?v=Afthm49vtAA "Watch the OpenAlgo Tutorial Video")
 
 
-
 ## Supported Broker
 
 - **5paisa**
