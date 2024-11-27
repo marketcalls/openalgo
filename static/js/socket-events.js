@@ -28,6 +28,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const html = await response.text();
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = html;
+            
+            // Update stats grid
+            const newStatsGrid = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-5');
+            if (newStatsGrid) {
+                const currentStatsGrid = document.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-5');
+                if (currentStatsGrid) {
+                    currentStatsGrid.innerHTML = newStatsGrid.innerHTML;
+                }
+            }
+            
+            // Update table
             const newContent = tempDiv.querySelector('.table-container');
             if (newContent) {
                 const currentContainer = document.querySelector('.table-container');
@@ -47,6 +58,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const html = await response.text();
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = html;
+            
+            // Update stats
+            const newStats = tempDiv.querySelector('.stats');
+            if (newStats) {
+                const currentStats = document.querySelector('.stats');
+                if (currentStats) {
+                    currentStats.innerHTML = newStats.innerHTML;
+                }
+            }
+            
+            // Update table
             const newContent = tempDiv.querySelector('.table-container');
             if (newContent) {
                 const currentContainer = document.querySelector('.table-container');
