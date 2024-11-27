@@ -53,12 +53,10 @@
                     }
                 }
             },
-            plugins: [require("daisyui")],
             daisyui: {
                 themes: [
                     {
                         light: {
-                            ...require("daisyui/src/theming/themes")["light"],
                             primary: "#2563eb",    // Blue-600
                             secondary: "#7c3aed",  // Violet-600
                             accent: "#0891b2",     // Cyan-600
@@ -68,7 +66,6 @@
                             "base-300": "#e5e7eb",
                         },
                         dark: {
-                            ...require("daisyui/src/theming/themes")["dark"],
                             primary: "#3b82f6",    // Blue-500
                             secondary: "#8b5cf6",   // Violet-500
                             accent: "#06b6d4",     // Cyan-500
