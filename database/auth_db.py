@@ -95,8 +95,16 @@ def get_auth_token_dbquery(name):
         return None
 
 
+def clear_api_key_cache(user_id):
+    """Clear API key cache for a specific user"""
+    cache_key = f"api-key-{user_id}"
+    if cache_key in api_key_cache:
+        del api_key_cache[cache_key]
 
 def upsert_api_key(user_id, api_key):
+    # Clear the cache first
+    clear_api_key_cache(user_id)
+    
     api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
     if api_key_obj:
         api_key_obj.api_key = api_key
@@ -104,6 +112,11 @@ def upsert_api_key(user_id, api_key):
         api_key_obj = ApiKeys(user_id=user_id, api_key=api_key)
         db_session.add(api_key_obj)
     db_session.commit()
+    
+    # Update the cache with the new value
+    cache_key = f"api-key-{user_id}"
+    api_key_cache[cache_key] = api_key
+    
     return api_key_obj.id
 
 def get_api_key(user_id):

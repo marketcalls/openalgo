@@ -1,0 +1,149 @@
+/* Card Enhancements */
+.card {
+    @apply transition-all duration-300;
+}
+
+.card:hover {
+    @apply shadow-2xl;
+}
+
+.card-body {
+    @apply p-6;
+}
+
+/* Form Controls */
+.form-control {
+    @apply relative;
+}
+
+.label-text {
+    @apply text-base-content/80;
+}
+
+.input, .select {
+    @apply transition-all duration-200;
+}
+
+.input:focus, .select:focus {
+    @apply ring-2 ring-primary/20;
+}
+
+/* Search Results */
+#searchResults {
+    @apply max-h-[300px] overflow-y-auto shadow-lg;
+}
+
+.menu-item {
+    @apply p-4 border-b border-base-200 hover:bg-base-200 cursor-pointer transition-all duration-200;
+}
+
+.menu-item:last-child {
+    @apply border-b-0;
+}
+
+.menu-item:hover {
+    @apply translate-x-1;
+}
+
+/* Loading Indicator */
+.loading-indicator {
+    @apply absolute right-3 top-1/2 -translate-y-1/2;
+    display: none;
+}
+
+/* JSON Output */
+.mockup-code {
+    @apply min-h-[200px] overflow-x-auto;
+}
+
+pre[class*="language-"] {
+    @apply bg-transparent m-0;
+}
+
+code[class*="language-"] {
+    @apply text-base-content;
+}
+
+/* Exchange Badges */
+.badge-nse {
+    @apply badge badge-success;
+}
+
+.badge-nfo {
+    @apply badge badge-warning;
+}
+
+.badge-bse {
+    @apply badge badge-info;
+}
+
+.badge-bfo {
+    @apply badge badge-error;
+}
+
+.badge-cds {
+    @apply badge badge-secondary;
+}
+
+.badge-mcx {
+    @apply badge badge-accent;
+}
+
+/* Button Enhancements */
+.btn {
+    @apply transition-transform duration-200;
+}
+
+.btn:active {
+    @apply scale-95;
+}
+
+/* Copy Success Animation */
+@keyframes fadeInOut {
+    0% { opacity: 0; transform: translateY(10px); }
+    10% { opacity: 1; transform: translateY(0); }
+    90% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-10px); }
+}
+
+.copy-success {
+    @apply text-success text-sm;
+    animation: fadeInOut 2s ease-in-out;
+}
+
+/* Alert Enhancements */
+.alert {
+    @apply transition-all duration-200;
+}
+
+.alert:hover {
+    @apply shadow-md;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 1024px) {
+    .grid {
+        @apply gap-4;
+    }
+    
+    .card-body {
+        @apply p-4;
+    }
+}
+
+/* Dark Mode Enhancements */
+[data-theme="dark"] .mockup-code {
+    @apply bg-base-300;
+}
+
+[data-theme="dark"] .alert {
+    @apply bg-base-300;
+}
+
+[data-theme="dark"] #searchResults {
+    @apply bg-base-300;
+}
+
+[data-theme="dark"] .menu-item:hover {
+    @apply bg-base-200;
+}

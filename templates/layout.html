@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="OpenAlgo is your premier open source algorithmic trading platform, offering a robust and secure environment for developing and executing trading strategies.">
-    <title>OpenAlgo</title>
+    <title>{% block title %}OpenAlgo{% endblock %}</title>
 
     <!-- Favicon and touch icons -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
@@ -17,17 +17,10 @@
     <!-- DaisyUI and Tailwind -->
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Socket.IO -->
+
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    
-    <!-- Audio for alerts -->
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
-
-    <!-- Custom Scripts -->
-    <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
-
+    
     <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
@@ -118,7 +111,7 @@
             <!-- Fixed Navbar -->
             <div class="sticky top-0 z-30 flex h-16 w-full justify-center bg-base-100 bg-opacity-90 backdrop-blur transition-all duration-100">
                 <nav class="navbar w-full">
-                    {% include 'navbar.html' %}
+                    {% include 'public_navbar.html' %}
                 </nav>
             </div>
 
@@ -168,86 +161,38 @@
         <!-- Drawer Side (Mobile Menu) -->
         <div class="drawer-side">
             <label for="main-drawer" aria-label="close sidebar" class="drawer-overlay"></label>
-            <div class="menu p-4 w-80 min-h-full bg-base-200 text-base-content">
+            <div class="menu p-4 w-80 min-h-full bg-base-200">
                 <!-- Sidebar content here -->
                 <div class="flex items-center gap-2 mb-8">
                     <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8">
                     <span class="text-xl font-semibold">OpenAlgo</span>
                 </div>
-                <ul class="menu menu-lg gap-2">
-                    <li>
-                        <a href="{{ url_for('dashboard_bp.dashboard') }}" 
-                           class="{{ 'active' if request.endpoint == 'dashboard_bp.dashboard' }}">
-                            Dashboard
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.orderbook') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.orderbook' }}">
-                            Orderbook
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.tradebook') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.tradebook' }}">
-                            Tradebook
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.positions') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.positions' }}">
-                            Positions
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.holdings') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.holdings' }}">
-                            Holdings
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
-                           class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
-                            Tradingview
-                        </a>
-                    </li>
-                    <div class="divider"></div>
-                    <li>
-                        <a href="{{ url_for('auth.change_password') }}" 
-                           class="{{ 'active' if request.endpoint == 'auth.change_password' }}">
-                            Profile
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('api_key_bp.manage_api_key') }}" 
-                           class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
-                            API Key
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('log_bp.view_logs') }}" 
-                           class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
-                            Logs
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('search_bp.token') }}" 
-                           class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
-                            Search
-                        </a>
-                    </li>
-                    <li>
-                        <a href="https://docs.openalgo.in" target="_blank">
-                            Docs
-                        </a>
-                    </li>
-                    <div class="divider"></div>
-                    <li>
-                        <a href="{{ url_for('auth.logout') }}" class="text-error">
-                            Logout
-                        </a>
-                    </li>
-                </ul>
+                <div class="flex flex-col gap-2">
+                    <a href="/" class="btn btn-ghost justify-start gap-2 {{ 'btn-active' if request.path == '/' }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                        </svg>
+                        Home
+                    </a>
+                    <a href="/faq" class="btn btn-ghost justify-start gap-2 {{ 'btn-active' if request.path == '/faq' }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        FAQ
+                    </a>
+                    <a href="https://docs.openalgo.in" class="btn btn-ghost justify-start gap-2" target="_blank" rel="noopener noreferrer">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        Docs
+                    </a>
+                    <a href="/download" class="btn btn-primary justify-start gap-2 {{ 'btn-active' if request.path == '/download' }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download
+                    </a>
+                </div>
             </div>
         </div>
     </div>

@@ -1,82 +1,233 @@
 {% extends "base.html" %}
 
+{% block head %}
+<style>
+    .form-container {
+        @apply max-w-xl mx-auto;
+    }
+
+    .password-requirements {
+        @apply mt-4 p-4 bg-base-200 rounded-lg;
+    }
+
+    .requirement-item {
+        @apply flex items-center gap-2 text-sm;
+    }
+
+    .requirement-met {
+        @apply text-success;
+    }
+
+    .requirement-not-met {
+        @apply text-base-content/60;
+    }
+
+    .password-match-indicator {
+        @apply text-sm mt-2;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="max-w-xl mx-auto pt-4 pb-10">
-    <h2 class="text-xl font-semibold mb-5">Change Password</h2>
-    <div class="mb-4">
-        <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
-        <input type="text" name="username" id="username" value="{{ username }}" readonly class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 bg-gray-200 text-gray-600 focus:outline-none sm:text-sm" disabled>
+<div class="form-container py-8">
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold">Profile Settings</h1>
+        <p class="text-base-content/60">Manage your account settings and security preferences</p>
     </div>
-    <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm">
-        <div class="mb-4">
-            <label for="old_password" class="block text-sm font-medium text-gray-700">Old Password</label>
-            <input type="password" name="old_password" id="old_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+
+    <!-- User Info Card -->
+    <div class="card bg-base-100 shadow-lg mb-8">
+        <div class="card-body">
+            <h2 class="card-title">Account Information</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div>
+                    <label class="label">
+                        <span class="label-text">Username</span>
+                    </label>
+                    <input type="text" value="{{ username }}" class="input input-bordered w-full" disabled>
+                </div>
+                <div>
+                    <label class="label">
+                        <span class="label-text">Account Type</span>
+                    </label>
+                    <div class="badge badge-primary">Administrator</div>
+                </div>
+            </div>
         </div>
-        <div class="mb-4">
-            <label for="new_password" class="block text-sm font-medium text-gray-700">New Password</label>
-            <input type="password" name="new_password" id="new_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+    </div>
+
+    <!-- Password Change Form -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title">Change Password</h2>
+            <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm" class="space-y-4">
+                <!-- Old Password -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Current Password</span>
+                    </label>
+                    <input type="password" 
+                           name="old_password" 
+                           id="old_password" 
+                           required 
+                           class="input input-bordered w-full" 
+                           placeholder="Enter your current password">
+                </div>
+
+                <!-- New Password -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">New Password</span>
+                    </label>
+                    <input type="password" 
+                           name="new_password" 
+                           id="new_password" 
+                           required 
+                           class="input input-bordered w-full" 
+                           placeholder="Enter your new password">
+                </div>
+
+                <!-- Confirm New Password -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Confirm New Password</span>
+                    </label>
+                    <input type="password" 
+                           name="confirm_password" 
+                           id="confirm_password" 
+                           required 
+                           class="input input-bordered w-full" 
+                           placeholder="Confirm your new password">
+                    <div id="passwordMatchMessage" class="password-match-indicator"></div>
+                </div>
+
+                <!-- Password Requirements -->
+                <div class="password-requirements">
+                    <h3 class="font-semibold mb-2">Password Requirements:</h3>
+                    <div class="space-y-2">
+                        <div id="req-length" class="requirement-item requirement-not-met">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>Minimum 8 characters</span>
+                        </div>
+                        <div id="req-uppercase" class="requirement-item requirement-not-met">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>At least 1 uppercase letter (A-Z)</span>
+                        </div>
+                        <div id="req-lowercase" class="requirement-item requirement-not-met">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>At least 1 lowercase letter (a-z)</span>
+                        </div>
+                        <div id="req-number" class="requirement-item requirement-not-met">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>At least 1 number (0-9)</span>
+                        </div>
+                        <div id="req-special" class="requirement-item requirement-not-met">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>At least 1 special character (@#$%^&*)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <div class="form-control mt-6">
+                    <button type="submit" class="btn btn-primary" id="submitButton" disabled>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                        </svg>
+                        Change Password
+                    </button>
+                </div>
+            </form>
         </div>
-        <div class="mb-4">
-            <label for="confirm_password" class="block text-sm font-medium text-gray-700">Confirm New Password</label>
-            <input type="password" name="confirm_password" id="confirm_password" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-            <p id="passwordMatchMessage" class="text-sm"></p>
-        </div>
-        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Change Password</button>
-    </form>
-    <div class="mt-4">
-        <p>Password Policy Guidelines:</p>
-        <ul class="list-disc pl-5">
-            <li>Minimum 8 characters</li>
-            <li>At least 1 uppercase letter (A-Z)</li>
-            <li>At least 1 lowercase letter (a-z)</li>
-            <li>At least 1 number (0-9)</li>
-            <li>At least 1 special symbol (@, #, $, etc.)</li>
-        </ul>
     </div>
 </div>
+
 <script>
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function() {
     const newPassword = document.getElementById('new_password');
     const confirmPassword = document.getElementById('confirm_password');
     const passwordMatchMessage = document.getElementById('passwordMatchMessage');
-    const changePasswordForm = document.getElementById('changePasswordForm');
+    const submitButton = document.getElementById('submitButton');
+    const requirements = {
+        length: document.getElementById('req-length'),
+        uppercase: document.getElementById('req-uppercase'),
+        lowercase: document.getElementById('req-lowercase'),
+        number: document.getElementById('req-number'),
+        special: document.getElementById('req-special')
+    };
 
-    function validatePasswordPolicy(password) {
-        return /^(?=.*\d)(?=.*[!@#$%^&*])(?=.*[a-z])(?=.*[A-Z]).{8,}$/.test(password);
+    function checkPasswordRequirements(password) {
+        const checks = {
+            length: password.length >= 8,
+            uppercase: /[A-Z]/.test(password),
+            lowercase: /[a-z]/.test(password),
+            number: /[0-9]/.test(password),
+            special: /[!@#$%^&*]/.test(password)
+        };
+
+        // Update requirement indicators
+        Object.keys(checks).forEach(req => {
+            const element = requirements[req];
+            if (checks[req]) {
+                element.classList.remove('requirement-not-met');
+                element.classList.add('requirement-met');
+            } else {
+                element.classList.remove('requirement-met');
+                element.classList.add('requirement-not-met');
+            }
+        });
+
+        return Object.values(checks).every(Boolean);
     }
 
-    function updatePasswordMatchMessage(isMatch, isPolicyMet) {
-        if (!isMatch) {
-            passwordMatchMessage.textContent = 'Password not matched';
-            passwordMatchMessage.style.color = 'red';
-        } else if (!isPolicyMet) {
-            passwordMatchMessage.textContent = 'Password does not meet policy';
-            passwordMatchMessage.style.color = 'red';
+    function updatePasswordMatchMessage() {
+        const newPass = newPassword.value;
+        const confirmPass = confirmPassword.value;
+        const meetsRequirements = checkPasswordRequirements(newPass);
+
+        if (confirmPass) {
+            if (newPass === confirmPass && meetsRequirements) {
+                passwordMatchMessage.textContent = 'Passwords match';
+                passwordMatchMessage.className = 'password-match-indicator text-success';
+                submitButton.disabled = false;
+            } else if (newPass !== confirmPass) {
+                passwordMatchMessage.textContent = 'Passwords do not match';
+                passwordMatchMessage.className = 'password-match-indicator text-error';
+                submitButton.disabled = true;
+            } else {
+                passwordMatchMessage.textContent = 'Password does not meet requirements';
+                passwordMatchMessage.className = 'password-match-indicator text-warning';
+                submitButton.disabled = true;
+            }
         } else {
-            passwordMatchMessage.textContent = 'Password matched';
-            passwordMatchMessage.style.color = 'green';
+            passwordMatchMessage.textContent = '';
+            submitButton.disabled = true;
         }
     }
 
-    confirmPassword.addEventListener('input', function() {
-        const isMatch = newPassword.value === confirmPassword.value;
-        const isPolicyMet = validatePasswordPolicy(newPassword.value);
-        updatePasswordMatchMessage(isMatch, isPolicyMet);
-    });
+    newPassword.addEventListener('input', updatePasswordMatchMessage);
+    confirmPassword.addEventListener('input', updatePasswordMatchMessage);
 
-    newPassword.addEventListener('input', function() {
-        const isMatch = newPassword.value === confirmPassword.value;
-        const isPolicyMet = validatePasswordPolicy(newPassword.value);
-        updatePasswordMatchMessage(isMatch, isPolicyMet);
-    });
+    // Form submission handler
+    document.getElementById('changePasswordForm').addEventListener('submit', function(event) {
+        const newPass = newPassword.value;
+        const confirmPass = confirmPassword.value;
+        const meetsRequirements = checkPasswordRequirements(newPass);
 
-    changePasswordForm.addEventListener('submit', function(event) {
-        const isMatch = newPassword.value === confirmPassword.value;
-        const isPolicyMet = validatePasswordPolicy(newPassword.value);
-
-        if (!isMatch || !isPolicyMet) {
-            event.preventDefault(); // Prevent form submission
-            updatePasswordMatchMessage(isMatch, isPolicyMet);
+        if (newPass !== confirmPass || !meetsRequirements) {
+            event.preventDefault();
+            updatePasswordMatchMessage();
         }
     });
 });

@@ -1,360 +1,176 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
 
 {% block head %}
-<!-- Include Prism CSS -->
 <link href="{{ url_for('static', filename='css/prism.css') }}" rel="stylesheet" />
-
+<link href="{{ url_for('static', filename='css/tradingview.css') }}" rel="stylesheet" />
 <style>
-    .vertical-space {
-        height: 20px;
-    }
-
-    .margin-bottom {
-        margin-bottom: 20px;
-    }
-
-    #json-output-container {
-        display: none;
-        width: 100%;
-        max-width: 700px;
-        margin: left;
-    }
-
-    #symbol, #product, #exchange {
-        width: 100%;
-        max-width: 300px;
-        margin: auto;
-    }
-
-    #webhook-info {
-        width: 100%;
-        max-width: 700px;
-        margin: left;
-    }
-
-    #copy-success-alert {
-        display: none;
-        color: green;
-        padding-left: 1rem;
-        line-height: 2.5rem;
-    }
-
-    .copy-container {
-        display: flex;
-        align-items: center;
-        margin-top: 1rem;
-    }
-
-    pre[class*="language-"] {
-        max-width: none;
-    }
-
-    /* Symbol Search Specific Styles */
-    .search-results {
-        position: absolute;
-        width: 100%;
-        max-width: 300px;
-        max-height: 300px;
-        overflow-y: auto;
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 0.375rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        z-index: 1000;
-        display: none;
-        margin-top: 2px;
-    }
-
-    .result-item {
-        padding: 0.75rem 1rem;
-        cursor: pointer;
-        border-bottom: 1px solid #f3f4f6;
-        transition: background-color 0.2s;
-    }
-
-    .result-item:last-child {
-        border-bottom: none;
-    }
-
-    .result-item:hover {
-        background-color: #f3f4f6;
-    }
-
-    .symbol-search-container {
-        position: relative;
-    }
-
-    .loading-indicator {
-        position: absolute;
-        right: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        display: none;
-    }
-
-    /* Adjustments for mobile devices */
-    @media (max-width: 768px) {
-        #json-output-container, #symbol, #product, #webhook-info {
-            max-width: 100%;
-            margin: auto;
-        }
-        
-        .copy-container, #webhook-info {
-            flex-direction: column;
-        }
-        
-        #copy-success-alert, #copyAlert {
-            margin-top: 0.5rem;
-        }
-        
-        #symbol, #product, #exchange {
-            max-width: 100%;
-        }
-        
-        #tradingview-form button[type="submit"] {
-            width: 100%;
-            margin-top: 1rem;
-        }
-        
-        #webhook-info {
-            margin-top: 2rem;
-        }
-    }
+.webhook-url {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto py-8">
-    <h1 class="text-2xl font-semibold mb-4">Tradingview JSON Generator</h1> 
-    <form id="tradingview-form">
-        <div class="mb-4">
-            <div class="symbol-search-container">
-                <label for="symbol" class="block text-gray-700 text-sm font-bold mb-2">Symbol:</label>
-                <input type="text" 
-                       id="symbol" 
-                       name="symbol" 
-                       class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" 
-                       required
-                       autocomplete="off"
-                       placeholder="Enter symbol, name, or token">
-                <div class="loading-indicator">
-                    <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+<div class="container mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold">TradingView Configuration</h1>
+        <p class="text-base-content/60 mt-2">Generate webhook configuration for TradingView strategy alerts</p>
+    </div>
+
+    <!-- Main Content -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Left Column -->
+        <div class="space-y-6">
+            <!-- Webhook URL Card -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-primary">Webhook URL</h2>
+                    <p class="text-base-content/60">Use this URL in your TradingView alerts</p>
+                    
+                    <div class="alert bg-base-200 mt-4">
+                        <div class="flex-1 font-mono text-sm webhook-url tooltip" data-tip="{{host}}/api/v1/placesmartorder">
+                            .../api/v1/placesmartorder
+                        </div>
+                        <button id="copy-webhook" class="btn btn-secondary btn-sm gap-2" onclick="copyWebhook('{{host}}/api/v1/placesmartorder')">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            Copy
+                        </button>
+                    </div>
+                    <div class="h-6">
+                        <span id="webhookCopyAlert" class="text-success text-sm hidden">✓ Copied to clipboard</span>
+                    </div>
                 </div>
-                <div id="searchResults" class="search-results"></div>
+            </div>
+
+            <!-- Configuration Form Card -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">Configuration</h2>
+                    <form id="tradingview-form" class="space-y-4">
+                        <!-- Symbol Search -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium">Symbol</span>
+                            </label>
+                            <div class="relative">
+                                <input type="text" 
+                                       id="symbol" 
+                                       name="symbol" 
+                                       required 
+                                       class="input input-bordered w-full" 
+                                       placeholder="Search for symbol..."
+                                       autocomplete="off">
+                                <div class="loading-indicator">
+                                    <span class="loading loading-spinner loading-sm"></span>
+                                </div>
+                                <div id="searchResults" class="menu bg-base-200 w-full rounded-box absolute z-50 mt-1 hidden"></div>
+                            </div>
+                        </div>
+
+                        <!-- Exchange Select -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium">Exchange</span>
+                            </label>
+                            <select id="exchange" name="exchange" required class="select select-bordered w-full">
+                                <option value="">Select Exchange</option>
+                                <option value="NSE">NSE</option>
+                                <option value="NFO">NFO</option>
+                                <option value="BSE">BSE</option>
+                                <option value="BFO">BFO</option>
+                                <option value="CDS">CDS</option>
+                                <option value="MCX">MCX</option>
+                            </select>
+                        </div>
+
+                        <!-- Product Type -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium">Product Type</span>
+                            </label>
+                            <select id="product" name="product" class="select select-bordered w-full">
+                                <option value="MIS">MIS</option>
+                                <option value="NRML">NRML</option>
+                                <option value="CNC">CNC</option>
+                            </select>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-full gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Generate JSON
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
 
-        <div class="mb-4">
-            <label for="product" class="block text-gray-700 text-sm font-bold mb-2">Product:</label>
-            <select id="product" name="product" class="shadow border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline">
-                <option value="MIS">MIS</option>
-                <option value="NRML">NRML</option>
-                <option value="CNC">CNC</option>
-            </select>
-        </div>
+        <!-- Right Column -->
+        <div class="space-y-6">
+            <!-- JSON Output Card -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <div class="flex justify-between items-center">
+                        <h2 class="card-title">Generated JSON</h2>
+                        <button id="copy-json" class="btn btn-secondary btn-sm gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            Copy
+                        </button>
+                    </div>
+                    <div class="bg-base-200 rounded-lg mt-4">
+                        <pre><code id="json-output" class="language-json"></code></pre>
+                    </div>
+                    <div class="h-6">
+                        <span id="copy-success-alert" class="text-success text-sm hidden">✓ Copied to clipboard</span>
+                    </div>
+                </div>
+            </div>
 
-        <div class="mb-4">
-            <label for="exchange" class="block text-gray-700 text-sm font-bold mb-2">Exchange:</label>
-            <select id="exchange" name="exchange" class="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                <option value="">Select Exchange</option>
-                <option value="NSE">NSE</option>
-                <option value="NFO">NFO</option>
-                <option value="BSE">BSE</option>
-                <option value="BFO">BFO</option>
-                <option value="CDS">CDS</option>
-                <option value="MCX">MCX</option>
-            </select>
-        </div>
-
-        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
-            Generate JSON
-        </button>
-    </form>
-
-    <!-- Webhook Info Section -->
-    <div class="vertical-space"></div>
-    <div id="webhook-info" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 my-4 relative" role="alert">
-        <p class="font-bold">Tradingview Webhook URL</p>
-        <div class="flex items-center space-x-2">
-            <p id="webhookURL" class="flex-1">{{host}}/api/v1/placesmartorder</p>
-            <button onclick="copyToClipboard('#webhookURL', '#copyAlert')" 
-                    class="bg-green-100 hover:bg-green-200 text-green-700 font-semibold py-2 px-4 border border-green-400 rounded transition-colors duration-300">
-                <img src="{{ url_for('static', filename='images/copy-icon.png') }}" alt="Copy" class="h-4 w-4"/>
-            </button>
-            <span id="copyAlert" class="text-green-500"></span>
-        </div>
-    </div>
-
-    <!-- JSON Output Section -->
-    <div id="json-output-container">
-        <pre class="language-json"><code id="json-output"></code></pre>
-        <div class="copy-container">
-            <button id="copy-json" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
-                Copy JSON
-            </button>
-            <div id="copy-success-alert">Copied to clipboard!</div>
+            <!-- Documentation Card -->
+            <div class="card bg-accent text-accent-content shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        Need Help?
+                    </h2>
+                    <p>Learn how to set up automated trading using TradingView webhooks with our step-by-step guide.</p>
+                    <div class="card-actions justify-end">
+                        <a href="https://docs.openalgo.in/trading-platform/tradingview" target="_blank" rel="noopener noreferrer" class="btn btn-primary gap-2">
+                            View Documentation
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
-
-    <div class="margin-bottom"></div>
-    <div class="margin-bottom"></div>
 </div>
 
+<!-- Include Prism JS and TradingView JS -->
+<script src="{{ url_for('static', filename='js/prism.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tradingview.js') }}"></script>
 <script>
-let debounceTimeout;
-const loadingIndicator = document.querySelector('.loading-indicator');
-
-// Symbol search functionality
-document.getElementById('symbol').addEventListener('input', function(e) {
-    clearTimeout(debounceTimeout);
-    const query = e.target.value.trim();
-    const exchange = document.getElementById('exchange').value;
-    
-    if (query.length < 2) {
-        document.getElementById('searchResults').style.display = 'none';
-        return;
-    }
-    
-    debounceTimeout = setTimeout(() => {
-        fetchSearchResults(query, exchange);
-    }, 300);
-});
-
-document.getElementById('exchange').addEventListener('change', function(e) {
-    const query = document.getElementById('symbol').value.trim();
-    if (query.length >= 2) {
-        fetchSearchResults(query, e.target.value);
-    }
-});
-
-document.addEventListener('click', function(e) {
-    if (!e.target.closest('#symbol') && !e.target.closest('#searchResults')) {
-        document.getElementById('searchResults').style.display = 'none';
-    }
-});
-
-async function fetchSearchResults(query, exchange) {
-    try {
-        loadingIndicator.style.display = 'block';
-        const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
-        const data = await response.json();
-        
-        const resultsDiv = document.getElementById('searchResults');
-        resultsDiv.innerHTML = '';
-        
-        if (data.results.length > 0) {
-            data.results.forEach(result => {
-                const div = document.createElement('div');
-                div.className = 'result-item';
-                div.innerHTML = `
-                    <div class="font-medium">${result.symbol}</div>
-                    <div class="text-sm text-gray-600">${result.name || ''}</div>
-                    <div class="text-xs text-gray-500">${result.exchange} | ${result.token}</div>
-                `;
-                div.addEventListener('click', () => {
-                    document.getElementById('symbol').value = result.symbol;
-                    document.getElementById('exchange').value = result.exchange;
-                    resultsDiv.style.display = 'none';
-                });
-                resultsDiv.appendChild(div);
-            });
-            resultsDiv.style.display = 'block';
-        } else {
-            resultsDiv.style.display = 'none';
-        }
-    } catch (error) {
-        console.error('Error fetching search results:', error);
-    } finally {
-        loadingIndicator.style.display = 'none';
-    }
-}
-
-// Form submission handler
-document.getElementById('tradingview-form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    
-    // Collect data from the form
-    var symbol = document.getElementById('symbol').value;
-    var product = document.getElementById('product').value;
-    var exchange = document.getElementById('exchange').value;
-    
-    // Prepare the data to be sent to the server
-    var formData = {
-        symbol: symbol,
-        product: product,
-        exchange: exchange
-    };
-
-    // AJAX POST request to the /tradingview route
-    fetch('/tradingview/', {
-        method: 'POST',
-        body: JSON.stringify(formData),
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok ' + response.statusText);
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Reconstruct the JSON object in the correct order
-        let orderedData = {
-            "apikey": data.apikey,
-            "strategy": data.strategy,
-            "symbol": data.symbol,
-            "action": data.action,
-            "exchange": data.exchange,
-            "pricetype": data.pricetype,
-            "product": data.product,
-            "quantity": data.quantity,
-            "position_size": data.position_size
-        };
-        // Update the display with the ordered and beautified jsonData
-        document.getElementById('json-output-container').style.display = 'block';
-        var jsonOutput = document.getElementById('json-output');
-        jsonOutput.textContent = JSON.stringify(orderedData, null, 2);
-        Prism.highlightElement(jsonOutput);
-    })
-    .catch(error => {
-        console.error('There has been a problem with your fetch operation:', error);
-    });
-});
-
-// Copy JSON button handler
-document.getElementById('copy-json').addEventListener('click', function() {
-    var jsonOutput = document.getElementById('json-output').textContent;
-    navigator.clipboard.writeText(jsonOutput).then(function() {
-        var alertBox = document.getElementById("copy-success-alert");
-        alertBox.style.display = 'inline';
-        setTimeout(() => { alertBox.style.display = 'none'; }, 3000);
-    }, function(err) {
-        console.error('Could not copy text: ', err);
-    });
-});
-
-// Webhook URL copy function
-function copyToClipboard(selector, alertSelector) {
-    var text = document.querySelector(selector).textContent;
-    navigator.clipboard.writeText(text).then(function() {
-        var alertBox = document.querySelector(alertSelector);
-        alertBox.textContent = 'Copied!';
-        alertBox.style.display = 'inline';
-        setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000);
-    }, function(err) {
-        var alertBox = document.querySelector(alertSelector);
-        alertBox.textContent = 'Failed to copy';
-        alertBox.style.display = 'inline';
-        setTimeout(() => { alertBox.style.display = 'none'; alertBox.textContent = ''; }, 3000);
+function copyWebhook(url) {
+    navigator.clipboard.writeText(url).then(() => {
+        const alert = document.getElementById('webhookCopyAlert');
+        alert.classList.remove('hidden');
+        setTimeout(() => {
+            alert.classList.add('hidden');
+        }, 2000);
     });
 }
 </script>
-
-<!-- Include Prism JS -->
-<script src="{{ url_for('static', filename='js/prism.js') }}"></script>
 {% endblock %}

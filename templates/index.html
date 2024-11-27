@@ -1,99 +1,33 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="OpenAlgo: The OpenSource Algo Platform for Everyone. Create, execute, and control algorithmic trading strategies with ease.">
+{% extends "layout.html" %}
 
-    <title>OpenAlgo - OpenSource Algo Platform for Everyone</title>
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon/favicon-16x16.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
-    <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
+{% block title %}OpenAlgo - OpenSource Algo Platform for Everyone{% endblock %}
 
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-        .highlight {
-            color: #8B5CF6;
-        }
-        .menu-item {
-            @apply px-4 py-2 text-gray-700 hover:text-gray-900 transition duration-300;
-        }
-        .menu-item.active {
-            @apply text-purple-600 font-semibold;
-        }
-    </style>
-
-    <meta name="msapplication-TileColor" content="#da532c">
-    <meta name="theme-color" content="#ffffff">
-</head>
-<body class="bg-white text-gray-900 flex flex-col min-h-screen">
-    <header class="p-4 flex justify-between items-center">
-        <a href="/" class="flex items-center hover:opacity-80 transition duration-300">
-            <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8 mr-2">
-            <span class="text-xl font-bold">OpenAlgo</span>
-        </a>
-
-        <!-- Burger Menu Button -->
-        <button id="menu-toggle" class="block md:hidden focus:outline-none">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
-            </svg>
-        </button>
-
-        <nav id="menu" class="hidden md:flex items-center">
-            <ul class="flex space-x-6">
-                <li><a href="/" class="menu-item active">Home</a></li>
-                <li><a href="/faq" class="menu-item">FAQ</a></li>
-                <li><a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a></li>
-            </ul>
-            <a href="/download" class="ml-6 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-300">Download</a>
-        </nav>
-
-        <!-- Mobile Menu -->
-        <nav id="mobile-menu" class="hidden flex flex-col space-y-4 mt-4 md:hidden">
-            <a href="/" class="menu-item active">Home</a>
-            <a href="/faq" class="menu-item">FAQ</a>
-            <a href="https://docs.openalgo.in" class="menu-item" target="_blank" rel="noopener noreferrer">Docs</a>
-            <a href="/download" class="menu-item bg-purple-600 text-white rounded-md py-2 text-center hover:bg-purple-700">Download</a>
-        </nav>
-    </header>
-
-    <main class="flex-grow flex flex-col items-center justify-center px-4 text-center">
-        <h1 class="text-5xl font-bold mb-4">
+{% block content %}
+<!-- Hero Section -->
+<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+    <div class="text-center max-w-3xl mx-auto">
+        <h1 class="text-5xl font-bold mb-8">
             Your Personal
-            <br>
-            <span class="highlight">Algo Trading Platform</span>
+            <span class="text-primary">Algo Trading</span>
+            <span class="text-primary">Platform</span>
         </h1>
-
-        <p class="text-xl text-gray-600 mb-8 max-w-2xl">
+        <p class="text-xl mb-8 opacity-80">
             Connect your algo strategies seamlessly with top Indian brokers. Run your strategies from any platform - Amibroker, TradingView, Python, MetaTrader, Excel, or Google Sheets.
         </p>
-
-        <div class="flex flex-col sm:flex-row gap-4 mb-12">
-            <a href="{{ url_for('auth.login') }}" class="px-6 py-3 bg-white text-gray-900 font-semibold rounded-full border-2 border-gray-900 hover:bg-gray-100 transition duration-300 flex items-center justify-center">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+        <div class="flex flex-col sm:flex-row gap-4 justify-center">
+            <a href="{{ url_for('auth.login') }}" class="btn btn-primary">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path>
+                </svg>
                 Login
             </a>
+            <a href="/download" class="btn btn-outline">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                Download
+            </a>
         </div>
-
-    </main>
-
-    <!-- Footer -->
-    {% include 'footer.html' %}
-
-    <!-- JavaScript for Toggle Menu -->
-    <script>
-        document.getElementById('menu-toggle').addEventListener('click', function() {
-            const mobileMenu = document.getElementById('mobile-menu');
-            mobileMenu.classList.toggle('hidden');
-        });
-    </script>
-</body>
-</html>
+    </div>
+</div>
+{% endblock %}
