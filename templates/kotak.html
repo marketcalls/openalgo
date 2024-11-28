@@ -13,7 +13,7 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/kotak/loginflow" method="POST" class="space-y-4">
+                    <form action="/kotak/loginflow" method="POST" class="space-y-4" id="kotakForm">
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>
@@ -26,13 +26,14 @@
                             <div class="join w-full">
                                 <span class="join-item flex items-center px-3 bg-base-200">+91</span>
                                 <input type="tel" 
-                                       id="mobilenumber" 
-                                       name="mobilenumber" 
+                                       id="mobileInput" 
                                        required 
                                        class="input input-bordered join-item flex-1" 
                                        placeholder="9999955555"
                                        pattern="[0-9]{10}"
                                        title="Please enter a valid 10-digit mobile number" />
+                                <!-- Hidden input that will contain the number with +91 prefix -->
+                                <input type="hidden" id="mobilenumber" name="mobilenumber" />
                             </div>
                             <label class="label">
                                 <span class="label-text-alt text-info">Your registered mobile number</span>
@@ -119,4 +120,28 @@
         </div>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const mobileInput = document.getElementById('mobileInput');
+    const hiddenMobileNumber = document.getElementById('mobilenumber');
+    const form = document.getElementById('kotakForm');
+
+    // Update hidden input whenever visible input changes
+    mobileInput.addEventListener('input', function() {
+        hiddenMobileNumber.value = '+91' + this.value;
+    });
+
+    // Handle form submission
+    form.addEventListener('submit', function(e) {
+        if (mobileInput.value.length !== 10) {
+            e.preventDefault();
+            alert('Please enter a valid 10-digit mobile number');
+            return;
+        }
+        // Ensure the hidden field has the complete number with prefix
+        hiddenMobileNumber.value = '+91' + mobileInput.value;
+    });
+});
+</script>
 {% endblock %}

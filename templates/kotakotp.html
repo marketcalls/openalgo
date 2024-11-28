@@ -8,15 +8,12 @@
         // Auto-focus OTP input on page load
         document.getElementById('otp').focus();
 
+        const otpInput = document.getElementById('otp');
+
         // Format OTP input
-        document.getElementById('otp').addEventListener('input', function(e) {
+        otpInput.addEventListener('input', function(e) {
             // Remove any non-numeric characters
             this.value = this.value.replace(/[^0-9]/g, '');
-            
-            // Limit to 6 digits
-            if (this.value.length > 6) {
-                this.value = this.value.slice(0, 6);
-            }
         });
     });
 </script>
@@ -53,13 +50,11 @@
                                    name="otp" 
                                    required 
                                    class="input input-bordered text-center text-2xl tracking-[1em]" 
-                                   placeholder="••••••"
-                                   pattern="[0-9]{6}"
-                                   maxlength="6"
+                                   placeholder="••••"
                                    inputmode="numeric"
                                    autocomplete="one-time-code" />
                             <label class="label">
-                                <span class="label-text-alt text-info">Enter the 6-digit OTP</span>
+                                <span class="label-text-alt text-info">Enter the OTP sent to your registered mobile number</span>
                             </label>
                         </div>
 
