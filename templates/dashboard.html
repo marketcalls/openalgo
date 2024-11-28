@@ -8,7 +8,7 @@
 </div>
 
 <!-- Stats Grid -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
+<div class="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-6 mb-16">
     <!-- Available Balance -->
     <div class="stat-card">
         <div class="stat">
@@ -64,10 +64,23 @@
             </div>
         </div>
     </div>
+
+    <!-- Utilised Margin -->
+    <div class="stat-card">
+        <div class="stat">
+            <div class="stat-title">Utilised Margin</div>
+            <div class="stat-value text-accent">
+                {{ margin_data['utiliseddebits'] }}
+            </div>
+            <div class="stat-desc mt-2">
+                <div class="badge badge-accent">Used Margin</div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Quick Actions Grid -->
-<div class="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-8">
     <!-- Search Symbols -->
     <div class="card bg-base-100 shadow-lg">
         <div class="card-body">
