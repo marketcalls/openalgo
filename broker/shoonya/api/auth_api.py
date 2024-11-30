@@ -15,6 +15,7 @@ def authenticate_broker(userid, password, totp_code):
     api_secretkey = os.getenv('BROKER_API_SECRET')
     vendor_code = os.getenv('BROKER_API_KEY')
     imei = '1234567890abcdef' # Default IMEI if not provided
+    #imei = 'abc1234' # Default IMEI if not provided
 
     try:
         # Shoonya API login URL
