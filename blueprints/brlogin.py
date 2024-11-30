@@ -123,6 +123,20 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'zebu.html'
 
+    elif broker == 'shoonya':  
+        if request.method == 'GET':
+            if 'user' not in session:
+                return redirect(url_for('auth.login'))
+            return render_template('shoonya.html')
+        
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            auth_token, error_message = auth_function(userid, password, totp_code)
+            forward_url = 'shoonya.html'
+
     elif broker=='kotak':
         print(f"The Broker is {broker}")
         if request.method == 'GET':
