@@ -84,9 +84,13 @@ def broker_login():
                 
             broker_name = match.group(1)
             
-            # Validate broker name is one of the supported brokers
-            valid_brokers = {'fivepaisa', 'aliceblue', 'angel', 'dhan', 'fyers', 
-                           'icici', 'kotak', 'shoonya','upstox', 'zebu', 'zerodha'}
+            # Get valid brokers from environment variable
+            valid_brokers_str = os.getenv('VALID_BROKERS', '')
+            valid_brokers = set(valid_brokers_str.split(',')) if valid_brokers_str else set()
+            
+            if not valid_brokers:
+                raise ValueError("VALID_BROKERS not configured in .env file")
+                
             if broker_name not in valid_brokers:
                 raise ValueError(f"Invalid broker name: {broker_name}")
                 
