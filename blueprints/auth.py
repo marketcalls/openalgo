@@ -86,7 +86,7 @@ def broker_login():
             
             # Validate broker name is one of the supported brokers
             valid_brokers = {'fivepaisa', 'aliceblue', 'angel', 'dhan', 'fyers', 
-                           'icici', 'kotak', 'upstox', 'zebu', 'zerodha'}
+                           'icici', 'kotak', 'shoonya','upstox', 'zebu', 'zerodha'}
             if broker_name not in valid_brokers:
                 raise ValueError(f"Invalid broker name: {broker_name}")
                 

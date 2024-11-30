@@ -40,6 +40,9 @@
                 case 'kotak':
                     loginUrl = '/kotak/callback';
                     break;
+                case 'shoonya':
+                    loginUrl = '/shoonya/callback';
+                    break;
                 case 'upstox':
                     loginUrl = 'https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={{broker_api_key}}&redirect_uri={{ redirect_url }}';
                     break;
@@ -86,6 +89,7 @@
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="icici" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
+                                <option value="shoonya" {{ 'disabled' if broker_name != 'shoonya' }}>Shoonya {{ '(Disabled)' if broker_name != 'shoonya' }}</option>
                                 <option value="upstox" {{ 'disabled' if broker_name != 'upstox' }}>Upstox {{ '(Disabled)' if broker_name != 'upstox' }}</option>
                                 <option value="zebu" {{ 'disabled' if broker_name != 'zebu' }}>Zebu {{ '(Disabled)' if broker_name != 'zebu' }}</option>
                                 <option value="zerodha" {{ 'disabled' if broker_name != 'zerodha' }}>Zerodha {{ '(Disabled)' if broker_name != 'zerodha' }}</option>
