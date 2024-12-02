@@ -6,7 +6,7 @@ import os
 from database.auth_db import upsert_auth
 from database.user_db import authenticate_user, User, db_session, find_user_by_username  # Import the function
 import re
-from utils.session import check_session_validity, set_session_login_time
+from utils.session import check_session_validity
 
 # Load environment variables
 load_dotenv()
@@ -25,12 +25,12 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
+
     if find_user_by_username() is None:
         return redirect(url_for('core_bp.setup'))
 
-    # Only redirect to broker_login if both user and logged_in are in session
-    if 'user' in session and session.get('logged_in'):
-        return redirect(url_for('auth.broker_login'))
+    if 'user' in session:
+            return redirect(url_for('auth.broker_login'))
     
     if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
@@ -40,12 +40,12 @@ def login():
     elif request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        
 
         if authenticate_user(username, password):
             session['user'] = username  # Set the username in the session
-            session['logged_in'] = True  # Set logged_in flag
-            set_session_login_time()  # Set the login timestamp
             print("login success")
+            # Redirect to broker login without marking as fully logged in
             return jsonify({'status': 'success'}), 200
         else:
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
@@ -54,15 +54,8 @@ def login():
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
-    # First check if user is fully logged in
-    if not session.get('logged_in'):
-        session.clear()  # Clear any partial session data
-        return redirect(url_for('auth.login'))
-
-    # Then check if already at dashboard
-    if session.get('broker'):
+    if session.get('logged_in'):
         return redirect(url_for('dashboard_bp.dashboard'))
-
     if request.method == 'GET':
         if 'user' not in session:
             return redirect(url_for('auth.login'))
@@ -75,8 +68,16 @@ def broker_login():
             flash('REDIRECT_URL is not configured in .env file', 'error')
             return redirect(url_for('auth.login'))
             
+        # Extract broker name from REDIRECT_URL
+        # Handles all valid formats:
+        # - http://127.0.0.1:5000/broker_name/callback
+        # - http://yourdomain.com/broker_name/callback
+        # - https://yourdomain.com/broker_name/callback
+        # - https://sub.yourdomain.com/broker_name/callback
+        # - http://sub.yourdomain.com/broker_name/callback
         try:
             # This pattern looks for the broker name between the last two forward slashes
+            # It works regardless of the domain format or protocol
             match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
             if not match:
                 raise ValueError("Invalid URL format")
@@ -115,6 +116,7 @@ def broker_login():
 @check_session_validity
 def change_password():
     if 'user' not in session:
+        # If the user is not logged in, redirect to login page
         flash('You must be logged in to change your password.', 'warning')
         return redirect(url_for('auth.login'))
 
@@ -128,14 +130,18 @@ def change_password():
 
         if user and user.check_password(old_password):
             if new_password == confirm_password:
+                # Here, you should also ensure the new password meets your policy before updating
                 user.set_password(new_password)
                 db_session.commit()
+                # Use flash to notify the user of success
                 flash('Your password has been changed successfully.', 'success')
+                # Redirect to a page where the user can see this confirmation, or stay on the same page
                 return redirect(url_for('auth.change_password'))
             else:
                 flash('New password and confirm password do not match.', 'error')
         else:
             flash('Old Password is incorrect.', 'error')
+            # Optionally, redirect to the same page to let the user try again
             return redirect(url_for('auth.change_password'))
 
     return render_template('profile.html', username=session['user'])
@@ -155,8 +161,10 @@ def logout():
         else:
             print("Failed to upsert auth token")
         
-    # Clear all session data
-    session.clear()
+        # Remove tokens and user information from session
+        session.pop('user', None)  # Remove 'user' from session if exists
+        session.pop('broker', None)  # Remove 'user' from session if exists
+        session.pop('logged_in', None)
 
     # Redirect to login page after logout
     return redirect(url_for('auth.login'))
