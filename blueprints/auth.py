@@ -25,7 +25,6 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
-
     if find_user_by_username() is None:
         return redirect(url_for('core_bp.setup'))
 
@@ -41,7 +40,6 @@ def login():
         username = request.form['username']
         password = request.form['password']
         
-
         if authenticate_user(username, password):
             session['user'] = username  # Set the username in the session
             print("login success")
@@ -60,51 +58,11 @@ def broker_login():
         if 'user' not in session:
             return redirect(url_for('auth.login'))
             
+        # Get broker configuration (already validated at startup)
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
-        
-        if not REDIRECT_URL:
-            flash('REDIRECT_URL is not configured in .env file', 'error')
-            return redirect(url_for('auth.login'))
-            
-        # Extract broker name from REDIRECT_URL
-        # Handles all valid formats:
-        # - http://127.0.0.1:5000/broker_name/callback
-        # - http://yourdomain.com/broker_name/callback
-        # - https://yourdomain.com/broker_name/callback
-        # - https://sub.yourdomain.com/broker_name/callback
-        # - http://sub.yourdomain.com/broker_name/callback
-        try:
-            # This pattern looks for the broker name between the last two forward slashes
-            # It works regardless of the domain format or protocol
-            match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
-            if not match:
-                raise ValueError("Invalid URL format")
-                
-            broker_name = match.group(1)
-            
-            # Get valid brokers from environment variable
-            valid_brokers_str = os.getenv('VALID_BROKERS', '')
-            valid_brokers = set(valid_brokers_str.split(',')) if valid_brokers_str else set()
-            
-            if not valid_brokers:
-                raise ValueError("VALID_BROKERS not configured in .env file")
-                
-            if broker_name not in valid_brokers:
-                raise ValueError(f"Invalid broker name: {broker_name}")
-                
-        except ValueError as e:
-            flash(f'Invalid REDIRECT_URL format in .env file: {str(e)}. Expected format examples:\n'
-                  '- http://127.0.0.1:5000/broker_name/callback\n'
-                  '- http://yourdomain.com/broker_name/callback\n'
-                  '- https://yourdomain.com/broker_name/callback\n'
-                  '- https://sub.yourdomain.com/broker_name/callback\n'
-                  '- http://sub.yourdomain.com/broker_name/callback', 'error')
-            return redirect(url_for('auth.login'))
-        except Exception as e:
-            flash(f'Error processing REDIRECT_URL: {str(e)}', 'error')
-            return redirect(url_for('auth.login'))
+        broker_name = re.search(r'/([^/]+)/callback$', REDIRECT_URL).group(1)
             
         return render_template('broker.html', 
                              broker_api_key=BROKER_API_KEY, 
