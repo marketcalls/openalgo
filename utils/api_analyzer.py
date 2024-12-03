@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 import pytz
 from database.analyzer_db import AnalyzerLog, db_session, async_log_analyzer
+from database.symbol import SymToken
 from sqlalchemy import func
 import json
 from extensions import socketio
@@ -10,7 +11,12 @@ from utils.constants import (
     VALID_ACTIONS,
     VALID_PRICE_TYPES,
     VALID_PRODUCT_TYPES,
-    REQUIRED_ORDER_FIELDS
+    REQUIRED_ORDER_FIELDS,
+    DEFAULT_PRODUCT_TYPE,
+    DEFAULT_PRICE_TYPE,
+    DEFAULT_PRICE,
+    DEFAULT_TRIGGER_PRICE,
+    DEFAULT_DISCLOSED_QUANTITY
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +34,18 @@ def check_rate_limits(user_id):
         logger.error(f"Error checking rate limits: {str(e)}")
         return False
 
+def validate_symbol(symbol: str, exchange: str) -> bool:
+    """Validate if symbol exists in the database for given exchange"""
+    try:
+        symbol_exists = SymToken.query.filter(
+            SymToken.symbol == symbol,
+            SymToken.exchange == exchange
+        ).first() is not None
+        return symbol_exists
+    except Exception as e:
+        logger.error(f"Error validating symbol: {str(e)}")
+        return False
+
 def analyze_api_request(order_data):
     """Analyze an API request before processing"""
     try:
@@ -37,7 +55,12 @@ def analyze_api_request(order_data):
         # Check required fields
         missing_fields = [field for field in REQUIRED_ORDER_FIELDS if field not in order_data]
         if missing_fields:
-            issues.append(f"Missing required fields: {', '.join(missing_fields)}")
+            issues.append(f"Missing mandatory field(s): {', '.join(missing_fields)}")
+
+        # Validate symbol and exchange
+        if 'symbol' in order_data and 'exchange' in order_data:
+            if not validate_symbol(order_data['symbol'], order_data['exchange']):
+                issues.append(f"Invalid symbol '{order_data['symbol']}' for exchange '{order_data['exchange']}'")
 
         # Validate quantity
         if 'quantity' in order_data:
@@ -58,15 +81,37 @@ def analyze_api_request(order_data):
             if order_data['action'] not in VALID_ACTIONS:
                 issues.append(f"Invalid action. Must be one of: {', '.join(VALID_ACTIONS)}")
 
-        # Validate price type if provided
-        if 'price_type' in order_data:
-            if order_data['price_type'] not in VALID_PRICE_TYPES:
-                issues.append(f"Invalid price type. Must be one of: {', '.join(VALID_PRICE_TYPES)}")
+        # Validate product type (optional with default)
+        product_type = order_data.get('product', DEFAULT_PRODUCT_TYPE)
+        if product_type not in VALID_PRODUCT_TYPES:
+            issues.append(f"Invalid product type. Must be one of: {', '.join(VALID_PRODUCT_TYPES)}")
 
-        # Validate product type if provided
-        if 'product_type' in order_data:
-            if order_data['product_type'] not in VALID_PRODUCT_TYPES:
-                issues.append(f"Invalid product type. Must be one of: {', '.join(VALID_PRODUCT_TYPES)}")
+        # Validate price type (optional with default)
+        price_type = order_data.get('pricetype', DEFAULT_PRICE_TYPE)
+        if price_type not in VALID_PRICE_TYPES:
+            issues.append(f"Invalid price type. Must be one of: {', '.join(VALID_PRICE_TYPES)}")
+
+        # Validate price values
+        try:
+            price = float(order_data.get('price', DEFAULT_PRICE))
+            trigger_price = float(order_data.get('trigger_price', DEFAULT_TRIGGER_PRICE))
+            disclosed_qty = float(order_data.get('disclosed_quantity', DEFAULT_DISCLOSED_QUANTITY))
+
+            if price < 0:
+                issues.append("Price cannot be negative")
+            if trigger_price < 0:
+                issues.append("Trigger price cannot be negative")
+            if disclosed_qty < 0:
+                issues.append("Disclosed quantity cannot be negative")
+
+            # Additional price type specific validations
+            if price_type == 'LIMIT' and price == 0:
+                issues.append("Price is required for LIMIT orders")
+            if price_type in ['SL', 'SL-M'] and trigger_price == 0:
+                issues.append("Trigger price is required for SL/SL-M orders")
+
+        except ValueError:
+            issues.append("Invalid numeric value for price, trigger_price, or disclosed_quantity")
 
         # Check for potential rate limit issues
         try:
@@ -115,8 +160,8 @@ def analyze_request(request_data):
                     'action': request_data.get('action', 'Unknown'),
                     'exchange': request_data.get('exchange', 'Unknown'),
                     'quantity': request_data.get('quantity', 0),
-                    'price_type': request_data.get('price_type', 'Unknown'),
-                    'product_type': request_data.get('product_type', 'Unknown')
+                    'price_type': request_data.get('pricetype', 'Unknown'),
+                    'product_type': request_data.get('product', 'Unknown')
                 },
                 'response': analysis
             })
