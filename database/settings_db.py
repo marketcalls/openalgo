@@ -30,18 +30,13 @@ def init_db():
     """Initialize the settings database"""
     print("Initializing Settings DB")
     
-    # Drop existing settings table if it exists
-    metadata = MetaData()
-    metadata.reflect(bind=engine)
-    if 'settings' in metadata.tables:
-        Settings.__table__.drop(engine)
-    
-    # Create tables
+    # Create tables if they don't exist
     Base.metadata.create_all(bind=engine)
     
-    # Create default settings
+    # Create default settings only if no settings exist
     if not Settings.query.first():
-        default_settings = Settings(analyze_mode=False)  # Default to Live Mode
+        print("Creating default settings (Live Mode)")
+        default_settings = Settings(analyze_mode=False)
         db_session.add(default_settings)
         db_session.commit()
 
