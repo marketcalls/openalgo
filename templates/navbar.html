@@ -60,8 +60,23 @@
         </ul>
     </div>
 
-    <!-- Right Side - Profile & Theme -->
+    <!-- Right Side - Mode Toggle, Theme & Profile -->
     <div class="navbar-end gap-2">
+        <!-- Mode Toggle -->
+        <div class="tooltip tooltip-bottom" data-tip="Toggle Live/Analyze Mode">
+            <label class="swap swap-rotate btn btn-ghost btn-circle">
+                <input type="checkbox" class="mode-controller" />
+                <!-- analyze icon -->
+                <svg class="swap-on fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <!-- live icon -->
+                <svg class="swap-off fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+            </label>
+        </div>
+
         <!-- Theme Toggle -->
         <label class="swap swap-rotate btn btn-ghost btn-circle">
             <input type="checkbox" class="theme-controller" />
@@ -144,3 +159,6 @@
         </div>
     </div>
 </div>
+
+<!-- Add mode toggle script -->
+<script src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>

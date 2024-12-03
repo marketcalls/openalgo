@@ -18,6 +18,7 @@ from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
 from blueprints.core import core_bp
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
+from blueprints.settings import settings_bp  # Import the settings blueprint
 
 from restx_api import api_v1_bp
 
@@ -26,6 +27,7 @@ from database.user_db import init_db as ensure_user_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
+from database.settings_db import init_db as ensure_settings_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -63,6 +65,7 @@ def create_app():
     app.register_blueprint(brlogin_bp)
     app.register_blueprint(core_bp)
     app.register_blueprint(analyzer_bp)  # Register the analyzer blueprint
+    app.register_blueprint(settings_bp)  # Register the settings blueprint
 
     # Register RESTx API blueprint
     app.register_blueprint(api_v1_bp)
@@ -88,6 +91,7 @@ def setup_environment(app):
         ensure_master_contract_tables_exists()
         ensure_api_log_tables_exists()
         ensure_analyzer_tables_exists()
+        ensure_settings_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':

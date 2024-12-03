@@ -3,6 +3,7 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor
+from database.settings_db import get_analyze_mode
 from extensions import socketio
 from limiter import limiter
 from utils.api_analyzer import analyze_request
@@ -22,7 +23,6 @@ import logging
 load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
-ANALYZE_MODE = os.getenv("ANALYZE_MODE", "true").lower() == "true"
 api = Namespace('place_order', description='Place Order API')
 
 # Configure logging
@@ -58,7 +58,7 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': f'Missing mandatory field(s): {", ".join(missing_fields)}'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 400)
 
@@ -68,7 +68,7 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': f'Invalid exchange. Must be one of: {", ".join(VALID_EXCHANGES)}'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 400)
 
@@ -78,7 +78,7 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': f'Invalid action. Must be one of: {", ".join(VALID_ACTIONS)}'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 400)
 
@@ -88,7 +88,7 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': f'Invalid price type. Must be one of: {", ".join(VALID_PRICE_TYPES)}'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 400)
 
@@ -98,7 +98,7 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': f'Invalid product type. Must be one of: {", ".join(VALID_PRODUCT_TYPES)}'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 400)
 
@@ -109,18 +109,19 @@ class PlaceOrder(Resource):
                     'status': 'error',
                     'message': 'Invalid openalgo apikey'
                 }
-                if not ANALYZE_MODE:
+                if not get_analyze_mode():
                     executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 403)
 
             # If in analyze mode, analyze the request and store in analyzer_logs
-            if ANALYZE_MODE:
+            if get_analyze_mode():
                 _, analysis = analyze_request(order_data)
                 response_data = {
                     'status': analysis.get('status', 'error'),
                     'message': analysis.get('message', 'Analysis failed'),
                     'warnings': analysis.get('warnings', []),
-                    'broker': broker
+                    'broker': broker,
+                    'mode': 'analyze'
                 }
                 return make_response(jsonify(response_data), 200)
 
@@ -154,7 +155,8 @@ class PlaceOrder(Resource):
                     'orderid': order_id,
                     'exchange': order_data.get('exchange', 'Unknown'),
                     'price_type': order_data.get('price_type', 'Unknown'),
-                    'product_type': order_data.get('product_type', 'Unknown')
+                    'product_type': order_data.get('product_type', 'Unknown'),
+                    'mode': 'live'
                 })
                 order_response_data = {'status': 'success', 'orderid': order_id}
                 executor.submit(async_log_order, 'placeorder', order_data, order_response_data)
@@ -171,7 +173,7 @@ class PlaceOrder(Resource):
         except ValidationError as err:
             logger.warning(f"Validation error: {err.messages}")
             error_response = {'status': 'error', 'message': err.messages}
-            if not ANALYZE_MODE:
+            if not get_analyze_mode():
                 executor.submit(async_log_order, 'placeorder', data, error_response)
             return make_response(jsonify(error_response), 400)
 
@@ -182,7 +184,7 @@ class PlaceOrder(Resource):
                 'status': 'error',
                 'message': f"A required field is missing: {missing_field}"
             }
-            if not ANALYZE_MODE:
+            if not get_analyze_mode():
                 executor.submit(async_log_order, 'placeorder', data, error_response)
             return make_response(jsonify(error_response), 400)
 
@@ -193,6 +195,6 @@ class PlaceOrder(Resource):
                 'status': 'error',
                 'message': 'An unexpected error occurred'
             }
-            if not ANALYZE_MODE:
+            if not get_analyze_mode():
                 executor.submit(async_log_order, 'placeorder', data, error_response)
             return make_response(jsonify(error_response), 500)
