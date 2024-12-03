@@ -139,8 +139,9 @@
                         </div>
                     </td>
                     <td>
-                        <button class="btn btn-sm btn-primary" 
-                                onclick="showDetails('{{ request|tojson|safe }}')">
+                        <button class="btn btn-sm btn-primary view-details" 
+                                data-request='{{ request.request_data|tojson }}'
+                                data-analysis='{{ request.analysis|tojson }}'>
                             View
                         </button>
                     </td>
@@ -176,15 +177,21 @@
 
 {% block scripts %}
 <script>
-function showDetails(requestStr) {
-    var request = JSON.parse(requestStr);
-    document.getElementById('request-data').textContent = 
-        JSON.stringify(request.request_data, null, 2);
-    document.getElementById('analysis-data').textContent = 
-        JSON.stringify(request.analysis, null, 2);
-    document.getElementById('requestModal').showModal();
-}
-
-// No auto-refresh, rely on socket events like other sections
+document.addEventListener('DOMContentLoaded', function() {
+    // Add click handlers to all view buttons
+    document.querySelectorAll('.view-details').forEach(button => {
+        button.addEventListener('click', function() {
+            const requestData = JSON.parse(this.getAttribute('data-request'));
+            const analysisData = JSON.parse(this.getAttribute('data-analysis'));
+            
+            document.getElementById('request-data').textContent = 
+                JSON.stringify(requestData, null, 2);
+            document.getElementById('analysis-data').textContent = 
+                JSON.stringify(analysisData, null, 2);
+            
+            document.getElementById('requestModal').showModal();
+        });
+    });
+});
 </script>
 {% endblock %}
