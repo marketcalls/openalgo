@@ -16,7 +16,8 @@ from blueprints.apikey import api_key_bp
 from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
-from blueprints.core import core_bp  
+from blueprints.core import core_bp
+from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 
 from restx_api import api_v1_bp
 
@@ -24,6 +25,7 @@ from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
+from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -46,14 +48,9 @@ def create_app():
 
     load_dotenv()
 
-    
-
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
-
-    # Initialize SQLAlchemy
- #   db.init_app(app)
 
     # Register the blueprints
     app.register_blueprint(auth_bp)
@@ -64,7 +61,8 @@ def create_app():
     app.register_blueprint(log_bp)
     app.register_blueprint(tv_json_bp)
     app.register_blueprint(brlogin_bp)
-    app.register_blueprint(core_bp)  
+    app.register_blueprint(core_bp)
+    app.register_blueprint(analyzer_bp)  # Register the analyzer blueprint
 
     # Register RESTx API blueprint
     app.register_blueprint(api_v1_bp)
@@ -82,7 +80,6 @@ def create_app():
 
 def setup_environment(app):
     with app.app_context():
-
         #load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
@@ -90,6 +87,7 @@ def setup_environment(app):
         ensure_user_tables_exists()
         ensure_master_contract_tables_exists()
         ensure_api_log_tables_exists()
+        ensure_analyzer_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':

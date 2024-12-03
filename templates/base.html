@@ -208,6 +208,12 @@
                             Tradingview
                         </a>
                     </li>
+                    <li>
+                        <a href="{{ url_for('analyzer_bp.analyzer') }}" 
+                           class="{{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
+                           API Analyzer
+                        </a>
+                    </li>
                     <div class="divider"></div>
                     <li>
                         <a href="{{ url_for('auth.change_password') }}" 
@@ -302,5 +308,7 @@
             }, 3000);
         }
     </script>
+
+    {% block scripts %}{% endblock %}
 </body>
 </html>

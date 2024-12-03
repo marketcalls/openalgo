@@ -1,0 +1,73 @@
+"""
+Constants used throughout the application.
+Reference: https://docs.openalgo.in/api-documentation/v1/order-constants
+"""
+
+# Exchange Types
+EXCHANGE_NSE = 'NSE'    # NSE Equity
+EXCHANGE_NFO = 'NFO'    # NSE Futures & Options
+EXCHANGE_CDS = 'CDS'    # NSE Currency
+EXCHANGE_BSE = 'BSE'    # BSE Equity
+EXCHANGE_BFO = 'BFO'    # BSE Futures & Options
+EXCHANGE_BCD = 'BCD'    # BSE Currency
+EXCHANGE_MCX = 'MCX'    # MCX Commodity
+EXCHANGE_NCDEX = 'NCDEX'  # NCDEX Commodity
+
+VALID_EXCHANGES = [
+    EXCHANGE_NSE,
+    EXCHANGE_NFO,
+    EXCHANGE_CDS,
+    EXCHANGE_BSE,
+    EXCHANGE_BFO,
+    EXCHANGE_BCD,
+    EXCHANGE_MCX,
+    EXCHANGE_NCDEX
+]
+
+# Product Types
+PRODUCT_CNC = 'CNC'     # Cash & Carry for equity
+PRODUCT_NRML = 'NRML'   # Normal for futures and options
+PRODUCT_MIS = 'MIS'     # Intraday Square off
+
+VALID_PRODUCT_TYPES = [
+    PRODUCT_CNC,
+    PRODUCT_NRML,
+    PRODUCT_MIS
+]
+
+# Price Types
+PRICE_TYPE_MARKET = 'MARKET'  # Market Order
+PRICE_TYPE_LIMIT = 'LIMIT'    # Limit Order
+PRICE_TYPE_SL = 'SL'         # Stop Loss Limit Order
+PRICE_TYPE_SLM = 'SL-M'      # Stop Loss Market Order
+
+VALID_PRICE_TYPES = [
+    PRICE_TYPE_MARKET,
+    PRICE_TYPE_LIMIT,
+    PRICE_TYPE_SL,
+    PRICE_TYPE_SLM
+]
+
+# Order Actions
+ACTION_BUY = 'BUY'    # Buy
+ACTION_SELL = 'SELL'  # Sell
+
+VALID_ACTIONS = [
+    ACTION_BUY,
+    ACTION_SELL
+]
+
+# Exchange Badge Colors (for UI)
+EXCHANGE_BADGE_COLORS = {
+    EXCHANGE_NSE: 'badge-accent',
+    EXCHANGE_NFO: 'badge-secondary',
+    EXCHANGE_CDS: 'badge-info',
+    EXCHANGE_BSE: 'badge-neutral',
+    EXCHANGE_BFO: 'badge-warning',
+    EXCHANGE_BCD: 'badge-error',
+    EXCHANGE_MCX: 'badge-primary',
+    EXCHANGE_NCDEX: 'badge-success'
+}
+
+# Required Fields for Order Placement
+REQUIRED_ORDER_FIELDS = ['symbol', 'exchange', 'quantity', 'action']
