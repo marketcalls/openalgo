@@ -25,6 +25,33 @@
     .loading {
         @apply fixed top-0 left-0 w-full h-full flex items-center justify-center bg-base-100 bg-opacity-50 z-50;
     }
+
+    .badge-cell {
+        @apply text-center whitespace-nowrap min-w-[120px] px-2;
+    }
+
+    .badge-container {
+        @apply flex justify-center items-center;
+    }
+
+    .badge {
+        @apply truncate max-w-full;
+    }
+
+    @media (max-width: 640px) {
+        .badge {
+            @apply text-xs px-2 py-1 max-w-[120px];
+        }
+        .badge-cell {
+            @apply min-w-[120px] px-1;
+        }
+        .table td {
+            @apply px-2 py-2;
+        }
+        .status-badge {
+            @apply whitespace-nowrap;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -112,38 +139,52 @@
                 {% for request in requests %}
                 <tr class="hover:bg-base-200">
                     <td class="text-sm">{{ request.timestamp }}</td>
-                    <td>
-                        <div class="badge badge-neutral">{{ request.source }}</div>
-                    </td>
-                    <td class="font-medium">{{ request.symbol }}</td>
-                    <td>
-                        {% set exchange_colors = {
-                            'NSE': 'badge-accent',
-                            'BSE': 'badge-neutral',
-                            'NFO': 'badge-secondary',
-                            'MCX': 'badge-primary'
-                        } %}
-                        <div class="badge {{ exchange_colors.get(request.exchange, 'badge-ghost') }}">
-                            {{ request.exchange }}
+                    <td class="badge-cell">
+                        <div class="badge-container">
+                            <div class="badge badge-neutral truncate">{{ request.source }}</div>
                         </div>
                     </td>
-                    <td>
-                        <div class="badge {% if request.action == 'BUY' %}badge-success{% else %}badge-error{% endif %} gap-2">
-                            {{ request.action }}
+                    <td class="font-medium">{{ request.symbol }}</td>
+                    <td class="badge-cell">
+                        {% set exchange_colors = {
+                            'NSE': 'badge-accent',
+                            'NFO': 'badge-secondary',
+                            'CDS': 'badge-info',
+                            'BSE': 'badge-neutral',
+                            'BFO': 'badge-warning',
+                            'BCD': 'badge-error',
+                            'MCX': 'badge-primary',
+                            'NCDEX': 'badge-success'
+                        } %}
+                        <div class="badge-container">
+                            <div class="badge {{ exchange_colors.get(request.exchange, 'badge-ghost') }}">
+                                {{ request.exchange }}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="badge-cell">
+                        <div class="badge-container">
+                            <div class="badge {% if request.action == 'BUY' %}badge-success{% else %}badge-error{% endif %}">
+                                {{ request.action }}
+                            </div>
                         </div>
                     </td>
                     <td class="numeric-cell">{{ request.quantity }}</td>
-                    <td>
-                        <div class="badge {% if request.analysis.issues %}badge-warning{% else %}badge-success{% endif %}">
-                            {% if request.analysis.issues %}Issues Found{% else %}Valid{% endif %}
+                    <td class="badge-cell">
+                        <div class="badge-container">
+                            <div class="badge status-badge {% if request.analysis.issues %}badge-warning{% else %}badge-success{% endif %}">
+                                {% if request.analysis.issues %}Issues{% else %}Valid{% endif %}
+                            </div>
                         </div>
                     </td>
-                    <td>
-                        <button class="btn btn-sm btn-primary view-details" 
-                                data-request='{{ request.request_data|tojson }}'
-                                data-analysis='{{ request.analysis|tojson }}'>
-                            View
-                        </button>
+                    <td class="badge-cell">
+                        <div class="badge-container">
+                            <button class="btn btn-sm btn-primary view-details" 
+                                    data-request='{{ request.request_data|tojson }}'
+                                    data-analysis='{{ request.analysis|tojson }}'>
+                                View
+                            </button>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
