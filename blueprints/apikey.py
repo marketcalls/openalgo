@@ -3,7 +3,7 @@ import os
 import logging
 import secrets
 from argon2 import PasswordHasher
-from database.auth_db import upsert_api_key, get_api_key, verify_api_key
+from database.auth_db import upsert_api_key, get_api_key, verify_api_key, get_api_key_for_tradingview
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
@@ -23,10 +23,14 @@ def generate_api_key():
 def manage_api_key():
     if request.method == 'GET':
         login_username = session['user']
-        # We don't show the actual API key after creation for security
-        has_api_key = get_api_key(login_username) is not None
+        # Get the decrypted API key if it exists
+        api_key = get_api_key_for_tradingview(login_username)
+        has_api_key = api_key is not None
         logger.info(f"Checking API key status for user: {login_username}")
-        return render_template('apikey.html', login_username=login_username, has_api_key=has_api_key)
+        return render_template('apikey.html', 
+                             login_username=login_username, 
+                             has_api_key=has_api_key,
+                             api_key=api_key)
     else:
         user_id = request.json.get('user_id')
         if not user_id:
@@ -41,9 +45,8 @@ def manage_api_key():
         
         if key_id is not None:
             logger.info(f"API key updated successfully for user: {user_id}")
-            # Return the unhashed key to user - this is the only time they'll see it
             return jsonify({
-                'message': 'API key updated successfully. Please save this key as it won\'t be shown again.',
+                'message': 'API key updated successfully.',
                 'api_key': api_key,
                 'key_id': key_id
             })
