@@ -2,7 +2,7 @@
 
 from flask import Blueprint, render_template, request, jsonify, session, url_for, redirect
 from database.symbol import enhanced_search_symbols
-from database.auth_db import get_api_key
+from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
 from collections import OrderedDict
 from dotenv import load_dotenv
@@ -32,7 +32,8 @@ def tradingview_json():
             
             logger.info(f"Processing TradingView request - Symbol: {symbol_input}, Exchange: {exchange}, Product: {product}")
             
-            api_key = get_api_key(session.get('user'))
+            # Get actual API key for TradingView
+            api_key = get_api_key_for_tradingview(session.get('user'))
             broker = session.get('broker')
             
             if not api_key:
@@ -50,7 +51,7 @@ def tradingview_json():
             
             # Create the JSON response object with OrderedDict
             json_data = OrderedDict([
-                ("apikey", api_key),
+                ("apikey", api_key),  # Use actual API key
                 ("strategy", "Tradingview"),
                 ("symbol", symbol_data.symbol),
                 ("action", "{{strategy.order.action}}"),

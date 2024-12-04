@@ -30,7 +30,7 @@ def get_encryption_key():
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b'openalgo_static_salt',  # Static salt is fine here as we have the pepper
+        salt=b'openalgo_static_salt',
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
@@ -57,7 +57,7 @@ class Auth(Base):
     __tablename__ = 'auth'
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
-    auth = Column(Text, nullable=False)  # Will store encrypted auth token
+    auth = Column(Text, nullable=False)
     broker = Column(String(20), nullable=False)
     is_revoked = Column(Boolean, default=False)
 
@@ -65,7 +65,8 @@ class ApiKeys(Base):
     __tablename__ = 'api_keys'
     id = Column(Integer, primary_key=True)
     user_id = Column(String, nullable=False, unique=True)
-    api_key_hash = Column(Text, nullable=False)  # Store hashed API key
+    api_key_hash = Column(Text, nullable=False)  # For verification
+    api_key_encrypted = Column(Text, nullable=False)  # For retrieval
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
@@ -74,13 +75,13 @@ def init_db():
 
 def encrypt_token(token):
     """Encrypt auth token"""
-    if not token:  # Handle empty token case
+    if not token:
         return ''
     return fernet.encrypt(token.encode()).decode()
 
 def decrypt_token(encrypted_token):
     """Decrypt auth token"""
-    if not encrypted_token:  # Handle empty token case
+    if not encrypted_token:
         return ''
     try:
         return fernet.decrypt(encrypted_token.encode()).decode()
@@ -131,13 +132,25 @@ def get_auth_token_dbquery(name):
         print("Error while querying the database for auth token:", e)
         return None
 
-def upsert_api_key(user_id, hashed_key):
-    """Store hashed API key in database"""
+def upsert_api_key(user_id, api_key):
+    """Store both hashed and encrypted API key"""
+    # Hash with Argon2 for verification
+    peppered_key = api_key + PEPPER
+    hashed_key = ph.hash(peppered_key)
+    
+    # Encrypt for retrieval
+    encrypted_key = encrypt_token(api_key)
+    
     api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
     if api_key_obj:
         api_key_obj.api_key_hash = hashed_key
+        api_key_obj.api_key_encrypted = encrypted_key
     else:
-        api_key_obj = ApiKeys(user_id=user_id, api_key_hash=hashed_key)
+        api_key_obj = ApiKeys(
+            user_id=user_id,
+            api_key_hash=hashed_key,
+            api_key_encrypted=encrypted_key
+        )
         db_session.add(api_key_obj)
     db_session.commit()
     return api_key_obj.id
@@ -151,12 +164,22 @@ def get_api_key(user_id):
         print("Error while querying the database for API key:", e)
         return None
 
-def verify_api_key(provided_api_key):
-    """Verify an API key and return user_id if valid"""
-    peppered_key = provided_api_key + PEPPER
-    
+def get_api_key_for_tradingview(user_id):
+    """Get decrypted API key for TradingView configuration"""
     try:
-        # Query all API keys (this is fine as we're using secure hashing)
+        api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+        if api_key_obj and api_key_obj.api_key_encrypted:
+            return decrypt_token(api_key_obj.api_key_encrypted)
+        return None
+    except Exception as e:
+        print("Error while querying the database for API key:", e)
+        return None
+
+def verify_api_key(provided_api_key):
+    """Verify an API key using Argon2"""
+    peppered_key = provided_api_key + PEPPER
+    try:
+        # Query all API keys
         api_keys = ApiKeys.query.all()
         
         # Try to verify against each stored hash
