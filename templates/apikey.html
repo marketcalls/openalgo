@@ -9,7 +9,11 @@
             <div class="card-body">
                 <h2 class="card-title">API Key Management</h2>
                 <p class="text-base-content/70">
-                    Your API key is shown below. Use it to authenticate your requests.
+                    {% if has_api_key %}
+                        You have an active API key. For security reasons, the key is only shown once when generated.
+                    {% else %}
+                        Generate an API key to authenticate your API requests.
+                    {% endif %}
                 </p>
 
                 <!-- API Key Display -->
@@ -21,38 +25,42 @@
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                                 </svg>
-                                Click to Show/Hide API Key
+                                {% if has_api_key %}Status: Active API Key{% else %}No Active API Key{% endif %}
                             </div>
                         </div>
                         <div class="collapse-content"> 
                             <div id="apiKeyDisplay" class="font-mono bg-base-300 p-4 rounded-box mt-2">
-                                {{ api_key }}
+                                {% if has_api_key %}
+                                    [Hidden for security] Generate a new key to view it
+                                {% else %}
+                                    No API key generated yet
+                                {% endif %}
                             </div>
                         </div>
                     </div>
 
                     <!-- Copy Button -->
                     <div class="mt-4 flex gap-2">
-                        <button onclick="copyApiKeyToClipboard()" class="btn btn-primary gap-2">
+                        <button onclick="copyApiKeyToClipboard()" class="btn btn-primary gap-2" id="copyButton" {% if not has_api_key %}disabled{% endif %}>
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                             </svg>
                             Copy API Key
                         </button>
 
-                        <!-- Regenerate Button -->
+                        <!-- Generate/Regenerate Button -->
                         <button onclick="document.getElementById('confirm-modal').showModal()" class="btn btn-secondary gap-2">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
-                            Regenerate API Key
+                            {% if has_api_key %}Regenerate API Key{% else %}Generate API Key{% endif %}
                         </button>
                     </div>
 
                     <!-- Loading Indicator -->
                     <div id="loadingIndicator" class="hidden mt-4">
                         <span class="loading loading-spinner loading-md"></span>
-                        <span class="ml-2">Regenerating API key...</span>
+                        <span class="ml-2">{% if has_api_key %}Regenerating{% else %}Generating{% endif %} API key...</span>
                     </div>
 
                     <!-- Success Alert -->
@@ -77,14 +85,14 @@
                         </div>
                     </div>
 
-                    <!-- Success Alert for Regeneration -->
-                    <div id="regenerateSuccessAlert" class="alert alert-success mt-4 hidden">
+                    <!-- Success Alert for Generation -->
+                    <div id="regenerateSuccessAlert" class="alert alert-warning mt-4 hidden">
                         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <div>
-                            <h3 class="font-bold">Success!</h3>
-                            <div class="text-sm">API key has been regenerated successfully.</div>
+                            <h3 class="font-bold">Important!</h3>
+                            <div class="text-sm">Your new API key is now displayed. Save it now - it won't be shown again!</div>
                         </div>
                     </div>
                 </div>
@@ -96,13 +104,19 @@
 <!-- Confirmation Modal -->
 <dialog id="confirm-modal" class="modal modal-bottom sm:modal-middle">
     <div class="modal-box">
-        <h3 class="font-bold text-lg">Confirm Regeneration</h3>
-        <p class="py-4">Are you sure you want to regenerate your API key? The current key will be invalidated and any applications using it will need to be updated.</p>
+        <h3 class="font-bold text-lg">Confirm {% if has_api_key %}Regeneration{% else %}Generation{% endif %}</h3>
+        <p class="py-4">
+            {% if has_api_key %}
+            Are you sure you want to regenerate your API key? The current key will be invalidated and any applications using it will need to be updated.
+            {% else %}
+            Generate a new API key for authenticating your API requests?
+            {% endif %}
+        </p>
         <div class="modal-action">
             <form method="dialog">
                 <button class="btn btn-ghost">Cancel</button>
             </form>
-            <button onclick="regenerateApiKey()" class="btn btn-primary">Regenerate</button>
+            <button onclick="regenerateApiKey()" class="btn btn-primary">{% if has_api_key %}Regenerate{% else %}Generate{% endif %}</button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">
@@ -128,13 +142,16 @@
         const display = document.getElementById('apiKeyDisplay');
         display.textContent = newKey;
         
+        // Enable copy button
+        document.getElementById('copyButton').disabled = false;
+        
         // Ensure the collapse is open to show the new key
         document.getElementById('apiKeyCollapse').checked = true;
     }
 
     function copyApiKeyToClipboard() {
         const apiKey = document.getElementById('apiKeyDisplay').textContent.trim();
-        if (apiKey) {
+        if (apiKey && !apiKey.includes('Hidden') && !apiKey.includes('No API key')) {
             navigator.clipboard.writeText(apiKey).then(function() {
                 showAlert('copySuccessAlert');
             }, function(err) {
@@ -171,7 +188,7 @@
             showLoading(false);
             if (data.api_key) {
                 updateApiKeyDisplay(data.api_key);
-                showAlert('regenerateSuccessAlert');
+                showAlert('regenerateSuccessAlert', 10000); // Show for 10 seconds
             } else {
                 showError(data.error || 'Failed to regenerate API key');
             }
