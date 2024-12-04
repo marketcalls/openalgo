@@ -10,6 +10,7 @@ def get_margin_data(auth_token):
     
     # Fetch UserID and AccountID from environment variables
     userid = os.getenv('BROKER_API_KEY')
+    userid = userid[:-2]  # Trim the last two characters
     actid = userid  # Assuming AccountID is the same as UserID
 
     # Prepare the payload for the request
@@ -68,4 +69,3 @@ def get_margin_data(auth_token):
         # Log the exception and return an empty dictionary if there's an unexpected error
         print(f"Error processing margin data: {str(e)}")
         return {}
-

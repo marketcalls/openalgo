@@ -7,11 +7,13 @@ def transform_data(data,token):
     """
     Transforms the new API request structure to the current expected structure.
     """
+    userid = data["apikey"]
+    userid = userid[:-2] 
     symbol = get_br_symbol(data["symbol"],data["exchange"])
     # Basic mapping
     transformed = {
-        "uid": data["apikey"],
-        "actid": data["apikey"],
+        "uid": userid,
+        "actid": userid,
         "exch": data["exchange"],
         "tsym": symbol,
         "qty": data["quantity"],

@@ -80,7 +80,7 @@ shoonya_urls = {
     "CDS": "https://api.shoonya.com/CDS_symbols.txt.zip",
     "MCX": "https://api.shoonya.com/MCX_symbols.txt.zip",
     "BSE": "https://api.shoonya.com/BSE_symbols.txt.zip",
-    "BFO": "https://api.shoonya.com/BFO_symbols.txt.zip"
+    "BFO": "https://go.mynt.in/BFO_symbols.txt.zip"
 }
 
 def download_and_unzip_shoonya_data(output_path):
@@ -252,6 +252,8 @@ def process_shoonya_cds_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'precision', 'multiplier', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    df = df[df['token'] > 100] # Filter out CDS tokens with less than 100 digits to avioid dummy entries or index values that are not actual CDS tokens
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
