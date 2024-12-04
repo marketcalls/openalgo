@@ -4,9 +4,10 @@ from dotenv import load_dotenv
 from extensions import socketio
 import os
 from database.auth_db import upsert_auth
-from database.user_db import authenticate_user, User, db_session, find_user_by_username  # Import the function
+from database.user_db import authenticate_user, User, db_session, find_user_by_username, find_user_by_email  # Import the function
 import re
 from utils.session import check_session_validity
+import secrets
 
 # Load environment variables
 load_dotenv()
@@ -14,6 +15,7 @@ load_dotenv()
 # Access environment variables
 LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")
 LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
+RESET_RATE_LIMIT = "3 per hour"  # More restrictive rate limit for password reset
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
@@ -69,6 +71,78 @@ def broker_login():
                              broker_api_secret=BROKER_API_SECRET,
                              redirect_url=REDIRECT_URL,
                              broker_name=broker_name)
+
+@auth_bp.route('/reset-password', methods=['GET', 'POST'])
+@limiter.limit(RESET_RATE_LIMIT)  # More restrictive rate limit for password reset
+def reset_password():
+    if request.method == 'GET':
+        return render_template('reset_password.html', email_sent=False)
+    
+    step = request.form.get('step')
+    
+    if step == 'email':
+        email = request.form.get('email')
+        user = find_user_by_email(email)
+        
+        if user:
+            session['reset_email'] = email
+            return render_template('reset_password.html', 
+                                 email_sent=True, 
+                                 totp_verified=False,
+                                 email=email)
+        else:
+            flash('No account found with that email address.', 'error')
+            return render_template('reset_password.html', email_sent=False)
+            
+    elif step == 'totp':
+        email = request.form.get('email')
+        totp_code = request.form.get('totp_code')
+        user = find_user_by_email(email)
+        
+        if user and user.verify_totp(totp_code):
+            # Generate a secure token for the password reset
+            token = secrets.token_urlsafe(32)
+            session['reset_token'] = token
+            session['reset_email'] = email
+            
+            return render_template('reset_password.html',
+                                 email_sent=True,
+                                 totp_verified=True,
+                                 email=email,
+                                 token=token)
+        else:
+            flash('Invalid TOTP code. Please try again.', 'error')
+            return render_template('reset_password.html',
+                                 email_sent=True,
+                                 totp_verified=False,
+                                 email=email)
+            
+    elif step == 'password':
+        email = request.form.get('email')
+        token = request.form.get('token')
+        password = request.form.get('password')
+        
+        # Verify token from session
+        if token != session.get('reset_token') or email != session.get('reset_email'):
+            flash('Invalid or expired reset token.', 'error')
+            return redirect(url_for('auth.reset_password'))
+        
+        user = find_user_by_email(email)
+        if user:
+            user.set_password(password)
+            db_session.commit()
+            
+            # Clear reset session data
+            session.pop('reset_token', None)
+            session.pop('reset_email', None)
+            
+            flash('Your password has been reset successfully.', 'success')
+            return redirect(url_for('auth.login'))
+        else:
+            flash('Error resetting password.', 'error')
+            return redirect(url_for('auth.reset_password'))
+    
+    return render_template('reset_password.html', email_sent=False)
 
 @auth_bp.route('/change', methods=['GET', 'POST'])
 @check_session_validity

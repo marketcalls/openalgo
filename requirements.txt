@@ -41,6 +41,7 @@ openalgo==1.0.2
 ordered-set==4.1.0
 packaging==24.1
 pandas==2.2.2
+pillow==11.0.0
 pycparser==2.22
 Pygments==2.18.0
 PyJWT==2.8.0
@@ -52,6 +53,7 @@ python-engineio==4.9.1
 python-socketio==5.11.3
 pytz==2024.1
 PyYAML==6.0.1
+qrcode==8.0
 referencing==0.35.1
 requests==2.32.3
 rich==13.7.1

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+import pyotp
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
@@ -35,7 +36,7 @@ class User(Base):
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)  # Increased length for Argon2 hash
-    mobile_number = Column(String(15), unique=True, nullable=False)
+    totp_secret = Column(String(32), nullable=False)  # For TOTP-based password reset
     is_admin = Column(Boolean, default=False)
 
     def set_password(self, password):
@@ -55,21 +56,40 @@ class User(Base):
             return True
         except VerifyMismatchError:
             return False
+    
+    def get_totp_uri(self):
+        """Get the TOTP URI for QR code generation"""
+        return pyotp.totp.TOTP(self.totp_secret).provisioning_uri(
+            name=self.email,
+            issuer_name="OpenAlgo"
+        )
+    
+    def verify_totp(self, token):
+        """Verify TOTP token"""
+        totp = pyotp.TOTP(self.totp_secret)
+        return totp.verify(token)
 
 def init_db():
     print("Initializing User DB")
     Base.metadata.create_all(bind=engine)
 
-def add_user(username, email, password, mobile_number, is_admin=False):
+def add_user(username, email, password, is_admin=False):
     try:
-        user = User(username=username, email=email, mobile_number=mobile_number, is_admin=is_admin)
+        # Generate TOTP secret for the user
+        totp_secret = pyotp.random_base32()
+        user = User(
+            username=username, 
+            email=email, 
+            totp_secret=totp_secret,
+            is_admin=is_admin
+        )
         user.set_password(password)
         db_session.add(user)
         db_session.commit()
-        return True
+        return user  # Return the user object instead of True
     except IntegrityError:
         db_session.rollback()
-        return False
+        return None  # Return None instead of False
 
 def authenticate_user(username, password):
     """Authenticate user with Argon2 hashed password"""
@@ -91,6 +111,10 @@ def authenticate_user(username, password):
 
 def find_user_by_username():
     return User.query.filter_by(is_admin=True).first()
+
+def find_user_by_email(email):
+    """Find user by email for password reset"""
+    return User.query.filter_by(email=email).first()
 
 def rehash_all_passwords():
     """

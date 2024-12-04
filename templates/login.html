@@ -75,6 +75,9 @@
                                    required 
                                    class="input input-bordered" 
                                    placeholder="Enter your password" />
+                            <label class="label">
+                                <a href="{{ url_for('auth.reset_password') }}" class="label-text-alt link link-hover">Forgot password?</a>
+                            </label>
                         </div>
 
                         <div id="loginStatus" class="alert hidden">
