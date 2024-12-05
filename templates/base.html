@@ -4,9 +4,13 @@
     <!-- Add blocking script to set theme before any content loads -->
     <script>
         (function() {
+            console.log('[Init] Initial theme check');
             const savedTheme = localStorage.getItem('theme');
             if (savedTheme) {
+                console.log(`[Init] Found saved theme: ${savedTheme}`);
                 document.documentElement.setAttribute('data-theme', savedTheme);
+            } else {
+                console.log('[Init] No saved theme found');
             }
         })();
     </script>
@@ -33,11 +37,6 @@
     <!-- Audio for alerts -->
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
-    <!-- Custom Scripts -->
-    <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-
     <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
@@ -47,6 +46,7 @@
 
     <!-- Theme Configuration -->
     <script>
+        console.log('[Config] Setting up Tailwind config');
         tailwind.config = {
             theme: {
                 extend: {
@@ -67,6 +67,10 @@
                         'base-200': 'hsl(var(--b2))',
                         'base-300': 'hsl(var(--b3))',
                         'base-content': 'hsl(var(--bc))',
+                        info: 'hsl(var(--in))',
+                        success: 'hsl(var(--su))',
+                        warning: 'hsl(var(--wa))',
+                        error: 'hsl(var(--er))',
                     }
                 }
             },
@@ -74,28 +78,60 @@
                 themes: [
                     {
                         light: {
-                            primary: "#2563eb",    // Blue-600
-                            secondary: "#7c3aed",  // Violet-600
-                            accent: "#0891b2",     // Cyan-600
-                            neutral: "#1f2937",    // Gray-800
+                            "primary": "#2563eb",    // Blue-600
+                            "primary-focus": "#1d4ed8", // Blue-700
+                            "primary-content": "#ffffff",
+                            "secondary": "#7c3aed",  // Violet-600
+                            "secondary-focus": "#6d28d9", // Violet-700
+                            "secondary-content": "#ffffff",
+                            "accent": "#0891b2",     // Cyan-600
+                            "accent-focus": "#0e7490", // Cyan-700
+                            "accent-content": "#ffffff",
+                            "neutral": "#1f2937",    // Gray-800
+                            "neutral-focus": "#111827", // Gray-900
+                            "neutral-content": "#ffffff",
                             "base-100": "#ffffff",
                             "base-200": "#f3f4f6",
                             "base-300": "#e5e7eb",
+                            "base-content": "#1f2937",
+                            "info": "#3b82f6",
+                            "success": "#22c55e",
+                            "warning": "#f59e0b",
+                            "error": "#ef4444"
                         },
                         dark: {
-                            primary: "#3b82f6",    // Blue-500
-                            secondary: "#8b5cf6",   // Violet-500
-                            accent: "#06b6d4",     // Cyan-500
-                            "base-100": "#1f2937", // Gray-800
-                            "base-200": "#111827", // Gray-900
-                            "base-300": "#0f172a", // Gray-950
+                            "primary": "#3b82f6",    // Blue-500
+                            "primary-focus": "#2563eb", // Blue-600
+                            "primary-content": "#ffffff",
+                            "secondary": "#8b5cf6",   // Violet-500
+                            "secondary-focus": "#7c3aed", // Violet-600
+                            "secondary-content": "#ffffff",
+                            "accent": "#06b6d4",     // Cyan-500
+                            "accent-focus": "#0891b2", // Cyan-600
+                            "accent-content": "#ffffff",
+                            "neutral": "#1f2937",    // Gray-800
+                            "neutral-focus": "#111827", // Gray-900
+                            "neutral-content": "#ffffff",
+                            "base-100": "#1f2937",   // Gray-800
+                            "base-200": "#111827",   // Gray-900
+                            "base-300": "#0f172a",   // Gray-950
+                            "base-content": "#f3f4f6",
+                            "info": "#60a5fa",
+                            "success": "#34d399",
+                            "warning": "#fbbf24",
+                            "error": "#f87171"
                         }
                     }
                 ],
-                darkTheme: "dark",
+                darkTheme: "dark"
             }
         }
+        console.log('[Config] Tailwind config set');
     </script>
+
+    <!-- Other Custom Scripts -->
+    <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
 
     {% block head %}{% endblock %}
 </head>
@@ -240,9 +276,11 @@
         </div>
     </div>
 
+    <!-- Toast notification function -->
     <script>
-        // Toast notification function
+        console.log('[Toast] Setting up toast notification function');
         function showToast(message, type = 'info') {
+            console.log(`[Toast] Showing toast: ${message}, type: ${type}`);
             const toast = document.createElement('div');
             toast.className = `alert alert-${type} shadow-lg mb-4`;
             
@@ -270,15 +308,22 @@
             
             toast.appendChild(content);
             document.querySelector('.toast').appendChild(toast);
+            console.log('[Toast] Toast element added to DOM');
 
             // Remove toast after 3 seconds
             setTimeout(() => {
                 toast.classList.add('animate-out');
                 setTimeout(() => {
                     toast.remove();
+                    console.log('[Toast] Toast element removed from DOM');
                 }, 300);
             }, 3000);
         }
     </script>
+
+    <!-- Load theme.js first -->
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <!-- Load mode-toggle.js after theme.js -->
+    <script src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>
 </body>
 </html>

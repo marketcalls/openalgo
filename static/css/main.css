@@ -85,6 +85,37 @@ main {
     pointer-events: none;
 }
 
+/* Mode badge styles */
+#mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1;
+    white-space: nowrap;
+    margin-right: 0.5rem;
+}
+
+#mode-badge.badge-success {
+    background-color: hsl(var(--su));
+    color: white;
+}
+
+#mode-badge.badge-warning {
+    background-color: hsl(var(--wa));
+    color: white;
+}
+
+/* Mode controller container */
+.mode-controller-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.5rem;
+}
+
 /* Card styles */
 .card {
     @apply bg-base-100;
@@ -209,19 +240,6 @@ main {
 .navbar {
     @apply bg-base-100;
     border-bottom: 1px solid hsl(var(--b2));
-}
-
-/* Mode Badge and Toggle Styles */
-#mode-badge {
-    font-size: 0.875rem;
-    padding: 0.5rem 0.75rem;
-    white-space: nowrap;
-}
-
-.mode-controller-container {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
 }
 
 /* Footer */
