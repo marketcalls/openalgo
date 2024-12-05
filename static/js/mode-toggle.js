@@ -8,10 +8,26 @@ document.addEventListener('DOMContentLoaded', function() {
             modeBadge.textContent = 'Analyze Mode';
             modeBadge.classList.remove('badge-success');
             modeBadge.classList.add('badge-warning');
+            // Set garden theme when switching to analyze mode
+            window.themeManager.setTheme('garden');
         } else {
             modeBadge.textContent = 'Live Mode';
             modeBadge.classList.remove('badge-warning');
             modeBadge.classList.add('badge-success');
+            // Force restore previous theme when switching back to live mode
+            window.themeManager.restorePreviousTheme();
+            
+            // Re-enable theme controllers
+            const themeControllers = document.querySelectorAll('.theme-controller');
+            themeControllers.forEach(controller => {
+                controller.disabled = false;
+            });
+            
+            // Remove disabled class from theme switcher
+            const themeSwitcher = document.querySelector('.theme-switcher');
+            if (themeSwitcher) {
+                themeSwitcher.classList.remove('disabled');
+            }
         }
     }
 

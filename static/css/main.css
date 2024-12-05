@@ -73,6 +73,18 @@ main {
     color: hsl(var(--bc));
 }
 
+/* Theme switcher */
+.theme-switcher {
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity 0.3s ease;
+}
+
+.theme-switcher.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
 /* Card styles */
 .card {
     @apply bg-base-100;
