@@ -228,6 +228,7 @@ def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
+    api_key = api_key[:-2]
     data = {"uid": api_key, "norenordno": orderid}
     
 
@@ -259,6 +260,7 @@ def modify_order(data,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
+    api_key = api_key[:-2]
 
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
