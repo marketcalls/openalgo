@@ -4,13 +4,9 @@
     <!-- Add blocking script to set theme before any content loads -->
     <script>
         (function() {
-            console.log('[Init] Initial theme check');
             const savedTheme = localStorage.getItem('theme');
             if (savedTheme) {
-                console.log(`[Init] Found saved theme: ${savedTheme}`);
                 document.documentElement.setAttribute('data-theme', savedTheme);
-            } else {
-                console.log('[Init] No saved theme found');
             }
         })();
     </script>
@@ -46,7 +42,6 @@
 
     <!-- Theme Configuration -->
     <script>
-        console.log('[Config] Setting up Tailwind config');
         tailwind.config = {
             theme: {
                 extend: {
@@ -126,7 +121,6 @@
                 darkTheme: "dark"
             }
         }
-        console.log('[Config] Tailwind config set');
     </script>
 
     <!-- Other Custom Scripts -->
@@ -278,9 +272,7 @@
 
     <!-- Toast notification function -->
     <script>
-        console.log('[Toast] Setting up toast notification function');
         function showToast(message, type = 'info') {
-            console.log(`[Toast] Showing toast: ${message}, type: ${type}`);
             const toast = document.createElement('div');
             toast.className = `alert alert-${type} shadow-lg mb-4`;
             
@@ -308,14 +300,12 @@
             
             toast.appendChild(content);
             document.querySelector('.toast').appendChild(toast);
-            console.log('[Toast] Toast element added to DOM');
 
             // Remove toast after 3 seconds
             setTimeout(() => {
                 toast.classList.add('animate-out');
                 setTimeout(() => {
                     toast.remove();
-                    console.log('[Toast] Toast element removed from DOM');
                 }, 300);
             }, 3000);
         }
