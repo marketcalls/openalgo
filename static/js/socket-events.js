@@ -12,9 +12,7 @@ async function refreshLogs() {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
         }
-    } catch (error) {
-        console.error('Error refreshing logs:', error);
-    }
+    } catch (error) {}
 }
 
 // Function to fetch and update orderbook
@@ -35,16 +33,14 @@ async function refreshOrderbook() {
         }
         
         // Update table
-        const newContent = tempDiv.querySelector('.table-container');
+        const newContent = tempDiv.querySelector('#orderbook-table-container');
         if (newContent) {
-            const currentContainer = document.querySelector('.table-container');
+            const currentContainer = document.querySelector('#orderbook-table-container');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
         }
-    } catch (error) {
-        console.error('Error refreshing orderbook:', error);
-    }
+    } catch (error) {}
 }
 
 // Function to fetch and update tradebook
@@ -65,16 +61,14 @@ async function refreshTradebook() {
         }
         
         // Update table
-        const newContent = tempDiv.querySelector('.table-container');
+        const newContent = tempDiv.querySelector('#tradebook-table-container');
         if (newContent) {
-            const currentContainer = document.querySelector('.table-container');
+            const currentContainer = document.querySelector('#tradebook-table-container');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
         }
-    } catch (error) {
-        console.error('Error refreshing tradebook:', error);
-    }
+    } catch (error) {}
 }
 
 // Function to fetch and update positions
@@ -84,16 +78,14 @@ async function refreshPositions() {
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        const newContent = tempDiv.querySelector('.table-container');
+        const newContent = tempDiv.querySelector('#positions-table-container');
         if (newContent) {
-            const currentContainer = document.querySelector('.table-container');
+            const currentContainer = document.querySelector('#positions-table-container');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
         }
-    } catch (error) {
-        console.error('Error refreshing positions:', error);
-    }
+    } catch (error) {}
 }
 
 // Function to fetch and update dashboard funds
@@ -110,9 +102,7 @@ async function refreshDashboard() {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
         }
-    } catch (error) {
-        console.error('Error refreshing dashboard:', error);
-    }
+    } catch (error) {}
 }
 
 // Function to fetch and update analyzer
@@ -122,10 +112,15 @@ async function refreshAnalyzer() {
         const statsResponse = await fetch('/analyzer/stats');
         const statsData = await statsResponse.json();
         
-        document.getElementById('total-requests').textContent = statsData.total_requests;
-        document.getElementById('total-issues').textContent = statsData.issues.total;
-        document.getElementById('unique-symbols').textContent = statsData.symbols.length;
-        document.getElementById('active-sources').textContent = Object.keys(statsData.sources).length;
+        const totalRequests = document.getElementById('total-requests');
+        const totalIssues = document.getElementById('total-issues');
+        const uniqueSymbols = document.getElementById('unique-symbols');
+        const activeSources = document.getElementById('active-sources');
+
+        if (totalRequests) totalRequests.textContent = statsData.total_requests;
+        if (totalIssues) totalIssues.textContent = statsData.issues.total;
+        if (uniqueSymbols) uniqueSymbols.textContent = statsData.symbols.length;
+        if (activeSources) activeSources.textContent = Object.keys(statsData.sources).length;
 
         // Update requests table
         const requestsResponse = await fetch('/analyzer/requests');
@@ -223,15 +218,11 @@ async function refreshAnalyzer() {
                         document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                         document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                         document.getElementById('requestModal').showModal();
-                    } catch (error) {
-                        console.error('Error in view button click handler:', error);
-                    }
+                    } catch (error) {}
                 });
             });
         }
-    } catch (error) {
-        console.error('Error in refreshAnalyzer:', error);
-    }
+    } catch (error) {}
 }
 
 // Helper function to get exchange badge color
@@ -266,14 +257,10 @@ window.refreshCurrentPageContent = function() {
 document.addEventListener('DOMContentLoaded', function() {
     var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
     var alertSound = document.getElementById('alert-sound');
+    var isOnAnalyzerPage = window.location.pathname.includes('/analyzer');
 
-    socket.on('connect', function() {
-        console.log('Connected to WebSocket server');
-    });
-
-    socket.on('disconnect', function() {
-        console.log('Disconnected from WebSocket server');
-    });
+    socket.on('connect', function() {});
+    socket.on('disconnect', function() {});
 
     // Password change notification
     socket.on('password_change', function(data) {
@@ -293,7 +280,11 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('cancel_order_event', function(data) {
         playAlertSound();
         showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
-        refreshCurrentPageContent();
+        if (isOnAnalyzerPage) {
+            refreshAnalyzer();
+        } else {
+            refreshCurrentPageContent();
+        }
     });
 
     // Modify order notification
@@ -303,10 +294,10 @@ document.addEventListener('DOMContentLoaded', function() {
             ? `Order Modified Successfully - Order ID: ${data.orderid}`
             : `Failed to Modify Order - Order ID: ${data.orderid}`;
         showToast(message, data.status === 'success' ? 'success' : 'error');
-        // Always refresh orderbook for modify order events
-        refreshOrderbook();
-        // Also refresh current page if not on orderbook
-        if (!window.location.pathname.includes('/orderbook')) {
+        if (isOnAnalyzerPage) {
+            refreshAnalyzer();
+        } else {
+            refreshOrderbook();
             refreshCurrentPageContent();
         }
     });
@@ -315,10 +306,10 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('close_position_event', function(data) {
         playAlertSound();
         showToast(data.message, data.status === 'success' ? 'success' : 'error');
-        // Always refresh positions page
-        refreshPositions();
-        // Also refresh current page if not on positions
-        if (!window.location.pathname.includes('/positions')) {
+        if (isOnAnalyzerPage) {
+            refreshAnalyzer();
+        } else {
+            refreshPositions();
             refreshCurrentPageContent();
         }
     });
@@ -328,7 +319,11 @@ document.addEventListener('DOMContentLoaded', function() {
         playAlertSound();
         const type = data.action.toUpperCase() === 'BUY' ? 'success' : 'error';
         showToast(`${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`, type);
-        refreshCurrentPageContent();
+        if (isOnAnalyzerPage) {
+            refreshAnalyzer();
+        } else {
+            refreshCurrentPageContent();
+        }
     });
 
     // Generic order notification handler
@@ -360,7 +355,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         showToast(message, type);
-        refreshCurrentPageContent();
     });
 
     // Analyzer update notification
@@ -386,8 +380,9 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 message = data.response.message || 'All Open Positions will be Squared Off';
             }
-            // Always refresh positions page for close position events in analyzer mode
-            refreshPositions();
+            if (!isOnAnalyzerPage) {
+                refreshPositions();
+            }
         } else if (data.request.api_type === 'modifyorder') {
             if (data.response.status === 'error') {
                 message = `Error: ${data.response.message}`;
@@ -397,8 +392,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     message += ` - ${data.request.symbol}`;
                 }
             }
-            // Always refresh orderbook for modify order events in analyzer mode
-            refreshOrderbook();
+            if (!isOnAnalyzerPage) {
+                refreshOrderbook();
+            }
         } else {
             const action = data.request.action || '';
             const symbol = data.request.symbol || '';
@@ -420,9 +416,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         showToast(message, type);
-        
-        // Refresh analyzer content if on analyzer page
-        if (window.location.pathname.includes('/analyzer')) {
+        if (isOnAnalyzerPage) {
             refreshAnalyzer();
         }
     });
@@ -430,14 +424,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Helper function to play alert sound
     function playAlertSound() {
         if (alertSound) {
-            alertSound.play().catch(function(error) {
-                console.log("Error playing sound:", error);
-            });
+            alertSound.play().catch(function(error) {});
         }
     }
 
     // Initial page load - set up click handlers
-    if (window.location.pathname.includes('/analyzer')) {
+    if (isOnAnalyzerPage) {
         document.querySelectorAll('.view-details').forEach(button => {
             button.addEventListener('click', function() {
                 try {
@@ -452,11 +444,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                     document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                     document.getElementById('requestModal').showModal();
-                } catch (error) {
-                    console.error('Error in initial view button click handler:', error);
-                }
+                } catch (error) {}
             });
         });
+
+        // Initial analyzer refresh
+        refreshAnalyzer();
     }
 });
 
