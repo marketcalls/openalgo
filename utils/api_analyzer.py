@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 import pytz
-from database.analyzer_db import AnalyzerLog, db_session, async_log_analyzer
+from database.analyzer_db import AnalyzerLog, db_session
 from database.symbol import SymToken
 from sqlalchemy import func
 import json
@@ -490,7 +490,7 @@ def analyze_modify_order_request(order_data):
         }
 
 def analyze_request(request_data, api_type='placeorder', should_log=False):
-    """Analyze and log a request"""
+    """Analyze a request - logging is now handled by API endpoints"""
     try:
         # Choose appropriate analyzer based on API type
         if api_type == 'placesmartorder':
@@ -506,14 +506,7 @@ def analyze_request(request_data, api_type='placeorder', should_log=False):
         else:
             analysis = analyze_api_request(request_data)
         
-        # Log to analyzer database only if should_log is True
-        if should_log:
-            try:
-                async_log_analyzer(request_data, analysis, api_type)
-            except Exception as e:
-                logger.error(f"Error logging to analyzer database: {str(e)}")
-        
-        # Return analysis results
+        # Return analysis results without logging
         return True, analysis
 
     except Exception as e:
