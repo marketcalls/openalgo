@@ -7,6 +7,7 @@ from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
+from utils.version import get_version  # Import version management
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -76,7 +77,7 @@ def create_app():
     
     @app.context_processor
     def inject_version():
-        return dict(version=os.getenv('FLASK_APP_VERSION'))
+        return dict(version=get_version())
 
     return app
 
