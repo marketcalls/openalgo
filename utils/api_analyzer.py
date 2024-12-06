@@ -16,6 +16,7 @@ from utils.constants import (
     REQUIRED_CANCEL_ORDER_FIELDS,
     REQUIRED_CANCEL_ALL_ORDER_FIELDS,
     REQUIRED_CLOSE_POSITION_FIELDS,
+    REQUIRED_MODIFY_ORDER_FIELDS,
     DEFAULT_PRODUCT_TYPE,
     DEFAULT_PRICE_TYPE,
     DEFAULT_PRICE,
@@ -397,6 +398,98 @@ def analyze_close_position_request(order_data):
             'warnings': []
         }
 
+def analyze_modify_order_request(order_data):
+    """Analyze a modify order request"""
+    try:
+        issues = []
+        warnings = []
+
+        # Check required fields using the constant
+        missing_fields = [field for field in REQUIRED_MODIFY_ORDER_FIELDS if field not in order_data]
+        if missing_fields:
+            issues.append(f"Missing mandatory field(s): {', '.join(missing_fields)}")
+
+        # Validate symbol and exchange
+        if 'symbol' in order_data and 'exchange' in order_data:
+            if not validate_symbol(order_data['symbol'], order_data['exchange']):
+                issues.append(f"Invalid symbol '{order_data['symbol']}' for exchange '{order_data['exchange']}'")
+
+        # Validate exchange
+        if 'exchange' in order_data:
+            if order_data['exchange'] not in VALID_EXCHANGES:
+                issues.append(f"Invalid exchange. Must be one of: {', '.join(VALID_EXCHANGES)}")
+
+        # Validate action
+        if 'action' in order_data:
+            if order_data['action'] not in VALID_ACTIONS:
+                issues.append(f"Invalid action. Must be one of: {', '.join(VALID_ACTIONS)}")
+
+        # Validate product type
+        if 'product' in order_data:
+            if order_data['product'] not in VALID_PRODUCT_TYPES:
+                issues.append(f"Invalid product type. Must be one of: {', '.join(VALID_PRODUCT_TYPES)}")
+
+        # Validate price type
+        if 'pricetype' in order_data:
+            if order_data['pricetype'] not in VALID_PRICE_TYPES:
+                issues.append(f"Invalid price type. Must be one of: {', '.join(VALID_PRICE_TYPES)}")
+
+        # Validate numeric fields
+        try:
+            # Validate quantity
+            if 'quantity' in order_data:
+                quantity = float(order_data['quantity'])
+                if quantity <= 0:
+                    issues.append("Quantity must be greater than 0")
+
+            # Validate price values
+            price = float(order_data.get('price', '0'))
+            trigger_price = float(order_data.get('trigger_price', '0'))
+            disclosed_qty = float(order_data.get('disclosed_quantity', '0'))
+
+            if price < 0:
+                issues.append("Price cannot be negative")
+            if trigger_price < 0:
+                issues.append("Trigger price cannot be negative")
+            if disclosed_qty < 0:
+                issues.append("Disclosed quantity cannot be negative")
+
+            # Additional price type specific validations
+            if order_data.get('pricetype') == 'LIMIT' and price == 0:
+                issues.append("Price is required for LIMIT orders")
+            if order_data.get('pricetype') in ['SL', 'SL-M'] and trigger_price == 0:
+                issues.append("Trigger price is required for SL/SL-M orders")
+
+        except ValueError:
+            issues.append("Invalid numeric value for price, trigger_price, quantity, or disclosed_quantity")
+
+        # Check for potential rate limit issues
+        try:
+            if AnalyzerLog.query.filter(
+                AnalyzerLog.created_at >= datetime.now(pytz.UTC) - timedelta(minutes=1)
+            ).count() > 50:
+                warnings.append("High request frequency detected. Consider reducing request rate.")
+        except Exception as e:
+            logger.error(f"Error checking rate limits: {str(e)}")
+            warnings.append("Unable to check rate limits")
+
+        # Prepare response
+        response = {
+            'status': 'success' if len(issues) == 0 else 'error',
+            'message': ', '.join(issues) if issues else 'Request valid',
+            'warnings': warnings
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error analyzing modify order request: {str(e)}")
+        return {
+            'status': 'error',
+            'message': "Internal error analyzing request",
+            'warnings': []
+        }
+
 def analyze_request(request_data, api_type='placeorder', should_log=False):
     """Analyze and log a request"""
     try:
@@ -409,6 +502,8 @@ def analyze_request(request_data, api_type='placeorder', should_log=False):
             analysis = analyze_cancel_all_order_request(request_data)
         elif api_type == 'closeposition':
             analysis = analyze_close_position_request(request_data)
+        elif api_type == 'modifyorder':
+            analysis = analyze_modify_order_request(request_data)
         else:
             analysis = analyze_api_request(request_data)
         

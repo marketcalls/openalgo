@@ -144,6 +144,11 @@ async function refreshAnalyzer() {
                     }
                 } else if (request.api_type === 'closeposition') {
                     details = 'Close All Positions';
+                } else if (request.api_type === 'modifyorder') {
+                    details = `Modify Order - OrderID: ${request.orderid || request.request_data.orderid}`;
+                    if (request.symbol) {
+                        details += ` - ${request.symbol}`;
+                    }
                 } else {
                     details = `${request.symbol || ''} ${request.quantity ? `(${request.quantity})` : ''}`;
                     if (request.api_type === 'placesmartorder' && request.position_size) {
@@ -294,17 +299,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Modify order notification
     socket.on('modify_order_event', function(data) {
         playAlertSound();
-        showToast(`ModifyOrder - Order ID: ${data.orderid}`, 'warning');
-        refreshCurrentPageContent();
+        const message = data.status === 'success' 
+            ? `Order Modified Successfully - Order ID: ${data.orderid}`
+            : `Failed to Modify Order - Order ID: ${data.orderid}`;
+        showToast(message, data.status === 'success' ? 'success' : 'error');
+        // Always refresh orderbook for modify order events
+        refreshOrderbook();
+        // Also refresh current page if not on orderbook
+        if (!window.location.pathname.includes('/orderbook')) {
+            refreshCurrentPageContent();
+        }
     });
 
     // Close position notification
     socket.on('close_position_event', function(data) {
         playAlertSound();
         showToast(data.message, data.status === 'success' ? 'success' : 'error');
-        // Always refresh positions page for close position events
+        // Always refresh positions page
         refreshPositions();
-        // Also refresh current page if it's not the positions page
+        // Also refresh current page if not on positions
         if (!window.location.pathname.includes('/positions')) {
             refreshCurrentPageContent();
         }
@@ -375,6 +388,17 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             // Always refresh positions page for close position events in analyzer mode
             refreshPositions();
+        } else if (data.request.api_type === 'modifyorder') {
+            if (data.response.status === 'error') {
+                message = `Error: ${data.response.message}`;
+            } else {
+                message = `Order Modified Successfully - Order ID: ${data.request.orderid}`;
+                if (data.request.symbol) {
+                    message += ` - ${data.request.symbol}`;
+                }
+            }
+            // Always refresh orderbook for modify order events in analyzer mode
+            refreshOrderbook();
         } else {
             const action = data.request.action || '';
             const symbol = data.request.symbol || '';
