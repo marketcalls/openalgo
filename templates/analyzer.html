@@ -22,10 +22,6 @@
         @apply font-mono text-right;
     }
 
-    .loading {
-        @apply fixed top-0 left-0 w-full h-full flex items-center justify-center bg-base-100 bg-opacity-50 z-50;
-    }
-
     .badge-cell {
         @apply text-center whitespace-nowrap min-w-[120px] px-2;
     }
@@ -56,11 +52,6 @@
 {% endblock %}
 
 {% block content %}
-<!-- Loading Spinner -->
-<div id="loading" class="loading hidden">
-    <span class="loading loading-spinner loading-lg"></span>
-</div>
-
 <div class="w-full">
     <!-- Header Section -->
     <div class="mb-6">
@@ -198,7 +189,7 @@
                         <div class="badge-container">
                             <button class="btn btn-sm btn-primary view-details" 
                                     data-request='{{ request.request_data|tojson }}'
-                                    data-analysis='{{ request.analysis|tojson }}'>
+                                    data-response='{{ request.response_data|tojson if request.response_data else request.analysis|tojson }}'>
                                 View
                             </button>
                         </div>
@@ -220,8 +211,8 @@
                 <pre class="bg-base-200 p-4 rounded-lg overflow-x-auto" id="request-data"></pre>
             </div>
             <div>
-                <h4 class="font-semibold mb-2">Analysis Results</h4>
-                <pre class="bg-base-200 p-4 rounded-lg overflow-x-auto" id="analysis-data"></pre>
+                <h4 class="font-semibold mb-2">Response Data</h4>
+                <pre class="bg-base-200 p-4 rounded-lg overflow-x-auto" id="response-data"></pre>
             </div>
         </div>
         <div class="modal-action">
@@ -240,12 +231,17 @@ document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.view-details').forEach(button => {
         button.addEventListener('click', function() {
             const requestData = JSON.parse(this.getAttribute('data-request'));
-            const analysisData = JSON.parse(this.getAttribute('data-analysis'));
+            const responseData = JSON.parse(this.getAttribute('data-response'));
+            
+            // Remove apikey from request data if present
+            if (requestData.apikey) {
+                delete requestData.apikey;
+            }
             
             document.getElementById('request-data').textContent = 
                 JSON.stringify(requestData, null, 2);
-            document.getElementById('analysis-data').textContent = 
-                JSON.stringify(analysisData, null, 2);
+            document.getElementById('response-data').textContent = 
+                JSON.stringify(responseData, null, 2);
             
             document.getElementById('requestModal').showModal();
         });

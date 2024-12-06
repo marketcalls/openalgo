@@ -130,6 +130,7 @@ async function refreshAnalyzer() {
         // Update requests table
         const requestsResponse = await fetch('/analyzer/requests');
         const requestsData = await requestsResponse.json();
+        
         const tbody = document.getElementById('requests-table');
         if (tbody && requestsData.requests) {
             tbody.innerHTML = requestsData.requests.map(request => {
@@ -186,7 +187,7 @@ async function refreshAnalyzer() {
                             <div class="badge-container">
                                 <button class="btn btn-sm btn-primary view-details" 
                                         data-request='${JSON.stringify(request.request_data)}'
-                                        data-analysis='${JSON.stringify(request.analysis)}'>
+                                        data-response='${JSON.stringify(request.response_data)}'>
                                     View
                                 </button>
                             </div>
@@ -194,9 +195,30 @@ async function refreshAnalyzer() {
                     </tr>
                 `;
             }).join('');
+            
+            // Reattach click handlers after updating table content
+            document.querySelectorAll('.view-details').forEach(button => {
+                button.addEventListener('click', function() {
+                    try {
+                        const requestData = JSON.parse(this.getAttribute('data-request'));
+                        const responseData = JSON.parse(this.getAttribute('data-response'));
+                        
+                        // Remove apikey from request data if present
+                        if (requestData.apikey) {
+                            delete requestData.apikey;
+                        }
+                        
+                        document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
+                        document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
+                        document.getElementById('requestModal').showModal();
+                    } catch (error) {
+                        console.error('Error in view button click handler:', error);
+                    }
+                });
+            });
         }
     } catch (error) {
-        console.error('Error refreshing analyzer:', error);
+        console.error('Error in refreshAnalyzer:', error);
     }
 }
 
@@ -359,6 +381,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log("Error playing sound:", error);
             });
         }
+    }
+
+    // Initial page load - set up click handlers
+    if (window.location.pathname.includes('/analyzer')) {
+        document.querySelectorAll('.view-details').forEach(button => {
+            button.addEventListener('click', function() {
+                try {
+                    const requestData = JSON.parse(this.getAttribute('data-request'));
+                    const responseData = JSON.parse(this.getAttribute('data-response'));
+                    
+                    // Remove apikey from request data if present
+                    if (requestData.apikey) {
+                        delete requestData.apikey;
+                    }
+                    
+                    document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
+                    document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
+                    document.getElementById('requestModal').showModal();
+                } catch (error) {
+                    console.error('Error in initial view button click handler:', error);
+                }
+            });
+        });
     }
 });
 

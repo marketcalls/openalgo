@@ -44,11 +44,11 @@ def emit_analyzer_error(request_data, error_message):
         'message': error_message
     }
     
-    analyzer_request = {
-        'api_type': 'cancelorder',
-        'strategy': request_data.get('strategy', 'Unknown'),
-        'orderid': request_data.get('orderid')
-    }
+    # Store complete request data without apikey
+    analyzer_request = request_data.copy()
+    if 'apikey' in analyzer_request:
+        del analyzer_request['apikey']
+    analyzer_request['api_type'] = 'cancelorder'
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'cancelorder')
@@ -67,6 +67,8 @@ class CancelOrder(Resource):
     def post(self):
         try:
             data = request.json
+            order_request_data = copy.deepcopy(data)
+            order_request_data.pop('apikey', None)
             
             # Validate and deserialize input
             try:
@@ -102,20 +104,17 @@ class CancelOrder(Resource):
 
             # If in analyze mode, return success response
             if get_analyze_mode():
+                # Store complete request data without apikey
+                analyzer_request = order_request_data.copy()
+                analyzer_request['api_type'] = 'cancelorder'
+                
                 response_data = {
                     'mode': 'analyze',
                     'orderid': orderid,
                     'status': 'success'
                 }
                 
-                # Format request data for analyzer log
-                analyzer_request = {
-                    'api_type': 'cancelorder',
-                    'strategy': order_data.get('strategy', 'Unknown'),
-                    'orderid': orderid
-                }
-                
-                # Log to analyzer database
+                # Log to analyzer database with complete request and response
                 executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelorder')
                 
                 # Emit socket event for toast notification
@@ -158,7 +157,7 @@ class CancelOrder(Resource):
                     'status': 'success',
                     'orderid': orderid
                 }
-                executor.submit(async_log_order, 'cancelorder', order_data, order_response_data)
+                executor.submit(async_log_order, 'cancelorder', order_request_data, order_response_data)
                 return make_response(jsonify(order_response_data), 200)
             else:
                 message = response_message.get('message', 'Failed to cancel order') if isinstance(response_message, dict) else 'Failed to cancel order'

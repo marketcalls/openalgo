@@ -54,15 +54,11 @@ def emit_analyzer_error(request_data, error_message):
         'message': error_message
     }
     
-    analyzer_request = {
-        'api_type': 'placesmartorder',
-        'strategy': request_data.get('strategy', 'Unknown'),
-        'symbol': request_data.get('symbol'),
-        'action': request_data.get('action'),
-        'quantity': request_data.get('quantity'),
-        'exchange': request_data.get('exchange'),
-        'position_size': request_data.get('position_size')
-    }
+    # Store complete request data without apikey
+    analyzer_request = request_data.copy()
+    if 'apikey' in analyzer_request:
+        del analyzer_request['apikey']
+    analyzer_request['api_type'] = 'placesmartorder'
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'placesmartorder')
@@ -156,16 +152,9 @@ class PlaceSmartOrder(Resource):
             if get_analyze_mode():
                 _, analysis = analyze_request(order_data, 'placesmartorder', True)
                 
-                # Format request data for analyzer log
-                analyzer_request = {
-                    'api_type': 'placesmartorder',
-                    'strategy': order_data.get('strategy', 'Unknown'),
-                    'symbol': order_data.get('symbol'),
-                    'action': order_data.get('action'),
-                    'quantity': order_data.get('quantity'),
-                    'exchange': order_data.get('exchange'),
-                    'position_size': order_data.get('position_size')
-                }
+                # Store complete request data without apikey
+                analyzer_request = order_request_data.copy()
+                analyzer_request['api_type'] = 'placesmartorder'
                 
                 if analysis.get('status') == 'success':
                     response_data = {
@@ -180,7 +169,7 @@ class PlaceSmartOrder(Resource):
                         'message': analysis.get('message', 'Analysis failed')
                     }
                 
-                # Log to analyzer database
+                # Log to analyzer database with complete request and response
                 executor.submit(async_log_analyzer, analyzer_request, response_data, 'placesmartorder')
                 
                 # Emit socket event for toast notification

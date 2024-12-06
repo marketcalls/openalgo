@@ -25,6 +25,7 @@ def format_request(req, ist):
             'api_type': req.api_type,
             'source': request_data.get('strategy', 'Unknown'),
             'request_data': request_data,
+            'response_data': response_data,  # Include complete response data
             'analysis': {
                 'issues': response_data.get('status') == 'error',
                 'error': response_data.get('message'),
