@@ -1,8 +1,7 @@
 # database/auth_db.py
 
-
 import os
-
+import base64
 from sqlalchemy import create_engine, UniqueConstraint
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -10,20 +9,44 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
 from cachetools import TTLCache
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-# Define a cache for the auth tokens and api_key with a max size and a 30-second TTL
-auth_cache = TTLCache(maxsize=1024, ttl=30)
-api_key_cache = TTLCache(maxsize=1024, ttl=30)
+# Initialize Argon2 hasher
+ph = PasswordHasher()
 
+# Load environment variables
 load_dotenv()
 
-DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
+DATABASE_URL = os.getenv('DATABASE_URL')
+PEPPER = os.getenv('API_KEY_PEPPER', 'default-pepper-change-in-production')
+
+# Setup Fernet encryption for auth tokens
+def get_encryption_key():
+    """Generate a Fernet key from the pepper"""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b'openalgo_static_salt',
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
+    return Fernet(key)
+
+# Initialize Fernet cipher
+fernet = get_encryption_key()
+
+# Define a cache for the auth tokens with a 30-second TTL
+auth_cache = TTLCache(maxsize=1024, ttl=30)
 
 engine = create_engine(
     DATABASE_URL,
-    pool_size=50,  # Increase pool size
-    max_overflow=100,  # Increase overflow
-    pool_timeout=10  # Increase timeout to 10 seconds
+    pool_size=50,
+    max_overflow=100,
+    pool_timeout=10
 )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
@@ -34,59 +57,74 @@ class Auth(Base):
     __tablename__ = 'auth'
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
-    auth = Column(String(1000), nullable=False)
+    auth = Column(Text, nullable=False)
     broker = Column(String(20), nullable=False)
-
-    is_revoked = Column(Boolean, default=False)  
-
+    is_revoked = Column(Boolean, default=False)
 
 class ApiKeys(Base):
     __tablename__ = 'api_keys'
     id = Column(Integer, primary_key=True)
     user_id = Column(String, nullable=False, unique=True)
-    api_key = Column(Text, nullable=False)
+    api_key_hash = Column(Text, nullable=False)  # For verification
+    api_key_encrypted = Column(Text, nullable=False)  # For retrieval
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
     print("Initializing Auth DB")
     Base.metadata.create_all(bind=engine)
 
+def encrypt_token(token):
+    """Encrypt auth token"""
+    if not token:
+        return ''
+    return fernet.encrypt(token.encode()).decode()
+
+def decrypt_token(encrypted_token):
+    """Decrypt auth token"""
+    if not encrypted_token:
+        return ''
+    try:
+        return fernet.decrypt(encrypted_token.encode()).decode()
+    except Exception as e:
+        print(f"Error decrypting token: {e}")
+        return None
+
 def upsert_auth(name, auth_token, broker, revoke=False):
+    """Store encrypted auth token"""
+    encrypted_token = encrypt_token(auth_token)
     auth_obj = Auth.query.filter_by(name=name).first()
     if auth_obj:
-        auth_obj.auth = auth_token
+        auth_obj.auth = encrypted_token
         auth_obj.broker = broker
-        auth_obj.is_revoked = revoke  # Update revoke status
+        auth_obj.is_revoked = revoke
     else:
-        auth_obj = Auth(name=name, auth=auth_token, broker=broker, is_revoked=revoke)
+        auth_obj = Auth(name=name, auth=encrypted_token, broker=broker, is_revoked=revoke)
         db_session.add(auth_obj)
     db_session.commit()
     return auth_obj.id
 
 def get_auth_token(name):
+    """Get decrypted auth token"""
     cache_key = f"auth-{name}"
     if cache_key in auth_cache:
         auth_obj = auth_cache[cache_key]
-        # Ensure that auth_obj is an instance of Auth, not a string
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            return auth_obj.auth
+            return decrypt_token(auth_obj.auth)
         else:
-            del auth_cache[cache_key]  # Remove invalid cache entry
+            del auth_cache[cache_key]
             return None
     else:
         auth_obj = get_auth_token_dbquery(name)
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
-            auth_cache[cache_key] = auth_obj  # Store the Auth object, not the string
-            return auth_obj.auth
+            auth_cache[cache_key] = auth_obj
+            return decrypt_token(auth_obj.auth)
         return None
-
 
 def get_auth_token_dbquery(name):
     try:
         auth_obj = Auth.query.filter_by(name=name).first()
         if auth_obj and not auth_obj.is_revoked:
-            #print(f"The auth token for name '{name}' is fetched from the Database")
-            return auth_obj  # Return the Auth object
+            return auth_obj
         else:
             print(f"No valid auth token found for name '{name}'.")
             return None
@@ -94,83 +132,79 @@ def get_auth_token_dbquery(name):
         print("Error while querying the database for auth token:", e)
         return None
 
-
-def clear_api_key_cache(user_id):
-    """Clear API key cache for a specific user"""
-    cache_key = f"api-key-{user_id}"
-    if cache_key in api_key_cache:
-        del api_key_cache[cache_key]
-
 def upsert_api_key(user_id, api_key):
-    # Clear the cache first
-    clear_api_key_cache(user_id)
+    """Store both hashed and encrypted API key"""
+    # Hash with Argon2 for verification
+    peppered_key = api_key + PEPPER
+    hashed_key = ph.hash(peppered_key)
+    
+    # Encrypt for retrieval
+    encrypted_key = encrypt_token(api_key)
     
     api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
     if api_key_obj:
-        api_key_obj.api_key = api_key
+        api_key_obj.api_key_hash = hashed_key
+        api_key_obj.api_key_encrypted = encrypted_key
     else:
-        api_key_obj = ApiKeys(user_id=user_id, api_key=api_key)
+        api_key_obj = ApiKeys(
+            user_id=user_id,
+            api_key_hash=hashed_key,
+            api_key_encrypted=encrypted_key
+        )
         db_session.add(api_key_obj)
     db_session.commit()
-    
-    # Update the cache with the new value
-    cache_key = f"api-key-{user_id}"
-    api_key_cache[cache_key] = api_key
-    
     return api_key_obj.id
 
 def get_api_key(user_id):
-    cache_key = f"api-key-{user_id}"
-    if cache_key in api_key_cache:
-        #print(f"Cache hit for {cache_key}.")
-        return api_key_cache[cache_key]
-    else:
-        api_key_obj = get_api_key_dbquery(user_id)
-        if api_key_obj is not None:
-            api_key_cache[cache_key] = api_key_obj
-        return api_key_obj
-
-def get_api_key_dbquery(user_id):
+    """Check if user has an API key"""
     try:
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
-        if api_key_obj:
-            #print(f"The API key for user_id '{user_id}' is fetched from the Database")
-            return api_key_obj.api_key
-        else:
-            print(f"No API key found for user_id '{user_id}'.")
-            return None
+        return api_key_obj is not None
     except Exception as e:
         print("Error while querying the database for API key:", e)
         return None
 
+def get_api_key_for_tradingview(user_id):
+    """Get decrypted API key for TradingView configuration"""
+    try:
+        api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+        if api_key_obj and api_key_obj.api_key_encrypted:
+            return decrypt_token(api_key_obj.api_key_encrypted)
+        return None
+    except Exception as e:
+        print("Error while querying the database for API key:", e)
+        return None
+
+def verify_api_key(provided_api_key):
+    """Verify an API key using Argon2"""
+    peppered_key = provided_api_key + PEPPER
+    try:
+        # Query all API keys
+        api_keys = ApiKeys.query.all()
+        
+        # Try to verify against each stored hash
+        for api_key_obj in api_keys:
+            try:
+                ph.verify(api_key_obj.api_key_hash, peppered_key)
+                return api_key_obj.user_id
+            except VerifyMismatchError:
+                continue
+        
+        return None
+    except Exception as e:
+        print(f"Error verifying API key: {e}")
+        return None
+
 def get_auth_token_broker(provided_api_key):
-    # Attempt to validate the API key and get the user ID
-    user_id = None
-    for cache_key, api_key in api_key_cache.items():
-        if api_key == provided_api_key:
-            user_id = cache_key.replace("api-key-", "")
-            break
-
-    if not user_id:
-        # If not found in cache, query the database
-        try:
-            api_key_obj = db_session.query(ApiKeys).filter_by(api_key=provided_api_key).first()
-            if api_key_obj:
-                user_id = api_key_obj.user_id
-                # Cache the API key for future requests
-                user_id_cache_key = f"api-key-{user_id}"
-                api_key_cache[user_id_cache_key] = provided_api_key
-        except Exception as e:
-            print(f"Error while validating API key: {e}")
-            return None
-
+    """Get auth token and broker for a valid API key"""
+    user_id = verify_api_key(provided_api_key)
+    
     if user_id:
-        # With the user_id, attempt to retrieve the auth token and broker
         try:
             auth_obj = Auth.query.filter_by(name=user_id).first()
             if auth_obj and not auth_obj.is_revoked:
-                # No need to cache here as it's already managed by the get_auth_token logic
-                return auth_obj.auth, auth_obj.broker  # Return the Auth object's auth token and broker
+                decrypted_token = decrypt_token(auth_obj.auth)
+                return decrypted_token, auth_obj.broker
             else:
                 print(f"No valid auth token or broker found for user_id '{user_id}'.")
                 return None, None

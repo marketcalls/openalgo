@@ -131,13 +131,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 'Content-Type': 'application/json'
             }
         })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
+        .then(response => response.json().then(data => ({status: response.status, data: data})))
+        .then(({status, data}) => {
+            if (status === 404 && data.error === 'API key not found') {
+                showToast('Please set up your API key in the API Key section first', 'warning', true);
+                return;
             }
-            return response.json();
-        })
-        .then(data => {
+            if (status !== 200) {
+                throw new Error(data.error || 'Network response was not ok');
+            }
+            
             // Reconstruct the JSON object in the correct order with exact symbol
             let orderedData = {
                 "apikey": data.apikey,
@@ -209,15 +212,27 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function showToast(message) {
+    function showToast(message, type = 'error', withLink = false) {
         const toast = document.createElement('div');
         toast.className = 'toast toast-end';
+        
+        let alertClass = type === 'warning' ? 'alert-warning' : 'alert-error';
+        let content = message;
+        
+        if (withLink) {
+            content = `
+                ${message}
+                <a href="/apikey" class="btn btn-sm btn-primary ml-2">Go to API Key Setup</a>
+            `;
+        }
+        
         toast.innerHTML = `
-            <div class="alert alert-error">
-                <span>${message}</span>
+            <div class="alert ${alertClass} flex items-center">
+                <span>${content}</span>
             </div>
         `;
+        
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+        setTimeout(() => toast.remove(), 5000);
     }
 });

@@ -73,6 +73,49 @@ main {
     color: hsl(var(--bc));
 }
 
+/* Theme switcher */
+.theme-switcher {
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity 0.3s ease;
+}
+
+.theme-switcher.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Mode badge styles */
+#mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1;
+    white-space: nowrap;
+    margin-right: 0.5rem;
+}
+
+#mode-badge.badge-success {
+    background-color: hsl(var(--su));
+    color: white;
+}
+
+#mode-badge.badge-warning {
+    background-color: hsl(var(--wa));
+    color: white;
+}
+
+/* Mode controller container */
+.mode-controller-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.5rem;
+}
+
 /* Card styles */
 .card {
     @apply bg-base-100;
@@ -254,5 +297,52 @@ code[class*="language-"] {
 
     .card-body {
         padding: 1rem;
+    }
+
+    /* Mobile-specific mode badge and toggle styles */
+    #mode-badge {
+        font-size: 0.75rem;
+        padding: 0.35rem 0.5rem;
+        height: auto;
+        min-height: 1.5rem;
+        line-height: 1;
+    }
+
+    .navbar-end {
+        gap: 0.5rem;
+    }
+
+    .mode-controller-container {
+        gap: 0.25rem;
+    }
+
+    /* Adjust button sizes for better touch targets */
+    .navbar-end .btn-circle {
+        width: 2.5rem;
+        height: 2.5rem;
+        min-height: 2.5rem;
+    }
+
+    .navbar-end .btn-circle svg {
+        width: 1.25rem;
+        height: 1.25rem;
+    }
+}
+
+/* iPad/tablet specific adjustments */
+@media (min-width: 641px) and (max-width: 1024px) {
+    #mode-badge {
+        font-size: 0.8125rem;
+        padding: 0.4rem 0.6rem;
+    }
+
+    .navbar-end {
+        gap: 0.75rem;
+    }
+
+    .navbar-end .btn-circle {
+        width: 2.75rem;
+        height: 2.75rem;
+        min-height: 2.75rem;
     }
 }

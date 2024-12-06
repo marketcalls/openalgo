@@ -7,6 +7,7 @@ from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
+from utils.version import get_version  # Import version management
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -16,7 +17,9 @@ from blueprints.apikey import api_key_bp
 from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
-from blueprints.core import core_bp  
+from blueprints.core import core_bp
+from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
+from blueprints.settings import settings_bp  # Import the settings blueprint
 
 from restx_api import api_v1_bp
 
@@ -24,6 +27,8 @@ from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
+from database.analyzer_db import init_db as ensure_analyzer_tables_exists
+from database.settings_db import init_db as ensure_settings_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -46,14 +51,9 @@ def create_app():
 
     load_dotenv()
 
-    
-
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
-
-    # Initialize SQLAlchemy
- #   db.init_app(app)
 
     # Register the blueprints
     app.register_blueprint(auth_bp)
@@ -64,7 +64,9 @@ def create_app():
     app.register_blueprint(log_bp)
     app.register_blueprint(tv_json_bp)
     app.register_blueprint(brlogin_bp)
-    app.register_blueprint(core_bp)  
+    app.register_blueprint(core_bp)
+    app.register_blueprint(analyzer_bp)  # Register the analyzer blueprint
+    app.register_blueprint(settings_bp)  # Register the settings blueprint
 
     # Register RESTx API blueprint
     app.register_blueprint(api_v1_bp)
@@ -75,14 +77,13 @@ def create_app():
     
     @app.context_processor
     def inject_version():
-        return dict(version=os.getenv('FLASK_APP_VERSION'))
+        return dict(version=get_version())
 
     return app
 
 
 def setup_environment(app):
     with app.app_context():
-
         #load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
@@ -90,6 +91,8 @@ def setup_environment(app):
         ensure_user_tables_exists()
         ensure_master_contract_tables_exists()
         ensure_api_log_tables_exists()
+        ensure_analyzer_tables_exists()
+        ensure_settings_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':

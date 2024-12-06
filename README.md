@@ -15,6 +15,7 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
 - **Fyers**
 - **ICICI Direct**
 - **Kotak** 
+- **Shoonya**
 - **Upstox**
 - **Zebu**
 - **Zerodha**
@@ -33,6 +34,13 @@ OpenAlgo is an open-source, Flask-based Python application designed to bridge th
   - Real-time position tracking
   - Dynamic log updates for trade activities
   - Contextual notifications with sound alerts
+
+- **API Analyzer**:
+  - Real-time request validation and testing
+  - Strategy testing without live execution
+  - Detailed request/response analysis
+  - Comprehensive error detection
+  - See [Analyzer.md](Analyzer.md) for detailed documentation
 
 - **Comprehensive Integration**: Seamlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for smooth data and strategy transition.
 
