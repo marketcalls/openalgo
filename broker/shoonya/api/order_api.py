@@ -26,6 +26,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
+    print(data)
     
     return json.loads(data.decode("utf-8"))
 
