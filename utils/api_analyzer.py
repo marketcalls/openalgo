@@ -210,8 +210,7 @@ def analyze_smart_order_request(order_data):
         if 'position_size' in order_data:
             try:
                 position_size = float(order_data['position_size'])
-                if position_size < 0:
-                    issues.append("Position size cannot be negative")
+                # Removed negative value check to allow negative position sizes
             except (ValueError, TypeError):
                 issues.append("Invalid position size value")
 

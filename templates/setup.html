@@ -5,15 +5,27 @@
 {% block head %}
 <style>
     .requirement-item {
-        @apply flex items-center gap-2 text-sm;
+        @apply flex items-center gap-2 text-sm py-1;
     }
 
     .requirement-met {
         @apply text-success;
     }
 
+    .requirement-met svg {
+        @apply opacity-100;
+    }
+
     .requirement-not-met {
         @apply text-base-content/60;
+    }
+
+    .requirement-not-met svg {
+        @apply opacity-0;
+    }
+
+    .password-strength-text {
+        @apply text-xs mt-1 font-medium;
     }
 </style>
 
@@ -23,6 +35,8 @@
         const confirmPassword = document.getElementById('confirm_password');
         const passwordMatchMessage = document.getElementById('passwordMatchMessage');
         const submitButton = document.getElementById('submitButton');
+        const strengthMeter = document.getElementById('strengthMeter');
+        const strengthText = document.getElementById('strengthText');
         const requirements = {
             length: document.getElementById('req-length'),
             uppercase: document.getElementById('req-uppercase'),
@@ -30,6 +44,44 @@
             number: document.getElementById('req-number'),
             special: document.getElementById('req-special')
         };
+
+        function calculatePasswordStrength(password) {
+            let score = 0;
+            
+            if (password.length >= 8) score += 20;
+            if (password.length >= 12) score += 10;
+            if (password.length >= 16) score += 10;
+            if (/[A-Z]/.test(password)) score += 15;
+            if (/[a-z]/.test(password)) score += 15;
+            if (/[0-9]/.test(password)) score += 15;
+            if (/[!@#$%^&*]/.test(password)) score += 15;
+            
+            return score;
+        }
+
+        function updateStrengthMeter(password) {
+            const score = calculatePasswordStrength(password);
+            let strength, className;
+
+            if (score >= 80) {
+                strength = 'Strong';
+                className = 'progress-success';
+            } else if (score >= 50) {
+                strength = 'Medium';
+                className = 'progress-warning';
+            } else if (score > 0) {
+                strength = 'Weak';
+                className = 'progress-error';
+            } else {
+                strength = '';
+                className = '';
+            }
+
+            strengthMeter.className = `progress ${className}`;
+            strengthMeter.value = score;
+            strengthText.textContent = strength;
+            strengthText.className = `password-strength-text ${className ? 'text-' + className.replace('progress-', '') : ''}`;
+        }
 
         function checkPasswordRequirements(password) {
             const checks = {
@@ -40,7 +92,6 @@
                 special: /[!@#$%^&*]/.test(password)
             };
 
-            // Update requirement indicators
             Object.keys(checks).forEach(req => {
                 const element = requirements[req];
                 if (checks[req]) {
@@ -79,14 +130,15 @@
             }
         }
 
-        // Add event listeners
-        password.addEventListener('input', validateForm);
+        password.addEventListener('input', function() {
+            validateForm();
+            updateStrengthMeter(this.value);
+        });
         confirmPassword.addEventListener('input', validateForm);
         document.querySelectorAll('input[required]').forEach(input => {
             input.addEventListener('input', validateForm);
         });
 
-        // Form submission handler
         document.getElementById('setupForm').addEventListener('submit', function(event) {
             if (!checkPasswordRequirements(password.value) || password.value !== confirmPassword.value) {
                 event.preventDefault();
@@ -132,7 +184,8 @@
                                    name="username" 
                                    required 
                                    class="input input-bordered" 
-                                   placeholder="Choose a username">
+                                   placeholder="Choose a username"
+                                   autocomplete="username">
                         </div>
 
                         <!-- Email -->
@@ -157,8 +210,13 @@
                                    id="password" 
                                    name="password" 
                                    required 
-                                   class="input input-bordered" 
-                                   placeholder="Choose a password">
+                                   class="input input-bordered w-full" 
+                                   placeholder="Choose a password"
+                                   autocomplete="new-password">
+                            
+                            <!-- Password Strength Meter -->
+                            <progress id="strengthMeter" class="progress w-full mt-2" value="0" max="100"></progress>
+                            <div id="strengthText" class="password-strength-text"></div>
                         </div>
 
                         <!-- Confirm Password -->
@@ -171,44 +229,42 @@
                                    name="confirm_password" 
                                    required 
                                    class="input input-bordered" 
-                                   placeholder="Confirm your password">
+                                   placeholder="Confirm your password"
+                                   autocomplete="new-password">
                             <div id="passwordMatchMessage" class="label-text-alt mt-1"></div>
                         </div>
 
                         <!-- Password Requirements -->
-                        <div class="bg-base-200 p-4 rounded-lg">
-                            <h3 class="font-semibold mb-2">Password Requirements:</h3>
-                            <div class="space-y-2">
-                                <div id="req-length" class="requirement-item requirement-not-met">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    <span>Minimum 8 characters</span>
-                                </div>
-                                <div id="req-uppercase" class="requirement-item requirement-not-met">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    <span>At least 1 uppercase letter (A-Z)</span>
-                                </div>
-                                <div id="req-lowercase" class="requirement-item requirement-not-met">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    <span>At least 1 lowercase letter (a-z)</span>
-                                </div>
-                                <div id="req-number" class="requirement-item requirement-not-met">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    <span>At least 1 number (0-9)</span>
-                                </div>
-                                <div id="req-special" class="requirement-item requirement-not-met">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    <span>At least 1 special character (@#$%^&*)</span>
-                                </div>
+                        <div class="space-y-1">
+                            <div id="req-length" class="requirement-item requirement-not-met">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>Minimum 8 characters</span>
+                            </div>
+                            <div id="req-uppercase" class="requirement-item requirement-not-met">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>At least 1 uppercase letter (A-Z)</span>
+                            </div>
+                            <div id="req-lowercase" class="requirement-item requirement-not-met">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>At least 1 lowercase letter (a-z)</span>
+                            </div>
+                            <div id="req-number" class="requirement-item requirement-not-met">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>At least 1 number (0-9)</span>
+                            </div>
+                            <div id="req-special" class="requirement-item requirement-not-met">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>At least 1 special character (!@#$%^&*)</span>
                             </div>
                         </div>
 
