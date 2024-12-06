@@ -142,6 +142,8 @@ async function refreshAnalyzer() {
                     if (request.response_data && request.response_data.canceled_orders) {
                         details += ` (${request.response_data.canceled_orders.length} orders)`;
                     }
+                } else if (request.api_type === 'closeposition') {
+                    details = 'Close All Positions';
                 } else {
                     details = `${request.symbol || ''} ${request.quantity ? `(${request.quantity})` : ''}`;
                     if (request.api_type === 'placesmartorder' && request.position_size) {
@@ -297,10 +299,15 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // Close position notification
-    socket.on('close_position', function(data) {
+    socket.on('close_position_event', function(data) {
         playAlertSound();
-        showToast(`${data.message}`, 'info');
-        refreshCurrentPageContent();
+        showToast(data.message, data.status === 'success' ? 'success' : 'error');
+        // Always refresh positions page for close position events
+        refreshPositions();
+        // Also refresh current page if it's not the positions page
+        if (!window.location.pathname.includes('/positions')) {
+            refreshCurrentPageContent();
+        }
     });
 
     // Order placement notification
@@ -360,6 +367,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     message += ` - Canceled ${data.response.canceled_orders.length} orders`;
                 }
             }
+        } else if (data.request.api_type === 'closeposition') {
+            if (data.response.status === 'error') {
+                message = `Error: ${data.response.message}`;
+            } else {
+                message = data.response.message || 'All Open Positions will be Squared Off';
+            }
+            // Always refresh positions page for close position events in analyzer mode
+            refreshPositions();
         } else {
             const action = data.request.action || '';
             const symbol = data.request.symbol || '';

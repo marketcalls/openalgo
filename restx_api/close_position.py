@@ -1,11 +1,13 @@
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
+from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from limiter import limiter
+from utils.api_analyzer import analyze_request
 import os
 from dotenv import load_dotenv
 import importlib
@@ -35,18 +37,53 @@ def import_broker_module(broker_name):
         logger.error(f"Error importing broker module '{module_path}': {error}")
         return None
 
+def emit_analyzer_error(request_data, error_message):
+    """Helper function to emit analyzer error events"""
+    error_response = {
+        'mode': 'analyze',
+        'status': 'error',
+        'message': error_message
+    }
+    
+    # Store complete request data without apikey
+    analyzer_request = request_data.copy()
+    if 'apikey' in analyzer_request:
+        del analyzer_request['apikey']
+    analyzer_request['api_type'] = 'closeposition'
+    
+    # Log to analyzer database
+    executor.submit(async_log_analyzer, analyzer_request, error_response, 'closeposition')
+    
+    # Emit socket event
+    socketio.emit('analyzer_update', {
+        'request': analyzer_request,
+        'response': error_response
+    })
+    
+    return error_response
+
 @api.route('/', strict_slashes=False)
 class ClosePosition(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
         try:
             data = request.json
+            position_request_data = copy.deepcopy(data)
+            position_request_data.pop('apikey', None)
             
-            # Early validation of API key before any mode-specific logic
-            order_data = close_position_schema.load(data)
-            api_key = order_data['apikey']
+            # Validate and deserialize input
+            try:
+                position_data = close_position_schema.load(data)
+            except ValidationError as err:
+                error_message = str(err.messages)
+                if get_analyze_mode():
+                    return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
+                error_response = {'status': 'error', 'message': error_message}
+                executor.submit(async_log_order, 'closeposition', data, error_response)
+                return make_response(jsonify(error_response), 400)
+
+            api_key = position_data['apikey']
             AUTH_TOKEN, broker = get_auth_token_broker(api_key)
-            
             if AUTH_TOKEN is None:
                 error_response = {
                     'status': 'error',
@@ -56,18 +93,37 @@ class ClosePosition(Resource):
                     executor.submit(async_log_order, 'closeposition', data, error_response)
                 return make_response(jsonify(error_response), 403)
 
-            # Check analyze mode and return placeholder if enabled
+            # If in analyze mode, analyze the request and return
             if get_analyze_mode():
-                return make_response(jsonify({
-                    'status': 'info',
-                    'message': 'Close Position Analyzer: Implementation in progress',
-                    'broker': broker,
-                    'mode': 'analyze'
-                }), 200)
-
-            # Live Mode - Proceed with actual position closing
-            order_request_data = copy.deepcopy(data)
-            order_request_data.pop('apikey', None)
+                _, analysis = analyze_request(position_data, 'closeposition', True)
+                
+                # Store complete request data without apikey
+                analyzer_request = position_request_data.copy()
+                analyzer_request['api_type'] = 'closeposition'
+                
+                if analysis.get('status') == 'success':
+                    response_data = {
+                        'mode': 'analyze',
+                        'status': 'success',
+                        'message': 'All Open Positions will be Squared Off'
+                    }
+                else:
+                    response_data = {
+                        'mode': 'analyze',
+                        'status': 'error',
+                        'message': analysis.get('message', 'Analysis failed')
+                    }
+                
+                # Log to analyzer database with complete request and response
+                executor.submit(async_log_analyzer, analyzer_request, response_data, 'closeposition')
+                
+                # Emit socket event for toast notification
+                socketio.emit('analyzer_update', {
+                    'request': analyzer_request,
+                    'response': response_data
+                })
+                
+                return make_response(jsonify(response_data), 200)
 
             broker_module = import_broker_module(broker)
             if broker_module is None:
@@ -79,58 +135,55 @@ class ClosePosition(Resource):
                 return make_response(jsonify(error_response), 404)
 
             try:
-                res, response_data = broker_module.close_position_api(order_data, AUTH_TOKEN)
+                # Use the dynamically imported module's function to close all positions
+                response_code, status_code = broker_module.close_all_positions(api_key, AUTH_TOKEN)
             except Exception as e:
-                logger.error(f"Error in broker_module.close_position_api: {e}")
+                logger.error(f"Error in broker_module.close_all_positions: {e}")
                 traceback.print_exc()
                 error_response = {
                     'status': 'error',
-                    'message': 'Failed to close position due to internal error'
+                    'message': 'Failed to close positions due to internal error'
                 }
                 executor.submit(async_log_order, 'closeposition', data, error_response)
                 return make_response(jsonify(error_response), 500)
 
-            if res.status == 200:
+            if status_code == 200:
+                response_data = {
+                    'status': 'success',
+                    'message': 'All Open Positions Squared Off'
+                }
                 socketio.emit('close_position_event', {
-                    'status': response_data.get('status'),
+                    'status': 'success',
+                    'message': 'All Open Positions Squared Off',
                     'mode': 'live'
                 })
-                executor.submit(async_log_order, 'closeposition', order_request_data, response_data)
+                executor.submit(async_log_order, 'closeposition', position_request_data, response_data)
                 return make_response(jsonify(response_data), 200)
             else:
-                message = response_data.get('message', 'Failed to close position') if isinstance(response_data, dict) else 'Failed to close position'
+                message = response_code.get('message', 'Failed to close positions') if isinstance(response_code, dict) else 'Failed to close positions'
                 error_response = {
                     'status': 'error',
                     'message': message
                 }
                 executor.submit(async_log_order, 'closeposition', data, error_response)
-                return make_response(jsonify(error_response), res.status if res.status != 200 else 500)
-
-        except ValidationError as err:
-            logger.warning(f"Validation error: {err.messages}")
-            error_response = {'status': 'error', 'message': err.messages}
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'closeposition', data, error_response)
-            return make_response(jsonify(error_response), 400)
+                return make_response(jsonify(error_response), status_code)
 
         except KeyError as e:
             missing_field = str(e)
             logger.error(f"KeyError: Missing field {missing_field}")
-            error_response = {
-                'status': 'error',
-                'message': f"A required field is missing: {missing_field}"
-            }
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'closeposition', data, error_response)
+            error_message = f"A required field is missing: {missing_field}"
+            if get_analyze_mode():
+                return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
+            error_response = {'status': 'error', 'message': error_message}
+            executor.submit(async_log_order, 'closeposition', data, error_response)
             return make_response(jsonify(error_response), 400)
 
         except Exception as e:
             logger.error("An unexpected error occurred in ClosePosition endpoint.")
             traceback.print_exc()
-            error_response = {
-                'status': 'error',
-                'message': 'An unexpected error occurred'
-            }
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'closeposition', data, error_response)
+            error_message = 'An unexpected error occurred'
+            if get_analyze_mode():
+                return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
+            error_response = {'status': 'error', 'message': error_message}
+            executor.submit(async_log_order, 'closeposition', data, error_response)
             return make_response(jsonify(error_response), 500)

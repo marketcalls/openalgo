@@ -81,6 +81,9 @@ REQUIRED_CANCEL_ORDER_FIELDS = ['apikey', 'strategy', 'orderid']
 # Required Fields for Cancel All Orders
 REQUIRED_CANCEL_ALL_ORDER_FIELDS = ['apikey', 'strategy']
 
+# Required Fields for Close Position
+REQUIRED_CLOSE_POSITION_FIELDS = ['apikey', 'strategy']
+
 # Default Values for Optional Fields
 DEFAULT_PRODUCT_TYPE = PRODUCT_MIS
 DEFAULT_PRICE_TYPE = PRICE_TYPE_MARKET
