@@ -109,8 +109,9 @@ def authenticate_user(username, password):
             return True
         return False
 
-def find_user_by_username():
-    return User.query.filter_by(is_admin=True).first()
+def find_user_by_username(username):
+    """Find user by username"""
+    return User.query.filter_by(username=username).first()
 
 def find_user_by_email(email):
     """Find user by email for password reset"""
