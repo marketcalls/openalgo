@@ -126,13 +126,13 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                         </svg>
                     </th>
+                    <th>API Type</th>
                     <th>Source</th>
-                    <th>Symbol</th>
+                    <th>Details</th>
                     <th>Exchange</th>
                     <th>Action</th>
-                    <th>Quantity</th>
                     <th>Status</th>
-                    <th>Details</th>
+                    <th>View</th>
                 </tr>
             </thead>
             <tbody id="requests-table">
@@ -141,11 +141,26 @@
                     <td class="text-sm">{{ request.timestamp }}</td>
                     <td class="badge-cell">
                         <div class="badge-container">
+                            <div class="badge badge-primary">{{ request.api_type }}</div>
+                        </div>
+                    </td>
+                    <td class="badge-cell">
+                        <div class="badge-container">
                             <div class="badge badge-neutral truncate">{{ request.source }}</div>
                         </div>
                     </td>
-                    <td class="font-medium">{{ request.symbol }}</td>
+                    <td class="font-medium">
+                        {% if request.api_type == 'cancelorder' %}
+                            OrderID: {{ request.orderid }}
+                        {% else %}
+                            {{ request.symbol }} {% if request.quantity %}({{ request.quantity }}){% endif %}
+                            {% if request.api_type == 'placesmartorder' and request.position_size %}
+                                [Size: {{ request.position_size }}]
+                            {% endif %}
+                        {% endif %}
+                    </td>
                     <td class="badge-cell">
+                        {% if request.exchange %}
                         {% set exchange_colors = {
                             'NSE': 'badge-accent',
                             'NFO': 'badge-secondary',
@@ -161,15 +176,17 @@
                                 {{ request.exchange }}
                             </div>
                         </div>
+                        {% endif %}
                     </td>
                     <td class="badge-cell">
+                        {% if request.action %}
                         <div class="badge-container">
                             <div class="badge {% if request.action == 'BUY' %}badge-success{% else %}badge-error{% endif %}">
                                 {{ request.action }}
                             </div>
                         </div>
+                        {% endif %}
                     </td>
-                    <td class="numeric-cell">{{ request.quantity }}</td>
                     <td class="badge-cell">
                         <div class="badge-container">
                             <div class="badge status-badge {% if request.analysis.issues %}badge-warning{% else %}badge-success{% endif %}">

@@ -72,6 +72,9 @@ EXCHANGE_BADGE_COLORS = {
 # Required Fields for Order Placement
 REQUIRED_ORDER_FIELDS = ['apikey', 'strategy', 'symbol', 'exchange', 'action', 'quantity']
 
+# Required Fields for Smart Order Placement
+REQUIRED_SMART_ORDER_FIELDS = ['apikey', 'strategy', 'symbol', 'exchange', 'action', 'quantity', 'position_size']
+
 # Default Values for Optional Fields
 DEFAULT_PRODUCT_TYPE = PRODUCT_MIS
 DEFAULT_PRICE_TYPE = PRICE_TYPE_MARKET

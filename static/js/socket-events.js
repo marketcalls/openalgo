@@ -132,35 +132,68 @@ async function refreshAnalyzer() {
         const requestsData = await requestsResponse.json();
         const tbody = document.getElementById('requests-table');
         if (tbody && requestsData.requests) {
-            tbody.innerHTML = requestsData.requests.map(request => `
-                <tr class="hover:bg-base-200">
-                    <td class="text-sm">${request.timestamp}</td>
-                    <td><div class="badge badge-neutral">${request.source}</div></td>
-                    <td class="font-medium">${request.symbol}</td>
-                    <td>
-                        <div class="badge ${getExchangeBadgeColor(request.exchange)}">
-                            ${request.exchange}
-                        </div>
-                    </td>
-                    <td>
-                        <div class="badge ${request.action === 'BUY' ? 'badge-success' : 'badge-error'} gap-2">
-                            ${request.action}
-                        </div>
-                    </td>
-                    <td class="numeric-cell">${request.quantity}</td>
-                    <td>
-                        <div class="badge ${request.analysis.issues ? 'badge-warning' : 'badge-success'}">
-                            ${request.analysis.issues ? 'Issues Found' : 'Valid'}
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-primary" 
-                                onclick='showDetails(${JSON.stringify(JSON.stringify(request))})'>
-                            View
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = requestsData.requests.map(request => {
+                let details = '';
+                if (request.api_type === 'cancelorder') {
+                    details = `OrderID: ${request.orderid || request.request_data.orderid}`;
+                } else {
+                    details = `${request.symbol || ''} ${request.quantity ? `(${request.quantity})` : ''}`;
+                    if (request.api_type === 'placesmartorder' && request.position_size) {
+                        details += ` [Size: ${request.position_size}]`;
+                    }
+                }
+
+                return `
+                    <tr class="hover:bg-base-200">
+                        <td class="text-sm">${request.timestamp}</td>
+                        <td class="badge-cell">
+                            <div class="badge-container">
+                                <div class="badge badge-primary">${request.api_type}</div>
+                            </div>
+                        </td>
+                        <td class="badge-cell">
+                            <div class="badge-container">
+                                <div class="badge badge-neutral truncate">${request.source}</div>
+                            </div>
+                        </td>
+                        <td class="font-medium">${details}</td>
+                        <td class="badge-cell">
+                            ${request.exchange ? `
+                                <div class="badge-container">
+                                    <div class="badge ${getExchangeBadgeColor(request.exchange)}">
+                                        ${request.exchange}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </td>
+                        <td class="badge-cell">
+                            ${request.action ? `
+                                <div class="badge-container">
+                                    <div class="badge ${request.action === 'BUY' ? 'badge-success' : 'badge-error'}">
+                                        ${request.action}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </td>
+                        <td class="badge-cell">
+                            <div class="badge-container">
+                                <div class="badge ${request.analysis.issues ? 'badge-warning' : 'badge-success'}">
+                                    ${request.analysis.issues ? 'Issues' : 'Valid'}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="badge-cell">
+                            <div class="badge-container">
+                                <button class="btn btn-sm btn-primary view-details" 
+                                        data-request='${JSON.stringify(request.request_data)}'
+                                        data-analysis='${JSON.stringify(request.analysis)}'>
+                                    View
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
         }
     } catch (error) {
         console.error('Error refreshing analyzer:', error);
@@ -286,8 +319,32 @@ document.addEventListener('DOMContentLoaded', function() {
     // Analyzer update notification
     socket.on('analyzer_update', function(data) {
         playAlertSound();
-        showToast(`API Request: ${data.request.symbol || 'Unknown'} - ${data.response.status}`, 
-                 data.response.status === 'success' ? 'success' : 'warning');
+        let message = '';
+        let type = data.response.status === 'success' ? 'success' : 'error';
+
+        if (data.request.api_type === 'cancelorder') {
+            message = `Cancel Order - Order ID: ${data.request.orderid}`;
+        } else {
+            const action = data.request.action || '';
+            const symbol = data.request.symbol || '';
+            const quantity = data.request.quantity || '';
+            const orderid = data.response.orderid || '';
+            
+            if (data.response.status === 'error') {
+                message = `Error: ${data.response.message}`;
+                if (symbol) message = `${symbol} - ${message}`;
+            } else {
+                message = `${action} Order Placed for Symbol: ${symbol}`;
+                if (quantity) message += `, Qty: ${quantity}`;
+                if (orderid) message += `, Order ID: ${orderid}`;
+                
+                if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
+                    message += `, Size: ${data.request.position_size}`;
+                }
+            }
+        }
+        
+        showToast(message, type);
         
         // Refresh analyzer content if on analyzer page
         if (window.location.pathname.includes('/analyzer')) {

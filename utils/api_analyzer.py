@@ -12,6 +12,7 @@ from utils.constants import (
     VALID_PRICE_TYPES,
     VALID_PRODUCT_TYPES,
     REQUIRED_ORDER_FIELDS,
+    REQUIRED_SMART_ORDER_FIELDS,
     DEFAULT_PRODUCT_TYPE,
     DEFAULT_PRICE_TYPE,
     DEFAULT_PRICE,
@@ -20,6 +21,42 @@ from utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Global variable to track order sequence
+_order_sequence = 0
+
+def generate_order_id():
+    """Generate a sequential order ID in format YYMMDDXXXXXXXX"""
+    global _order_sequence
+    now = datetime.now()
+    date_prefix = now.strftime("%y%m%d")
+    
+    # Get the last order from analyzer logs to ensure sequence continuity
+    try:
+        last_order = AnalyzerLog.query.filter(
+            AnalyzerLog.response_data.like('%"orderid": "%"')
+        ).order_by(AnalyzerLog.created_at.desc()).first()
+        
+        if last_order:
+            try:
+                last_response = json.loads(last_order.response_data)
+                last_orderid = last_response.get('orderid', '')
+                if len(last_orderid) >= 5:  # Ensure there's a sequence number
+                    _order_sequence = int(last_orderid[-5:])
+            except (json.JSONDecodeError, ValueError):
+                pass
+    except Exception as e:
+        logger.error(f"Error getting last order sequence: {e}")
+    
+    # Increment sequence
+    _order_sequence += 1
+    
+    # Reset sequence if it exceeds 99999
+    if _order_sequence > 99999:
+        _order_sequence = 1
+    
+    # Format: YYMMDDXXXXX (where XXXXX is the sequence padded to 5 digits)
+    return f"{date_prefix}{_order_sequence:05d}"
 
 def check_rate_limits(user_id):
     """Check if user has hit rate limits recently"""
@@ -140,34 +177,125 @@ def analyze_api_request(order_data):
             'warnings': []
         }
 
-def analyze_request(request_data):
+def analyze_smart_order_request(order_data):
+    """Analyze a smart order API request"""
+    try:
+        issues = []
+        warnings = []
+
+        # Check required fields for smart order
+        missing_fields = [field for field in REQUIRED_SMART_ORDER_FIELDS if field not in order_data]
+        if missing_fields:
+            issues.append(f"Missing mandatory field(s): {', '.join(missing_fields)}")
+
+        # Validate symbol and exchange
+        if 'symbol' in order_data and 'exchange' in order_data:
+            if not validate_symbol(order_data['symbol'], order_data['exchange']):
+                issues.append(f"Invalid symbol '{order_data['symbol']}' for exchange '{order_data['exchange']}'")
+
+        # Validate quantity
+        if 'quantity' in order_data:
+            try:
+                quantity = float(order_data['quantity'])
+                if quantity <= 0:
+                    issues.append("Quantity must be greater than 0")
+            except (ValueError, TypeError):
+                issues.append("Invalid quantity value")
+
+        # Validate position_size
+        if 'position_size' in order_data:
+            try:
+                position_size = float(order_data['position_size'])
+                if position_size < 0:
+                    issues.append("Position size cannot be negative")
+            except (ValueError, TypeError):
+                issues.append("Invalid position size value")
+
+        # Validate exchange
+        if 'exchange' in order_data:
+            if order_data['exchange'] not in VALID_EXCHANGES:
+                issues.append(f"Invalid exchange. Must be one of: {', '.join(VALID_EXCHANGES)}")
+
+        # Validate action
+        if 'action' in order_data:
+            if order_data['action'] not in VALID_ACTIONS:
+                issues.append(f"Invalid action. Must be one of: {', '.join(VALID_ACTIONS)}")
+
+        # Validate product type (optional with default)
+        product_type = order_data.get('product', DEFAULT_PRODUCT_TYPE)
+        if product_type not in VALID_PRODUCT_TYPES:
+            issues.append(f"Invalid product type. Must be one of: {', '.join(VALID_PRODUCT_TYPES)}")
+
+        # Validate price type (optional with default)
+        price_type = order_data.get('pricetype', DEFAULT_PRICE_TYPE)
+        if price_type not in VALID_PRICE_TYPES:
+            issues.append(f"Invalid price type. Must be one of: {', '.join(VALID_PRICE_TYPES)}")
+
+        # Validate price values
+        try:
+            price = float(order_data.get('price', DEFAULT_PRICE))
+            trigger_price = float(order_data.get('trigger_price', DEFAULT_TRIGGER_PRICE))
+            disclosed_qty = float(order_data.get('disclosed_quantity', DEFAULT_DISCLOSED_QUANTITY))
+
+            if price < 0:
+                issues.append("Price cannot be negative")
+            if trigger_price < 0:
+                issues.append("Trigger price cannot be negative")
+            if disclosed_qty < 0:
+                issues.append("Disclosed quantity cannot be negative")
+
+            # Additional price type specific validations
+            if price_type == 'LIMIT' and price == 0:
+                issues.append("Price is required for LIMIT orders")
+            if price_type in ['SL', 'SL-M'] and trigger_price == 0:
+                issues.append("Trigger price is required for SL/SL-M orders")
+
+        except ValueError:
+            issues.append("Invalid numeric value for price, trigger_price, or disclosed_quantity")
+
+        # Check for potential rate limit issues
+        try:
+            if AnalyzerLog.query.filter(
+                AnalyzerLog.created_at >= datetime.now(pytz.UTC) - timedelta(minutes=1)
+            ).count() > 50:
+                warnings.append("High request frequency detected. Consider reducing request rate.")
+        except Exception as e:
+            logger.error(f"Error checking rate limits: {str(e)}")
+            warnings.append("Unable to check rate limits")
+
+        # Prepare response
+        response = {
+            'status': 'success' if len(issues) == 0 else 'error',
+            'message': ', '.join(issues) if issues else 'Request valid',
+            'warnings': warnings
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error analyzing smart order request: {str(e)}")
+        return {
+            'status': 'error',
+            'message': "Internal error analyzing request",
+            'warnings': []
+        }
+
+def analyze_request(request_data, api_type='placeorder', should_log=False):
     """Analyze and log a request"""
     try:
-        # Analyze request first
-        analysis = analyze_api_request(request_data)
+        # Choose appropriate analyzer based on API type
+        if api_type == 'placesmartorder':
+            analysis = analyze_smart_order_request(request_data)
+        else:
+            analysis = analyze_api_request(request_data)
         
-        # Log to analyzer database
-        try:
-            async_log_analyzer(request_data, analysis)
-        except Exception as e:
-            logger.error(f"Error logging to analyzer database: {str(e)}")
+        # Log to analyzer database only if should_log is True
+        if should_log:
+            try:
+                async_log_analyzer(request_data, analysis, api_type)
+            except Exception as e:
+                logger.error(f"Error logging to analyzer database: {str(e)}")
         
-        # Emit socket event for real-time updates
-        try:
-            socketio.emit('analyzer_update', {
-                'request': {
-                    'symbol': request_data.get('symbol', 'Unknown'),
-                    'action': request_data.get('action', 'Unknown'),
-                    'exchange': request_data.get('exchange', 'Unknown'),
-                    'quantity': request_data.get('quantity', 0),
-                    'price_type': request_data.get('pricetype', 'Unknown'),
-                    'product_type': request_data.get('product', 'Unknown')
-                },
-                'response': analysis
-            })
-        except Exception as e:
-            logger.error(f"Error emitting socket event: {str(e)}")
-
         # Return analysis results
         return True, analysis
 

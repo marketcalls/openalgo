@@ -3,6 +3,8 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor
+from database.settings_db import get_analyze_mode
+from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from limiter import limiter
 import os
@@ -34,73 +36,155 @@ def import_broker_module(broker_name):
         logger.error(f"Error importing broker module '{module_path}': {error}")
         return None
 
+def emit_analyzer_error(request_data, error_message):
+    """Helper function to emit analyzer error events"""
+    error_response = {
+        'mode': 'analyze',
+        'status': 'error',
+        'message': error_message
+    }
+    
+    analyzer_request = {
+        'api_type': 'cancelorder',
+        'strategy': request_data.get('strategy', 'Unknown'),
+        'orderid': request_data.get('orderid')
+    }
+    
+    # Log to analyzer database
+    executor.submit(async_log_analyzer, analyzer_request, error_response, 'cancelorder')
+    
+    # Emit socket event
+    socketio.emit('analyzer_update', {
+        'request': analyzer_request,
+        'response': error_response
+    })
+    
+    return error_response
+
 @api.route('/', strict_slashes=False)
 class CancelOrder(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
         try:
             data = request.json
-            order_request_data = copy.deepcopy(data)
-            order_request_data.pop('apikey', None)
+            
             # Validate and deserialize input
-            order_data = cancel_order_schema.load(data)
+            try:
+                order_data = cancel_order_schema.load(data)
+            except ValidationError as err:
+                error_message = str(err.messages)
+                if get_analyze_mode():
+                    return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
+                error_response = {'status': 'error', 'message': error_message}
+                executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), 400)
 
             api_key = order_data['apikey']
             AUTH_TOKEN, broker = get_auth_token_broker(api_key)
             if AUTH_TOKEN is None:
-                logger.error("Invalid openalgo apikey")
-                return make_response(jsonify({'status': 'error', 'message': 'Invalid openalgo apikey'}), 403)
+                error_response = {
+                    'status': 'error',
+                    'message': 'Invalid openalgo apikey'
+                }
+                if not get_analyze_mode():
+                    executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), 403)
+
+            # Extract the order ID from order_data
+            orderid = order_data.get('orderid')
+            if not orderid:
+                error_message = 'Order ID is missing'
+                if get_analyze_mode():
+                    return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
+                error_response = {'status': 'error', 'message': error_message}
+                executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), 400)
+
+            # If in analyze mode, return success response
+            if get_analyze_mode():
+                response_data = {
+                    'mode': 'analyze',
+                    'orderid': orderid,
+                    'status': 'success'
+                }
+                
+                # Format request data for analyzer log
+                analyzer_request = {
+                    'api_type': 'cancelorder',
+                    'strategy': order_data.get('strategy', 'Unknown'),
+                    'orderid': orderid
+                }
+                
+                # Log to analyzer database
+                executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelorder')
+                
+                # Emit socket event for toast notification
+                socketio.emit('analyzer_update', {
+                    'request': analyzer_request,
+                    'response': response_data
+                })
+                
+                return make_response(jsonify(response_data), 200)
 
             broker_module = import_broker_module(broker)
             if broker_module is None:
-                logger.error("Broker-specific module not found")
-                return make_response(jsonify({'status': 'error', 'message': 'Broker-specific module not found'}), 404)
+                error_response = {
+                    'status': 'error',
+                    'message': 'Broker-specific module not found'
+                }
+                executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), 404)
 
             try:
-                # Extract the order ID from order_data
-                orderid = order_data.get('orderid')
-                if not orderid:
-                    logger.error("Order ID is missing in the request data")
-                    return make_response(jsonify({'status': 'error', 'message': 'Order ID is missing'}), 400)
-
                 # Use the dynamically imported module's function to cancel the order
                 response_message, status_code = broker_module.cancel_order(orderid, AUTH_TOKEN)
             except Exception as e:
                 logger.error(f"Error in broker_module.cancel_order: {e}")
                 traceback.print_exc()
-                return make_response(jsonify({
+                error_response = {
                     'status': 'error',
                     'message': 'Failed to cancel order due to internal error'
-                }), 500)
+                }
+                executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), 500)
 
             if status_code == 200:
                 socketio.emit('cancel_order_event', {
                     'status': response_message.get('status'),
-                    'orderid': orderid
+                    'orderid': orderid,
+                    'mode': 'live'
                 })
-                try:
-                    executor.submit(async_log_order, 'cancelorder', order_request_data, response_message)
-                except Exception as e:
-                    logger.error(f"Error submitting async_log_order task: {e}")
-                    traceback.print_exc()
-                return make_response(jsonify(response_message), 200)
+                order_response_data = {
+                    'status': 'success',
+                    'orderid': orderid
+                }
+                executor.submit(async_log_order, 'cancelorder', order_data, order_response_data)
+                return make_response(jsonify(order_response_data), 200)
             else:
                 message = response_message.get('message', 'Failed to cancel order') if isinstance(response_message, dict) else 'Failed to cancel order'
-                return make_response(jsonify({'status': 'error', 'message': message}), status_code)
-        except ValidationError as err:
-            logger.warning(f"Validation error: {err.messages}")
-            return make_response(jsonify({'status': 'error', 'message': err.messages}), 400)
+                error_response = {
+                    'status': 'error',
+                    'message': message
+                }
+                executor.submit(async_log_order, 'cancelorder', data, error_response)
+                return make_response(jsonify(error_response), status_code)
+
         except KeyError as e:
             missing_field = str(e)
             logger.error(f"KeyError: Missing field {missing_field}")
-            return make_response(jsonify({
-                'status': 'error',
-                'message': f"A required field is missing: {missing_field}"
-            }), 400)
+            error_message = f"A required field is missing: {missing_field}"
+            if get_analyze_mode():
+                return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
+            error_response = {'status': 'error', 'message': error_message}
+            executor.submit(async_log_order, 'cancelorder', data, error_response)
+            return make_response(jsonify(error_response), 400)
+
         except Exception as e:
             logger.error("An unexpected error occurred in CancelOrder endpoint.")
             traceback.print_exc()
-            return make_response(jsonify({
-                'status': 'error',
-                'message': 'An unexpected error occurred'
-            }), 500)
+            error_message = 'An unexpected error occurred'
+            if get_analyze_mode():
+                return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
+            error_response = {'status': 'error', 'message': error_message}
+            executor.submit(async_log_order, 'cancelorder', data, error_response)
+            return make_response(jsonify(error_response), 500)

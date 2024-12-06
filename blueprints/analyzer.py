@@ -19,15 +19,11 @@ def format_request(req, ist):
         request_data = json.loads(req.request_data) if isinstance(req.request_data, str) else req.request_data
         response_data = json.loads(req.response_data) if isinstance(req.response_data, str) else req.response_data
         
-        return {
+        # Base request info
+        formatted_request = {
             'timestamp': req.created_at.astimezone(ist).strftime('%Y-%m-%d %H:%M:%S'),
+            'api_type': req.api_type,
             'source': request_data.get('strategy', 'Unknown'),
-            'symbol': request_data.get('symbol', 'Unknown'),
-            'exchange': request_data.get('exchange', 'Unknown'),
-            'action': request_data.get('action', 'Unknown'),
-            'quantity': request_data.get('quantity', 0),
-            'price_type': request_data.get('price_type', 'Unknown'),
-            'product_type': request_data.get('product_type', 'Unknown'),
             'request_data': request_data,
             'analysis': {
                 'issues': response_data.get('status') == 'error',
@@ -36,6 +32,25 @@ def format_request(req, ist):
                 'warnings': response_data.get('warnings', [])
             }
         }
+
+        # Add fields based on API type
+        if req.api_type in ['placeorder', 'placesmartorder']:
+            formatted_request.update({
+                'symbol': request_data.get('symbol', 'Unknown'),
+                'exchange': request_data.get('exchange', 'Unknown'),
+                'action': request_data.get('action', 'Unknown'),
+                'quantity': request_data.get('quantity', 0),
+                'price_type': request_data.get('pricetype', 'Unknown'),
+                'product_type': request_data.get('product', 'Unknown')
+            })
+            if req.api_type == 'placesmartorder':
+                formatted_request['position_size'] = request_data.get('position_size', 0)
+        elif req.api_type == 'cancelorder':
+            formatted_request.update({
+                'orderid': request_data.get('orderid', 'Unknown')
+            })
+        
+        return formatted_request
     except Exception as e:
         logger.error(f"Error formatting request {req.id}: {str(e)}")
         return None

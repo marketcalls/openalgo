@@ -1,15 +1,17 @@
 from flask_restx import Namespace, Resource, fields
 from flask import request, jsonify, make_response
+from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor
+from database.settings_db import get_analyze_mode
 from extensions import socketio
 from limiter import limiter
 import os
-import copy
 from dotenv import load_dotenv
 import importlib
 import logging
 import traceback
+import copy
 
 load_dotenv()
 
@@ -19,6 +21,10 @@ api = Namespace('modify_order', description='Modify Order API')
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Marshmallow schema
+from restx_api.schemas import ModifyOrderSchema
+modify_order_schema = ModifyOrderSchema()
 
 def import_broker_module(broker_name):
     try:
@@ -35,77 +41,106 @@ class ModifyOrder(Resource):
     def post(self):
         try:
             data = request.json
+            
+            # Early validation of API key before any mode-specific logic
+            order_data = modify_order_schema.load(data)
+            api_key = order_data['apikey']
+            AUTH_TOKEN, broker = get_auth_token_broker(api_key)
+            
+            if AUTH_TOKEN is None:
+                error_response = {
+                    'status': 'error',
+                    'message': 'Invalid openalgo apikey'
+                }
+                if not get_analyze_mode():
+                    executor.submit(async_log_order, 'modifyorder', data, error_response)
+                return make_response(jsonify(error_response), 403)
+
+            # Check analyze mode and return placeholder if enabled
+            if get_analyze_mode():
+                return make_response(jsonify({
+                    'status': 'info',
+                    'message': 'Modify Order Analyzer: Implementation in progress',
+                    'broker': broker,
+                    'mode': 'analyze'
+                }), 200)
+
+            # Live Mode - Proceed with actual order modification
             order_request_data = copy.deepcopy(data)
             order_request_data.pop('apikey', None)
 
-            mandatory_fields = [
-                'apikey', 'strategy', 'exchange', 'symbol', 'orderid',
-                'action', 'product', 'pricetype', 'price', 'quantity',
-                'disclosed_quantity', 'trigger_price'
-            ]
-            missing_fields = [field for field in mandatory_fields if field not in data]
-
-            if missing_fields:
-                logger.warning(f"Missing mandatory fields: {', '.join(missing_fields)}")
-                return make_response(jsonify({
+            orderid = order_data.get('orderid')
+            if not orderid:
+                error_response = {
                     'status': 'error',
-                    'message': f"Missing mandatory field(s): {', '.join(missing_fields)}"
-                }), 400)
-
-            api_key = data['apikey']
-            AUTH_TOKEN, broker = get_auth_token_broker(api_key)
-
-            if AUTH_TOKEN is None:
-                logger.error("Invalid openalgo apikey")
-                return make_response(jsonify({
-                    'status': 'error',
-                    'message': 'Invalid openalgo apikey'
-                }), 403)
+                    'message': 'Order ID is missing'
+                }
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+                return make_response(jsonify(error_response), 400)
 
             broker_module = import_broker_module(broker)
             if broker_module is None:
-                logger.error("Broker-specific module not found")
-                return make_response(jsonify({
+                error_response = {
                     'status': 'error',
                     'message': 'Broker-specific module not found'
-                }), 404)
+                }
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+                return make_response(jsonify(error_response), 404)
 
             try:
-                # Use the dynamically imported module's function to modify the order
-                response_message, status_code = broker_module.modify_order(data, AUTH_TOKEN)
+                res, response_data = broker_module.modify_order_api(order_data, AUTH_TOKEN)
             except Exception as e:
-                logger.error(f"Error in broker_module.modify_order: {e}")
+                logger.error(f"Error in broker_module.modify_order_api: {e}")
                 traceback.print_exc()
-                return make_response(jsonify({
+                error_response = {
                     'status': 'error',
                     'message': 'Failed to modify order due to internal error'
-                }), 500)
+                }
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+                return make_response(jsonify(error_response), 500)
 
-            socketio.emit('modify_order_event', {
-                'status': response_message.get('status'),
-                'orderid': data.get('orderid')
-            })
+            if res.status == 200:
+                socketio.emit('modify_order_event', {
+                    'status': response_data.get('status'),
+                    'orderid': orderid,
+                    'mode': 'live'
+                })
+                executor.submit(async_log_order, 'modifyorder', order_request_data, response_data)
+                return make_response(jsonify(response_data), 200)
+            else:
+                message = response_data.get('message', 'Failed to modify order') if isinstance(response_data, dict) else 'Failed to modify order'
+                error_response = {
+                    'status': 'error',
+                    'message': message
+                }
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+                return make_response(jsonify(error_response), res.status if res.status != 200 else 500)
 
-            try:
-                # Assuming executor and async_log_order are properly defined and set up
-                executor.submit(async_log_order, 'modifyorder', order_request_data, response_message)
-            except Exception as e:
-                logger.error(f"Error submitting async_log_order task: {e}")
-                traceback.print_exc()
-
-            return make_response(jsonify(response_message), status_code)
+        except ValidationError as err:
+            logger.warning(f"Validation error: {err.messages}")
+            error_response = {'status': 'error', 'message': err.messages}
+            if not get_analyze_mode():
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+            return make_response(jsonify(error_response), 400)
 
         except KeyError as e:
             missing_field = str(e)
             logger.error(f"KeyError: Missing field {missing_field}")
-            return make_response(jsonify({
+            error_response = {
                 'status': 'error',
-                'message': f'A required field is missing from the request: {missing_field}'
-            }), 400)
+                'message': f"A required field is missing: {missing_field}"
+            }
+            if not get_analyze_mode():
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+            return make_response(jsonify(error_response), 400)
+
         except Exception as e:
             logger.error("An unexpected error occurred in ModifyOrder endpoint.")
             traceback.print_exc()
-            return make_response(jsonify({
+            error_response = {
                 'status': 'error',
                 'message': 'An unexpected error occurred'
-            }), 500)
+            }
+            if not get_analyze_mode():
+                executor.submit(async_log_order, 'modifyorder', data, error_response)
+            return make_response(jsonify(error_response), 500)

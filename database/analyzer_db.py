@@ -2,7 +2,7 @@
 
 import os
 import json
-from sqlalchemy import create_engine, Column, Integer, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
@@ -29,6 +29,7 @@ Base.query = db_session.query_property()
 class AnalyzerLog(Base):
     __tablename__ = 'analyzer_logs'
     id = Column(Integer, primary_key=True)
+    api_type = Column(String(50), nullable=False)  # placeorder, cancelorder, etc.
     request_data = Column(Text, nullable=False)
     response_data = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
@@ -44,6 +45,7 @@ class AnalyzerLog(Base):
 
         return {
             'id': self.id,
+            'api_type': self.api_type,
             'request_data': request_data,
             'response_data': response_data,
             'created_at': self.created_at.astimezone(pytz.UTC).isoformat()
@@ -57,7 +59,7 @@ def init_db():
 # Executor for asynchronous tasks
 executor = ThreadPoolExecutor(2)
 
-def async_log_analyzer(request_data, response_data):
+def async_log_analyzer(request_data, response_data, api_type='placeorder'):
     """Asynchronously log analyzer request"""
     try:
         # Serialize JSON data for storage
@@ -69,6 +71,7 @@ def async_log_analyzer(request_data, response_data):
         now_ist = datetime.now(ist)
 
         analyzer_log = AnalyzerLog(
+            api_type=api_type,
             request_data=request_json,
             response_data=response_json,
             created_at=now_ist
