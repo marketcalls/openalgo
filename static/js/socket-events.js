@@ -137,6 +137,11 @@ async function refreshAnalyzer() {
                 let details = '';
                 if (request.api_type === 'cancelorder') {
                     details = `OrderID: ${request.orderid || request.request_data.orderid}`;
+                } else if (request.api_type === 'cancelallorder') {
+                    details = 'Cancel All Orders';
+                    if (request.response_data && request.response_data.canceled_orders) {
+                        details += ` (${request.response_data.canceled_orders.length} orders)`;
+                    }
                 } else {
                     details = `${request.symbol || ''} ${request.quantity ? `(${request.quantity})` : ''}`;
                     if (request.api_type === 'placesmartorder' && request.position_size) {
@@ -346,6 +351,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (data.request.api_type === 'cancelorder') {
             message = `Cancel Order - Order ID: ${data.request.orderid}`;
+        } else if (data.request.api_type === 'cancelallorder') {
+            if (data.response.status === 'error') {
+                message = `Error: ${data.response.message}`;
+            } else {
+                message = 'Cancel All Orders';
+                if (data.response.canceled_orders) {
+                    message += ` - Canceled ${data.response.canceled_orders.length} orders`;
+                }
+            }
         } else {
             const action = data.request.action || '';
             const symbol = data.request.symbol || '';

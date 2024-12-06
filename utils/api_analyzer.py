@@ -13,6 +13,8 @@ from utils.constants import (
     VALID_PRODUCT_TYPES,
     REQUIRED_ORDER_FIELDS,
     REQUIRED_SMART_ORDER_FIELDS,
+    REQUIRED_CANCEL_ORDER_FIELDS,
+    REQUIRED_CANCEL_ALL_ORDER_FIELDS,
     DEFAULT_PRODUCT_TYPE,
     DEFAULT_PRICE_TYPE,
     DEFAULT_PRICE,
@@ -280,12 +282,92 @@ def analyze_smart_order_request(order_data):
             'warnings': []
         }
 
+def analyze_cancel_order_request(order_data):
+    """Analyze a cancel order request"""
+    try:
+        issues = []
+        warnings = []
+
+        # Check required fields using the constant
+        missing_fields = [field for field in REQUIRED_CANCEL_ORDER_FIELDS if field not in order_data]
+        if missing_fields:
+            issues.append(f"Missing mandatory field(s): {', '.join(missing_fields)}")
+
+        # Check for potential rate limit issues
+        try:
+            if AnalyzerLog.query.filter(
+                AnalyzerLog.created_at >= datetime.now(pytz.UTC) - timedelta(minutes=1)
+            ).count() > 50:
+                warnings.append("High request frequency detected. Consider reducing request rate.")
+        except Exception as e:
+            logger.error(f"Error checking rate limits: {str(e)}")
+            warnings.append("Unable to check rate limits")
+
+        # Prepare response
+        response = {
+            'status': 'success' if len(issues) == 0 else 'error',
+            'message': ', '.join(issues) if issues else 'Request valid',
+            'warnings': warnings
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error analyzing cancel order request: {str(e)}")
+        return {
+            'status': 'error',
+            'message': "Internal error analyzing request",
+            'warnings': []
+        }
+
+def analyze_cancel_all_order_request(order_data):
+    """Analyze a cancel all order request"""
+    try:
+        issues = []
+        warnings = []
+
+        # Check required fields using the constant
+        missing_fields = [field for field in REQUIRED_CANCEL_ALL_ORDER_FIELDS if field not in order_data]
+        if missing_fields:
+            issues.append(f"Missing mandatory field(s): {', '.join(missing_fields)}")
+
+        # Check for potential rate limit issues
+        try:
+            if AnalyzerLog.query.filter(
+                AnalyzerLog.created_at >= datetime.now(pytz.UTC) - timedelta(minutes=1)
+            ).count() > 50:
+                warnings.append("High request frequency detected. Consider reducing request rate.")
+        except Exception as e:
+            logger.error(f"Error checking rate limits: {str(e)}")
+            warnings.append("Unable to check rate limits")
+
+        # Prepare response
+        response = {
+            'status': 'success' if len(issues) == 0 else 'error',
+            'message': ', '.join(issues) if issues else 'Request valid',
+            'warnings': warnings
+        }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error analyzing cancel all order request: {str(e)}")
+        return {
+            'status': 'error',
+            'message': "Internal error analyzing request",
+            'warnings': []
+        }
+
 def analyze_request(request_data, api_type='placeorder', should_log=False):
     """Analyze and log a request"""
     try:
         # Choose appropriate analyzer based on API type
         if api_type == 'placesmartorder':
             analysis = analyze_smart_order_request(request_data)
+        elif api_type == 'cancelorder':
+            analysis = analyze_cancel_order_request(request_data)
+        elif api_type == 'cancelallorder':
+            analysis = analyze_cancel_all_order_request(request_data)
         else:
             analysis = analyze_api_request(request_data)
         

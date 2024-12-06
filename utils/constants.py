@@ -75,6 +75,12 @@ REQUIRED_ORDER_FIELDS = ['apikey', 'strategy', 'symbol', 'exchange', 'action', '
 # Required Fields for Smart Order Placement
 REQUIRED_SMART_ORDER_FIELDS = ['apikey', 'strategy', 'symbol', 'exchange', 'action', 'quantity', 'position_size']
 
+# Required Fields for Cancel Order
+REQUIRED_CANCEL_ORDER_FIELDS = ['apikey', 'strategy', 'orderid']
+
+# Required Fields for Cancel All Orders
+REQUIRED_CANCEL_ALL_ORDER_FIELDS = ['apikey', 'strategy']
+
 # Default Values for Optional Fields
 DEFAULT_PRODUCT_TYPE = PRODUCT_MIS
 DEFAULT_PRICE_TYPE = PRICE_TYPE_MARKET
