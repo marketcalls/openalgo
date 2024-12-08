@@ -17,3 +17,6 @@ class DepthSchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)
     exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+
+class IntervalsSchema(Schema):
+    apikey = fields.Str(required=True)

@@ -34,8 +34,7 @@ class FyersData:
             # Hours
             '1h': '60', '2h': '120', '4h': '240',
             # Higher timeframes
-            'd': '1D', 'w': 'W', 'm': 'M',
-            'D': '1D', 'W': 'W', 'M': 'M'  # Support both cases
+            'D': '1D', 'W': 'W', 'M': 'M'
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
@@ -95,7 +94,7 @@ class FyersData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
-            # Validate and map interval (case-insensitive)
+            # Validate and map interval
             resolution = self.timeframe_map.get(interval)
             if not resolution:
                 supported = {
