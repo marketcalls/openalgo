@@ -11,6 +11,9 @@ from .modify_order import api as modify_order_ns
 from .cancel_order import api as cancel_order_ns
 from .close_position import api as close_position_ns
 from .cancel_all_order import api as cancel_all_order_ns
+from .quotes import api as quotes_ns
+from .history import api as history_ns
+from .depth import api as depth_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -19,3 +22,6 @@ api.add_namespace(modify_order_ns, path='/modifyorder')
 api.add_namespace(cancel_order_ns, path='/cancelorder')
 api.add_namespace(close_position_ns, path='/closeposition')
 api.add_namespace(cancel_all_order_ns, path='/cancelallorder')
+api.add_namespace(quotes_ns, path='/quotes')
+api.add_namespace(history_ns, path='/history')
+api.add_namespace(depth_ns, path='/depth')
