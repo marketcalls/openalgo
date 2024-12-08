@@ -15,6 +15,11 @@ from .quotes import api as quotes_ns
 from .history import api as history_ns
 from .depth import api as depth_ns
 from .intervals import api as intervals_ns
+from .funds import api as funds_ns
+from .orderbook import api as orderbook_ns
+from .tradebook import api as tradebook_ns
+from .positionbook import api as positionbook_ns
+from .holdings import api as holdings_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -27,3 +32,8 @@ api.add_namespace(quotes_ns, path='/quotes')
 api.add_namespace(history_ns, path='/history')
 api.add_namespace(depth_ns, path='/depth')
 api.add_namespace(intervals_ns, path='/intervals')
+api.add_namespace(funds_ns, path='/funds')
+api.add_namespace(orderbook_ns, path='/orderbook')
+api.add_namespace(tradebook_ns, path='/tradebook')
+api.add_namespace(positionbook_ns, path='/positionbook')
+api.add_namespace(holdings_ns, path='/holdings')
