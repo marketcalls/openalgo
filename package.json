@@ -1,0 +1,19 @@
+{
+  "scripts": {    
+    "build:css": "postcss ./static/css/styles.css -o ./static/css/output.css"
+  },
+  
+  "devDependencies": {    
+    "autoprefixer": "^10.4.20",    
+    "postcss": "^8.4.49",    
+    "postcss-cli": "^11.0.0",    
+    "tailwindcss": "^3.4.16"
+  },
+  
+  "name": "openalgo",  
+  "version": "1.0.0",  
+  "description": "OpenAlgo is an open-source, Flask-based Python application designed to bridge the gap between traders and major trading platforms such as Amibroker, Tradingview, Excel, and Google Spreadsheets. With a focus on simplifying algotrading, OpenAlgo facilitates easy integration, automation, and execution of trading strategies, providing a user-friendly interface to enhance trading performance.",  
+  "main": "postcss.config.js",
+  "author": "",  
+  "license": "ISC"
+}
