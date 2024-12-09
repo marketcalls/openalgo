@@ -316,7 +316,6 @@ class SplitOrder(Resource):
                 # Log the split order results
                 response_data = {
                     'status': 'success',
-                    'mode': 'live',
                     'total_quantity': total_quantity,
                     'split_size': split_size,
                     'results': results

@@ -264,7 +264,6 @@ class BasketOrder(Resource):
                 # Log the basket order results
                 response_data = {
                     'status': 'success',
-                    'mode': 'live',
                     'results': results
                 }
                 log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
