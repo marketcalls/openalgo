@@ -14,3 +14,15 @@ class PositionbookSchema(Schema):
 
 class HoldingsSchema(Schema):
     apikey = fields.Str(required=True)
+
+class OrderStatusSchema(Schema):
+    apikey = fields.Str(required=True)
+    strategy = fields.Str(required=True)
+    orderid = fields.Str(required=True)
+
+class OpenPositionSchema(Schema):
+    apikey = fields.Str(required=True)
+    strategy = fields.Str(required=True)
+    symbol = fields.Str(required=True)
+    exchange = fields.Str(required=True)
+    product = fields.Str(required=True)

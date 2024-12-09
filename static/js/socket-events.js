@@ -318,11 +318,17 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('order_event', function(data) {
         playAlertSound();
         const type = data.action.toUpperCase() === 'BUY' ? 'success' : 'error';
+        
+        // Show toast notification
         showToast(`${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`, type);
-        if (isOnAnalyzerPage) {
-            refreshAnalyzer();
-        } else {
-            refreshCurrentPageContent();
+        
+        // For batch orders (basket/split), only refresh on the last order
+        if (!data.batch_order || data.is_last_order) {
+            if (isOnAnalyzerPage) {
+                refreshAnalyzer();
+            } else {
+                refreshCurrentPageContent();
+            }
         }
     });
 

@@ -20,6 +20,10 @@ from .orderbook import api as orderbook_ns
 from .tradebook import api as tradebook_ns
 from .positionbook import api as positionbook_ns
 from .holdings import api as holdings_ns
+from .basket_order import api as basket_order_ns
+from .split_order import api as split_order_ns
+from .orderstatus import api as orderstatus_ns
+from .openposition import api as openposition_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -37,3 +41,7 @@ api.add_namespace(orderbook_ns, path='/orderbook')
 api.add_namespace(tradebook_ns, path='/tradebook')
 api.add_namespace(positionbook_ns, path='/positionbook')
 api.add_namespace(holdings_ns, path='/holdings')
+api.add_namespace(basket_order_ns, path='/basketorder')
+api.add_namespace(split_order_ns, path='/splitorder')
+api.add_namespace(orderstatus_ns, path='/orderstatus')
+api.add_namespace(openposition_ns, path='/openposition')
