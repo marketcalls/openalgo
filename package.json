@@ -1,12 +1,11 @@
 {
   "scripts": {    
-    "build:css": "postcss ./static/css/styles.css -o ./static/css/output.css"
+    "build:css": "npx tailwindcss -i ./static/css/styles.css -o ./static/css/output.css --watch"
   },
   
   "devDependencies": {    
-    "autoprefixer": "^10.4.20",    
+    "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",    
-    "postcss-cli": "^11.0.0",    
     "tailwindcss": "^3.4.16"
   },
   
