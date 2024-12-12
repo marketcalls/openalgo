@@ -240,7 +240,8 @@ def process_icici_nfo_csv(path):
     }
 
     # Map the values
-    df['EXCHANGECODE'] = df['EXCHANGECODE'].map(mapping)
+    df['EXCHANGECODE'] = df['EXCHANGECODE'].map(mapping).fillna(df['EXCHANGECODE'])
+
 
     newdata['symbol1'] = df['EXCHANGECODE']
     # Apply the function across the DataFrame rows
