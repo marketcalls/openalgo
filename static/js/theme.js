@@ -44,23 +44,14 @@ function setTheme(theme, force = false) {
             themeSwitcher.classList.remove('disabled');
         }
     }
-
-    // Update mode badge if in garden theme
-    const modeBadge = document.getElementById('mode-badge');
-    if (modeBadge) {
-        if (theme === 'garden') {
-            modeBadge.textContent = 'Analyze Mode';
-            modeBadge.classList.remove('badge-success');
-            modeBadge.classList.add('badge-warning');
-        } else {
-            modeBadge.classList.remove('badge-warning');
-            modeBadge.classList.add('badge-success');
-        }
-    }
 }
 
 // Theme toggle event handler
 function handleThemeToggle(e) {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    if (currentTheme === 'garden') {
+        return; // Don't allow theme toggle in garden mode
+    }
     const newTheme = e.target.checked ? 'dark' : 'light';
     setTheme(newTheme);
 }
@@ -88,18 +79,6 @@ function initializeTheme() {
             themeSwitcher.classList.add('disabled');
         } else {
             themeSwitcher.classList.remove('disabled');
-        }
-    }
-
-    // Update mode badge classes only, let mode-toggle.js handle the text
-    const modeBadge = document.getElementById('mode-badge');
-    if (modeBadge) {
-        if (savedTheme === 'garden') {
-            modeBadge.classList.remove('badge-success');
-            modeBadge.classList.add('badge-warning');
-        } else {
-            modeBadge.classList.remove('badge-warning');
-            modeBadge.classList.add('badge-success');
         }
     }
 
@@ -144,7 +123,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // When page becomes visible, ensure theme is consistent
             const sessionTheme = sessionStorage.getItem(themeKey);
             if (sessionTheme) {
-                setTheme(sessionTheme, true);
+                setTheme(sessionTheme);
             }
         }
     });
@@ -153,12 +132,12 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('storage', function(e) {
         if (e.key === themeKey) {
             const newTheme = e.newValue || defaultTheme;
-            setTheme(newTheme, true);
+            setTheme(newTheme);
         }
     });
 });
 
-// Export functions for use in mode-toggle.js
+// Export functions for use in other scripts
 window.themeManager = {
     setTheme,
     restorePreviousTheme,

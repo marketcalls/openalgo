@@ -23,106 +23,19 @@
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     
-    <!-- DaisyUI and Tailwind -->
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Compiled Tailwind CSS with DaisyUI -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 
     <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
     
-    <!-- Custom Scripts -->
+    <!-- Theme Scripts -->
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     
-    <!-- Custom Styles -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-
     <!-- Meta tags for color settings -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
-
-    <!-- Theme Configuration -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: 'hsl(var(--p))',
-                        'primary-focus': 'hsl(var(--pf))',
-                        'primary-content': 'hsl(var(--pc))',
-                        secondary: 'hsl(var(--s))',
-                        'secondary-focus': 'hsl(var(--sf))',
-                        'secondary-content': 'hsl(var(--sc))',
-                        accent: 'hsl(var(--a))',
-                        'accent-focus': 'hsl(var(--af))',
-                        'accent-content': 'hsl(var(--ac))',
-                        neutral: 'hsl(var(--n))',
-                        'neutral-focus': 'hsl(var(--nf))',
-                        'neutral-content': 'hsl(var(--nc))',
-                        'base-100': 'hsl(var(--b1))',
-                        'base-200': 'hsl(var(--b2))',
-                        'base-300': 'hsl(var(--b3))',
-                        'base-content': 'hsl(var(--bc))',
-                        info: 'hsl(var(--in))',
-                        success: 'hsl(var(--su))',
-                        warning: 'hsl(var(--wa))',
-                        error: 'hsl(var(--er))',
-                    }
-                }
-            },
-            daisyui: {
-                themes: [
-                    {
-                        light: {
-                            "primary": "#2563eb",    // Blue-600
-                            "primary-focus": "#1d4ed8", // Blue-700
-                            "primary-content": "#ffffff",
-                            "secondary": "#7c3aed",  // Violet-600
-                            "secondary-focus": "#6d28d9", // Violet-700
-                            "secondary-content": "#ffffff",
-                            "accent": "#0891b2",     // Cyan-600
-                            "accent-focus": "#0e7490", // Cyan-700
-                            "accent-content": "#ffffff",
-                            "neutral": "#1f2937",    // Gray-800
-                            "neutral-focus": "#111827", // Gray-900
-                            "neutral-content": "#ffffff",
-                            "base-100": "#ffffff",
-                            "base-200": "#f3f4f6",
-                            "base-300": "#e5e7eb",
-                            "base-content": "#1f2937",
-                            "info": "#3b82f6",
-                            "success": "#22c55e",
-                            "warning": "#f59e0b",
-                            "error": "#ef4444"
-                        },
-                        dark: {
-                            "primary": "#3b82f6",    // Blue-500
-                            "primary-focus": "#2563eb", // Blue-600
-                            "primary-content": "#ffffff",
-                            "secondary": "#8b5cf6",   // Violet-500
-                            "secondary-focus": "#7c3aed", // Violet-600
-                            "secondary-content": "#ffffff",
-                            "accent": "#06b6d4",     // Cyan-500
-                            "accent-focus": "#0891b2", // Cyan-600
-                            "accent-content": "#ffffff",
-                            "neutral": "#1f2937",    // Gray-800
-                            "neutral-focus": "#111827", // Gray-900
-                            "neutral-content": "#ffffff",
-                            "base-100": "#1f2937",   // Gray-800
-                            "base-200": "#111827",   // Gray-900
-                            "base-300": "#0f172a",   // Gray-950
-                            "base-content": "#f3f4f6",
-                            "info": "#60a5fa",
-                            "success": "#34d399",
-                            "warning": "#fbbf24",
-                            "error": "#f87171"
-                        }
-                    }
-                ],
-                darkTheme: "dark"
-            }
-        }
-    </script>
 
     {% block head %}{% endblock %}
 </head>

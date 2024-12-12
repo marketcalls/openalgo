@@ -15,7 +15,7 @@
     }
 
     .symbol-cell {
-        @apply font-medium;
+        @apply font-medium flex items-center gap-2;
     }
 
     .name-cell {
@@ -28,6 +28,14 @@
 
     .numeric-cell {
         @apply font-mono text-right;
+    }
+
+    .copy-btn {
+        @apply btn btn-ghost btn-xs p-1;
+    }
+
+    .copy-btn:hover {
+        @apply text-primary;
     }
 </style>
 {% endblock %}
@@ -73,22 +81,27 @@
                         <th class="sortable" data-sort="exchange">Exchange</th>
                         <th class="sortable" data-sort="brexchange">Broker Exchange</th>
                         <th class="sortable" data-sort="token">Token</th>
-                        <th class="sortable" data-sort="expiry">Expiry</th>
-                        <th class="sortable" data-sort="strike">Strike</th>
                         <th class="sortable" data-sort="lotsize">Lot Size</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in results %}
                     <tr>
-                        <td class="symbol-cell">{{ row.symbol }}</td>
+                        <td>
+                            <div class="symbol-cell">
+                                {{ row.symbol }}
+                                <button class="copy-btn tooltip" data-tip="Copy symbol" onclick="copyToClipboard('{{ row.symbol }}', event)">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
                         <td>{{ row.brsymbol }}</td>
                         <td class="name-cell">{{ row.name }}</td>
                         <td><div class="badge badge-ghost">{{ row.exchange }}</div></td>
                         <td><div class="badge badge-ghost">{{ row.brexchange }}</div></td>
                         <td class="token-cell">{{ row.token }}</td>
-                        <td>{{ row.expiry or '-' }}</td>
-                        <td class="numeric-cell">{{ row.strike or '-' }}</td>
                         <td class="numeric-cell">{{ row.lotsize or '-' }}</td>
                     </tr>
                     {% endfor %}
@@ -108,6 +121,16 @@
 </div>
 
 <script>
+function copyToClipboard(text, event) {
+    event.stopPropagation(); // Prevent row click event if any
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Symbol copied to clipboard', 'success');
+    }).catch(err => {
+        showToast('Failed to copy symbol', 'error');
+        console.error('Failed to copy:', err);
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Sorting functionality
     document.querySelectorAll('th.sortable').forEach(header => {
@@ -134,17 +157,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 const bValue = b.children[index].textContent.trim();
                 
                 // Handle numeric values
-                if (['strike', 'lotsize'].includes(sortKey)) {
+                if (['lotsize'].includes(sortKey)) {
                     const aNum = parseFloat(aValue) || 0;
                     const bNum = parseFloat(bValue) || 0;
                     return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
-                }
-                
-                // Handle date values
-                if (sortKey === 'expiry') {
-                    const aDate = aValue === '-' ? new Date(0) : new Date(aValue);
-                    const bDate = bValue === '-' ? new Date(0) : new Date(bValue);
-                    return newDirection === 'asc' ? aDate - bDate : bDate - aDate;
                 }
                 
                 // Handle text values

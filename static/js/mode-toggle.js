@@ -23,6 +23,10 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Set garden theme when switching to analyze mode
             window.themeManager.setTheme('garden');
+            
+            modeBadge.textContent = 'Analyze Mode';
+            modeBadge.classList.remove('badge-success');
+            modeBadge.classList.add('badge-warning');
         } else {
             modeBadge.textContent = 'Live Mode';
             modeBadge.classList.remove('badge-warning');
@@ -31,26 +35,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Only restore theme if we're switching from analyze mode
             const currentTheme = document.documentElement.getAttribute('data-theme');
             if (currentTheme === 'garden') {
-                const previousTheme = localStorage.getItem('previousTheme') || sessionStorage.getItem('previousTheme') || 'light';
-                window.themeManager.setTheme(previousTheme, true);
-            }
-            
-            // Clear stored previous theme
-            localStorage.removeItem('previousTheme');
-            sessionStorage.removeItem('previousTheme');
-            
-            // Re-enable theme controllers
-            const themeControllers = document.querySelectorAll('.theme-controller');
-            themeControllers.forEach(controller => {
-                const currentTheme = document.documentElement.getAttribute('data-theme');
-                controller.checked = currentTheme === 'dark';
-                controller.disabled = false;
-            });
-            
-            // Remove disabled class from theme switcher
-            const themeSwitcher = document.querySelector('.theme-switcher');
-            if (themeSwitcher) {
-                themeSwitcher.classList.remove('disabled');
+                window.themeManager.restorePreviousTheme();
             }
         }
     }
@@ -69,10 +54,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     sessionStorage.setItem('previousTheme', currentTheme);
                 }
                 window.themeManager.setTheme('garden');
-            } else {
-                // Just update the badge, don't change theme
-                updateBadge(false);
             }
+            updateBadge(data.analyze_mode);
         })
         .catch(error => {
             console.error('[Mode] Error fetching analyze mode:', error);
@@ -114,11 +97,12 @@ document.addEventListener('DOMContentLoaded', function() {
             // When page becomes visible, check and restore theme state
             const analyzeMode = sessionStorage.getItem('analyzeMode') === 'true';
             if (analyzeMode) {
-                const previousTheme = localStorage.getItem('previousTheme') || sessionStorage.getItem('previousTheme');
-                if (previousTheme) {
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                if (currentTheme !== 'garden') {
                     window.themeManager.setTheme('garden');
                 }
             }
+            updateBadge(analyzeMode);
         }
     });
 
