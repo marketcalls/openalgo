@@ -11,60 +11,72 @@
         </a>
     </div>
 
-    <div class="grid gap-6 md:grid-cols-2">
-        <!-- Strategy Form -->
+    <div class="max-w-2xl mx-auto">
         <div class="card bg-base-100 shadow-xl">
             <div class="card-body">
-                <h2 class="card-title">Create Strategy</h2>
-                <form method="POST" class="space-y-6" id="strategyForm">
+                <form method="POST" class="space-y-6">
                     <div class="form-control">
                         <label class="label">
                             <span class="label-text">Strategy Name</span>
                         </label>
                         <input type="text" name="name" class="input input-bordered" required
-                               placeholder="Enter a unique name for your strategy">
+                               placeholder="Enter strategy name">
                     </div>
 
                     <div class="form-control">
-                        <label class="label cursor-pointer justify-start gap-4">
-                            <span class="label-text">Is Intraday Strategy?</span>
-                            <input type="checkbox" name="is_intraday" value="true" class="toggle" checked
+                        <label class="label cursor-pointer">
+                            <span class="label-text">Strategy Type</span>
+                            <input type="checkbox" name="is_intraday" value="true" 
+                                   class="toggle toggle-primary" checked
                                    onchange="toggleTimeControls(this)">
                         </label>
+                        <span class="label-text-alt mt-1">Toggle between Intraday and Positional</span>
                     </div>
 
                     <div id="timeControls" class="space-y-4">
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text">Signal Start Time (IST)</span>
-                            </label>
-                            <input type="time" name="start_time" step="1" class="input input-bordered" 
-                                   value="09:30:00" required>
-                            <label class="label">
-                                <span class="label-text-alt">Orders will be placed after this time</span>
-                            </label>
+                        <div class="alert alert-info">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <div>
+                                <h3 class="font-bold">Time Controls (IST)</h3>
+                                <div class="text-sm">Set trading hours for intraday strategy</div>
+                            </div>
                         </div>
 
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text">Trading End Time (IST)</span>
-                            </label>
-                            <input type="time" name="end_time" step="1" class="input input-bordered"
-                                   value="15:00:00" required>
-                            <label class="label">
-                                <span class="label-text-alt">No new orders after this time</span>
-                            </label>
-                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Signal Start Time</span>
+                                </label>
+                                <input type="time" name="start_time" step="1"
+                                       class="input input-bordered" value="09:30:00">
+                                <label class="label">
+                                    <span class="label-text-alt">Start accepting signals</span>
+                                </label>
+                            </div>
 
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text">Square-off Time (IST)</span>
-                            </label>
-                            <input type="time" name="squareoff_time" step="1" class="input input-bordered"
-                                   value="15:15:00" required>
-                            <label class="label">
-                                <span class="label-text-alt">All positions will be closed at this time</span>
-                            </label>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Trading End Time</span>
+                                </label>
+                                <input type="time" name="end_time" step="1"
+                                       class="input input-bordered" value="15:00:00">
+                                <label class="label">
+                                    <span class="label-text-alt">Stop new positions</span>
+                                </label>
+                            </div>
+
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Square-off Time</span>
+                                </label>
+                                <input type="time" name="squareoff_time" step="1"
+                                       class="input input-bordered" value="15:15:00">
+                                <label class="label">
+                                    <span class="label-text-alt">Close all positions</span>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
@@ -75,89 +87,41 @@
             </div>
         </div>
 
-        <!-- Instructions -->
-        <div class="card bg-base-100 shadow-xl">
+        <div class="card bg-base-100 shadow-xl mt-6">
             <div class="card-body">
-                <h2 class="card-title">How It Works</h2>
-                
-                <div class="space-y-6">
-                    <div>
-                        <h3 class="font-bold mb-2">1. Webhook Setup</h3>
-                        <ul class="list-disc list-inside space-y-1 text-sm">
-                            <li>A secure webhook URL will be generated automatically</li>
-                            <li>Use this URL in your Chartink scanner alerts</li>
-                            <li>Each strategy gets its own unique webhook URL</li>
-                            <li>URLs are encrypted and securely stored</li>
-                        </ul>
-                    </div>
-
-                    <div>
-                        <h3 class="font-bold mb-2">2. Scanner Names</h3>
-                        <div class="overflow-x-auto">
-                            <table class="table table-compact w-full">
-                                <thead>
-                                    <tr>
-                                        <th>Suffix</th>
-                                        <th>Action</th>
-                                        <th>Description</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td class="font-mono">BUY</td>
-                                        <td>Long Entry</td>
-                                        <td>Places regular buy order</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="font-mono">SELL</td>
-                                        <td>Long Exit</td>
-                                        <td>Closes long positions</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="font-mono">SHORT</td>
-                                        <td>Short Entry</td>
-                                        <td>Places regular sell order</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="font-mono">COVER</td>
-                                        <td>Short Exit</td>
-                                        <td>Closes short positions</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div>
-                        <h3 class="font-bold mb-2">3. Time Controls</h3>
-                        <div class="alert alert-info">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 h-6 w-6">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <div>
-                                <h4 class="font-bold">Default Times (IST)</h4>
-                                <ul class="list-none mt-1">
-                                    <li>09:30:00 - Start accepting signals</li>
-                                    <li>15:00:00 - Stop new orders</li>
-                                    <li>15:15:00 - Square off positions</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-warning">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                        <div>
-                            <h3 class="font-bold">Important Notes</h3>
-                            <ul class="list-disc list-inside mt-1 text-sm">
-                                <li>All times must be in 24-hour format (HH:MM:SS)</li>
-                                <li>Square-off time should be after trading end time</li>
-                                <li>Times are enforced server-side for security</li>
-                            </ul>
-                        </div>
-                    </div>
+                <h2 class="card-title">Scanner Name Rules</h2>
+                <div class="overflow-x-auto">
+                    <table class="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Suffix</th>
+                                <th>Action</th>
+                                <th>Example</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>BUY</td>
+                                <td>Long Entry</td>
+                                <td>"MA Crossover BUY"</td>
+                            </tr>
+                            <tr>
+                                <td>SELL</td>
+                                <td>Long Exit</td>
+                                <td>"RSI Exit SELL"</td>
+                            </tr>
+                            <tr>
+                                <td>SHORT</td>
+                                <td>Short Entry</td>
+                                <td>"Breakdown SHORT"</td>
+                            </tr>
+                            <tr>
+                                <td>COVER</td>
+                                <td>Short Exit</td>
+                                <td>"Reversal COVER"</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -167,45 +131,17 @@
 <script>
 function toggleTimeControls(checkbox) {
     const timeControls = document.getElementById('timeControls');
-    const inputs = timeControls.querySelectorAll('input[type="time"]');
-    
     timeControls.style.display = checkbox.checked ? 'block' : 'none';
-    inputs.forEach(input => {
-        input.required = checkbox.checked;
-    });
 }
 
-// Format time inputs to include seconds
+// Convert time inputs to 24-hour format
 document.querySelectorAll('input[type="time"]').forEach(input => {
     input.addEventListener('change', function() {
-        // Add :00 seconds if not present
-        if (this.value && this.value.split(':').length === 2) {
+        // Ensure seconds are included
+        if (this.value.length === 5) {
             this.value = this.value + ':00';
         }
     });
-});
-
-// Form validation
-document.getElementById('strategyForm').addEventListener('submit', function(e) {
-    const isIntraday = this.querySelector('input[name="is_intraday"]').checked;
-    
-    if (isIntraday) {
-        const start = this.querySelector('input[name="start_time"]').value;
-        const end = this.querySelector('input[name="end_time"]').value;
-        const squareoff = this.querySelector('input[name="squareoff_time"]').value;
-        
-        if (end <= start) {
-            e.preventDefault();
-            alert('Trading end time must be after start time');
-            return;
-        }
-        
-        if (squareoff <= end) {
-            e.preventDefault();
-            alert('Square-off time must be after trading end time');
-            return;
-        }
-    }
 });
 </script>
 {% endblock %}

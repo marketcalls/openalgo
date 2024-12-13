@@ -81,6 +81,7 @@ class ChartinkStrategy(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
+    user_id = Column(String(255), nullable=False)  # Store user ID for API key lookup
     webhook_id = Column(String(32), unique=True, nullable=False)  # Public webhook identifier
     webhook_url_encrypted = Column(Text, nullable=False)  # Encrypted full webhook URL
     is_intraday = Column(Boolean, default=True)
@@ -125,7 +126,9 @@ def init_db():
     print("Initializing Chartink DB")
     Base.metadata.create_all(bind=engine)
 
-def create_strategy(name, base_url, is_intraday=True, start_time="09:30:00", end_time="15:00:00", squareoff_time="15:15:00"):
+def create_strategy(name: str, base_url: str, user_id: str, is_intraday: bool = True, 
+                   start_time: str = "09:30:00", end_time: str = "15:00:00", 
+                   squareoff_time: str = "15:15:00") -> ChartinkStrategy:
     """Create a new Chartink strategy with secure webhook URL"""
     try:
         # Generate webhook ID and URL
@@ -137,6 +140,7 @@ def create_strategy(name, base_url, is_intraday=True, start_time="09:30:00", end
         
         strategy = ChartinkStrategy(
             name=name,
+            user_id=user_id,  # Store user ID
             webhook_id=webhook_id,
             webhook_url_encrypted=encrypted_url,
             is_intraday=is_intraday,
@@ -151,7 +155,8 @@ def create_strategy(name, base_url, is_intraday=True, start_time="09:30:00", end
         db_session.rollback()
         raise e
 
-def add_symbol_mapping(strategy_id, chartink_symbol, exchange, quantity, product_type):
+def add_symbol_mapping(strategy_id: int, chartink_symbol: str, exchange: str, 
+                      quantity: int, product_type: str) -> ChartinkSymbolMapping:
     """Add symbol mapping for a strategy"""
     try:
         # Check if mapping already exists
@@ -183,7 +188,7 @@ def add_symbol_mapping(strategy_id, chartink_symbol, exchange, quantity, product
         db_session.rollback()
         raise e
 
-def bulk_add_symbol_mappings(strategy_id: int, symbols: List[Dict]):
+def bulk_add_symbol_mappings(strategy_id: int, symbols: List[Dict]) -> bool:
     """Add multiple symbol mappings at once"""
     try:
         # Get existing mappings
@@ -233,19 +238,20 @@ def delete_symbol_mapping(strategy_id: int, mapping_id: int) -> bool:
         db_session.rollback()
         raise e
 
-def get_strategy_by_webhook_id(webhook_id):
+def get_strategy_by_webhook_id(webhook_id: str) -> ChartinkStrategy:
     """Get strategy by webhook ID"""
     return ChartinkStrategy.query.filter_by(webhook_id=webhook_id).first()
 
-def get_symbol_mappings(strategy_id):
+def get_symbol_mappings(strategy_id: int) -> List[ChartinkSymbolMapping]:
     """Get all symbol mappings for a strategy"""
     return ChartinkSymbolMapping.query.filter_by(strategy_id=strategy_id).all()
 
-def get_all_strategies():
+def get_all_strategies() -> List[ChartinkStrategy]:
     """Get all strategies"""
     return ChartinkStrategy.query.all()
 
-def update_strategy_times(strategy_id: int, start_time=None, end_time=None, squareoff_time=None):
+def update_strategy_times(strategy_id: int, start_time: str = None, 
+                        end_time: str = None, squareoff_time: str = None) -> bool:
     """Update strategy trading times"""
     try:
         strategy = ChartinkStrategy.query.get(strategy_id)
@@ -265,7 +271,7 @@ def update_strategy_times(strategy_id: int, start_time=None, end_time=None, squa
         db_session.rollback()
         raise e
 
-def delete_strategy(strategy_id):
+def delete_strategy(strategy_id: int) -> bool:
     """Delete a strategy and its symbol mappings"""
     try:
         strategy = ChartinkStrategy.query.get(strategy_id)
