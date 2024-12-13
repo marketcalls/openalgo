@@ -1,233 +1,178 @@
-# Chartink Integration Guide
+# Chartink Integration
 
-This guide explains how to use OpenAlgo's Chartink integration to automate your trading strategies.
+OpenAlgo supports integration with Chartink for automated trading based on scanner alerts. This integration allows you to:
+- Create and manage trading strategies
+- Configure symbols with quantities and product types
+- Handle intraday and positional strategies
+- Automate order placement based on Chartink alerts
+- Auto square-off positions for intraday strategies
 
-## Table of Contents
-- [Overview](#overview)
-- [Prerequisites](#prerequisites)
-- [Creating a Strategy](#creating-a-strategy)
-- [Configuring Symbols](#configuring-symbols)
-- [Setting Up Chartink](#setting-up-chartink)
-- [Trading Times](#trading-times)
-- [Scanner Names](#scanner-names)
-- [Webhook Format](#webhook-format)
-- [Troubleshooting](#troubleshooting)
+## Setting Up a Strategy
 
-## Overview
-
-The Chartink integration allows you to:
-- Receive alerts from Chartink scanners
-- Automatically place orders based on alerts
-- Configure multiple strategies with different symbols
-- Control trading times for intraday strategies
-- Support both NSE and BSE symbols
-
-## Prerequisites
-
-1. OpenAlgo Account Setup:
-   - Login to OpenAlgo
-   - Create API Key (Required for orders)
-   - Note: Keep your API key secure
-
-2. Chartink Premium Account:
-   - Required for webhook alerts
-   - Access to real-time data
-
-## Creating a Strategy
-
-1. Navigate to Chartink section in OpenAlgo
-2. Click "New Strategy"
-3. Fill in the details:
-   ```
-   Strategy Name: My First Strategy
-   Is Intraday: Yes/No
-   Trading Times (IST):
-   - Signal Start: 09:30:00
-   - Trading End: 15:00:00
-   - Square-off: 15:15:00
-   ```
-4. Click "Create Strategy"
-5. Copy the generated webhook URL
+1. Go to the Chartink section in OpenAlgo
+2. Click "New Strategy" button
+3. Fill in the strategy details:
+   - Name: A unique name for your strategy
+   - Type: Choose between Intraday or Positional
+   - For Intraday strategies:
+     - Start Time: Trading start time (default: 09:15)
+     - End Time: Trading end time (default: 15:15)
+     - Square Off Time: Auto square-off time (default: 15:15)
 
 ## Configuring Symbols
 
-### Single Symbol Add
-1. Click "Configure Symbols" on your strategy
-2. Select exchange (NSE/BSE)
-3. Search and select symbol
-4. Set quantity and product type:
-   ```
-   Symbol: RELIANCE
-   Exchange: NSE
-   Quantity: 10
-   Product Type: MIS/CNC
-   ```
+After creating a strategy, you need to configure the symbols to trade:
 
-### Bulk Symbol Add
-1. Use the bulk add textarea
-2. Format: SYMBOL,EXCHANGE,QUANTITY,PRODUCT
-3. One symbol per line:
+1. Click "Configure Symbols" on your strategy
+2. Add symbols individually:
+   - Select Exchange (NSE/BSE)
+   - Search and select Symbol
+   - Enter Quantity
+   - Select Product Type (MIS for Intraday, CNC for Positional)
+3. Or bulk add symbols using CSV format:
    ```
    RELIANCE,NSE,10,MIS
    HDFCBANK,NSE,5,CNC
    TATASTEEL,BSE,15,MIS
    ```
 
-## Setting Up Chartink
+## Setting Up Chartink Alert
 
-### Creating Scanners
-
-1. Long Entry Scanner:
+1. Create your scanner in Chartink
+2. Set up an alert for your scanner
+3. In the webhook URL field, paste your strategy's webhook URL:
    ```
-   // Example: Moving Average Crossover
-   close > sma(close,20) and close[1] <= sma(close,20)[1]
-   Name: "MA Crossover BUY"  // Must end with BUY
+   https://your-openalgo-domain/chartink/webhook/<webhook-id>
    ```
 
-2. Long Exit Scanner:
-   ```
-   // Example: Moving Average Crossover Exit
-   close < sma(close,20) and close[1] >= sma(close,20)[1]
-   Name: "MA Crossover SELL"  // Must end with SELL
-   ```
+## How It Works
 
-3. Short Entry Scanner:
-   ```
-   // Example: RSI Overbought
-   rsi(14) crosses above 70
-   Name: "RSI Overbought SHORT"  // Must end with SHORT
-   ```
+1. When your scanner conditions are met, Chartink sends an alert to your webhook URL
+2. OpenAlgo receives the alert and:
+   - Validates the webhook ID
+   - Checks if strategy is active
+   - For intraday strategies, checks if within trading hours
+   - Matches symbols from alert with your configured symbols
+   - Places orders according to your configuration
 
-4. Short Exit Scanner:
-   ```
-   // Example: RSI Oversold
-   rsi(14) crosses below 30
-   Name: "RSI Oversold COVER"  // Must end with COVER
-   ```
+### Intraday Trading
 
-### Setting Up Alerts
+For intraday strategies:
+- Orders are only placed between Start Time and End Time
+- At Square Off Time, all open positions are automatically closed
+- Uses MIS product type for better leverage
 
-1. Click "Create Alert" on your scanner
-2. Set Alert Options:
-   - Frequency: 1 minute (recommended)
-   - Add webhook URL from OpenAlgo
-   - Enable during market hours
+### Positional Trading
 
-## Trading Times
+For positional strategies:
+- Orders can be placed any time during market hours
+- No automatic square-off
+- Uses CNC product type for delivery trades
 
-For intraday strategies, the system enforces these time controls:
+## Order Placement
 
-1. Signal Start Time (e.g., 09:30:00)
-   - No orders before this time
-   - Allows market to stabilize
-   - Default: 09:30:00
+When a Chartink alert is received:
+- For new positions:
+  ```json
+  {
+    "apikey": "your-api-key",
+    "strategy": "Strategy Name",
+    "symbol": "SYMBOL",
+    "exchange": "NSE/BSE",
+    "action": "BUY",
+    "product": "MIS/CNC",
+    "pricetype": "MARKET",
+    "quantity": "configured-quantity"
+  }
+  ```
 
-2. Trading End Time (e.g., 15:00:00)
-   - No new positions after this time
-   - Existing positions remain open
-   - Default: 15:00:00
+- For square-off (intraday):
+  ```json
+  {
+    "apikey": "your-api-key",
+    "strategy": "Strategy Name",
+    "symbol": "SYMBOL",
+    "exchange": "NSE/BSE",
+    "action": "SELL",
+    "product": "MIS",
+    "pricetype": "MARKET",
+    "quantity": "0",
+    "position_size": "0"
+  }
+  ```
 
-3. Square-off Time (e.g., 15:15:00)
-   - All positions automatically closed
-   - Uses smart orders for closure
-   - Default: 15:15:00
+## Strategy Management
 
-## Scanner Names
+### Activation/Deactivation
 
-The system uses scanner name suffixes to determine the action:
+- Active strategies process incoming alerts
+- Inactive strategies ignore alerts
+- Toggle status from strategy view or list
 
-| Suffix | Action | Description | Example Name |
-|--------|--------|-------------|--------------|
-| BUY | Long Entry | Places regular buy order | "SMA Crossover BUY" |
-| SELL | Long Exit | Closes long positions | "RSI Exit SELL" |
-| SHORT | Short Entry | Places regular sell order | "Breakdown SHORT" |
-| COVER | Short Exit | Closes short positions | "Reversal COVER" |
+### Symbol Management
 
-## Webhook Format
+- Add/remove symbols any time
+- Update quantities as needed
+- View all configured symbols
+- Bulk import for multiple symbols
 
-When Chartink sends alerts, it uses this format:
+### Time Controls
 
-```json
-{
-    "stocks": "RELIANCE,SBIN",
-    "trigger_prices": "2500.00,550.75",
-    "triggered_at": "14:30:00",
-    "scan_name": "MA Crossover BUY",
-    "scan_url": "ma-crossover",
-    "alert_name": "Alert for MA Crossover",
-    "webhook_url": "your-webhook-url"
-}
-```
+For intraday strategies:
+- Start Time: When to start accepting alerts
+- End Time: When to stop accepting alerts
+- Square Off Time: When to close all positions
 
-Important Notes:
-- The scan_name suffix determines the action
-- Only configured symbols will be processed
-- Orders respect trading time controls
-- Uses your API key for authentication
+## Best Practices
+
+1. Test your strategy with small quantities first
+2. Use proper stop-losses in your Chartink scanner
+3. Monitor the strategy's performance
+4. Keep track of order logs
+5. Regularly verify symbol configurations
+
+## Error Handling
+
+OpenAlgo handles various error scenarios:
+- Invalid webhook IDs
+- Inactive strategies
+- Outside trading hours
+- Symbol mismatches
+- Order placement failures
+
+All errors are logged and can be viewed in the API analyzer.
+
+## Limitations
+
+1. Only supports NSE and BSE exchanges
+2. Intraday square-off is all-or-nothing
+3. No partial position closures
+4. No modification of existing orders
+5. Market orders only
+
+## Security
+
+- Each strategy has a unique webhook ID
+- API keys are required for order placement
+- Session validation for web interface
+- Secure storage of credentials
+- Rate limiting on endpoints
 
 ## Troubleshooting
 
-### Common Issues
+1. Check strategy status (active/inactive)
+2. Verify trading hours for intraday
+3. Confirm symbol configurations
+4. Check API analyzer for errors
+5. Verify webhook URL in Chartink
 
-1. "API key not found" Error
-   - Ensure you've created an API key in OpenAlgo
-   - Check if API key is active
-   - Create a new API key if needed
+## Support
 
-2. Orders Not Executing
-   - Check if within trading hours
-   - Verify symbol is configured
-   - Ensure scanner name has correct suffix
-   - Check logs for specific errors
-
-3. Symbol Not Found
-   - Verify symbol exists in selected exchange
-   - Check symbol spelling
-   - Ensure exchange is correct (NSE/BSE)
-
-4. Webhook Not Working
-   - Verify webhook URL is correct
-   - Check if strategy is active
-   - Ensure Chartink premium subscription is active
-
-### Best Practices
-
-1. Testing New Strategies
-   - Start with small quantities
-   - Test during market hours
-   - Monitor first few trades
-   - Check logs for any issues
-
-2. Symbol Configuration
-   - Use correct exchange
-   - Verify quantities
-   - Double-check product types
-   - Test with one symbol first
-
-3. Time Settings
-   - Allow buffer after market open
-   - Set square-off before market close
-   - Consider market liquidity
-   - Test time-based controls
-
-4. Scanner Setup
-   - Use clear naming convention
-   - Test conditions thoroughly
-   - Monitor alert frequency
-   - Verify webhook delivery
-
-### Logs and Monitoring
-
-1. Check OpenAlgo Logs for:
-   - Webhook receipts
-   - Order execution
-   - Error messages
-   - Time validations
-
-2. Monitor Chartink for:
-   - Alert triggers
-   - Webhook delivery
-   - Scanner conditions
-   - Real-time updates
-
-For additional support or questions, refer to the OpenAlgo documentation or contact support.
+For issues or questions:
+1. Check the logs in API analyzer
+2. Review error messages
+3. Contact support with:
+   - Strategy ID
+   - Error details
+   - Time of occurrence
+   - Relevant logs
