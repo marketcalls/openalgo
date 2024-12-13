@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Configure Symbols - {{ strategy.name }}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Configure Symbols - {{ strategy.name }}</h1>
+        <a href="{{ url_for('chartink_bp.index') }}" class="btn btn-ghost">
+            Back to Strategies
+        </a>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-2">
+        <!-- Single Symbol Add -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Add Single Symbol</h2>
+                <form method="POST" class="space-y-4">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Exchange</span>
+                        </label>
+                        <select name="exchange" class="select select-bordered w-full" required
+                                onchange="document.getElementById('symbolSearch').setAttribute('data-exchange', this.value)">
+                            {% for exchange in exchanges %}
+                            <option value="{{ exchange }}">{{ exchange }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Symbol</span>
+                        </label>
+                        <div class="relative">
+                            <input type="text" id="symbolSearch" name="symbol" 
+                                   class="input input-bordered w-full" required
+                                   placeholder="Search symbol..."
+                                   data-exchange="NSE"
+                                   autocomplete="off">
+                            <div id="symbolResults" class="absolute z-10 w-full mt-1 hidden">
+                                <ul class="menu bg-base-200 w-full rounded-box shadow-lg max-h-64 overflow-y-auto">
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Quantity</span>
+                        </label>
+                        <input type="number" name="quantity" class="input input-bordered" required min="1">
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Product Type</span>
+                        </label>
+                        <select name="product_type" class="select select-bordered w-full" required>
+                            <option value="MIS">MIS</option>
+                            <option value="CNC">CNC</option>
+                        </select>
+                    </div>
+
+                    <div class="form-control mt-6">
+                        <button type="submit" class="btn btn-primary">Add Symbol</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Bulk Add Symbols -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Bulk Add Symbols</h2>
+                <form method="POST" class="space-y-4">
+                    <div class="alert alert-info">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">Format</h3>
+                            <p>One symbol per line: SYMBOL,EXCHANGE,QUANTITY,PRODUCT</p>
+                            <p class="text-sm mt-1">Example:</p>
+                            <pre class="text-xs mt-1">RELIANCE,NSE,10,MIS
+HDFCBANK,NSE,5,CNC
+TATASTEEL,BSE,15,MIS</pre>
+                        </div>
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Symbols List</span>
+                        </label>
+                        <textarea name="symbols" class="textarea textarea-bordered h-48 font-mono" 
+                                  placeholder="Enter symbols list..."></textarea>
+                    </div>
+
+                    <div class="form-control mt-6">
+                        <button type="submit" class="btn btn-primary">Add Symbols</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Current Symbols -->
+    <div class="mt-8">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Configured Symbols</h2>
+                
+                {% if symbol_mappings %}
+                <div class="overflow-x-auto">
+                    <table class="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Exchange</th>
+                                <th>Quantity</th>
+                                <th>Product</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for mapping in symbol_mappings %}
+                            <tr>
+                                <td>{{ mapping.chartink_symbol }}</td>
+                                <td>{{ mapping.exchange }}</td>
+                                <td>{{ mapping.quantity }}</td>
+                                <td>{{ mapping.product_type }}</td>
+                                <td>
+                                    <form action="{{ url_for('chartink_bp.delete_symbol', strategy_id=strategy.id, mapping_id=mapping.id) }}"
+                                          method="POST" 
+                                          class="inline"
+                                          onsubmit="return confirm('Are you sure you want to delete this symbol?');">
+                                        <button type="submit" class="btn btn-error btn-xs">Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">No symbols configured</h3>
+                        <div class="text-sm">Add symbols above to start trading with this strategy</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let searchTimeout;
+
+function searchSymbols(input) {
+    clearTimeout(searchTimeout);
+    const query = input.value.trim();
+    const exchange = input.getAttribute('data-exchange');
+    const resultsDiv = document.getElementById('symbolResults');
+    
+    if (query.length < 2) {
+        resultsDiv.classList.add('hidden');
+        return;
+    }
+    
+    searchTimeout = setTimeout(() => {
+        fetch(`/chartink/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+            .then(response => response.json())
+            .then(data => {
+                const resultsList = resultsDiv.querySelector('ul');
+                resultsList.innerHTML = '';
+                
+                if (data.results && data.results.length > 0) {
+                    data.results.forEach(result => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `
+                            <a href="#" onclick="selectSymbol('${result.symbol}', '${result.exchange}')">
+                                <strong>${result.symbol}</strong>
+                                <span class="text-sm opacity-70">${result.name || ''}</span>
+                            </a>
+                        `;
+                        resultsList.appendChild(li);
+                    });
+                    resultsDiv.classList.remove('hidden');
+                } else {
+                    resultsDiv.classList.add('hidden');
+                }
+            })
+            .catch(error => {
+                console.error('Error searching symbols:', error);
+                resultsDiv.classList.add('hidden');
+            });
+    }, 300);
+}
+
+function selectSymbol(symbol, exchange) {
+    document.getElementById('symbolSearch').value = symbol;
+    document.getElementById('symbolResults').classList.add('hidden');
+}
+
+// Close results when clicking outside
+document.addEventListener('click', function(e) {
+    const resultsDiv = document.getElementById('symbolResults');
+    const searchInput = document.getElementById('symbolSearch');
+    
+    if (!resultsDiv.contains(e.target) && !searchInput.contains(e.target)) {
+        resultsDiv.classList.add('hidden');
+    }
+});
+</script>
+{% endblock %}

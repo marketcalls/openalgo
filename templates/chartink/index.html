@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block title %}Chartink Strategies{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Chartink Strategies</h1>
+        <a href="{{ url_for('chartink_bp.new_strategy') }}" class="btn btn-primary">
+            New Strategy
+        </a>
+    </div>
+
+    {% if strategies %}
+    <div class="grid gap-6">
+        {% for strategy in strategies %}
+        {% if strategy.user_id == session['user'] %}
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <div class="flex justify-between items-start">
+                    <div class="w-full">
+                        <h2 class="card-title">{{ strategy.name }}</h2>
+                        <div class="mt-2">
+                            <label class="label">
+                                <span class="label-text font-bold">Webhook URL:</span>
+                            </label>
+                            <div class="flex items-center gap-2">
+                                <div class="form-control flex-1">
+                                    <input type="text" value="{{ strategy.webhook_url }}" 
+                                           class="input input-bordered w-full font-mono text-sm" readonly>
+                                </div>
+                                <button onclick="copyWebhook(this)" 
+                                        class="btn btn-square btn-sm tooltip tooltip-left"
+                                        data-webhook="{{ strategy.webhook_url }}"
+                                        data-tip="Copy webhook URL">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        {% if strategy.is_intraday %}
+                        <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="stat bg-base-200 rounded-box p-4">
+                                <div class="stat-title">Signal Start</div>
+                                <div class="stat-value text-lg">{{ strategy.start_time }}</div>
+                                <div class="stat-desc">Orders start after this time</div>
+                            </div>
+                            <div class="stat bg-base-200 rounded-box p-4">
+                                <div class="stat-title">Trading End</div>
+                                <div class="stat-value text-lg">{{ strategy.end_time }}</div>
+                                <div class="stat-desc">No new orders after this</div>
+                            </div>
+                            <div class="stat bg-base-200 rounded-box p-4">
+                                <div class="stat-title">Square-off</div>
+                                <div class="stat-value text-lg">{{ strategy.squareoff_time }}</div>
+                                <div class="stat-desc">Auto close positions</div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="mt-4">
+                            <span class="badge badge-lg badge-success">Positional Strategy</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="flex flex-col gap-2 ml-4">
+                        <a href="{{ url_for('chartink_bp.configure_symbols', strategy_id=strategy.id) }}" 
+                           class="btn btn-sm btn-outline">
+                            Configure Symbols
+                        </a>
+                        <form action="{{ url_for('chartink_bp.delete', strategy_id=strategy.id) }}" 
+                              method="POST" 
+                              class="inline"
+                              onsubmit="return confirm('Are you sure you want to delete this strategy? This will remove all symbol mappings and webhook configurations.');">
+                            <button type="submit" class="btn btn-sm btn-error w-full">Delete</button>
+                        </form>
+                    </div>
+                </div>
+
+                {% if strategy.symbol_mappings %}
+                <div class="divider"></div>
+                <div class="overflow-x-auto">
+                    <table class="table table-compact w-full">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Exchange</th>
+                                <th>Quantity</th>
+                                <th>Product</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for mapping in strategy.symbol_mappings %}
+                            <tr>
+                                <td>{{ mapping.chartink_symbol }}</td>
+                                <td>{{ mapping.exchange }}</td>
+                                <td>{{ mapping.quantity }}</td>
+                                <td>{{ mapping.product_type }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-warning mt-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">No symbols configured</h3>
+                        <div class="text-sm">Click "Configure Symbols" to add trading symbols</div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="alert alert-info mt-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">Scanner Name Rules</h3>
+                        <div class="text-sm mt-1">End your scanner names with:</div>
+                        <ul class="list-disc list-inside text-sm mt-1">
+                            <li>BUY - For long entry signals</li>
+                            <li>SELL - For long exit signals</li>
+                            <li>SHORT - For short entry signals</li>
+                            <li>COVER - For short exit signals</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="hero bg-base-200 rounded-box">
+        <div class="hero-content text-center py-10">
+            <div class="max-w-md">
+                <h2 class="text-2xl font-bold">No Strategies Yet</h2>
+                <p class="py-6">Create your first Chartink strategy to start receiving webhook alerts and automating your trades.</p>
+                <a href="{{ url_for('chartink_bp.new_strategy') }}" class="btn btn-primary">
+                    Create First Strategy
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+async function copyWebhook(button) {
+    const webhook = button.dataset.webhook;
+    try {
+        await navigator.clipboard.writeText(webhook);
+        
+        // Store original classes
+        const originalClasses = button.className;
+        const originalSvg = button.innerHTML;
+        
+        // Show success state
+        button.className = 'btn btn-square btn-sm btn-success tooltip tooltip-left';
+        button.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+        `;
+        
+        // Reset after 1 second
+        setTimeout(() => {
+            button.className = originalClasses;
+            button.innerHTML = originalSvg;
+        }, 1000);
+    } catch (err) {
+        console.error('Failed to copy webhook URL:', err);
+    }
+}
+</script>
+{% endblock %}

@@ -20,6 +20,7 @@ from blueprints.brlogin import brlogin_bp
 from blueprints.core import core_bp
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
+from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 
 from restx_api import api_v1_bp
 
@@ -29,6 +30,7 @@ from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
+from database.chartink_db import init_db as ensure_chartink_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -67,6 +69,7 @@ def create_app():
     app.register_blueprint(core_bp)
     app.register_blueprint(analyzer_bp)  # Register the analyzer blueprint
     app.register_blueprint(settings_bp)  # Register the settings blueprint
+    app.register_blueprint(chartink_bp)  # Register the chartink blueprint
 
     # Register RESTx API blueprint
     app.register_blueprint(api_v1_bp)
@@ -93,6 +96,7 @@ def setup_environment(app):
         ensure_api_log_tables_exists()
         ensure_analyzer_tables_exists()
         ensure_settings_tables_exists()
+        ensure_chartink_tables_exists()  # Initialize Chartink tables
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
