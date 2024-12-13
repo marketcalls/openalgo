@@ -3,12 +3,12 @@ from database.chartink_db import (
     ChartinkStrategy, ChartinkSymbolMapping, db_session,
     create_strategy, add_symbol_mapping, get_strategy_by_webhook_id,
     get_symbol_mappings, get_all_strategies, delete_strategy,
-    update_strategy_times, delete_symbol_mapping, bulk_add_symbol_mappings
+    update_strategy_times, delete_symbol_mapping, bulk_add_symbol_mappings,
+    toggle_strategy, get_strategy
 )
 from database.symbol import enhanced_search_symbols
 from utils.session import check_session_validity
-from database.auth_db import get_api_key_for_tradingview, get_auth_token_broker
-from database.user_db import User
+from database.auth_db import get_api_key_for_tradingview
 import json
 from datetime import datetime
 import pytz
@@ -33,11 +33,10 @@ VALID_EXCHANGES = ['NSE', 'BSE']
 
 def schedule_squareoff(strategy_id):
     """Schedule squareoff for a strategy"""
-    strategy = ChartinkStrategy.query.get(strategy_id)
+    strategy = get_strategy(strategy_id)
     if not strategy:
         return
     
-    # Parse squareoff time
     try:
         hours, minutes, seconds = map(int, strategy.squareoff_time.split(':'))
         # Remove existing job if any
@@ -61,7 +60,7 @@ def schedule_squareoff(strategy_id):
 def squareoff_positions(strategy_id):
     """Square off all positions for a strategy"""
     try:
-        strategy = ChartinkStrategy.query.get(strategy_id)
+        strategy = get_strategy(strategy_id)
         if not strategy:
             return
             
@@ -77,7 +76,6 @@ def squareoff_positions(strategy_id):
         # Place smart orders with quantity 0 to close positions
         for mapping in mappings:
             try:
-                # Make API request to place smart order
                 response = requests.post(
                     f"{BASE_URL}/api/v1/placesmartorder",
                     json={
@@ -107,6 +105,36 @@ def index():
     strategies = get_all_strategies()
     return render_template('chartink/index.html', strategies=strategies)
 
+@chartink_bp.route('/<int:strategy_id>')
+@check_session_validity
+def view_strategy(strategy_id):
+    """View strategy details"""
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.user_id != session['user']:
+        abort(404)
+    return render_template('chartink/view_strategy.html', strategy=strategy)
+
+@chartink_bp.route('/<int:strategy_id>/toggle', methods=['POST'])
+@check_session_validity
+def toggle_strategy_status(strategy_id):
+    """Toggle strategy active status"""
+    try:
+        strategy = get_strategy(strategy_id)
+        if not strategy or strategy.user_id != session['user']:
+            abort(404)
+            
+        if toggle_strategy(strategy_id):
+            status = 'stopped' if not strategy.is_active else 'started'
+            flash(f'Strategy {status} successfully', 'success')
+        else:
+            flash('Error toggling strategy status', 'error')
+            
+    except Exception as e:
+        logger.error(f"Error toggling strategy: {str(e)}")
+        flash('Error toggling strategy status', 'error')
+        
+    return redirect(request.referrer or url_for('chartink_bp.index'))
+
 @chartink_bp.route('/new', methods=['GET', 'POST'])
 @check_session_validity
 def new_strategy():
@@ -132,7 +160,7 @@ def new_strategy():
             strategy = create_strategy(
                 name=name,
                 base_url=BASE_URL,
-                user_id=session['user'],  # Store user ID with strategy
+                user_id=session['user'],
                 is_intraday=is_intraday,
                 start_time=start_time,
                 end_time=end_time,
@@ -144,7 +172,7 @@ def new_strategy():
                 schedule_squareoff(strategy.id)
                 
             flash('Strategy created successfully', 'success')
-            return redirect(url_for('chartink_bp.configure_symbols', strategy_id=strategy.id))
+            return redirect(url_for('chartink_bp.view_strategy', strategy_id=strategy.id))
             
         except Exception as e:
             logger.error(f"Error creating strategy: {str(e)}")
@@ -157,13 +185,9 @@ def new_strategy():
 @check_session_validity
 def configure_symbols(strategy_id):
     """Configure symbol mappings for a strategy"""
-    strategy = ChartinkStrategy.query.get(strategy_id)
-    if not strategy:
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.user_id != session['user']:
         abort(404)
-    
-    # Check ownership
-    if strategy.user_id != session['user']:
-        abort(403)
     
     if request.method == 'POST':
         try:
@@ -209,7 +233,7 @@ def configure_symbols(strategy_id):
                 )
                 flash('Symbol mapping added successfully', 'success')
             
-            return redirect(url_for('chartink_bp.configure_symbols', strategy_id=strategy_id))
+            return redirect(url_for('chartink_bp.view_strategy', strategy_id=strategy_id))
             
         except Exception as e:
             flash(f'Error adding symbol mapping: {str(e)}', 'error')
@@ -225,7 +249,7 @@ def configure_symbols(strategy_id):
 def delete_symbol(strategy_id, mapping_id):
     """Delete a symbol mapping"""
     try:
-        strategy = ChartinkStrategy.query.get(strategy_id)
+        strategy = get_strategy(strategy_id)
         if not strategy or strategy.user_id != session['user']:
             abort(403)
             
@@ -236,14 +260,14 @@ def delete_symbol(strategy_id, mapping_id):
     except Exception as e:
         flash(f'Error deleting symbol mapping: {str(e)}', 'error')
         
-    return redirect(url_for('chartink_bp.configure_symbols', strategy_id=strategy_id))
+    return redirect(url_for('chartink_bp.view_strategy', strategy_id=strategy_id))
 
 @chartink_bp.route('/<int:strategy_id>/times', methods=['POST'])
 @check_session_validity
 def update_times(strategy_id):
     """Update strategy trading times"""
     try:
-        strategy = ChartinkStrategy.query.get(strategy_id)
+        strategy = get_strategy(strategy_id)
         if not strategy or strategy.user_id != session['user']:
             abort(403)
             
@@ -270,6 +294,28 @@ def update_times(strategy_id):
         logger.error(f"Error updating strategy times: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@chartink_bp.route('/<int:strategy_id>/delete', methods=['POST'])
+@check_session_validity
+def delete(strategy_id):
+    """Delete a strategy"""
+    try:
+        strategy = get_strategy(strategy_id)
+        if not strategy or strategy.user_id != session['user']:
+            abort(403)
+            
+        if delete_strategy(strategy_id):
+            # Remove scheduled squareoff job if exists
+            job_id = f'squareoff_{strategy_id}'
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+            flash('Strategy deleted successfully', 'success')
+        else:
+            flash('Strategy not found', 'error')
+    except Exception as e:
+        flash(f'Error deleting strategy: {str(e)}', 'error')
+        
+    return redirect(url_for('chartink_bp.index'))
+
 @chartink_bp.route('/webhook/<webhook_id>', methods=['POST'])
 def webhook(webhook_id):
     """Handle incoming webhooks from Chartink"""
@@ -280,6 +326,10 @@ def webhook(webhook_id):
         strategy = get_strategy_by_webhook_id(webhook_id)
         if not strategy:
             return jsonify({'error': 'Invalid webhook ID'}), 404
+            
+        # Check if strategy is active
+        if not strategy.is_active:
+            return jsonify({'error': 'Strategy is not active'}), 400
             
         # Check if within trading hours for intraday
         if strategy.is_intraday:
@@ -393,28 +443,6 @@ def webhook(webhook_id):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@chartink_bp.route('/<int:strategy_id>/delete', methods=['POST'])
-@check_session_validity
-def delete(strategy_id):
-    """Delete a strategy"""
-    try:
-        strategy = ChartinkStrategy.query.get(strategy_id)
-        if not strategy or strategy.user_id != session['user']:
-            abort(403)
-            
-        if delete_strategy(strategy_id):
-            # Remove scheduled squareoff job if exists
-            job_id = f'squareoff_{strategy_id}'
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-            flash('Strategy deleted successfully', 'success')
-        else:
-            flash('Strategy not found', 'error')
-    except Exception as e:
-        flash(f'Error deleting strategy: {str(e)}', 'error')
-        
-    return redirect(url_for('chartink_bp.index'))
 
 @chartink_bp.route('/search')
 @check_session_validity

@@ -17,7 +17,7 @@ from typing import List, Dict
 load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-WEBHOOK_PEPPER = os.getenv('API_KEY_PEPPER', 'default-pepper-change-in-production')  # Use same pepper as API keys
+WEBHOOK_PEPPER = os.getenv('API_KEY_PEPPER', 'default-pepper-change-in-production')
 
 # Setup Fernet encryption for webhook URLs
 def get_encryption_key():
@@ -50,11 +50,8 @@ Base.query = db_session.query_property()
 
 def generate_webhook_id():
     """Generate a secure webhook identifier"""
-    # Generate random bytes
     random_bytes = secrets.token_bytes(32)
-    # Create a hash using the random bytes and the webhook secret
     hash_input = random_bytes + WEBHOOK_PEPPER.encode()
-    # Use SHA-256 to create a fixed-length hash
     hasher = hashlib.sha256()
     hasher.update(hash_input)
     webhook_id = base64.urlsafe_b64encode(hasher.digest()).decode()[:32]
@@ -81,13 +78,14 @@ class ChartinkStrategy(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
-    user_id = Column(String(255), nullable=False)  # Store user ID for API key lookup
-    webhook_id = Column(String(32), unique=True, nullable=False)  # Public webhook identifier
-    webhook_url_encrypted = Column(Text, nullable=False)  # Encrypted full webhook URL
+    user_id = Column(String(255), nullable=False)
+    webhook_id = Column(String(32), unique=True, nullable=False)
+    webhook_url_encrypted = Column(Text, nullable=False)
     is_intraday = Column(Boolean, default=True)
-    start_time = Column(String(8))  # HH:MM:SS format
-    end_time = Column(String(8))    # HH:MM:SS format
-    squareoff_time = Column(String(8))  # HH:MM:SS format
+    is_active = Column(Boolean, default=True)  # Strategy status
+    start_time = Column(String(8))
+    end_time = Column(String(8))
+    squareoff_time = Column(String(8))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -111,10 +109,10 @@ class ChartinkSymbolMapping(Base):
     
     id = Column(Integer, primary_key=True)
     strategy_id = Column(Integer, ForeignKey('chartink_strategies.id'), nullable=False)
-    chartink_symbol = Column(String(50), nullable=False)  # Symbol from Chartink
-    exchange = Column(String(10), nullable=False)  # NSE/BSE
+    chartink_symbol = Column(String(50), nullable=False)
+    exchange = Column(String(10), nullable=False)
     quantity = Column(Integer, nullable=False)
-    product_type = Column(String(10), nullable=False)  # MIS/CNC
+    product_type = Column(String(10), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -131,19 +129,21 @@ def create_strategy(name: str, base_url: str, user_id: str, is_intraday: bool = 
                    squareoff_time: str = "15:15:00") -> ChartinkStrategy:
     """Create a new Chartink strategy with secure webhook URL"""
     try:
-        # Generate webhook ID and URL
+        # Add chartink_ prefix if not present
+        if not name.startswith('chartink_'):
+            name = f'chartink_{name}'
+            
         webhook_id = generate_webhook_id()
         webhook_url = f"{base_url}/chartink/webhook/{webhook_id}"
-        
-        # Encrypt webhook URL
         encrypted_url = encrypt_webhook_url(webhook_url)
         
         strategy = ChartinkStrategy(
             name=name,
-            user_id=user_id,  # Store user ID
+            user_id=user_id,
             webhook_id=webhook_id,
             webhook_url_encrypted=encrypted_url,
             is_intraday=is_intraday,
+            is_active=True,  # Start as active
             start_time=start_time,
             end_time=end_time,
             squareoff_time=squareoff_time
@@ -155,88 +155,22 @@ def create_strategy(name: str, base_url: str, user_id: str, is_intraday: bool = 
         db_session.rollback()
         raise e
 
-def add_symbol_mapping(strategy_id: int, chartink_symbol: str, exchange: str, 
-                      quantity: int, product_type: str) -> ChartinkSymbolMapping:
-    """Add symbol mapping for a strategy"""
+def toggle_strategy(strategy_id: int) -> bool:
+    """Toggle strategy active status"""
     try:
-        # Check if mapping already exists
-        existing = ChartinkSymbolMapping.query.filter_by(
-            strategy_id=strategy_id,
-            chartink_symbol=chartink_symbol,
-            exchange=exchange
-        ).first()
-        
-        if existing:
-            # Update existing mapping
-            existing.quantity = quantity
-            existing.product_type = product_type
-            mapping = existing
-        else:
-            # Create new mapping
-            mapping = ChartinkSymbolMapping(
-                strategy_id=strategy_id,
-                chartink_symbol=chartink_symbol,
-                exchange=exchange,
-                quantity=quantity,
-                product_type=product_type
-            )
-            db_session.add(mapping)
-            
-        db_session.commit()
-        return mapping
-    except Exception as e:
-        db_session.rollback()
-        raise e
-
-def bulk_add_symbol_mappings(strategy_id: int, symbols: List[Dict]) -> bool:
-    """Add multiple symbol mappings at once"""
-    try:
-        # Get existing mappings
-        existing_mappings = {
-            (m.chartink_symbol, m.exchange): m 
-            for m in ChartinkSymbolMapping.query.filter_by(strategy_id=strategy_id).all()
-        }
-        
-        for symbol_data in symbols:
-            key = (symbol_data['symbol'], symbol_data['exchange'])
-            if key in existing_mappings:
-                # Update existing mapping
-                mapping = existing_mappings[key]
-                mapping.quantity = symbol_data['quantity']
-                mapping.product_type = symbol_data['product_type']
-            else:
-                # Create new mapping
-                mapping = ChartinkSymbolMapping(
-                    strategy_id=strategy_id,
-                    chartink_symbol=symbol_data['symbol'],
-                    exchange=symbol_data['exchange'],
-                    quantity=symbol_data['quantity'],
-                    product_type=symbol_data['product_type']
-                )
-                db_session.add(mapping)
-        
-        db_session.commit()
-        return True
-    except Exception as e:
-        db_session.rollback()
-        raise e
-
-def delete_symbol_mapping(strategy_id: int, mapping_id: int) -> bool:
-    """Delete a symbol mapping"""
-    try:
-        mapping = ChartinkSymbolMapping.query.filter_by(
-            id=mapping_id,
-            strategy_id=strategy_id
-        ).first()
-        
-        if mapping:
-            db_session.delete(mapping)
+        strategy = ChartinkStrategy.query.get(strategy_id)
+        if strategy:
+            strategy.is_active = not strategy.is_active
             db_session.commit()
             return True
         return False
     except Exception as e:
         db_session.rollback()
         raise e
+
+def get_strategy(strategy_id: int) -> ChartinkStrategy:
+    """Get strategy by ID"""
+    return ChartinkStrategy.query.get(strategy_id)
 
 def get_strategy_by_webhook_id(webhook_id: str) -> ChartinkStrategy:
     """Get strategy by webhook ID"""
@@ -276,12 +210,88 @@ def delete_strategy(strategy_id: int) -> bool:
     try:
         strategy = ChartinkStrategy.query.get(strategy_id)
         if strategy:
-            # Clear from cache if exists
             cache_key = f"webhook-{strategy.id}"
             if cache_key in webhook_cache:
                 del webhook_cache[cache_key]
             
             db_session.delete(strategy)
+            db_session.commit()
+            return True
+        return False
+    except Exception as e:
+        db_session.rollback()
+        raise e
+
+def add_symbol_mapping(strategy_id: int, chartink_symbol: str, exchange: str, 
+                      quantity: int, product_type: str) -> ChartinkSymbolMapping:
+    """Add symbol mapping for a strategy"""
+    try:
+        existing = ChartinkSymbolMapping.query.filter_by(
+            strategy_id=strategy_id,
+            chartink_symbol=chartink_symbol,
+            exchange=exchange
+        ).first()
+        
+        if existing:
+            existing.quantity = quantity
+            existing.product_type = product_type
+            mapping = existing
+        else:
+            mapping = ChartinkSymbolMapping(
+                strategy_id=strategy_id,
+                chartink_symbol=chartink_symbol,
+                exchange=exchange,
+                quantity=quantity,
+                product_type=product_type
+            )
+            db_session.add(mapping)
+            
+        db_session.commit()
+        return mapping
+    except Exception as e:
+        db_session.rollback()
+        raise e
+
+def bulk_add_symbol_mappings(strategy_id: int, symbols: List[Dict]) -> bool:
+    """Add multiple symbol mappings at once"""
+    try:
+        existing_mappings = {
+            (m.chartink_symbol, m.exchange): m 
+            for m in ChartinkSymbolMapping.query.filter_by(strategy_id=strategy_id).all()
+        }
+        
+        for symbol_data in symbols:
+            key = (symbol_data['symbol'], symbol_data['exchange'])
+            if key in existing_mappings:
+                mapping = existing_mappings[key]
+                mapping.quantity = symbol_data['quantity']
+                mapping.product_type = symbol_data['product_type']
+            else:
+                mapping = ChartinkSymbolMapping(
+                    strategy_id=strategy_id,
+                    chartink_symbol=symbol_data['symbol'],
+                    exchange=symbol_data['exchange'],
+                    quantity=symbol_data['quantity'],
+                    product_type=symbol_data['product_type']
+                )
+                db_session.add(mapping)
+        
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        raise e
+
+def delete_symbol_mapping(strategy_id: int, mapping_id: int) -> bool:
+    """Delete a symbol mapping"""
+    try:
+        mapping = ChartinkSymbolMapping.query.filter_by(
+            id=mapping_id,
+            strategy_id=strategy_id
+        ).first()
+        
+        if mapping:
+            db_session.delete(mapping)
             db_session.commit()
             return True
         return False
