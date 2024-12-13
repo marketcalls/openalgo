@@ -19,12 +19,17 @@
                         <span class="label-text">Strategy Name</span>
                         <span class="label-text-alt text-error">*</span>
                     </label>
-                    <input type="text" name="name" class="input input-bordered" required 
-                           placeholder="Enter strategy name"
-                           pattern="[A-Za-z0-9\s\-_]+"
-                           title="Only letters, numbers, spaces, hyphens and underscores allowed">
+                    <div class="join w-full">
+                        <div class="join-item flex items-center px-4 bg-base-200 border border-r-0 rounded-l-lg">
+                            chartink_
+                        </div>
+                        <input type="text" name="name" class="input input-bordered join-item rounded-l-none w-full" required 
+                               placeholder="Enter strategy name"
+                               pattern="[A-Za-z0-9\s\-_]+"
+                               title="Only letters, numbers, spaces, hyphens and underscores allowed">
+                    </div>
                     <label class="label">
-                        <span class="label-text-alt">This name will be used to identify orders from this strategy</span>
+                        <span class="label-text-alt">Strategy name will be prefixed with 'chartink_'</span>
                     </label>
                 </div>
 

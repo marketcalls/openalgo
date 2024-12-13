@@ -48,6 +48,21 @@ def validate_strategy_times(start_time, end_time, squareoff_time):
     except ValueError:
         return False, 'Invalid time format'
 
+def validate_strategy_name(name):
+    """Validate strategy name format"""
+    if not name:
+        return False, 'Strategy name is required'
+    
+    # Add prefix if not present
+    if not name.startswith('chartink_'):
+        name = f'chartink_{name}'
+    
+    # Check for valid characters
+    if not all(c.isalnum() or c in ['-', '_', ' '] for c in name.replace('chartink_', '')):
+        return False, 'Strategy name can only contain letters, numbers, spaces, hyphens and underscores'
+    
+    return True, name
+
 def schedule_squareoff(strategy_id):
     """Schedule squareoff for intraday strategy"""
     strategy = get_strategy(strategy_id)
@@ -142,16 +157,18 @@ def new_strategy():
                 flash('Session expired. Please login again.', 'error')
                 return redirect(url_for('auth.login'))
             
-            name = request.form.get('name')
+            # Validate strategy name
+            name = request.form.get('name', '').strip()
+            is_valid_name, name_result = validate_strategy_name(name)
+            if not is_valid_name:
+                flash(name_result, 'error')
+                return redirect(url_for('chartink_bp.new_strategy'))
+            name = name_result  # Use the validated and prefixed name
+            
             is_intraday = request.form.get('type') == 'intraday'
             start_time = request.form.get('start_time') if is_intraday else None
             end_time = request.form.get('end_time') if is_intraday else None
             squareoff_time = request.form.get('squareoff_time') if is_intraday else None
-            
-            # Validate required fields
-            if not name:
-                flash('Strategy name is required', 'error')
-                return redirect(url_for('chartink_bp.new_strategy'))
             
             if is_intraday:
                 if not all([start_time, end_time, squareoff_time]):
