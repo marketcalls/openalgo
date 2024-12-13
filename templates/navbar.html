@@ -52,6 +52,12 @@
                 </a>
             </li>
             <li>
+                <a href="{{ url_for('chartink_bp.index') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
+                    Chartink
+                </a>
+            </li>
+            <li>
                 <a href="{{ url_for('analyzer_bp.analyzer') }}" 
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
                     API Analyzer
@@ -134,6 +140,14 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                         Search
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('chartink_bp.index') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                        </svg>
+                        Chartink
                     </a>
                 </li>
                 <li>

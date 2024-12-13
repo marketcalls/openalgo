@@ -146,6 +146,12 @@
                             Tradingview
                         </a>
                     </li>
+                    <li>
+                        <a href="{{ url_for('chartink_bp.index') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
+                            Chartink
+                        </a>
+                    </li>
                     <div class="divider"></div>
                     <li>
                         <a href="{{ url_for('auth.change_password') }}" 
