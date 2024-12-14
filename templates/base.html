@@ -36,6 +36,10 @@
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
 
+    <script>
+        const APPLICATION_ROOT = "{{ config['APPLICATION_ROOT'] }}";
+    </script>
+
     <!-- Theme and Mode Scripts -->
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>

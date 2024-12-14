@@ -14,7 +14,7 @@ function regenerateApiKey() {
     
     const userId = userInfo.getAttribute('data-login-username');
 
-    fetch('/apikey', {
+    fetch(`${APPLICATION_ROOT}/apikey`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

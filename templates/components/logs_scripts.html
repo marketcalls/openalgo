@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }).toString();
 
         // Create and click a temporary link
-        var downloadUrl = `/logs/export?${params}`;
+        var downloadUrl = `${url_for('log_bp.export_logs')}?${params}`;
         window.location.href = downloadUrl;
     };
     

@@ -13,7 +13,7 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/shoonya/callback" method="POST" class="space-y-4">
+                    <form action="{{ url_for('brlogin.broker_callback', broker='shoonya') }}" method="POST" class="space-y-4">
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">User ID</span>
@@ -119,7 +119,7 @@
                             </svg>
                             Documentation
                         </a>
-                        <a href="/auth/broker" class="btn btn-outline gap-2">
+                        <a href="{{ url_for('auth.broker_login')}}" class="btn btn-outline gap-2">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"></path>
                             </svg>

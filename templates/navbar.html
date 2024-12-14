@@ -6,7 +6,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
             </svg>
         </label>
-        <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+        <a href="{{ url_for('core_bp.home') }}" class="btn btn-ghost normal-case text-xl gap-2">
             <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8">
             <span class="hidden sm:inline">OpenAlgo</span>
         </a>
