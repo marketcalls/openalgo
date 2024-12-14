@@ -2,12 +2,13 @@
 from utils.env_check import load_and_check_env_variables  # Import the environment check function
 load_and_check_env_variables()
 
-
 from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
 from utils.version import get_version  # Import version management
+from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
+from utils.traffic_logger import init_traffic_logging  # Import traffic logging
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -21,8 +22,10 @@ from blueprints.core import core_bp
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
+from blueprints.traffic import traffic_bp  # Import the traffic blueprint
+from blueprints.latency import latency_bp  # Import the latency blueprint
 
-from restx_api import api_v1_bp
+from restx_api import api_v1_bp, api
 
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -31,12 +34,13 @@ from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
+from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
+from database.latency_db import init_latency_db as ensure_latency_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
 from dotenv import load_dotenv
 import os
-
 
 def create_app():
     # Initialize Flask application
@@ -55,9 +59,15 @@ def create_app():
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')  # Adjust the environment variable name as necessary
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 
-    # Register the blueprints
+    # Register RESTx API blueprint first
+    app.register_blueprint(api_v1_bp)
+
+    # Initialize traffic logging middleware after RESTx but before other blueprints
+    init_traffic_logging(app)
+
+    # Register other blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(orders_bp)
@@ -67,12 +77,15 @@ def create_app():
     app.register_blueprint(tv_json_bp)
     app.register_blueprint(brlogin_bp)
     app.register_blueprint(core_bp)
-    app.register_blueprint(analyzer_bp)  # Register the analyzer blueprint
-    app.register_blueprint(settings_bp)  # Register the settings blueprint
-    app.register_blueprint(chartink_bp)  # Register the chartink blueprint
+    app.register_blueprint(analyzer_bp)
+    app.register_blueprint(settings_bp)
+    app.register_blueprint(chartink_bp)
+    app.register_blueprint(traffic_bp)
+    app.register_blueprint(latency_bp)
 
-    # Register RESTx API blueprint
-    app.register_blueprint(api_v1_bp)
+    # Initialize latency monitoring (after registering API blueprint)
+    with app.app_context():
+        init_latency_monitoring(app)
 
     @app.errorhandler(404)
     def not_found_error(error):
@@ -83,7 +96,6 @@ def create_app():
         return dict(version=get_version())
 
     return app
-
 
 def setup_environment(app):
     with app.app_context():
@@ -96,14 +108,15 @@ def setup_environment(app):
         ensure_api_log_tables_exists()
         ensure_analyzer_tables_exists()
         ensure_settings_tables_exists()
-        ensure_chartink_tables_exists()  # Initialize Chartink tables
+        ensure_chartink_tables_exists()
+        ensure_traffic_logs_exists()
+        ensure_latency_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         print(" * ngrok URL: " + public_url + " *")
-
 
 app = create_app()
 

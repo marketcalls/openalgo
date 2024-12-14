@@ -172,6 +172,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('traffic_bp.traffic_dashboard') }}" 
+                           class="{{ 'active' if request.endpoint == 'traffic_bp.traffic_dashboard' }}">
+                            Traffic Monitor
+                        </a>
+                    </li>
+                    <li>
                         <a href="{{ url_for('search_bp.token') }}" 
                            class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
                             Search
