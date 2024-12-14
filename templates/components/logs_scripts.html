@@ -1,4 +1,6 @@
 <script>
+const exportURL = "{{ url_for('log_bp.export_logs') }}";
+
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize variables
     var searchTimeout = null;
@@ -46,7 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }).toString();
 
         // Create and click a temporary link
-        var downloadUrl = `${url_for('log_bp.export_logs')}?${params}`;
+        var downloadUrl = `${exportURL}?${params}`;
         window.location.href = downloadUrl;
     };
     
