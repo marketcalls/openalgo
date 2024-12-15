@@ -232,6 +232,37 @@ def view_strategy(strategy_id):
     symbol_mappings = get_symbol_mappings(strategy_id)
     return render_template('chartink/view_strategy.html', strategy=strategy, symbol_mappings=symbol_mappings)
 
+@chartink_bp.route('/<int:strategy_id>/delete', methods=['POST'])
+@check_session_validity
+def delete_strategy_route(strategy_id):
+    """Delete a strategy"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'error': 'Session expired'}), 401
+        
+    strategy = get_strategy(strategy_id)
+    if not strategy:
+        return jsonify({'status': 'error', 'error': 'Strategy not found'}), 404
+    
+    # Check if strategy belongs to user
+    if strategy.user_id != user_id:
+        return jsonify({'status': 'error', 'error': 'Unauthorized'}), 403
+    
+    try:
+        # Remove squareoff job if exists
+        job_id = f'squareoff_{strategy_id}'
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+        
+        # Delete strategy and its mappings
+        if delete_strategy(strategy_id):
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'status': 'error', 'error': 'Failed to delete strategy'}), 500
+    except Exception as e:
+        logger.error(f'Error deleting strategy {strategy_id}: {str(e)}')
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
 @chartink_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
 @check_session_validity
 def configure_symbols(strategy_id):
@@ -447,6 +478,21 @@ def webhook(webhook_id):
             logger.error(f'No API key found for user {strategy.user_id}')
             return jsonify({'status': 'error', 'error': 'No API key found'}), 401
         
+        # Determine action from scan name
+        scan_name = data.get('scan_name', '').upper()
+        if 'BUY' in scan_name:
+            action = 'BUY'
+        elif 'SELL' in scan_name:
+            action = 'SELL'
+        elif 'SHORT' in scan_name:
+            action = 'SELL'  # For short entry
+        elif 'COVER' in scan_name:
+            action = 'BUY'   # For short cover
+        else:
+            error_msg = 'No valid action keyword (BUY/SELL/SHORT/COVER) found in scan name'
+            logger.error(error_msg)
+            return jsonify({'status': 'error', 'error': error_msg}), 400
+        
         # Process each symbol
         processed_symbols = []
         for symbol in symbols:
@@ -458,19 +504,6 @@ def webhook(webhook_id):
             if not mapping:
                 logger.warning(f'No mapping found for symbol {symbol} in strategy {strategy.id}')
                 continue
-            
-            # Determine action from scan name
-            scan_name = data.get('scan_name', '').upper()
-            if 'BUY' in scan_name:
-                action = 'BUY'
-            elif 'SELL' in scan_name:
-                action = 'SELL'
-            elif 'SHORT' in scan_name:
-                action = 'SELL'  # For short entry
-            elif 'COVER' in scan_name:
-                action = 'BUY'   # For short cover
-            else:
-                action = 'BUY'   # Default to buy
             
             # Place order
             payload = {
