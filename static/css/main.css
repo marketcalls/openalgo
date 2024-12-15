@@ -2980,6 +2980,11 @@ details.collapse summary::-webkit-details-marker {
   border-radius: var(--rounded-box, 1rem);
   background-color: currentColor;
 }
+.progress-info::-moz-progress-bar {
+  border-radius: var(--rounded-box, 1rem);
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-in,oklch(var(--in)/var(--tw-bg-opacity)));
+}
 .progress-success::-moz-progress-bar {
   border-radius: var(--rounded-box, 1rem);
   --tw-bg-opacity: 1;
@@ -3008,6 +3013,9 @@ details.collapse summary::-webkit-details-marker {
   background-position-x: 15%;
   animation: progress-loading 5s ease-in-out infinite;
 }
+.progress-info:indeterminate {
+  --progress-color: var(--fallback-in,oklch(var(--in)/1));
+}
 .progress-success:indeterminate {
   --progress-color: var(--fallback-su,oklch(var(--su)/1));
 }
@@ -3024,6 +3032,10 @@ details.collapse summary::-webkit-details-marker {
 .progress::-webkit-progress-value {
   border-radius: var(--rounded-box, 1rem);
   background-color: currentColor;
+}
+.progress-info::-webkit-progress-value {
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-in,oklch(var(--in)/var(--tw-bg-opacity)));
 }
 .progress-success::-webkit-progress-value {
   --tw-bg-opacity: 1;
@@ -3573,6 +3585,13 @@ details.collapse summary::-webkit-details-marker {
         0 0 0 2px rgb(0 0 0 / 5%);
     text-shadow: 0 1px rgb(0 0 0 / var(--glass-text-shadow-opacity, 5%));
   }
+}
+.badge-sm {
+  height: 1rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  padding-left: 0.438rem;
+  padding-right: 0.438rem;
 }
 .badge-lg {
   height: 1.5rem;
@@ -4541,6 +4560,9 @@ code[class*="language-"] {
   margin-top: 0.25rem;
   margin-bottom: 0.25rem;
 }
+.mb-1 {
+  margin-bottom: 0.25rem;
+}
 .mb-12 {
   margin-bottom: 3rem;
 }
@@ -4564,6 +4586,9 @@ code[class*="language-"] {
 }
 .ml-2 {
   margin-left: 0.5rem;
+}
+.ml-4 {
+  margin-left: 1rem;
 }
 .ml-auto {
   margin-left: auto;
@@ -4642,6 +4667,9 @@ code[class*="language-"] {
 }
 .max-h-\[300px\] {
   max-height: 300px;
+}
+.min-h-\[250px\] {
+  min-height: 250px;
 }
 .min-h-\[calc\(100vh-16rem\)\] {
   min-height: calc(100vh - 16rem);
@@ -5001,6 +5029,9 @@ code[class*="language-"] {
 .pr-10 {
   padding-right: 2.5rem;
 }
+.text-left {
+  text-align: left;
+}
 .text-center {
   text-align: center;
 }
@@ -5057,6 +5088,9 @@ code[class*="language-"] {
 }
 .lowercase {
   text-transform: lowercase;
+}
+.capitalize {
+  text-transform: capitalize;
 }
 .normal-case {
   text-transform: none;

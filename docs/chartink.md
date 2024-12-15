@@ -12,12 +12,46 @@ OpenAlgo supports integration with Chartink for automated trading based on scann
 1. Go to the Chartink section in OpenAlgo
 2. Click "New Strategy" button
 3. Fill in the strategy details:
-   - Name: A unique name for your strategy
+   - Name: A unique name for your strategy (will be prefixed with 'chartink_')
    - Type: Choose between Intraday or Positional
    - For Intraday strategies:
      - Start Time: Trading start time (default: 09:15)
-     - End Time: Trading end time (default: 15:15)
+     - End Time: Trading end time (default: 15:00)
      - Square Off Time: Auto square-off time (default: 15:15)
+
+## Alert Name Keywords
+
+The alert name in Chartink MUST include one of these keywords (not case-sensitive):
+
+1. **BUY** - For entering long positions
+   - Examples: 
+     - "BUY Alert"
+     - "Alert for BUY 2024-12-13"
+     - "Supertrend BUY Signal"
+
+2. **SELL** - For exiting long positions or regular selling
+   - Examples:
+     - "SELL Alert"
+     - "Alert for SELL 2024-12-13"
+     - "Supertrend SELL Signal"
+
+3. **SHORT** - For entering short positions (selling first)
+   - Examples:
+     - "SHORT Alert"
+     - "Alert for SHORT 2024-12-13"
+     - "Supertrend SHORT Signal"
+
+4. **COVER** - For exiting short positions (buying to cover)
+   - Examples:
+     - "COVER Alert"
+     - "Alert for COVER 2024-12-13"
+     - "Supertrend COVER Signal"
+
+### Keyword Rules
+- Keywords can appear anywhere in the alert name
+- Keywords are not case-sensitive (buy/BUY/Buy all work)
+- Alert will fail if no valid keyword is found
+- Only one action will be taken even if multiple keywords are present
 
 ## Configuring Symbols
 
@@ -25,8 +59,8 @@ After creating a strategy, you need to configure the symbols to trade:
 
 1. Click "Configure Symbols" on your strategy
 2. Add symbols individually:
-   - Select Exchange (NSE/BSE)
-   - Search and select Symbol
+   - Search and select Symbol (with exchange badge)
+   - Select Exchange (NSE by default)
    - Enter Quantity
    - Select Product Type (MIS for Intraday, CNC for Positional)
 3. Or bulk add symbols using CSV format:
@@ -39,11 +73,15 @@ After creating a strategy, you need to configure the symbols to trade:
 ## Setting Up Chartink Alert
 
 1. Create your scanner in Chartink
-2. Set up an alert for your scanner
-3. In the webhook URL field, paste your strategy's webhook URL:
+2. Click "Create Alert" button
+3. Enter an alert name that includes one of the action keywords
+4. Find the "Webhook url(optional)" field
+5. Copy and paste your strategy's webhook URL:
    ```
    https://your-openalgo-domain/chartink/webhook/<webhook-id>
    ```
+6. Configure other alert settings as needed
+7. Click "Save alert" button
 
 ## How It Works
 
@@ -51,6 +89,7 @@ After creating a strategy, you need to configure the symbols to trade:
 2. OpenAlgo receives the alert and:
    - Validates the webhook ID
    - Checks if strategy is active
+   - Validates the alert name for action keyword
    - For intraday strategies, checks if within trading hours
    - Matches symbols from alert with your configured symbols
    - Places orders according to your configuration
@@ -79,7 +118,7 @@ When a Chartink alert is received:
     "strategy": "Strategy Name",
     "symbol": "SYMBOL",
     "exchange": "NSE/BSE",
-    "action": "BUY",
+    "action": "BUY/SELL/SHORT/COVER",
     "product": "MIS/CNC",
     "pricetype": "MARKET",
     "quantity": "configured-quantity"
@@ -107,14 +146,15 @@ When a Chartink alert is received:
 
 - Active strategies process incoming alerts
 - Inactive strategies ignore alerts
-- Toggle status from strategy view or list
+- Toggle status from strategy view
 
 ### Symbol Management
 
 - Add/remove symbols any time
 - Update quantities as needed
-- View all configured symbols
+- View all configured symbols with exchange badges
 - Bulk import for multiple symbols
+- Delete confirmation for symbol removal
 
 ### Time Controls
 
@@ -127,14 +167,18 @@ For intraday strategies:
 
 1. Test your strategy with small quantities first
 2. Use proper stop-losses in your Chartink scanner
-3. Monitor the strategy's performance
-4. Keep track of order logs
-5. Regularly verify symbol configurations
+3. Monitor the first few alerts
+4. Keep your webhook URL private
+5. Include action keyword in scan name
+6. For intraday strategies:
+   - Ensure orders are placed during trading hours
+   - Monitor square-off at configured time
 
 ## Error Handling
 
 OpenAlgo handles various error scenarios:
 - Invalid webhook IDs
+- Missing action keywords in alert names
 - Inactive strategies
 - Outside trading hours
 - Symbol mismatches
@@ -149,6 +193,7 @@ All errors are logged and can be viewed in the API analyzer.
 3. No partial position closures
 4. No modification of existing orders
 5. Market orders only
+6. Alert name must contain valid action keyword
 
 ## Security
 
@@ -157,14 +202,16 @@ All errors are logged and can be viewed in the API analyzer.
 - Session validation for web interface
 - Secure storage of credentials
 - Rate limiting on endpoints
+- Confirmation dialogs for deletions
 
 ## Troubleshooting
 
 1. Check strategy status (active/inactive)
 2. Verify trading hours for intraday
 3. Confirm symbol configurations
-4. Check API analyzer for errors
-5. Verify webhook URL in Chartink
+4. Check alert name contains valid keyword
+5. Check API analyzer for errors
+6. Verify webhook URL in Chartink
 
 ## Support
 
@@ -176,3 +223,4 @@ For issues or questions:
    - Error details
    - Time of occurrence
    - Relevant logs
+   - Alert name and webhook URL used
