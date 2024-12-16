@@ -255,12 +255,20 @@ window.refreshCurrentPageContent = function() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+    const socketUrl = `${location.protocol}//${window.location.hostname}`;
+    var socket = io.connect(socketUrl, {
+        path: `${APPLICATION_ROOT}/socket.io`,
+        transports: ['websocket', 'polling']
+    });
+    console.log(`[Socket] Connected to ${socketUrl}`);
     var alertSound = document.getElementById('alert-sound');
     var isOnAnalyzerPage = window.location.pathname.includes('/analyzer');
 
     socket.on('connect', function() {});
     socket.on('disconnect', function() {});
+    socket.on('connection', (socket) => {
+        console.log('a user connected');
+      });
 
     // Password change notification
     socket.on('password_change', function(data) {
