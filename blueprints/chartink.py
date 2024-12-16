@@ -108,7 +108,7 @@ def squareoff_positions(strategy_id):
         mappings = get_symbol_mappings(strategy_id)
         
         for mapping in mappings:
-            # Place smart order with quantity 0 to close position
+            # Use placesmartorder with quantity=0 and position_size=0 for squareoff
             payload = {
                 'apikey': api_key,
                 'strategy': strategy.name,
@@ -118,7 +118,10 @@ def squareoff_positions(strategy_id):
                 'product': mapping.product_type,
                 'pricetype': 'MARKET',
                 'quantity': '0',
-                'position_size': '0'  # This will close the position
+                'position_size': '0',  # This will close the position
+                'price': '0',
+                'trigger_price': '0',
+                'disclosed_quantity': '0'
             }
             
             try:
@@ -456,6 +459,62 @@ def webhook(webhook_id):
         
         logger.info(f'Received webhook data: {data}')
         
+        # Determine action from scan name first to apply correct time checks
+        scan_name = data.get('scan_name', '').upper()
+        if 'BUY' in scan_name:
+            action = 'BUY'
+            use_smart_order = False
+            is_entry_order = True
+        elif 'SELL' in scan_name:
+            action = 'SELL'
+            use_smart_order = True
+            is_entry_order = False
+        elif 'SHORT' in scan_name:
+            action = 'SELL'  # For short entry
+            use_smart_order = False
+            is_entry_order = True
+        elif 'COVER' in scan_name:
+            action = 'BUY'   # For short cover
+            use_smart_order = True
+            is_entry_order = False
+        else:
+            error_msg = 'No valid action keyword (BUY/SELL/SHORT/COVER) found in scan name'
+            logger.error(error_msg)
+            return jsonify({'status': 'error', 'error': error_msg}), 400
+            
+        # Time validations for intraday strategies
+        if strategy.is_intraday:
+            current_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+            
+            # Convert strategy times to time objects
+            start_time = datetime.strptime(strategy.start_time, '%H:%M').time()
+            end_time = datetime.strptime(strategy.end_time, '%H:%M').time()
+            squareoff_time = datetime.strptime(strategy.squareoff_time, '%H:%M').time()
+            
+            # Check if before start time for all orders
+            if current_time < start_time:
+                logger.info(f'Strategy {strategy.id} received webhook before start time, ignoring')
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Cannot place orders before start time'
+                }), 400
+            
+            # Check if after squareoff time for all orders
+            if current_time >= squareoff_time:
+                logger.info(f'Strategy {strategy.id} received webhook after squareoff time, ignoring')
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Cannot place orders after squareoff time'
+                }), 400
+            
+            # For entry orders (BUY/SHORT), check end time
+            if is_entry_order and current_time >= end_time:
+                logger.info(f'Strategy {strategy.id} received entry order after end time, ignoring')
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Cannot place entry orders after end time'
+                }), 400
+        
         # Get symbols and trigger prices
         symbols = data.get('stocks', '').split(',')
         trigger_prices = data.get('trigger_prices', '').split(',')
@@ -478,21 +537,6 @@ def webhook(webhook_id):
             logger.error(f'No API key found for user {strategy.user_id}')
             return jsonify({'status': 'error', 'error': 'No API key found'}), 401
         
-        # Determine action from scan name
-        scan_name = data.get('scan_name', '').upper()
-        if 'BUY' in scan_name:
-            action = 'BUY'
-        elif 'SELL' in scan_name:
-            action = 'SELL'
-        elif 'SHORT' in scan_name:
-            action = 'SELL'  # For short entry
-        elif 'COVER' in scan_name:
-            action = 'BUY'   # For short cover
-        else:
-            error_msg = 'No valid action keyword (BUY/SELL/SHORT/COVER) found in scan name'
-            logger.error(error_msg)
-            return jsonify({'status': 'error', 'error': error_msg}), 400
-        
         # Process each symbol
         processed_symbols = []
         for symbol in symbols:
@@ -505,7 +549,7 @@ def webhook(webhook_id):
                 logger.warning(f'No mapping found for symbol {symbol} in strategy {strategy.id}')
                 continue
             
-            # Place order
+            # Prepare base payload
             payload = {
                 'apikey': api_key,
                 'strategy': strategy.name,
@@ -513,14 +557,31 @@ def webhook(webhook_id):
                 'exchange': mapping.exchange,
                 'action': action,
                 'product': mapping.product_type,
-                'pricetype': 'MARKET',
-                'quantity': str(mapping.quantity)
+                'pricetype': 'MARKET'
             }
             
-            logger.info(f'Placing order with payload: {payload}')
+            # Add quantity based on order type
+            if use_smart_order:
+                # For SELL and COVER, use smart order with quantity=0 and position_size=0
+                payload.update({
+                    'quantity': '0',
+                    'position_size': '0',
+                    'price': '0',
+                    'trigger_price': '0',
+                    'disclosed_quantity': '0'
+                })
+                endpoint = 'placesmartorder'
+            else:
+                # For BUY and SHORT, use regular order with configured quantity
+                payload.update({
+                    'quantity': str(mapping.quantity)
+                })
+                endpoint = 'placeorder'
+            
+            logger.info(f'Placing {endpoint} with payload: {payload}')
             
             try:
-                response = requests.post(f'{BASE_URL}/api/v1/placeorder', json=payload)
+                response = requests.post(f'{BASE_URL}/api/v1/{endpoint}', json=payload)
                 if response.ok:
                     logger.info(f'Order placed for {symbol} in strategy {strategy.id}')
                     processed_symbols.append(symbol)
