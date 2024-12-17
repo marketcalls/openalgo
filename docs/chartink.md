@@ -7,6 +7,35 @@ OpenAlgo supports integration with Chartink for automated trading based on scann
 - Automate order placement based on Chartink alerts
 - Auto square-off positions for intraday strategies
 
+## Order Processing System
+
+### Queue Management
+OpenAlgo uses a dual-queue system to handle orders efficiently:
+
+1. Regular Order Queue (Entry Orders):
+   - Handles BUY and SHORT orders
+   - Processes up to 10 orders per second
+   - Orders are batched for maximum throughput
+   - Example: 50 BUY orders complete in ~5 seconds
+
+2. Smart Order Queue (Exit Orders):
+   - Handles SELL and COVER orders
+   - Maintains 1-second delay between orders
+   - Higher priority than entry orders
+   - Example: 50 SELL orders complete in ~50 seconds
+
+3. Multiple Strategy Handling:
+   - All strategies share the same queues
+   - Exit orders always processed before entries
+   - Rate limits maintained across strategies
+   - Each strategy respects its trading hours
+
+4. Auto Square-off Processing:
+   - Uses smart order queue
+   - 1-second delay between position closures
+   - Processes positions sequentially
+   - Example: 20 positions take ~20 seconds to close
+
 ## Setting Up a Strategy
 
 1. Go to the Chartink section in OpenAlgo
@@ -165,14 +194,50 @@ For intraday strategies:
 
 ## Best Practices
 
-1. Test your strategy with small quantities first
-2. Use proper stop-losses in your Chartink scanner
-3. Monitor the first few alerts
-4. Keep your webhook URL private
-5. Include action keyword in scan name
-6. For intraday strategies:
+1. Use Chartink Custom Watchlists
+   - Create custom watchlists with only your trading symbols
+   - Avoid scanning large portfolios like NIFTY500, NIFTY200
+   - Helps manage positions efficiently
+   - Reduces processing time for orders
+   - Better control over trading universe
+
+2. Test your strategy with small quantities first
+   - Verify order placement
+   - Check position management
+   - Monitor square-off process
+   - Validate webhook integration
+
+3. Use proper stop-losses in your Chartink scanner
+   - Implement risk management rules
+   - Set appropriate price conditions
+   - Add volume filters if needed
+
+4. Monitor the first few alerts
+   - Verify order execution
+   - Check processing times
+   - Validate symbol matching
+   - Ensure proper position tracking
+
+5. Keep your webhook URL private
+   - Don't share webhook URLs
+   - Regularly check for unauthorized alerts
+   - Monitor strategy activity
+
+6. Include action keyword in scan name
+   - Use clear, consistent naming
+   - Follow keyword rules strictly
+   - Avoid multiple keywords
+
+7. For intraday strategies:
    - Ensure orders are placed during trading hours
    - Monitor square-off at configured time
+   - Plan for processing delays with large lists
+
+8. For large symbol lists:
+   - Entry orders process faster (10/sec)
+   - Exit orders take longer (1/sec)
+   - Plan strategy timing accordingly
+   - Consider splitting into multiple strategies
 
 ## Error Handling
 

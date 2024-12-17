@@ -18,8 +18,10 @@ import requests
 import os
 import uuid
 import time as time_module
-from queue import Queue
+import queue
 import threading
+from collections import deque
+from time import time
 
 logger = logging.getLogger(__name__)
 
@@ -35,43 +37,78 @@ BASE_URL = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
 # Valid exchanges
 VALID_EXCHANGES = ['NSE', 'BSE']
 
-# Global order queue for rate limiting across strategies
-order_queue = Queue()
+# Separate queues for different order types
+regular_order_queue = queue.Queue()  # For placeorder (up to 10/sec)
+smart_order_queue = queue.Queue()    # For placesmartorder (1/sec)
 
-# Flag to track if order processor is running
+# Order processor state
 order_processor_running = False
 order_processor_lock = threading.Lock()
 
+# Rate limiting state for regular orders
+last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
+
 def process_orders():
-    """Background task to process orders from the queue with rate limiting"""
+    """Background task to process orders from both queues with rate limiting"""
     global order_processor_running
     
     while True:
         try:
-            # Get order from queue
-            order = order_queue.get()
-            if order is None:  # Poison pill to stop processor
-                break
-                
-            endpoint = order['endpoint']
-            payload = order['payload']
-            
+            # Process smart orders first (1 per second)
             try:
-                response = requests.post(f'{BASE_URL}/api/v1/{endpoint}', json=payload)
-                if response.ok:
-                    logger.info(f'Order placed for {payload["symbol"]} in strategy {payload["strategy"]}')
-                else:
-                    logger.error(f'Error placing order for {payload["symbol"]} in strategy {payload["strategy"]}: {response.text}')
-            except Exception as e:
-                logger.error(f'Error placing order for {payload["symbol"]} in strategy {payload["strategy"]}: {str(e)}')
+                smart_order = smart_order_queue.get_nowait()
+                if smart_order is None:  # Poison pill
+                    break
+                
+                try:
+                    response = requests.post(f'{BASE_URL}/api/v1/placesmartorder', json=smart_order['payload'])
+                    if response.ok:
+                        logger.info(f'Smart order placed for {smart_order["payload"]["symbol"]} in strategy {smart_order["payload"]["strategy"]}')
+                    else:
+                        logger.error(f'Error placing smart order for {smart_order["payload"]["symbol"]}: {response.text}')
+                except Exception as e:
+                    logger.error(f'Error placing smart order: {str(e)}')
+                
+                # Always wait 1 second after smart order
+                time_module.sleep(1)
+                continue  # Start next iteration
+                
+            except queue.Empty:
+                pass  # No smart orders, continue to regular orders
             
-            # Rate limiting delay
-            time_module.sleep(1)
+            # Process regular orders (up to 10 per second)
+            now = time()
             
+            # Clean up old timestamps
+            while last_regular_orders and now - last_regular_orders[0] > 1:
+                last_regular_orders.popleft()
+            
+            # Process regular orders if under rate limit
+            if len(last_regular_orders) < 10:
+                try:
+                    regular_order = regular_order_queue.get_nowait()
+                    if regular_order is None:  # Poison pill
+                        break
+                    
+                    try:
+                        response = requests.post(f'{BASE_URL}/api/v1/placeorder', json=regular_order['payload'])
+                        if response.ok:
+                            logger.info(f'Regular order placed for {regular_order["payload"]["symbol"]} in strategy {regular_order["payload"]["strategy"]}')
+                            last_regular_orders.append(now)
+                        else:
+                            logger.error(f'Error placing regular order for {regular_order["payload"]["symbol"]}: {response.text}')
+                    except Exception as e:
+                        logger.error(f'Error placing regular order: {str(e)}')
+                        
+                except queue.Empty:
+                    time_module.sleep(0.1)  # No orders to process
+            else:
+                # Rate limit hit, wait until next second
+                time_module.sleep(0.1)
+                
         except Exception as e:
             logger.error(f'Error in order processor: {str(e)}')
-        finally:
-            order_queue.task_done()
+            time_module.sleep(0.1)  # Prevent tight loop on error
     
     with order_processor_lock:
         order_processor_running = False
@@ -87,9 +124,13 @@ def ensure_order_processor():
             thread.start()
 
 def queue_order(endpoint, payload):
-    """Add order to processing queue"""
+    """Add order to appropriate processing queue"""
     ensure_order_processor()
-    order_queue.put({'endpoint': endpoint, 'payload': payload})
+    
+    if endpoint == 'placesmartorder':
+        smart_order_queue.put({'endpoint': endpoint, 'payload': payload})
+    else:  # placeorder
+        regular_order_queue.put({'endpoint': endpoint, 'payload': payload})
 
 def validate_strategy_times(start_time, end_time, squareoff_time):
     """Validate strategy time settings"""
