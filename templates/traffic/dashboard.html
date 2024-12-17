@@ -168,8 +168,8 @@
     async function refreshData() {
         try {
             const [logsResponse, statsResponse] = await Promise.all([
-                fetch('/traffic/api/logs'),
-                fetch('/traffic/api/stats')
+                fetch('${APPLICATION_ROOT}/traffic/api/logs'),
+                fetch('${APPLICATION_ROOT}/traffic/api/stats')
             ]);
             
             if (!logsResponse.ok || !statsResponse.ok) {
