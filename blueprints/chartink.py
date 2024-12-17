@@ -17,6 +17,9 @@ import logging
 import requests
 import os
 import uuid
+import time as time_module
+from queue import Queue
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,62 @@ BASE_URL = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
 
 # Valid exchanges
 VALID_EXCHANGES = ['NSE', 'BSE']
+
+# Global order queue for rate limiting across strategies
+order_queue = Queue()
+
+# Flag to track if order processor is running
+order_processor_running = False
+order_processor_lock = threading.Lock()
+
+def process_orders():
+    """Background task to process orders from the queue with rate limiting"""
+    global order_processor_running
+    
+    while True:
+        try:
+            # Get order from queue
+            order = order_queue.get()
+            if order is None:  # Poison pill to stop processor
+                break
+                
+            endpoint = order['endpoint']
+            payload = order['payload']
+            
+            try:
+                response = requests.post(f'{BASE_URL}/api/v1/{endpoint}', json=payload)
+                if response.ok:
+                    logger.info(f'Order placed for {payload["symbol"]} in strategy {payload["strategy"]}')
+                else:
+                    logger.error(f'Error placing order for {payload["symbol"]} in strategy {payload["strategy"]}: {response.text}')
+            except Exception as e:
+                logger.error(f'Error placing order for {payload["symbol"]} in strategy {payload["strategy"]}: {str(e)}')
+            
+            # Rate limiting delay
+            time_module.sleep(1)
+            
+        except Exception as e:
+            logger.error(f'Error in order processor: {str(e)}')
+        finally:
+            order_queue.task_done()
+    
+    with order_processor_lock:
+        order_processor_running = False
+
+def ensure_order_processor():
+    """Ensure order processor is running"""
+    global order_processor_running
+    
+    with order_processor_lock:
+        if not order_processor_running:
+            order_processor_running = True
+            thread = threading.Thread(target=process_orders, daemon=True)
+            thread.start()
+
+def queue_order(endpoint, payload):
+    """Add order to processing queue"""
+    ensure_order_processor()
+    order_queue.put({'endpoint': endpoint, 'payload': payload})
 
 def validate_strategy_times(start_time, end_time, squareoff_time):
     """Validate strategy time settings"""
@@ -124,14 +183,9 @@ def squareoff_positions(strategy_id):
                 'disclosed_quantity': '0'
             }
             
-            try:
-                response = requests.post(f'{BASE_URL}/api/v1/placesmartorder', json=payload)
-                if response.ok:
-                    logger.info(f'Squared off position for {mapping.chartink_symbol} in strategy {strategy_id}')
-                else:
-                    logger.error(f'Error squaring off position for {mapping.chartink_symbol} in strategy {strategy_id}: {response.text}')
-            except Exception as e:
-                logger.error(f'Error squaring off position for {mapping.chartink_symbol} in strategy {strategy_id}: {str(e)}')
+            # Queue the order instead of executing directly
+            queue_order('placesmartorder', payload)
+            
     except Exception as e:
         logger.error(f'Error in squareoff_positions for strategy {strategy_id}: {str(e)}')
 
@@ -578,27 +632,21 @@ def webhook(webhook_id):
                 })
                 endpoint = 'placeorder'
             
-            logger.info(f'Placing {endpoint} with payload: {payload}')
+            logger.info(f'Queueing {endpoint} with payload: {payload}')
             
-            try:
-                response = requests.post(f'{BASE_URL}/api/v1/{endpoint}', json=payload)
-                if response.ok:
-                    logger.info(f'Order placed for {symbol} in strategy {strategy.id}')
-                    processed_symbols.append(symbol)
-                else:
-                    logger.error(f'Error placing order for {symbol} in strategy {strategy.id}: {response.text}')
-            except Exception as e:
-                logger.error(f'Error placing order for {symbol} in strategy {strategy.id}: {str(e)}')
+            # Queue the order instead of executing directly
+            queue_order(endpoint, payload)
+            processed_symbols.append(symbol)
         
         if processed_symbols:
             return jsonify({
                 'status': 'success',
-                'message': f'Orders placed for symbols: {", ".join(processed_symbols)}'
+                'message': f'Orders queued for symbols: {", ".join(processed_symbols)}'
             })
         else:
             return jsonify({
                 'status': 'warning',
-                'message': 'No orders were placed'
+                'message': 'No orders were queued'
             })
         
     except Exception as e:
