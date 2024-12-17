@@ -38,7 +38,7 @@ MarkupSafe==2.1.5
 marshmallow==3.22.0
 mdurl==0.1.2
 numpy==1.26.2
-openalgo==1.0.4
+openalgo==1.0.5
 ordered-set==4.1.0
 packaging==24.1
 pandas==2.2.2
