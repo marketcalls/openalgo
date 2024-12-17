@@ -23,6 +23,10 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
     print(f'Broker is {broker}')
+    # Check if user is not in session first
+    if 'user' not in session:
+        return redirect(url_for('auth.login'))
+
     if session.get('logged_in'):
         # Store broker in session and g
         session['broker'] = broker
@@ -36,8 +40,6 @@ def broker_callback(broker,para=None):
     
     if broker == 'fivepaisa':
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('5paisa.html')
         
         elif request.method == 'POST':
@@ -50,8 +52,6 @@ def broker_callback(broker,para=None):
 
     elif broker == 'angel':
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('angel.html')
         
         elif request.method == 'POST':
@@ -63,8 +63,6 @@ def broker_callback(broker,para=None):
     
     elif broker == 'aliceblue':
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('aliceblue.html')
         
         elif request.method == 'POST':
@@ -111,8 +109,6 @@ def broker_callback(broker,para=None):
 
     elif broker == 'zebu':  
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('zebu.html')
         
         elif request.method == 'POST':
@@ -125,8 +121,6 @@ def broker_callback(broker,para=None):
 
     elif broker == 'shoonya':  
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('shoonya.html')
         
         elif request.method == 'POST':
@@ -140,11 +134,8 @@ def broker_callback(broker,para=None):
     elif broker=='kotak':
         print(f"The Broker is {broker}")
         if request.method == 'GET':
-            if 'user' not in session:
-                return redirect(url_for('auth.login'))
             return render_template('kotak.html')
         
-
         elif request.method == 'POST':
             otp = request.form.get('otp')
             token = request.form.get('token')
@@ -153,10 +144,7 @@ def broker_callback(broker,para=None):
             api_secret = get_broker_api_secret()
 
             auth_token, error_message = auth_function(otp,token,sid,userid,api_secret)
-
             forward_url = 'kotak.html'
-
-   
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
@@ -169,21 +157,22 @@ def broker_callback(broker,para=None):
         session['broker'] = broker
         print(f'Connected broker: {broker}')
         if broker == 'zerodha':
-            #token = request.args.get('request_token')
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
-            #token = request.args.get('request_token')
             auth_token = f'{auth_token}'
-        return handle_auth_success(auth_token, session['user'],broker)
+        return handle_auth_success(auth_token, session['user'], broker)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     
-
 
 @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_loginflow(broker):
+    # Check if user is not in session first
+    if 'user' not in session:
+        return redirect(url_for('auth.login'))
+
     if broker == 'kotak':
         mobilenumber = request.form.get('mobilenumber')
         password = request.form.get('password')

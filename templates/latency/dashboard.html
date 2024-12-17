@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="w-full">
+    <!-- Stats Cards -->
+    <div class="stats shadow w-full mb-8">
+        <div class="stat">
+            <div class="stat-title">Total Orders</div>
+            <div class="stat-value" id="total-orders">{{ stats.total_orders }}</div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-title">Failed Orders</div>
+            <div class="stat-value text-error" id="failed-orders">{{ stats.failed_orders }}</div>
+            <div class="stat-desc" id="failure-rate">
+                {{ "%.1f"|format(stats.failed_orders / stats.total_orders * 100 if stats.total_orders else 0) }}% Failure Rate
+            </div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-title">Avg Round-Trip Time</div>
+            <div class="stat-value" id="avg-rtt">{{ "%.2f"|format(stats.avg_rtt) }}ms</div>
+            <div class="stat-desc">Comparable to Postman/Bruno</div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-title">P99 Round-Trip Time</div>
+            <div class="stat-value" id="p99-rtt">{{ "%.2f"|format(stats.p99_rtt) }}ms</div>
+            <div class="stat-desc">99th percentile</div>
+        </div>
+    </div>
+
+    <!-- Recent Orders Table -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="card-title">Recent Orders</h2>
+                <button class="btn btn-sm" onclick="refreshData()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Order ID</th>
+                            <th>Broker</th>
+                            <th>Symbol</th>
+                            <th>Type</th>
+                            <th>RTT</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-table-body">
+                    {% for log in logs %}
+                        <tr class="hover" data-id="{{ log.id }}">
+                            <td>{{ log.formatted_timestamp }}</td>
+                            <td>{{ log.order_id }}</td>
+                            <td>{{ log.broker }}</td>
+                            <td>{{ log.symbol }}</td>
+                            <td>
+                                <span class="badge badge-sm 
+                                    {% if log.order_type == 'MARKET' %}badge-info
+                                    {% elif log.order_type == 'LIMIT' %}badge-success
+                                    {% else %}badge-warning{% endif %}">
+                                    {{ log.order_type }}
+                                </span>
+                            </td>
+                            <td>{{ "%.2f"|format(log.rtt_ms) }}ms</td>
+                            <td>{{ "%.2f"|format(log.total_latency_ms) }}ms</td>
+                            <td>
+                                <span class="badge badge-sm {% if log.status == 'SUCCESS' %}badge-success{% else %}badge-error{% endif %}">
+                                    {{ log.status }}
+                                </span>
+                            </td>
+                            <td>
+                                <button class="btn btn-xs view-details">View</button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Details Modal -->
+    <div id="details-modal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg mb-4">Order Details</h3>
+            <div id="modal-content"></div>
+            <div class="modal-action">
+                <button class="btn" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Modal functions
+function showModal() {
+    document.getElementById('details-modal').classList.add('modal-open');
+}
+
+function closeModal() {
+    document.getElementById('details-modal').classList.remove('modal-open');
+}
+
+// Update functions
+function updateStats(stats) {
+    document.getElementById('total-orders').textContent = stats.total_orders;
+    document.getElementById('failed-orders').textContent = stats.failed_orders;
+    document.getElementById('avg-rtt').textContent = stats.avg_rtt.toFixed(2) + 'ms';
+    document.getElementById('p99-rtt').textContent = stats.p99_rtt.toFixed(2) + 'ms';
+    
+    const failureRate = stats.total_orders ? 
+        ((stats.failed_orders / stats.total_orders) * 100).toFixed(1) : '0.0';
+    document.getElementById('failure-rate').textContent = `${failureRate}% Failure Rate`;
+}
+
+function formatDate(timestamp) {
+    const date = new Date(timestamp);
+    const options = {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    };
+    return date.toLocaleString('en-IN', options);
+}
+
+function updateTable(logs) {
+    const tbody = document.getElementById('orders-table-body');
+    tbody.innerHTML = logs.map(log => {
+        const orderTypeClass = log.order_type === 'MARKET' ? 'badge-info' : 
+                             log.order_type === 'LIMIT' ? 'badge-success' : 
+                             'badge-warning';
+        
+        const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-error';
+        
+        return `
+            <tr class="hover" data-id="${log.id}">
+                <td>${formatDate(log.timestamp)}</td>
+                <td>${log.order_id}</td>
+                <td>${log.broker || ''}</td>
+                <td>${log.symbol || ''}</td>
+                <td><span class="badge badge-sm ${orderTypeClass}">${log.order_type}</span></td>
+                <td>${log.rtt_ms.toFixed(2)}ms</td>
+                <td>${log.total_latency_ms.toFixed(2)}ms</td>
+                <td><span class="badge badge-sm ${statusClass}">${log.status}</span></td>
+                <td><button class="btn btn-xs view-details">View</button></td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Attach click handlers
+    document.querySelectorAll('.view-details').forEach(button => {
+        button.addEventListener('click', function() {
+            const orderId = this.closest('tr').dataset.id;
+            showOrderDetails(orderId);
+        });
+    });
+}
+
+// API functions
+async function showOrderDetails(orderId) {
+    try {
+        const response = await fetch(`/latency/api/logs?order_id=${orderId}`);
+        const logs = await response.json();
+        const order = logs[0];
+        
+        if (order) {
+            const modalContent = document.getElementById('modal-content');
+            modalContent.innerHTML = `
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <div class="text-sm opacity-70">Order ID</div>
+                        <div>${order.order_id}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm opacity-70">Round-Trip Time</div>
+                        <div>${order.rtt_ms.toFixed(2)}ms</div>
+                    </div>
+                </div>
+                
+                <div class="divider">Latency Breakdown</div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Round-Trip Time</span>
+                            <span>${order.rtt_ms.toFixed(2)}ms</span>
+                        </div>
+                        <progress class="progress progress-info" value="${order.rtt_ms}" max="${order.total_latency_ms}"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Validation</span>
+                            <span>${order.validation_latency_ms.toFixed(2)}ms</span>
+                        </div>
+                        <progress class="progress progress-success" value="${order.validation_latency_ms}" max="${order.total_latency_ms}"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Response Processing</span>
+                            <span>${order.response_latency_ms.toFixed(2)}ms</span>
+                        </div>
+                        <progress class="progress progress-warning" value="${order.response_latency_ms}" max="${order.total_latency_ms}"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Total Overhead</span>
+                            <span>${order.overhead_ms.toFixed(2)}ms</span>
+                        </div>
+                        <progress class="progress progress-error" value="${order.overhead_ms}" max="${order.total_latency_ms}"></progress>
+                    </div>
+                </div>
+                
+                ${order.error ? `
+                    <div class="mt-4">
+                        <div class="text-sm opacity-70">Error</div>
+                        <div class="text-error">${order.error}</div>
+                    </div>
+                ` : ''}
+            `;
+            showModal();
+        }
+    } catch (error) {
+        console.error('Error showing details:', error);
+    }
+}
+
+async function refreshData() {
+    try {
+        const [logsResponse, statsResponse] = await Promise.all([
+            fetch('/latency/api/logs'),
+            fetch('/latency/api/stats')
+        ]);
+        
+        const logs = await logsResponse.json();
+        const stats = await statsResponse.json();
+        
+        updateStats(stats);
+        updateTable(logs);
+    } catch (error) {
+        console.error('Error refreshing data:', error);
+    }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+    // Attach initial click handlers
+    document.querySelectorAll('.view-details').forEach(button => {
+        button.addEventListener('click', function() {
+            const orderId = this.closest('tr').dataset.id;
+            showOrderDetails(orderId);
+        });
+    });
+    
+    // Auto-refresh every 30 seconds
+    setInterval(refreshData, 30000);
+});
+</script>
+{% endblock %}

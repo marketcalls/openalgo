@@ -26,6 +26,26 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 
 ## Features
 
+- **ChartInk Platform Integration**: 
+  - Direct integration with ChartInk for strategy execution
+  - Automated scanning and trading based on ChartInk signals
+  - Real-time strategy monitoring and management
+  - Custom strategy configuration and deployment
+  - Seamless execution of ChartInk strategies through your broker
+
+- **Advanced Monitoring Tools**:
+  - **Latency Monitor**: Track and analyze order execution performance
+    - Real-time latency tracking across different brokers
+    - Detailed breakdown of execution times
+    - Performance comparison between brokers
+    - Order execution success rates and patterns
+  - **Traffic Monitor**: Monitor system performance and API usage
+    - Real-time API request tracking
+    - Endpoint-specific analytics
+    - Error rate monitoring
+    - System performance metrics
+  For detailed information about monitoring tools, see [traffic.md](docs/traffic.md)
+
 - **Modern UI with DaisyUI**: 
   - Sleek and responsive interface built with DaisyUI components
   - Three distinct themes:

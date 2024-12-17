@@ -26,15 +26,15 @@ class FyersData:
         self.auth_token = auth_token
         # Map common timeframe format to Fyers resolutions
         self.timeframe_map = {
-            # Seconds
-            '5s': '5', '10s': '10', '15s': '15', '30s': '30', '45s': '45',
+            # Seconds - Use 'S' suffix for seconds timeframes
+            '5s': '5S', '10s': '10S', '15s': '15S', '30s': '30S', '45s': '45S',
             # Minutes
             '1m': '1', '2m': '2', '3m': '3', '5m': '5',
             '10m': '10', '15m': '15', '20m': '20', '30m': '30',
             # Hours
             '1h': '60', '2h': '120', '4h': '240',
-            # Higher timeframes
-            'D': '1D', 'W': 'W', 'M': 'M'
+            # Daily
+            'D': '1D'
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
@@ -84,7 +84,7 @@ class FyersData:
                      Seconds: 5s, 10s, 15s, 30s, 45s
                      Minutes: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m
                      Hours: 1h, 2h, 4h
-                     Higher: D (Daily), W (Weekly), M (Monthly)
+                     Daily: D
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         Returns:
@@ -94,6 +94,14 @@ class FyersData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
+            # Check for unsupported timeframes first
+            if interval in ['W', 'M']:
+                raise Exception(f"Timeframe '{interval}' is not supported by Fyers. Supported timeframes are:\n"
+                              "Seconds: 5s, 10s, 15s, 30s, 45s\n"
+                              "Minutes: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m\n"
+                              "Hours: 1h, 2h, 4h\n"
+                              "Daily: D")
+            
             # Validate and map interval
             resolution = self.timeframe_map.get(interval)
             if not resolution:
@@ -101,7 +109,7 @@ class FyersData:
                     'Seconds': ['5s', '10s', '15s', '30s', '45s'],
                     'Minutes': ['1m', '2m', '3m', '5m', '10m', '15m', '20m', '30m'],
                     'Hours': ['1h', '2h', '4h'],
-                    'Higher': ['D (Daily)', 'W (Weekly)', 'M (Monthly)']
+                    'Daily': ['D']
                 }
                 error_msg = "Unsupported timeframe. Supported timeframes:\n"
                 for category, timeframes in supported.items():

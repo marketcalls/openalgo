@@ -111,21 +111,24 @@ def place_smartorder_api(data,auth):
 
 
     # If both position_size and current_position are 0, do nothing
-    if position_size == 0 and current_position == 0:
+    if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
-        res, response, orderid = place_order_api(data,auth)
-        # print(res)
-        # print(response)
-        # print(orderid)
+        res, response, orderid = place_order_api(data,AUTH_TOKEN)
+        #print(res)
+        #print(response)
+        
         return res , response, orderid
         
     elif position_size == current_position:
-        response = {"status": "success", "message": "No action needed. Position size matches current position."}
+        if int(data['quantity'])==0:
+            response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
+        else:
+            response = {"status": "success", "message": "No action needed. Position size matches current position"}
         orderid = None
-        return res, response, orderid  # res remains None as no API call was mad
+        return res, response, orderid  # res remains None as no API call was made
    
    
 

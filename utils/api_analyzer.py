@@ -197,20 +197,19 @@ def analyze_smart_order_request(order_data):
             if not validate_symbol(order_data['symbol'], order_data['exchange']):
                 issues.append(f"Invalid symbol '{order_data['symbol']}' for exchange '{order_data['exchange']}'")
 
-        # Validate quantity
+        # Validate quantity - Allow zero for smart orders since it's used for position checking
         if 'quantity' in order_data:
             try:
                 quantity = float(order_data['quantity'])
-                if quantity <= 0:
-                    issues.append("Quantity must be greater than 0")
+                if quantity < 0:  # Only check for negative values
+                    issues.append("Quantity cannot be negative")
             except (ValueError, TypeError):
                 issues.append("Invalid quantity value")
 
-        # Validate position_size
+        # Validate position_size - Allow any number including zero for position management
         if 'position_size' in order_data:
             try:
-                position_size = float(order_data['position_size'])
-                # Removed negative value check to allow negative position sizes
+                float(order_data['position_size'])  # Just validate it's a valid number
             except (ValueError, TypeError):
                 issues.append("Invalid position size value")
 

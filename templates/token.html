@@ -52,7 +52,7 @@
     <!-- Search Form -->
     <div class="card bg-base-100 shadow-lg">
         <div class="card-body">
-            <form action="/search" method="get" id="searchForm" class="space-y-6">
+            <form action="{{ url_for('search_bp.search') }}" method="get" id="searchForm" class="space-y-6">
                 <!-- Symbol Search -->
                 <div class="form-control w-full">
                     <label class="label">
@@ -157,7 +157,7 @@ document.addEventListener('click', function(e) {
 async function fetchSearchResults(query, exchange) {
     try {
         loadingIndicator.style.display = 'block';
-        const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
+        const response = await fetch(`{{ url_for('search_bp.api_search') }}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
         const data = await response.json();
         
         searchResults.innerHTML = '';

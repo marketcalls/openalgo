@@ -146,6 +146,12 @@
                             Tradingview
                         </a>
                     </li>
+                    <li>
+                        <a href="{{ url_for('chartink_bp.index') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
+                            Chartink
+                        </a>
+                    </li>
                     <div class="divider"></div>
                     <li>
                         <a href="{{ url_for('auth.change_password') }}" 
@@ -163,6 +169,12 @@
                         <a href="{{ url_for('log_bp.view_logs') }}" 
                            class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
                             Logs
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('traffic_bp.traffic_dashboard') }}" 
+                           class="{{ 'active' if request.endpoint == 'traffic_bp.traffic_dashboard' }}">
+                            Traffic Monitor
                         </a>
                     </li>
                     <li>
