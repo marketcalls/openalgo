@@ -6,10 +6,27 @@ import logging
 from sqlalchemy import func
 from collections import defaultdict
 import numpy as np
+from datetime import datetime
+import pytz
 
 logger = logging.getLogger(__name__)
 
 latency_bp = Blueprint('latency_bp', __name__, url_prefix='/latency')
+
+def convert_to_ist(timestamp):
+    """Convert UTC timestamp to IST"""
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    utc = pytz.timezone('UTC')
+    ist = pytz.timezone('Asia/Kolkata')
+    if timestamp.tzinfo is None:
+        timestamp = utc.localize(timestamp)
+    return timestamp.astimezone(ist)
+
+def format_ist_time(timestamp):
+    """Format timestamp in IST with 12-hour format"""
+    ist_time = convert_to_ist(timestamp)
+    return ist_time.strftime('%d-%m-%Y %I:%M:%S %p')
 
 def get_histogram_data(broker=None):
     """Get histogram data for RTT distribution"""
@@ -87,6 +104,10 @@ def latency_dashboard():
     
     logger.info(f"Broker histograms data: {broker_histograms}")
     
+    # Format timestamps in IST
+    for log in recent_logs:
+        log.formatted_timestamp = format_ist_time(log.timestamp)
+    
     return render_template('latency/dashboard.html',
                          stats=stats,
                          logs=recent_logs,
@@ -101,7 +122,7 @@ def get_logs():
         limit = min(int(request.args.get('limit', 100)), 1000)
         logs = OrderLatency.get_recent_logs(limit=limit)
         return jsonify([{
-            'timestamp': log.timestamp.isoformat(),
+            'timestamp': convert_to_ist(log.timestamp).isoformat(),
             'id': log.id,
             'order_id': log.order_id,
             'broker': log.broker,

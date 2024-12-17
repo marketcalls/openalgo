@@ -60,7 +60,7 @@
                     <tbody id="orders-table-body">
                     {% for log in logs %}
                         <tr class="hover" data-id="{{ log.id }}">
-                            <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td>{{ log.formatted_timestamp }}</td>
                             <td>{{ log.order_id }}</td>
                             <td>{{ log.broker }}</td>
                             <td>{{ log.symbol }}</td>
@@ -124,6 +124,21 @@ function updateStats(stats) {
     document.getElementById('failure-rate').textContent = `${failureRate}% Failure Rate`;
 }
 
+function formatDate(timestamp) {
+    const date = new Date(timestamp);
+    const options = {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    };
+    return date.toLocaleString('en-IN', options);
+}
+
 function updateTable(logs) {
     const tbody = document.getElementById('orders-table-body');
     tbody.innerHTML = logs.map(log => {
@@ -135,7 +150,7 @@ function updateTable(logs) {
         
         return `
             <tr class="hover" data-id="${log.id}">
-                <td>${new Date(log.timestamp).toLocaleString()}</td>
+                <td>${formatDate(log.timestamp)}</td>
                 <td>${log.order_id}</td>
                 <td>${log.broker || ''}</td>
                 <td>${log.symbol || ''}</td>

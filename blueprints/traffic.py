@@ -4,10 +4,27 @@ from utils.session import check_session_validity
 from limiter import limiter
 from sqlalchemy import func
 import logging
+from datetime import datetime
+import pytz
 
 logger = logging.getLogger(__name__)
 
 traffic_bp = Blueprint('traffic_bp', __name__, url_prefix='/traffic')
+
+def convert_to_ist(timestamp):
+    """Convert UTC timestamp to IST"""
+    if isinstance(timestamp, str):
+        timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    utc = pytz.timezone('UTC')
+    ist = pytz.timezone('Asia/Kolkata')
+    if timestamp.tzinfo is None:
+        timestamp = utc.localize(timestamp)
+    return timestamp.astimezone(ist)
+
+def format_ist_time(timestamp):
+    """Format timestamp in IST with 12-hour format"""
+    ist_time = convert_to_ist(timestamp)
+    return ist_time.strftime('%d-%m-%Y %I:%M:%S %p')
 
 @traffic_bp.route('/', methods=['GET'])
 @check_session_validity
@@ -16,9 +33,9 @@ def traffic_dashboard():
     """Display traffic monitoring dashboard"""
     stats = TrafficLog.get_stats()
     recent_logs = TrafficLog.get_recent_logs(limit=100)
-    # Convert TrafficLog objects to dictionaries
+    # Convert TrafficLog objects to dictionaries with IST timestamps
     logs_data = [{
-        'timestamp': log.timestamp.isoformat(),
+        'timestamp': format_ist_time(log.timestamp),
         'client_ip': log.client_ip,
         'method': log.method,
         'path': log.path,
@@ -40,7 +57,7 @@ def get_logs():
         limit = min(int(request.args.get('limit', 100)), 1000)
         logs = TrafficLog.get_recent_logs(limit=limit)
         return jsonify([{
-            'timestamp': log.timestamp.isoformat(),
+            'timestamp': format_ist_time(log.timestamp),
             'client_ip': log.client_ip,
             'method': log.method,
             'path': log.path,

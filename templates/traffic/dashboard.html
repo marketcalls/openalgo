@@ -95,10 +95,6 @@
         refreshBtn: document.getElementById('refresh-btn')
     };
 
-    function formatDate(timestamp) {
-        return new Date(timestamp).toLocaleString();
-    }
-
     function getMethodBadgeClass(method) {
         const classes = {
             'GET': 'badge-info',
@@ -128,7 +124,7 @@
         const filteredLogs = filterLogs();
         elements.tableBody.innerHTML = filteredLogs.map(log => `
             <tr class="hover">
-                <td>${formatDate(log.timestamp)}</td>
+                <td>${log.timestamp}</td>
                 <td>
                     <span class="badge badge-sm ${getMethodBadgeClass(log.method)}">
                         ${log.method}
