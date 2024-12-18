@@ -39,7 +39,6 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
-from dotenv import load_dotenv
 import os
 
 def create_app():
@@ -54,8 +53,6 @@ def create_app():
 
     # Initialize Flask-CORS with the app object
     cors.init_app(app)
-
-    load_dotenv()
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
