@@ -12,8 +12,8 @@ def load_and_check_env_variables():
         print("\nSolution: Copy .sample.env to .env and configure your settings")
         sys.exit(1)
 
-    # Load environment variables from the .env file
-    load_dotenv(dotenv_path=env_path)
+    # Load environment variables from the .env file with override=True to ensure values are updated
+    load_dotenv(dotenv_path=env_path, override=True)
 
     # Define the required environment variables
     required_vars = [

@@ -3,8 +3,8 @@
 from dotenv import load_dotenv
 import os
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file with override=True to ensure values are updated
+load_dotenv(override=True)
 
 def get_broker_api_key():
     return os.getenv('BROKER_API_KEY')
