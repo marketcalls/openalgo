@@ -16,13 +16,10 @@ import io
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from dotenv import load_dotenv
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
 
 
-
-load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -267,4 +264,3 @@ def master_contract_download():
 
 def search_symbols(symbol, exchange):
     return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exchange == exchange).all()
-

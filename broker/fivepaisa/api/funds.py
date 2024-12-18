@@ -1,18 +1,14 @@
 import os
 import http.client
 import json
-from dotenv import load_dotenv
 from broker.fivepaisa.api.order_api import get_positions
 
 
-# Load environment variables from the .env file
-load_dotenv()
+# Retrieve the BROKER_API_KEY environment variable
+broker_api_key = os.getenv('BROKER_API_KEY')
 
 def get_margin_data(auth_token):
     """Fetch margin data from the broker's API using the provided auth token."""
-    # Retrieve the BROKER_API_KEY environment variable
-    broker_api_key = os.getenv('BROKER_API_KEY')
-
     if not broker_api_key:
         raise ValueError("BROKER_API_KEY not found in environment variables")
 
@@ -69,5 +65,3 @@ def get_margin_data(auth_token):
         return processed_margin_data
     except Exception as e:
         return {}
-
-

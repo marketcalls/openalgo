@@ -1,10 +1,6 @@
 import http.client
 import json
 import os
-from dotenv import load_dotenv
-
-# Load environment variables from the .env file
-load_dotenv()
 
 def authenticate_broker(clientcode, broker_pin, totp_code):
     """
@@ -106,4 +102,3 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
         return None, "Failed to parse JSON response from the server"
     except Exception as e:
         return None, str(e)
-

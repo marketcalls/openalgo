@@ -9,13 +9,10 @@ from extensions import socketio
 from limiter import limiter
 from utils.api_analyzer import analyze_request, generate_order_id
 import os
-from dotenv import load_dotenv
 import importlib
 import logging
 import traceback
 import copy
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('cancel_all_order', description='Cancel All Orders API')

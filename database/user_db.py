@@ -5,7 +5,6 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError
-from dotenv import load_dotenv
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -13,9 +12,6 @@ import pyotp
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
-
-# Load environment variables
-load_dotenv()
 
 # Database connection details
 DATABASE_URL = os.getenv('DATABASE_URL')

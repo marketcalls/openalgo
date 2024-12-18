@@ -3,9 +3,6 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from typing import List
-from dotenv import load_dotenv
-
-load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 engine = create_engine(DATABASE_URL)

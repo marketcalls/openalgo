@@ -8,13 +8,10 @@ from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from limiter import limiter
 import os
-from dotenv import load_dotenv
 import importlib
 import logging
 import traceback
 import copy
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('cancel_order', description='Cancel Order API')

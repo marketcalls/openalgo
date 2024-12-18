@@ -3,13 +3,9 @@ from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import os
-from dotenv import load_dotenv
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
