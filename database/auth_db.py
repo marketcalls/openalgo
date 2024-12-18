@@ -7,7 +7,6 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean  
 from sqlalchemy.sql import func
-from dotenv import load_dotenv
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -17,9 +16,6 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
-
-# Load environment variables
-load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 PEPPER = os.getenv('API_KEY_PEPPER', 'default-pepper-change-in-production')

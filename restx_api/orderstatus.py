@@ -8,14 +8,11 @@ from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from limiter import limiter
 import os
-from dotenv import load_dotenv
 import importlib
 import traceback
 import logging
 import copy
 import requests
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('orderstatus', description='Order Status API')

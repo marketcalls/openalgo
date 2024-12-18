@@ -16,14 +16,11 @@ from utils.constants import (
     REQUIRED_SMART_ORDER_FIELDS
 )
 import os
-from dotenv import load_dotenv
 import importlib
 import logging
 import traceback
 import copy
 import time
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 SMART_ORDER_DELAY = os.getenv("SMART_ORDER_DELAY", "0.5")

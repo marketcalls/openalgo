@@ -3,14 +3,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import os
-from dotenv import load_dotenv
 import logging
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
 
 # Use a separate database for logs
 LOGS_DATABASE_URL = 'sqlite:///db/logs.db'

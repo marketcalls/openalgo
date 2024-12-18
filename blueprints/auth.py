@@ -1,6 +1,5 @@
 from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from limiter import limiter  # Import the limiter instance
-from dotenv import load_dotenv
 from extensions import socketio
 import os
 from database.auth_db import upsert_auth
@@ -8,9 +7,6 @@ from database.user_db import authenticate_user, User, db_session, find_user_by_u
 import re
 from utils.session import check_session_validity
 import secrets
-
-# Load environment variables
-load_dotenv()
 
 # Access environment variables
 LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")

@@ -7,13 +7,9 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from dotenv import load_dotenv
 from extensions import socketio  # Import SocketIO
 
 
-
-# Load environment variables
-load_dotenv()
 
 # Database setup
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path

@@ -16,14 +16,11 @@ from utils.constants import (
     REQUIRED_ORDER_FIELDS
 )
 import os
-from dotenv import load_dotenv
 import importlib
 import traceback
 import logging
 import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('split_order', description='Split Order API')

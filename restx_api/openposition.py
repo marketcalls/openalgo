@@ -15,8 +15,6 @@ import logging
 import copy
 import requests
 
-load_dotenv()
-
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('openposition', description='Open Position API')
 

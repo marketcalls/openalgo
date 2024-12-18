@@ -5,13 +5,10 @@ from database.symbol import enhanced_search_symbols
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
 from collections import OrderedDict
-from dotenv import load_dotenv
 import os
 import logging
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 host = os.getenv('HOST_SERVER')
 

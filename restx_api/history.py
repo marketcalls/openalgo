@@ -4,15 +4,12 @@ from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
 import os
-from dotenv import load_dotenv
 import importlib
 import traceback
 import logging
 import pandas as pd
 
 from .data_schemas import HistorySchema
-
-load_dotenv()
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('history', description='Historical Data API')

@@ -7,12 +7,9 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
 from datetime import datetime
 import pytz
 
-
-load_dotenv()
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
 
@@ -61,4 +58,3 @@ def async_log_order(api_type,request_data, response_data):
         print(f"Error saving order log: {e}")
     finally:
         db_session.remove()
-
