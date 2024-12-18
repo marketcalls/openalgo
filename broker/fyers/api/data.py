@@ -4,6 +4,7 @@ import os
 from database.token_db import get_br_symbol, get_oa_symbol
 import pandas as pd
 from datetime import datetime
+import urllib.parse
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -50,7 +51,10 @@ class FyersData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
-            response = get_api_response(f"/data/quotes?symbols={br_symbol}", self.auth_token)
+            # URL encode the symbol to handle special characters
+            encoded_symbol = urllib.parse.quote(br_symbol)
+            
+            response = get_api_response(f"/data/quotes?symbols={encoded_symbol}", self.auth_token)
             
             if response.get('s') != 'ok':
                 raise Exception(f"Error from Fyers API: {response.get('message', 'Unknown error')}")
@@ -93,6 +97,7 @@ class FyersData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
+            print(br_symbol)
             
             # Check for unsupported timeframes first
             if interval in ['W', 'M']:
@@ -116,7 +121,10 @@ class FyersData:
                     error_msg += f"{category}: {', '.join(timeframes)}\n"
                 raise Exception(error_msg)
             
-            endpoint = (f"/data/history?symbol={br_symbol}&resolution={resolution}"
+            # URL encode the symbol to handle special characters
+            encoded_symbol = urllib.parse.quote(br_symbol)
+            
+            endpoint = (f"/data/history?symbol={encoded_symbol}&resolution={resolution}"
                        f"&date_format=1&range_from={start_date}&range_to={end_date}")
             
             response = get_api_response(endpoint, self.auth_token)
@@ -148,7 +156,10 @@ class FyersData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
-            response = get_api_response(f"/data/depth?symbol={br_symbol}&ohlcv_flag=1", self.auth_token)
+            # URL encode the symbol to handle special characters
+            encoded_symbol = urllib.parse.quote(br_symbol)
+            
+            response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
             
             if response.get('s') != 'ok':
                 raise Exception(f"Error from Fyers API: {response.get('message', 'Unknown error')}")
