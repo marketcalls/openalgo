@@ -255,8 +255,7 @@ window.refreshCurrentPageContent = function() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    const socketUrl = `${APPLICATION_ROOT}socket.io`; // Append APPLICATION_ROOT to the socket URL
-
+    const socketUrl = `${location.protocol}//${window.location.hostname}`;
     var socket = io.connect(socketUrl, {
         path: `${APPLICATION_ROOT}/socket.io`,
         transports: ['websocket', 'polling']
