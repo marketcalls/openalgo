@@ -1,7 +1,7 @@
 // Function to fetch and update logs
 async function refreshLogs() {
     try {
-        const response = await fetch('/logs');
+        const response = await fetch(`${APPLICATION_ROOT}/logs`);
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -18,7 +18,7 @@ async function refreshLogs() {
 // Function to fetch and update orderbook
 async function refreshOrderbook() {
     try {
-        const response = await fetch('/orderbook');
+        const response = await fetch(`${APPLICATION_ROOT}/orderbook`);
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -46,7 +46,7 @@ async function refreshOrderbook() {
 // Function to fetch and update tradebook
 async function refreshTradebook() {
     try {
-        const response = await fetch('/tradebook');
+        const response = await fetch(`${APPLICATION_ROOT}/tradebook`);
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -74,7 +74,7 @@ async function refreshTradebook() {
 // Function to fetch and update positions
 async function refreshPositions() {
     try {
-        const response = await fetch('/positions');
+        const response = await fetch(`${APPLICATION_ROOT}/positions`);
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -91,7 +91,7 @@ async function refreshPositions() {
 // Function to fetch and update dashboard funds
 async function refreshDashboard() {
     try {
-        const response = await fetch('/dashboard');
+        const response = await fetch(`${APPLICATION_ROOT}/dashboard`);
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -109,7 +109,7 @@ async function refreshDashboard() {
 async function refreshAnalyzer() {
     try {
         // Update stats
-        const statsResponse = await fetch('/analyzer/stats');
+        const statsResponse = await fetch(`${APPLICATION_ROOT}/analyzer/stats`);
         const statsData = await statsResponse.json();
         
         const totalRequests = document.getElementById('total-requests');
@@ -123,7 +123,7 @@ async function refreshAnalyzer() {
         if (activeSources) activeSources.textContent = Object.keys(statsData.sources).length;
 
         // Update requests table
-        const requestsResponse = await fetch('/analyzer/requests');
+        const requestsResponse = await fetch(`${APPLICATION_ROOT}/analyzer/requests`);
         const requestsData = await requestsResponse.json();
         
         const tbody = document.getElementById('requests-table');
@@ -255,12 +255,20 @@ window.refreshCurrentPageContent = function() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+    const socketUrl = `${location.protocol}//${window.location.hostname}`;
+    var socket = io.connect(socketUrl, {
+        path: `${APPLICATION_ROOT}/socket.io`,
+        transports: ['websocket', 'polling']
+    });
+    console.log(`[Socket] Connected to ${socketUrl}`);
     var alertSound = document.getElementById('alert-sound');
     var isOnAnalyzerPage = window.location.pathname.includes('/analyzer');
 
     socket.on('connect', function() {});
     socket.on('disconnect', function() {});
+    socket.on('connection', (socket) => {
+        console.log('a user connected');
+      });
 
     // Password change notification
     socket.on('password_change', function(data) {

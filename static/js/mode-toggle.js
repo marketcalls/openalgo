@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Initialize mode from server
-    fetch('/settings/analyze-mode')
+    fetch(`${APPLICATION_ROOT}/settings/analyze-mode`)
         .then(response => response.json())
         .then(data => {
             modeToggle.checked = data.analyze_mode;
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', function() {
     modeToggle.addEventListener('change', function(e) {
         const mode = e.target.checked ? 1 : 0;
         
-        fetch(`/settings/analyze-mode/${mode}`, {
+        fetch(`${APPLICATION_ROOT}/settings/analyze-mode/${mode}`, {
             method: 'POST',
         })
         .then(response => response.json())

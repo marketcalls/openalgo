@@ -6,7 +6,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
             </svg>
         </label>
-        <a href="/" class="btn btn-ghost normal-case text-xl gap-2">
+        <a href="{{ url_for('core_bp.home')}}" class="btn btn-ghost normal-case text-xl gap-2">
             <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo Logo" class="h-8 w-8">
             <span class="hidden sm:inline">OpenAlgo</span>
         </a>
@@ -16,7 +16,7 @@
     <div class="navbar-end hidden lg:flex items-center">
         <ul class="menu menu-horizontal px-1 gap-2 mr-4">
             <li>
-                <a href="/" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/' }}">
+                <a href="{{ url_for('core_bp.home')}}" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/' }}">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
                     </svg>
@@ -24,7 +24,7 @@
                 </a>
             </li>
             <li>
-                <a href="/faq" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/faq' }}">
+                <a href="{{ url_for('core_bp.faq')}}" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/faq' }}">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -40,7 +40,7 @@
                 </a>
             </li>
             <li>
-                <a href="/download" class="btn btn-primary text-base {{ 'btn-active' if request.path == '/download' }}">
+                <a href="{{ url_for('core_bp.download')}}" class="btn btn-primary text-base {{ 'btn-active' if request.path == '/download' }}">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>

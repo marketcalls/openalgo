@@ -203,7 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
         debounceTimer = setTimeout(() => {
             const exchange = singleSymbolForm.querySelector('[name="exchange"]').value;
             
-            fetch(`/chartink/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+            fetch(`${APPLICATION_ROOT}/chartink/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)
                 .then(response => response.json())
                 .then(data => {
                     const results = data.results;
@@ -275,7 +275,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        fetch(`/chartink/{{ strategy.id }}/configure`, {
+        fetch(`${APPLICATION_ROOT}/chartink/{{ strategy.id }}/configure`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -307,7 +307,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        fetch(`/chartink/{{ strategy.id }}/configure`, {
+        fetch(`${APPLICATION_ROOT}/chartink/{{ strategy.id }}/configure`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -359,7 +359,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function deleteSymbol(mappingId, row) {
-        fetch(`/chartink/{{ strategy.id }}/symbol/${mappingId}/delete`, {
+        fetch(`${APPLICATION_ROOT}/chartink/{{ strategy.id }}/symbol/${mappingId}/delete`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

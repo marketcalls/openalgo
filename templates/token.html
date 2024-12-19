@@ -125,6 +125,7 @@ const loadingIndicator = document.querySelector('.loading-indicator');
 const symbolInput = document.getElementById('symbolSearch');
 const searchResults = document.getElementById('searchResults');
 const exchangeSelect = document.getElementById('exchangeSelect');
+const searchUrl = "{{ url_for('search_bp.api_search') }}";
 
 symbolInput.addEventListener('input', function(e) {
     clearTimeout(debounceTimeout);
@@ -156,8 +157,7 @@ document.addEventListener('click', function(e) {
 
 async function fetchSearchResults(query, exchange) {
     try {
-        loadingIndicator.style.display = 'block';
-        const response = await fetch(`{{ url_for('search_bp.api_search') }}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
+        const response = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
         const data = await response.json();
         
         searchResults.innerHTML = '';

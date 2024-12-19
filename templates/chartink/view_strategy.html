@@ -128,7 +128,7 @@
                                 <span class="label-text-alt">Click to copy</span>
                             </label>
                             <div class="mockup-code cursor-pointer relative" id="webhookUrl">
-                                <pre><code>{{ request.host_url }}chartink/webhook/{{ strategy.webhook_id }}</code></pre>
+                                <pre><code>{{ (request.host_url.rstrip('/') + config['APPLICATION_ROOT'] + '/chartink/webhook/' + strategy.webhook_id) }}</code></pre>
                                 <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
                                     Copied!
                                 </div>
@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Handle strategy deletion
     document.getElementById('confirm_strategy_delete').addEventListener('click', function() {
-        fetch(`/chartink/{{ strategy.id }}/delete`, {
+        fetch(`${APPLICATION_ROOT}/chartink/{{ strategy.id }}/delete`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

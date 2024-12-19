@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             loadingIndicator.style.display = 'block';
-            const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
+            const response = await fetch(`${APPLICATION_ROOT}/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
             const data = await response.json();
             
             searchResults.innerHTML = '';
@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', function() {
             product: productSelect.value
         };
 
-        fetch('/tradingview/', {
+        fetch(`${APPLICATION_ROOT}/tradingview/`, {
             method: 'POST',
             body: JSON.stringify(formData),
             headers: {
@@ -222,7 +222,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (withLink) {
             content = `
                 ${message}
-                <a href="/apikey" class="btn btn-sm btn-primary ml-2">Go to API Key Setup</a>
+                <a href="${APPLICATION_ROOT}/apikey" class="btn btn-sm btn-primary ml-2">Go to API Key Setup</a>
             `;
         }
         

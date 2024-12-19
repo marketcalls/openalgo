@@ -40,10 +40,23 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from utils.plugin_loader import load_broker_auth_functions
 
 import os
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 def create_app():
     # Initialize Flask application
     app = Flask(__name__)
+        # Add ProxyFix middleware to handle proxy headers
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,
+        x_proto=1,
+        x_host=1,
+        x_prefix=1
+    )
+
+    # Set application root for subpath, if proxy APPLICATION_ROOT is set it will use else will use /
+    app.config['APPLICATION_ROOT'] = os.getenv('APPLICATION_ROOT', '/')
+    #app.config['PREFERRED_URL_SCHEME'] = 'https'
 
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app

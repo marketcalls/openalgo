@@ -174,7 +174,7 @@
         // Show loading indicator
         showLoading(true);
         
-        fetch('/apikey', {
+        fetch(`${APPLICATION_ROOT}/apikey`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

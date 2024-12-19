@@ -67,7 +67,7 @@
                 <p>2. In the alert form, find the "Webhook URL" field</p>
                 <p>3. Enter your webhook URL in the format:</p>
                 <div class="mockup-code cursor-pointer" id="webhookUrl">
-                    <pre><code>{{ request.host_url }}chartink/webhook/YOUR_WEBHOOK_ID</code></pre>
+                    <pre><code>{{ request.host_url.rstrip('/') }}{{ config['APPLICATION_ROOT'] }}/chartink/webhook/YOUR_WEBHOOK_ID</code></pre>
                     <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
                         Click to copy
                     </div>

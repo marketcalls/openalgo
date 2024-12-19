@@ -16,7 +16,7 @@
         loginStatus.querySelector('span').textContent = 'Logging in...';
 
         try {
-            const response = await fetch('/auth/login', {
+            const response = await fetch("{{ url_for('auth.login')}}", {
                 method: 'POST',
                 body: formData
             });
@@ -30,9 +30,10 @@
                 loginStatus.classList.remove('alert-info');
                 loginStatus.classList.add('alert-success');
                 loginStatus.querySelector('span').textContent = 'Login successful';
-                window.location.href = '/auth/broker';
+                window.location.href = "{{ url_for('auth.broker_login')}}";
             }
         } catch (error) {
+            
             loginStatus.classList.remove('alert-info');
             loginStatus.classList.add('alert-error');
             loginStatus.querySelector('span').textContent = 'Login failed: Please try again';

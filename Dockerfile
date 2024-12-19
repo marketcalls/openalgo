@@ -3,8 +3,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update \
@@ -14,11 +14,17 @@ RUN apt-get update \
 
 # Install Python dependencies
 COPY requirements-nginx.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements-nginx.txt
+RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install gunicorn eventlet>=0.24.1
 
 # Copy project files
 COPY . .
+RUN rm .sample.env
+#COPY .env .
+# List files in the current directory
+RUN ls -la
 
 # Create directories and set permissions
 RUN mkdir -p db logs && \

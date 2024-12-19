@@ -13,7 +13,7 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/fivepaisa/callback" method="POST" class="space-y-4">
+                    <form action="{{ url_for('brlogin.broker_callback', broker='fivepaisa') }}" method="POST" class="space-y-4">
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">Client ID/Mobile No</span>

@@ -175,7 +175,7 @@ function updateTable(logs) {
 // API functions
 async function showOrderDetails(orderId) {
     try {
-        const response = await fetch(`/latency/api/logs?order_id=${orderId}`);
+        const response = await fetch(`${APPLICATION_ROOT}/latency/api/logs?order_id=${orderId}`);
         const logs = await response.json();
         const order = logs[0];
         
@@ -243,8 +243,8 @@ async function showOrderDetails(orderId) {
 async function refreshData() {
     try {
         const [logsResponse, statsResponse] = await Promise.all([
-            fetch('/latency/api/logs'),
-            fetch('/latency/api/stats')
+            fetch('${APPLICATION_ROOT}/latency/api/logs'),
+            fetch('${APPLICATION_ROOT}/latency/api/stats')
         ]);
         
         const logs = await logsResponse.json();
