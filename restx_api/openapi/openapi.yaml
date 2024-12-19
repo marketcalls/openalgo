@@ -1,0 +1,670 @@
+openapi: 3.0.0
+info:
+  title: OpenAlgo Trading API
+  description: |
+    API for algorithmic trading across multiple Indian brokers.
+    Supports order placement, modification, cancellation, and various market data endpoints.
+  version: '1.0.0'
+  contact:
+    name: OpenAlgo Support
+    url: https://docs.openalgo.in
+
+servers:
+  - url: http://127.0.0.1:5000/api/v1
+    description: Local development
+  - url: https://{domain}.ngrok-free.app/api/v1
+    description: Ngrok tunnel
+    variables:
+      domain:
+        description: Your ngrok domain
+  - url: https://{domain}/api/v1
+    description: Custom domain
+    variables:
+      domain:
+        description: Your custom domain
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+      required:
+        - status
+        - message
+
+    OrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+          description: Your OpenAlgo API key
+        strategy:
+          type: string
+          description: Strategy identifier
+        exchange:
+          type: string
+          enum: [NSE, NFO, CDS, BSE, BFO, BCD, MCX, NCDEX]
+          description: Trading exchange
+        symbol:
+          type: string
+          description: Trading symbol
+        action:
+          type: string
+          enum: [BUY, SELL]
+          description: Order action
+        quantity:
+          type: string
+          description: Order quantity
+        pricetype:
+          type: string
+          enum: [MARKET, LIMIT, SL, SL-M]
+          default: MARKET
+          description: Order price type
+        product:
+          type: string
+          enum: [CNC, NRML, MIS]
+          default: MIS
+          description: Product type
+        price:
+          type: string
+          default: "0"
+          description: Order price (required for LIMIT orders)
+        trigger_price:
+          type: string
+          default: "0"
+          description: Trigger price (required for SL/SL-M orders)
+        disclosed_quantity:
+          type: string
+          default: "0"
+          description: Disclosed quantity for iceberg orders
+      required:
+        - apikey
+        - strategy
+        - exchange
+        - symbol
+        - action
+        - quantity
+
+    SmartOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+        exchange:
+          type: string
+          enum: [NSE, NFO, CDS, BSE, BFO, BCD, MCX, NCDEX]
+        symbol:
+          type: string
+        action:
+          type: string
+          enum: [BUY, SELL]
+        quantity:
+          type: string
+        position_size:
+          type: string
+          description: Position size in percentage or absolute value
+        pricetype:
+          type: string
+          enum: [MARKET, LIMIT, SL, SL-M]
+          default: MARKET
+        product:
+          type: string
+          enum: [CNC, NRML, MIS]
+          default: MIS
+        price:
+          type: string
+          default: "0"
+        trigger_price:
+          type: string
+          default: "0"
+        disclosed_quantity:
+          type: string
+          default: "0"
+      required:
+        - apikey
+        - strategy
+        - exchange
+        - symbol
+        - action
+        - quantity
+        - position_size
+
+    ModifyOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+        exchange:
+          type: string
+          enum: [NSE, NFO, CDS, BSE, BFO, BCD, MCX, NCDEX]
+        symbol:
+          type: string
+        orderid:
+          type: string
+        action:
+          type: string
+          enum: [BUY, SELL]
+        product:
+          type: string
+          enum: [CNC, NRML, MIS]
+        pricetype:
+          type: string
+          enum: [MARKET, LIMIT, SL, SL-M]
+        price:
+          type: string
+        quantity:
+          type: string
+        disclosed_quantity:
+          type: string
+        trigger_price:
+          type: string
+      required:
+        - apikey
+        - strategy
+        - exchange
+        - symbol
+        - orderid
+        - action
+        - product
+        - pricetype
+        - price
+        - quantity
+        - disclosed_quantity
+        - trigger_price
+
+    CancelOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+        orderid:
+          type: string
+      required:
+        - apikey
+        - strategy
+        - orderid
+
+    ClosePositionRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+      required:
+        - apikey
+        - strategy
+
+    CancelAllOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+      required:
+        - apikey
+        - strategy
+
+    BasketOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderRequest'
+      required:
+        - apikey
+        - strategy
+        - orders
+
+    SplitOrderRequest:
+      type: object
+      properties:
+        apikey:
+          type: string
+        strategy:
+          type: string
+        exchange:
+          type: string
+          enum: [NSE, NFO, CDS, BSE, BFO, BCD, MCX, NCDEX]
+        symbol:
+          type: string
+        action:
+          type: string
+          enum: [BUY, SELL]
+        quantity:
+          type: string
+          description: Total quantity to split
+        splitsize:
+          type: string
+          description: Size of each split order
+        pricetype:
+          type: string
+          enum: [MARKET, LIMIT, SL, SL-M]
+          default: MARKET
+        product:
+          type: string
+          enum: [CNC, NRML, MIS]
+          default: MIS
+        price:
+          type: string
+          default: "0"
+        trigger_price:
+          type: string
+          default: "0"
+        disclosed_quantity:
+          type: string
+          default: "0"
+      required:
+        - apikey
+        - strategy
+        - exchange
+        - symbol
+        - action
+        - quantity
+        - splitsize
+
+    OrderResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+        orderid:
+          type: string
+      required:
+        - status
+        - orderid
+
+paths:
+  /placeorder:
+    post:
+      summary: Place a new order
+      description: Place a new order with the specified parameters
+      operationId: placeOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '200':
+          description: Order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /placesmartorder:
+    post:
+      summary: Place a smart order
+      description: Place a smart order that considers position sizing
+      operationId: placeSmartOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmartOrderRequest'
+      responses:
+        '200':
+          description: Smart order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /modifyorder:
+    post:
+      summary: Modify an existing order
+      description: Modify parameters of an existing order
+      operationId: modifyOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModifyOrderRequest'
+      responses:
+        '200':
+          description: Order modified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /cancelorder:
+    post:
+      summary: Cancel an order
+      description: Cancel a specific order by order ID
+      operationId: cancelOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelOrderRequest'
+      responses:
+        '200':
+          description: Order cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                required:
+                  - status
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /cancelallorder:
+    post:
+      summary: Cancel all orders
+      description: Cancel all open orders for a strategy
+      operationId: cancelAllOrders
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelAllOrderRequest'
+      responses:
+        '200':
+          description: All orders cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                required:
+                  - status
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /closeposition:
+    post:
+      summary: Close all positions
+      description: Close all open positions for a strategy
+      operationId: closePosition
+      tags:
+        - Positions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClosePositionRequest'
+      responses:
+        '200':
+          description: All positions closed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                required:
+                  - status
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /basketorder:
+    post:
+      summary: Place multiple orders
+      description: Place multiple orders in a single request
+      operationId: basketOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BasketOrderRequest'
+      responses:
+        '200':
+          description: Basket order placed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                  orders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        orderid:
+                          type: string
+                required:
+                  - status
+                  - orders
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /splitorder:
+    post:
+      summary: Split and place order
+      description: Split a large order into multiple smaller orders
+      operationId: splitOrder
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SplitOrderRequest'
+      responses:
+        '200':
+          description: Split order placed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                  orders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        orderid:
+                          type: string
+                required:
+                  - status
+                  - orders
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Orders
+    description: Order management endpoints
+  - name: Positions
+    description: Position management endpoints
