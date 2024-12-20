@@ -1,0 +1,65 @@
+server {
+    listen 443 ssl http2; # Enable HTTP/2
+    listen [::]:443 ssl http2 ipv6only=on;
+    server_name openalgo.in www.openalgo.in;
+
+    # SSL configuration
+    ssl_certificate /etc/letsencrypt/live/openalgo.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/openalgo.in/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+
+    # Enabling GZip Compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+    gzip_buffers 16 8k;
+
+
+
+
+    # Static content
+    location /static/ {
+        alias /var/python/openalgo-flask/openalgo/static/;
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+    }
+
+    # Socket.IO support
+    location /socket.io {
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_pass http://unix:/var/python/openalgo-flask/openalgo/openalgo.sock;
+    }
+
+    # Main Flask application
+    location / {
+        proxy_pass http://unix:/var/python/openalgo-flask/openalgo/openalgo.sock;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+
+    # Redirect non-SSL to SSL
+    if ($scheme = http) {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# HTTP server block to handle redirects to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name openalgo.in www.openalgo.in;
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}

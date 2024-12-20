@@ -1,0 +1,14 @@
+[Unit]
+Description=Gunicorn instance to serve openalgo
+After=network.target
+
+[Service]
+User=openalgo
+Group=www-data
+WorkingDirectory=/var/python/openalgo-flask/openalgo/
+Environment="PATH=/var/python/openalgo-flask/bin/"
+ExecStart=/var/python/openalgo-flask/bin/gunicorn --worker-class eventlet -w 1 --bind unix:/var/python/openalgo-flask/openalgo/openalgo.sock -m 007 app:app --log-level info --access-logfile /var/log/gunicorn/access.log --error-logfile /var/log/gunicorn/error.log
+
+
+[Install]
+WantedBy=multi-user.target
