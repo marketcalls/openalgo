@@ -112,9 +112,10 @@ APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
 
 # Installation paths
-OPENALGO_PATH="/var/python/openalgo-flask"
-VENV_PATH="$OPENALGO_PATH/venv"
-SOCKET_PATH="$OPENALGO_PATH"
+BASE_PATH="/var/python/openalgo-flask"
+OPENALGO_PATH="$BASE_PATH/openalgo"
+VENV_PATH="$BASE_PATH/venv"
+SOCKET_PATH="$BASE_PATH"
 SOCKET_FILE="$SOCKET_PATH/openalgo.sock"
 
 echo -e "\n${YELLOW}Starting OpenAlgo installation...${NC}"
@@ -137,9 +138,13 @@ check_status "Failed to install Certbot"
 # Check and handle existing OpenAlgo installation
 handle_existing "$OPENALGO_PATH" "installation directory" "OpenAlgo directory"
 
-# Create OpenAlgo directory and clone repository
-echo -e "\n${BLUE}Creating OpenAlgo directory and cloning repository...${NC}"
-sudo mkdir -p $OPENALGO_PATH
+# Create base directory
+echo -e "\n${BLUE}Creating base directory...${NC}"
+sudo mkdir -p $BASE_PATH
+check_status "Failed to create base directory"
+
+# Clone repository
+echo -e "\n${BLUE}Cloning OpenAlgo repository...${NC}"
 sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
@@ -298,18 +303,23 @@ check_status "Failed to create systemd service"
 
 # Set correct permissions
 echo -e "\n${BLUE}Setting permissions...${NC}"
-# Set permissions for application files
+
+# Set permissions for base directory
+sudo chown -R www-data:www-data $BASE_PATH
+sudo chmod -R 755 $BASE_PATH
+
+# Create and set permissions for required directories
+sudo mkdir -p $OPENALGO_PATH/db
+sudo mkdir -p $OPENALGO_PATH/tmp
 sudo chown -R www-data:www-data $OPENALGO_PATH
 sudo chmod -R 755 $OPENALGO_PATH
-
-# Create and set permissions for socket directory
-sudo mkdir -p $(dirname $SOCKET_FILE)
-sudo chown www-data:www-data $(dirname $SOCKET_FILE)
-sudo chmod 755 $(dirname $SOCKET_FILE)
 
 # Remove existing socket file if it exists
 [ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE
 
+# Verify permissions
+echo -e "${BLUE}Verifying permissions...${NC}"
+ls -la $OPENALGO_PATH
 check_status "Failed to set permissions"
 
 # Reload systemd and start services
