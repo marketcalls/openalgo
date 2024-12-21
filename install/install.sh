@@ -73,11 +73,19 @@ echo -e "${BLUE}OpenAlgo Installation Configuration${NC}"
 echo "----------------------------------------"
 
 # Get domain name
-read -p "Enter your domain name (e.g., opendash.app): " DOMAIN
-if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Error: Domain name is required${NC}"
-    exit 1
-fi
+while true; do
+    read -p "Enter your domain name (e.g., opendash.app): " DOMAIN
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}Error: Domain name is required${NC}"
+        continue
+    fi
+    # Basic domain validation
+    if [[ ! $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+        echo -e "${RED}Error: Invalid domain format. Please enter a valid domain name${NC}"
+        continue
+    fi
+    break
+done
 
 # Get broker name
 while true; do
