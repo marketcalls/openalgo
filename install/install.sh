@@ -79,10 +79,17 @@ while true; do
         echo -e "${RED}Error: Domain name is required${NC}"
         continue
     fi
-    # Basic domain validation
-    if [[ ! $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+    # Domain validation that accepts subdomains
+    if [[ ! $DOMAIN =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
         echo -e "${RED}Error: Invalid domain format. Please enter a valid domain name${NC}"
         continue
+    fi
+
+    # Check if it's a subdomain
+    if [[ $DOMAIN =~ ^[^.]+\.[^.]+\.[^.]+$ ]]; then
+        IS_SUBDOMAIN=true
+    else
+        IS_SUBDOMAIN=false
     fi
     break
 done
@@ -111,14 +118,16 @@ fi
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
 
-# Installation paths
-BASE_PATH="/var/python/openalgo-flask"
+# Installation paths with unique deployment name
+DEPLOY_NAME="${DOMAIN/./-}-${BROKER_NAME}"  # e.g., opendash-app-fyers
+BASE_PATH="/var/python/openalgo-flask/$DEPLOY_NAME"
 OPENALGO_PATH="$BASE_PATH/openalgo"
 VENV_PATH="$BASE_PATH/venv"
 SOCKET_PATH="$BASE_PATH"
 SOCKET_FILE="$SOCKET_PATH/openalgo.sock"
+SERVICE_NAME="openalgo-$DEPLOY_NAME"
 
-echo -e "\n${YELLOW}Starting OpenAlgo installation...${NC}"
+echo -e "\n${YELLOW}Starting OpenAlgo installation for $DEPLOY_NAME...${NC}"
 
 # Update system packages
 echo -e "\n${BLUE}Updating system packages...${NC}"
@@ -136,7 +145,7 @@ sudo apt-get install -y certbot python3-certbot-nginx
 check_status "Failed to install Certbot"
 
 # Check and handle existing OpenAlgo installation
-handle_existing "$OPENALGO_PATH" "installation directory" "OpenAlgo directory"
+handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
 
 # Create base directory
 echo -e "\n${BLUE}Creating base directory...${NC}"
@@ -184,7 +193,7 @@ sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
 server {
     listen 80;
     listen [::]:80;
-    server_name $DOMAIN www.$DOMAIN;
+    server_name $DOMAIN;
     root /var/www/html;
     
     location / {
@@ -215,7 +224,11 @@ check_status "Failed to configure firewall"
 
 # Obtain SSL certificate
 echo -e "\n${BLUE}Obtaining SSL certificate...${NC}"
-sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
+if [ "$IS_SUBDOMAIN" = true ]; then
+    sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@${DOMAIN#*.}
+else
+    sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
+fi
 check_status "Failed to obtain SSL certificate"
 
 # Configure final Nginx setup with SSL and socket
@@ -224,7 +237,7 @@ sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
 server {
     listen 80;
     listen [::]:80;
-    server_name $DOMAIN www.$DOMAIN;
+    server_name $DOMAIN;
 
     location / {
         return 301 https://\$host\$request_uri;
@@ -235,7 +248,7 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     
-    server_name $DOMAIN www.$DOMAIN;
+    server_name $DOMAIN;
     
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
@@ -278,13 +291,13 @@ sudo nginx -t
 check_status "Failed to validate Nginx configuration"
 
 # Check and handle existing systemd service
-handle_existing "/etc/systemd/system/openalgo.service" "systemd service" "OpenAlgo service file"
+handle_existing "/etc/systemd/system/$SERVICE_NAME.service" "systemd service" "OpenAlgo service file"
 
-# Create systemd service
+# Create systemd service with unique name
 echo -e "\n${BLUE}Creating systemd service...${NC}"
-sudo tee /etc/systemd/system/openalgo.service > /dev/null << EOL
+sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
 [Unit]
-Description=OpenAlgo Gunicorn Daemon
+Description=OpenAlgo Gunicorn Daemon ($DEPLOY_NAME)
 After=network.target
 
 [Service]
@@ -325,28 +338,30 @@ check_status "Failed to set permissions"
 # Reload systemd and start services
 echo -e "\n${BLUE}Starting services...${NC}"
 sudo systemctl daemon-reload
-sudo systemctl enable openalgo
-sudo systemctl start openalgo
+sudo systemctl enable $SERVICE_NAME
+sudo systemctl start $SERVICE_NAME
 sudo systemctl restart nginx
 check_status "Failed to start services"
 
 echo -e "\n${GREEN}Installation completed successfully!${NC}"
 echo -e "\n${YELLOW}Installation Summary:${NC}"
+echo -e "${BLUE}Deployment Name:${NC} $DEPLOY_NAME"
 echo -e "${BLUE}Domain:${NC} $DOMAIN"
 echo -e "${BLUE}Broker:${NC} $BROKER_NAME"
 echo -e "${BLUE}Installation Directory:${NC} $OPENALGO_PATH"
 echo -e "${BLUE}Environment File:${NC} $OPENALGO_PATH/.env"
 echo -e "${BLUE}Socket File:${NC} $SOCKET_FILE"
+echo -e "${BLUE}Service Name:${NC} $SERVICE_NAME"
 echo -e "${BLUE}Nginx Config:${NC} /etc/nginx/sites-available/$DOMAIN"
 echo -e "${BLUE}SSL:${NC} Enabled with Let's Encrypt"
 
 echo -e "\n${YELLOW}Next Steps:${NC}"
 echo -e "1. ${GREEN}Visit https://$DOMAIN to access your OpenAlgo instance${NC}"
 echo -e "2. ${GREEN}Configure your broker settings in the web interface${NC}"
-echo -e "3. ${GREEN}Review the logs using: sudo journalctl -u openalgo${NC}"
-echo -e "4. ${GREEN}Monitor the application status: sudo systemctl status openalgo${NC}"
+echo -e "3. ${GREEN}Review the logs using: sudo journalctl -u $SERVICE_NAME${NC}"
+echo -e "4. ${GREEN}Monitor the application status: sudo systemctl status $SERVICE_NAME${NC}"
 
 echo -e "\n${YELLOW}Useful Commands:${NC}"
-echo -e "${BLUE}Restart OpenAlgo:${NC} sudo systemctl restart openalgo"
-echo -e "${BLUE}View Logs:${NC} sudo journalctl -u openalgo"
-echo -e "${BLUE}Check Status:${NC} sudo systemctl status openalgo"
+echo -e "${BLUE}Restart OpenAlgo:${NC} sudo systemctl restart $SERVICE_NAME"
+echo -e "${BLUE}View Logs:${NC} sudo journalctl -u $SERVICE_NAME"
+echo -e "${BLUE}Check Status:${NC} sudo systemctl status $SERVICE_NAME"
