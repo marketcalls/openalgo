@@ -74,3 +74,4 @@ WTForms==3.1.2
 zipp==3.19.2
 dnspython>=2.6.1 # not directly required, pinned by Snyk to avoid a vulnerability
 gunicorn
+eventlet
