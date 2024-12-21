@@ -67,7 +67,7 @@ sudo ./install.sh
 ```
 
 The script will interactively prompt you for:
-- Your domain name
+- Your domain name (supports both root domains and subdomains)
 - Broker selection
 - Broker API credentials
 
@@ -75,24 +75,71 @@ The installation process will:
 - Install required packages
 - Configure Nginx with SSL
 - Set up the OpenAlgo application
-- Create systemd service
+- Create systemd service with unique name based on domain and broker
+- Generate installation logs in the logs directory
+
+#### Multi-Domain Deployment
+The installation script supports deploying multiple instances on the same server:
+- Each deployment gets a unique service name (e.g., openalgo-yourdomain-broker)
+- Separate configuration files and directories for each deployment
+- Individual log files for each installation in the logs directory
+- Independent SSL certificates for each domain
+- Isolated Python virtual environments
+
+Example of running multiple deployments:
+```bash
+# First deployment
+sudo ./install.sh
+# Enter domain: trading1.yourdomain.com
+# Enter broker: fyers
+
+# Second deployment
+sudo ./install.sh
+# Enter domain: trading2.yourdomain.com
+# Enter broker: zerodha
+```
+
+Each deployment will:
+- Have its own systemd service
+- Use separate configuration files
+- Store logs in unique timestamped files
+- Run independently of other deployments
 
 ### 3. Verify Installation
 
-After installation completes, verify that:
-1. The application is running:
+After installation completes, verify each deployment:
+
+1. **Check Service Status**
    ```bash
-   sudo systemctl status openalgo
+   # Example for Fyers deployment
+   sudo systemctl status openalgo-fyers-yourdomain-fyers
+   
+   # Example for Zerodha deployment
+   sudo systemctl status openalgo-zerodha-yourdomain-zerodha
    ```
 
-2. Nginx is configured properly:
+2. **Verify Nginx Configuration**
    ```bash
+   # Test overall Nginx configuration
    sudo nginx -t
+   
+   # Check specific site configurations
+   ls -l /etc/nginx/sites-enabled/
+   cat /etc/nginx/sites-enabled/fyers.yourdomain.com
+   cat /etc/nginx/sites-enabled/zerodha.yourdomain.com
    ```
 
-3. Access your domain in a web browser:
+3. **Access Web Interfaces**
+   Test each deployment in your web browser:
    ```
-   https://yourdomain.com
+   https://fyers.yourdomain.com
+   https://zerodha.yourdomain.com
+   ```
+
+4. **Check Installation Logs**
+   ```bash
+   # View the installation log for your deployment
+   cat install/logs/install_YYYYMMDD_HHMMSS.log
    ```
 
 ## Troubleshooting
@@ -104,46 +151,104 @@ After installation completes, verify that:
    # Check Certbot logs
    sudo journalctl -u certbot
    
-   # Manually run certificate installation
-   sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+   # Example: Manually run certificate installation for trading.yourdomain.com
+   sudo certbot --nginx -d trading.yourdomain.com
+   
+   # Example: Manually run certificate installation for multiple subdomains
+   sudo certbot --nginx -d fyers.yourdomain.com -d zerodha.yourdomain.com
    ```
 
 2. **Application Not Starting**
+   Example scenario: Managing multiple broker deployments
    ```bash
-   # Check application logs
-   sudo journalctl -u openalgo
+   # Example 1: Fyers deployment on fyers.yourdomain.com
+   sudo journalctl -u openalgo-fyers-yourdomain-fyers    # View logs
+   sudo systemctl restart openalgo-fyers-yourdomain-fyers # Restart service
    
-   # Restart the service
-   sudo systemctl restart openalgo
+   # Example 2: Zerodha deployment on zerodha.yourdomain.com
+   sudo journalctl -u openalgo-zerodha-yourdomain-zerodha # View logs
+   sudo systemctl restart openalgo-zerodha-yourdomain-zerodha # Restart service
    ```
 
 3. **Nginx Issues**
    ```bash
-   # Check Nginx error logs
+   # Check Nginx error logs for all deployments
    sudo tail -f /var/log/nginx/error.log
    
-   # Check Nginx access logs
-   sudo tail -f /var/log/nginx/access.log
+   # Check access logs for specific domains
+   sudo tail -f /var/log/nginx/fyers.yourdomain.com.access.log
+   sudo tail -f /var/log/nginx/zerodha.yourdomain.com.access.log
    ```
 
-### Useful Commands
+4. **Installation Logs**
+   Example: Checking installation logs for multiple deployments
+   ```bash
+   # List all installation logs
+   ls -l install/logs/
+   
+   # View latest installation log
+   cat install/logs/$(ls -t install/logs/ | head -1)
+   
+   # Example: View specific deployment logs
+   cat install/logs/install_20240101_120000.log  # Fyers installation
+   cat install/logs/install_20240101_143000.log  # Zerodha installation
+   ```
 
-```bash
-# Restart OpenAlgo
-sudo systemctl restart openalgo
+### Managing Multiple Deployments
 
-# View OpenAlgo logs
-sudo journalctl -u openalgo
+1. **Service Management Examples**
+   ```bash
+   # List all OpenAlgo services
+   systemctl list-units "openalgo-*"
+   
+   # Example outputs:
+   # openalgo-fyers-yourdomain-fyers.service    loaded active running
+   # openalgo-zerodha-yourdomain-zerodha.service loaded active running
+   
+   # Restart specific deployment
+   sudo systemctl restart openalgo-fyers-yourdomain-fyers
+   
+   # Check status of specific deployment
+   sudo systemctl status openalgo-zerodha-yourdomain-zerodha
+   ```
 
-# Check OpenAlgo status
-sudo systemctl status openalgo
+2. **Log Management Examples**
+   ```bash
+   # View real-time logs for Fyers deployment
+   sudo journalctl -f -u openalgo-fyers-yourdomain-fyers
+   
+   # View last 100 lines of Zerodha deployment logs
+   sudo journalctl -n 100 -u openalgo-zerodha-yourdomain-zerodha
+   
+   # View logs since last hour for specific deployment
+   sudo journalctl --since "1 hour ago" -u openalgo-fyers-yourdomain-fyers
+   ```
 
-# Restart Nginx
-sudo systemctl restart nginx
+3. **Nginx Configuration Examples**
+   ```bash
+   # View Nginx configs for different deployments
+   sudo nano /etc/nginx/sites-available/fyers.yourdomain.com
+   sudo nano /etc/nginx/sites-available/zerodha.yourdomain.com
+   
+   # Test Nginx configuration
+   sudo nginx -t
+   
+   # Reload Nginx after config changes
+   sudo systemctl reload nginx
+   ```
 
-# View Nginx configuration
-sudo nano /etc/nginx/sites-available/yourdomain.com
-```
+4. **Installation Directory Examples**
+   ```bash
+   # List deployment directories
+   ls -l /var/python/openalgo-flask/
+   
+   # Example structure:
+   # /var/python/openalgo-flask/fyers-yourdomain-fyers/
+   # /var/python/openalgo-flask/zerodha-yourdomain-zerodha/
+   
+   # Check specific deployment files
+   ls -l /var/python/openalgo-flask/fyers-yourdomain-fyers/
+   ```
 
 ## Security Notes
 

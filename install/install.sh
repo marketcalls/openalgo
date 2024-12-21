@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# openalgo Installation Banner
+echo '
+                             _             
+  ___  _ __   ___ _ __     / \   | | __ _ ___  
+ / _ \| '_ \ / _ \ '_ \   / _ \  | |/ _` / _ \ 
+| (_) | |_) |  __/ | | | / ___ \ | | (_| | (_) |
+ \___/| .__/ \___|_| |_|/_/   \_\|_|\__, \___/ 
+      |_|                            |___/      
+'
+
 # OpenAlgo Installation and Configuration Script
 
 # Color codes for better readability
@@ -9,11 +19,49 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Create logs directory if it doesn't exist
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+LOGS_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOGS_DIR"
+
+# Generate unique log file name for this deployment
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="$LOGS_DIR/install_${TIMESTAMP}.log"
+
+# Function to log messages to both console and log file
+log_message() {
+    local message="$1"
+    local color="$2"
+    echo -e "${color}${message}${NC}" | tee -a "$LOG_FILE"
+}
+
 # Function to check if command was successful
 check_status() {
     if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: $1${NC}"
+        log_message "Error: $1" "$RED"
         exit 1
+    fi
+}
+
+# Function to check current timezone
+check_timezone() {
+    current_tz=$(timedatectl | grep "Time zone" | awk '{print $3}')
+    log_message "Current timezone: $current_tz" "$BLUE"
+    
+    if [[ "$current_tz" == "Asia/Kolkata" ]]; then
+        log_message "Server is already set to IST timezone." "$GREEN"
+        return 0
+    fi
+    
+    log_message "Server is not set to IST timezone." "$YELLOW"
+    read -p "Would you like to change the timezone to IST? (y/n): " change_tz
+    if [[ $change_tz =~ ^[Yy]$ ]]; then
+        log_message "Changing timezone to IST..." "$BLUE"
+        sudo timedatectl set-timezone Asia/Kolkata
+        check_status "Failed to change timezone"
+        log_message "Timezone successfully changed to IST" "$GREEN"
+    else
+        log_message "Keeping current timezone: $current_tz" "$YELLOW"
     fi
 }
 
@@ -40,18 +88,18 @@ handle_existing() {
     local name=$3
 
     if [ -e "$path" ]; then
-        echo -e "${YELLOW}Warning: $name already exists at $path${NC}"
+        log_message "Warning: $name already exists at $path" "$YELLOW"
         read -p "Would you like to backup the existing $type? (y/n): " backup_choice
         if [[ $backup_choice =~ ^[Yy]$ ]]; then
             backup_path="${path}_backup_$(date +%Y%m%d_%H%M%S)"
-            echo -e "${BLUE}Creating backup at $backup_path${NC}"
+            log_message "Creating backup at $backup_path" "$BLUE"
             sudo mv "$path" "$backup_path"
             check_status "Failed to create backup of $name"
             return 0
         else
             read -p "Would you like to remove the existing $type? (y/n): " remove_choice
             if [[ $remove_choice =~ ^[Yy]$ ]]; then
-                echo -e "${BLUE}Removing existing $type...${NC}"
+                log_message "Removing existing $type..." "$BLUE"
                 if [ -d "$path" ]; then
                     sudo rm -rf "$path"
                 else
@@ -60,7 +108,7 @@ handle_existing() {
                 check_status "Failed to remove existing $type"
                 return 0
             else
-                echo -e "${RED}Installation cannot proceed without handling existing $type${NC}"
+                log_message "Installation cannot proceed without handling existing $type" "$RED"
                 exit 1
             fi
         fi
@@ -68,20 +116,27 @@ handle_existing() {
     return 0
 }
 
+# Start logging
+log_message "Starting OpenAlgo installation log at: $LOG_FILE" "$BLUE"
+log_message "----------------------------------------" "$BLUE"
+
+# Check timezone before proceeding with installation
+check_timezone
+
 # Collect installation parameters
-echo -e "${BLUE}OpenAlgo Installation Configuration${NC}"
-echo "----------------------------------------"
+log_message "OpenAlgo Installation Configuration" "$BLUE"
+log_message "----------------------------------------" "$BLUE"
 
 # Get domain name
 while true; do
-    read -p "Enter your domain name (e.g., opendash.app): " DOMAIN
+    read -p "Enter your domain name (e.g., yourdomain.com or sub.yourdomain.com): " DOMAIN
     if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}Error: Domain name is required${NC}"
+        log_message "Error: Domain name is required" "$RED"
         continue
     fi
     # Domain validation that accepts subdomains
     if [[ ! $DOMAIN =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
-        echo -e "${RED}Error: Invalid domain format. Please enter a valid domain name${NC}"
+        log_message "Error: Invalid domain format. Please enter a valid domain name" "$RED"
         continue
     fi
 
@@ -96,12 +151,12 @@ done
 
 # Get broker name
 while true; do
-    echo -e "\nValid brokers: fivepaisa, aliceblue, angel, dhan, fyers, icici, kotak, shoonya, upstox, zebu, zerodha"
+    log_message "\nValid brokers: fivepaisa, aliceblue, angel, dhan, fyers, icici, kotak, shoonya, upstox, zebu, zerodha" "$BLUE"
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
         break
     else
-        echo -e "${RED}Invalid broker name. Please choose from the list above.${NC}"
+        log_message "Invalid broker name. Please choose from the list above." "$RED"
     fi
 done
 
@@ -110,7 +165,7 @@ read -p "Enter your broker API key: " BROKER_API_KEY
 read -p "Enter your broker API secret: " BROKER_API_SECRET
 
 if [ -z "$BROKER_API_KEY" ] || [ -z "$BROKER_API_SECRET" ]; then
-    echo -e "${RED}Error: Broker API credentials are required${NC}"
+    log_message "Error: Broker API credentials are required" "$RED"
     exit 1
 fi
 
@@ -127,20 +182,20 @@ SOCKET_PATH="$BASE_PATH"
 SOCKET_FILE="$SOCKET_PATH/openalgo.sock"
 SERVICE_NAME="openalgo-$DEPLOY_NAME"
 
-echo -e "\n${YELLOW}Starting OpenAlgo installation for $DEPLOY_NAME...${NC}"
+log_message "\nStarting OpenAlgo installation for $DEPLOY_NAME..." "$YELLOW"
 
 # Update system packages
-echo -e "\n${BLUE}Updating system packages...${NC}"
+log_message "\nUpdating system packages..." "$BLUE"
 sudo apt-get update && sudo apt-get upgrade -y
 check_status "Failed to update system packages"
 
 # Install required packages including Certbot
-echo -e "\n${BLUE}Installing required packages...${NC}"
+log_message "\nInstalling required packages..." "$BLUE"
 sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
 check_status "Failed to install required packages"
 
 # Install Certbot
-echo -e "\n${BLUE}Installing Certbot...${NC}"
+log_message "\nInstalling Certbot..." "$BLUE"
 sudo apt-get install -y certbot python3-certbot-nginx
 check_status "Failed to install Certbot"
 
@@ -148,31 +203,31 @@ check_status "Failed to install Certbot"
 handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
 
 # Create base directory
-echo -e "\n${BLUE}Creating base directory...${NC}"
+log_message "\nCreating base directory..." "$BLUE"
 sudo mkdir -p $BASE_PATH
 check_status "Failed to create base directory"
 
 # Clone repository
-echo -e "\n${BLUE}Cloning OpenAlgo repository...${NC}"
+log_message "\nCloning OpenAlgo repository..." "$BLUE"
 sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
 # Create and activate virtual environment
-echo -e "\n${BLUE}Setting up Python virtual environment...${NC}"
+log_message "\nSetting up Python virtual environment..." "$BLUE"
 if [ -d "$VENV_PATH" ]; then
-    echo -e "${YELLOW}Warning: Virtual environment already exists, removing...${NC}"
+    log_message "Warning: Virtual environment already exists, removing..." "$YELLOW"
     sudo rm -rf "$VENV_PATH"
 fi
 sudo python3 -m venv $VENV_PATH
 check_status "Failed to create virtual environment"
 
 # Install Python dependencies
-echo -e "\n${BLUE}Installing Python dependencies...${NC}"
+log_message "\nInstalling Python dependencies..." "$BLUE"
 sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Configure .env file
-echo -e "\n${BLUE}Configuring environment file...${NC}"
+log_message "\nConfiguring environment file..." "$BLUE"
 handle_existing "$OPENALGO_PATH/.env" "environment file" ".env file"
 
 sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
@@ -188,7 +243,7 @@ check_status "Failed to configure environment file"
 handle_existing "/etc/nginx/sites-available/$DOMAIN" "Nginx configuration" "Nginx config file"
 
 # Configure initial Nginx for SSL certificate obtention
-echo -e "\n${BLUE}Configuring initial Nginx setup...${NC}"
+log_message "\nConfiguring initial Nginx setup..." "$BLUE"
 sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
 server {
     listen 80;
@@ -208,12 +263,12 @@ sudo ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
 check_status "Failed to enable Nginx site"
 
 # Reload Nginx for initial configuration
-echo -e "\n${BLUE}Testing and reloading Nginx...${NC}"
+log_message "\nTesting and reloading Nginx..." "$BLUE"
 sudo nginx -t && sudo systemctl reload nginx
 check_status "Failed to reload Nginx"
 
 # Configure UFW firewall
-echo -e "\n${BLUE}Configuring firewall rules...${NC}"
+log_message "\nConfiguring firewall rules..." "$BLUE"
 sudo apt-get install -y ufw
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
@@ -223,7 +278,7 @@ sudo ufw --force enable
 check_status "Failed to configure firewall"
 
 # Obtain SSL certificate
-echo -e "\n${BLUE}Obtaining SSL certificate...${NC}"
+log_message "\nObtaining SSL certificate..." "$BLUE"
 if [ "$IS_SUBDOMAIN" = true ]; then
     sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@${DOMAIN#*.}
 else
@@ -232,7 +287,7 @@ fi
 check_status "Failed to obtain SSL certificate"
 
 # Configure final Nginx setup with SSL and socket
-echo -e "\n${BLUE}Configuring final Nginx setup...${NC}"
+log_message "\nConfiguring final Nginx setup..." "$BLUE"
 sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
 server {
     listen 80;
@@ -286,7 +341,7 @@ server {
 EOL
 
 # Test Nginx configuration
-echo -e "\n${BLUE}Testing Nginx configuration...${NC}"
+log_message "\nTesting Nginx configuration..." "$BLUE"
 sudo nginx -t
 check_status "Failed to validate Nginx configuration"
 
@@ -294,7 +349,7 @@ check_status "Failed to validate Nginx configuration"
 handle_existing "/etc/systemd/system/$SERVICE_NAME.service" "systemd service" "OpenAlgo service file"
 
 # Create systemd service with unique name
-echo -e "\n${BLUE}Creating systemd service...${NC}"
+log_message "\nCreating systemd service..." "$BLUE"
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
 [Unit]
 Description=OpenAlgo Gunicorn Daemon ($DEPLOY_NAME)
@@ -315,7 +370,7 @@ EOL
 check_status "Failed to create systemd service"
 
 # Set correct permissions
-echo -e "\n${BLUE}Setting permissions...${NC}"
+log_message "\nSetting permissions..." "$BLUE"
 
 # Set permissions for base directory
 sudo chown -R www-data:www-data $BASE_PATH
@@ -331,37 +386,39 @@ sudo chmod -R 755 $OPENALGO_PATH
 [ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE
 
 # Verify permissions
-echo -e "${BLUE}Verifying permissions...${NC}"
+log_message "\nVerifying permissions..." "$BLUE"
 ls -la $OPENALGO_PATH
 check_status "Failed to set permissions"
 
 # Reload systemd and start services
-echo -e "\n${BLUE}Starting services...${NC}"
+log_message "\nStarting services..." "$BLUE"
 sudo systemctl daemon-reload
 sudo systemctl enable $SERVICE_NAME
 sudo systemctl start $SERVICE_NAME
 sudo systemctl restart nginx
 check_status "Failed to start services"
 
-echo -e "\n${GREEN}Installation completed successfully!${NC}"
-echo -e "\n${YELLOW}Installation Summary:${NC}"
-echo -e "${BLUE}Deployment Name:${NC} $DEPLOY_NAME"
-echo -e "${BLUE}Domain:${NC} $DOMAIN"
-echo -e "${BLUE}Broker:${NC} $BROKER_NAME"
-echo -e "${BLUE}Installation Directory:${NC} $OPENALGO_PATH"
-echo -e "${BLUE}Environment File:${NC} $OPENALGO_PATH/.env"
-echo -e "${BLUE}Socket File:${NC} $SOCKET_FILE"
-echo -e "${BLUE}Service Name:${NC} $SERVICE_NAME"
-echo -e "${BLUE}Nginx Config:${NC} /etc/nginx/sites-available/$DOMAIN"
-echo -e "${BLUE}SSL:${NC} Enabled with Let's Encrypt"
+log_message "\nInstallation completed successfully!" "$GREEN"
+log_message "\nInstallation Summary:" "$YELLOW"
+log_message "Deployment Name: $DEPLOY_NAME" "$BLUE"
+log_message "Domain: $DOMAIN" "$BLUE"
+log_message "Broker: $BROKER_NAME" "$BLUE"
+log_message "Installation Directory: $OPENALGO_PATH" "$BLUE"
+log_message "Environment File: $OPENALGO_PATH/.env" "$BLUE"
+log_message "Socket File: $SOCKET_FILE" "$BLUE"
+log_message "Service Name: $SERVICE_NAME" "$BLUE"
+log_message "Nginx Config: /etc/nginx/sites-available/$DOMAIN" "$BLUE"
+log_message "SSL: Enabled with Let's Encrypt" "$BLUE"
+log_message "Installation Log: $LOG_FILE" "$BLUE"
 
-echo -e "\n${YELLOW}Next Steps:${NC}"
-echo -e "1. ${GREEN}Visit https://$DOMAIN to access your OpenAlgo instance${NC}"
-echo -e "2. ${GREEN}Configure your broker settings in the web interface${NC}"
-echo -e "3. ${GREEN}Review the logs using: sudo journalctl -u $SERVICE_NAME${NC}"
-echo -e "4. ${GREEN}Monitor the application status: sudo systemctl status $SERVICE_NAME${NC}"
+log_message "\nNext Steps:" "$YELLOW"
+log_message "1. Visit https://$DOMAIN to access your OpenAlgo instance" "$GREEN"
+log_message "2. Configure your broker settings in the web interface" "$GREEN"
+log_message "3. Review the logs using: sudo journalctl -u $SERVICE_NAME" "$GREEN"
+log_message "4. Monitor the application status: sudo systemctl status $SERVICE_NAME" "$GREEN"
 
-echo -e "\n${YELLOW}Useful Commands:${NC}"
-echo -e "${BLUE}Restart OpenAlgo:${NC} sudo systemctl restart $SERVICE_NAME"
-echo -e "${BLUE}View Logs:${NC} sudo journalctl -u $SERVICE_NAME"
-echo -e "${BLUE}Check Status:${NC} sudo systemctl status $SERVICE_NAME"
+log_message "\nUseful Commands:" "$YELLOW"
+log_message "Restart OpenAlgo: sudo systemctl restart $SERVICE_NAME" "$BLUE"
+log_message "View Logs: sudo journalctl -u $SERVICE_NAME" "$BLUE"
+log_message "Check Status: sudo systemctl status $SERVICE_NAME" "$BLUE"
+log_message "View Installation Log: cat $LOG_FILE" "$BLUE"
