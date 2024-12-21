@@ -154,7 +154,7 @@ check_status "Failed to create virtual environment"
 
 # Install Python dependencies
 echo -e "\n${BLUE}Installing Python dependencies...${NC}"
-sudo $VENV_PATH/bin/pip install eventlet gunicorn
+sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Configure .env file
@@ -165,6 +165,7 @@ sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" $OPENALGO_PATH/.env
 sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
+sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
 check_status "Failed to configure environment file"
@@ -297,11 +298,18 @@ check_status "Failed to create systemd service"
 
 # Set correct permissions
 echo -e "\n${BLUE}Setting permissions...${NC}"
+# Set permissions for application files
 sudo chown -R www-data:www-data $OPENALGO_PATH
 sudo chmod -R 755 $OPENALGO_PATH
-sudo touch $SOCKET_FILE
-sudo chown www-data:www-data $SOCKET_FILE
-sudo chmod 660 $SOCKET_FILE
+
+# Create and set permissions for socket directory
+sudo mkdir -p $(dirname $SOCKET_FILE)
+sudo chown www-data:www-data $(dirname $SOCKET_FILE)
+sudo chmod 755 $(dirname $SOCKET_FILE)
+
+# Remove existing socket file if it exists
+[ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE
+
 check_status "Failed to set permissions"
 
 # Reload systemd and start services
