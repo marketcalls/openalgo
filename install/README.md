@@ -3,7 +3,7 @@
 ## Prerequisites
 
 ### System Requirements
-- Ubuntu Server (20.04 LTS or later recommended)
+- Ubuntu Server (22.04 LTS or later recommended)
 - Minimum 2GB RAM
 - Clean installation recommended
 
