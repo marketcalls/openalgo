@@ -161,6 +161,13 @@ while true; do
     fi
 done
 
+# Show redirect URL for broker setup
+log_message "\nRedirect URL for broker developer portal:" "$YELLOW"
+log_message "https://$DOMAIN" "$GREEN"
+log_message "\nPlease use this URL in your broker's developer portal to generate API credentials." "$BLUE"
+log_message "Once you have the credentials, you can proceed with the installation." "$BLUE"
+echo ""
+
 # Get broker API credentials
 read -p "Enter your broker API key: " BROKER_API_KEY
 read -p "Enter your broker API secret: " BROKER_API_SECRET
