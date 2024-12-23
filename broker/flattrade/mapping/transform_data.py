@@ -1,5 +1,5 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Shoonya Broking Parameters https://shoonya.com/api-documentation
+#Mapping Angel Broking Parameters https://smartapi.angelbroking.com/docs/Orders
 
 from database.token_db import get_br_symbol
 
@@ -7,13 +7,11 @@ def transform_data(data,token):
     """
     Transforms the new API request structure to the current expected structure.
     """
-    userid = data["apikey"]
-    userid = userid[:-2] 
     symbol = get_br_symbol(data["symbol"],data["exchange"])
     # Basic mapping
     transformed = {
-        "uid": userid,
-        "actid": userid,
+        "uid": data["apikey"],
+        "actid": data["apikey"],
         "exch": data["exchange"],
         "tsym": symbol,
         "qty": data["quantity"],

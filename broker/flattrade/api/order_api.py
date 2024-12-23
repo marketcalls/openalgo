@@ -3,7 +3,7 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.shoonya.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.zebu.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
@@ -11,7 +11,6 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
 
     api_key = os.getenv('BROKER_API_KEY')
-    api_key = api_key[:-2]
 
     data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
 
@@ -20,7 +19,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("api.shoonya.com")
+    conn = http.client.HTTPSConnection("go.mynt.in")
     headers = {'Content-Type': 'application/json'}
 
     conn.request(method, endpoint, payload, headers)
@@ -74,7 +73,7 @@ def place_order_api(data,auth):
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
     print(payload)
-    conn = http.client.HTTPSConnection("api.shoonya.com")
+    conn = http.client.HTTPSConnection("go.mynt.in")
     conn.request("POST", "/NorenWClientTP/PlaceOrder", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
@@ -231,7 +230,6 @@ def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-    api_key = api_key[:-2]
     data = {"uid": api_key, "norenordno": orderid}
     
 
@@ -243,7 +241,7 @@ def cancel_order(orderid,auth):
 
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.shoonya.com")  # Adjust the URL as necessary
+    conn = http.client.HTTPSConnection("go.mynt.in")  # Adjust the URL as necessary
     conn.request("POST", "/NorenWClientTP/CancelOrder", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
@@ -263,7 +261,6 @@ def modify_order(data,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-    api_key = api_key[:-2]
 
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
@@ -275,7 +272,7 @@ def modify_order(data,auth):
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
 
-    conn = http.client.HTTPSConnection("api.shoonya.com")
+    conn = http.client.HTTPSConnection("go.mynt.in")
     conn.request("POST", "/NorenWClientTP/ModifyOrder", payload, headers)
     res = conn.getresponse()
     response = json.loads(res.read().decode("utf-8"))

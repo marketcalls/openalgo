@@ -69,21 +69,21 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-# Define the shoonya URLs for downloading the symbol files
-shoonya_urls = {
-    "NSE": "https://api.shoonya.com/NSE_symbols.txt.zip",
-    "NFO": "https://api.shoonya.com/NFO_symbols.txt.zip",
-    "CDS": "https://api.shoonya.com/CDS_symbols.txt.zip",
-    "MCX": "https://api.shoonya.com/MCX_symbols.txt.zip",
-    "BSE": "https://api.shoonya.com/BSE_symbols.txt.zip",
+# Define the Zebu URLs for downloading the symbol files
+zebu_urls = {
+    "NSE": "https://go.mynt.in/NSE_symbols.txt.zip",
+    "NFO": "https://go.mynt.in/NFO_symbols.txt.zip",
+    "CDS": "https://go.mynt.in/CDS_symbols.txt.zip",
+    "MCX": "https://go.mynt.in/MCX_symbols.txt.zip",
+    "BSE": "https://go.mynt.in/BSE_symbols.txt.zip",
     "BFO": "https://go.mynt.in/BFO_symbols.txt.zip"
 }
 
-def download_and_unzip_shoonya_data(output_path):
+def download_and_unzip_zebu_data(output_path):
     """
-    Downloads and unzips the shoonya text files to the tmp folder.
+    Downloads and unzips the Zebu text files to the tmp folder.
     """
-    print("Downloading and Unzipping shoonya Data")
+    print("Downloading and Unzipping Zebu Data")
 
     # Create the tmp directory if it doesn't exist
     if not os.path.exists(output_path):
@@ -91,8 +91,8 @@ def download_and_unzip_shoonya_data(output_path):
 
     downloaded_files = []
 
-    # Iterate through the shoonya URLs and download/unzip files
-    for key, url in shoonya_urls.items():
+    # Iterate through the Zebu URLs and download/unzip files
+    for key, url in zebu_urls.items():
         try:
             # Send GET request to download the zip file
             response = requests.get(url, timeout=10)
@@ -113,12 +113,12 @@ def download_and_unzip_shoonya_data(output_path):
 
 # Placeholder functions for processing data
 
-def process_shoonya_nse_data(output_path):
+def process_zebu_nse_data(output_path):
     """
-    Processes the shoonya NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Zebu NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
     Separates EQ, BE symbols, and Index symbols.
     """
-    print("Processing shoonya NSE Data")
+    print("Processing Zebu NSE Data")
     file_path = f'{output_path}/NSE_symbols.txt'
 
     # Read the NSE symbols file, specifying the exact columns to use and ignoring extra columns
@@ -168,12 +168,12 @@ def process_shoonya_nse_data(output_path):
 
 
 
-def process_shoonya_nfo_data(output_path):
+def process_zebu_nfo_data(output_path):
     """
-    Processes the shoonya NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Zebu NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya NFO Data")
+    print("Processing Zebu NFO Data")
     file_path = f'{output_path}/NFO_symbols.txt'
 
     # Read the NFO symbols file, specifying the exact columns to use
@@ -235,12 +235,12 @@ def process_shoonya_nfo_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_shoonya_cds_data(output_path):
+def process_zebu_cds_data(output_path):
     """
-    Processes the shoonya CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Zebu CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya CDS Data")
+    print("Processing Zebu CDS Data")
     file_path = f'{output_path}/CDS_symbols.txt'
 
     # Read the CDS symbols file, specifying the exact columns to use
@@ -248,8 +248,6 @@ def process_shoonya_cds_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'precision', 'multiplier', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
-
-    df = df[df['token'] > 100] # Filter out CDS tokens with less than 100 digits to avioid dummy entries or index values that are not actual CDS tokens
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -305,12 +303,12 @@ def process_shoonya_cds_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_shoonya_mcx_data(output_path):
+def process_zebu_mcx_data(output_path):
     """
-    Processes the shoonya MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Zebu MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya MCX Data")
+    print("Processing Zebu MCX Data")
     file_path = f'{output_path}/MCX_symbols.txt'
 
     # Read the MCX symbols file, specifying the exact columns to use
@@ -373,12 +371,12 @@ def process_shoonya_mcx_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_shoonya_bse_data(output_path):
+def process_zebu_bse_data(output_path):
     """
-    Processes the shoonya BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Zebu BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
     Ensures that the instrument type is always 'EQ'.
     """
-    print("Processing shoonya BSE Data")
+    print("Processing Zebu BSE Data")
     file_path = f'{output_path}/BSE_symbols.txt'
 
     # Read the BSE symbols file
@@ -423,12 +421,12 @@ def process_shoonya_bse_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_shoonya_bfo_data(output_path):
+def process_zebu_bfo_data(output_path):
     """
-    Processes the shoonya BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
+    Processes the Zebu BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
     Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
     """
-    print("Processing shoonya BFO Data")
+    print("Processing Zebu BFO Data")
     file_path = f'{output_path}/BFO_symbols.txt'
 
     # Read the BFO symbols file, specifying the exact columns to use
@@ -510,9 +508,9 @@ def process_shoonya_bfo_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def delete_shoonya_temp_data(output_path):
+def delete_zebu_temp_data(output_path):
     """
-    Deletes the shoonya symbol files from the tmp folder after processing.
+    Deletes the Zebu symbol files from the tmp folder after processing.
     """
     for filename in os.listdir(output_path):
         file_path = os.path.join(output_path, filename)
@@ -522,30 +520,30 @@ def delete_shoonya_temp_data(output_path):
 
 def master_contract_download():
     """
-    Downloads, processes, and deletes shoonya data.
+    Downloads, processes, and deletes Zebu data.
     """
-    print("Downloading shoonya Master Contract")
+    print("Downloading Zebu Master Contract")
 
     output_path = 'tmp'
     try:
-        download_and_unzip_shoonya_data(output_path)
+        download_and_unzip_zebu_data(output_path)
         delete_symtoken_table()
         
         # Placeholders for processing different exchanges
-        token_df = process_shoonya_nse_data(output_path)
+        token_df = process_zebu_nse_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_shoonya_bse_data(output_path)
+        token_df = process_zebu_bse_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_shoonya_nfo_data(output_path)
+        token_df = process_zebu_nfo_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_shoonya_cds_data(output_path)
+        token_df = process_zebu_cds_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_shoonya_mcx_data(output_path)
+        token_df = process_zebu_mcx_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_shoonya_bfo_data(output_path)
+        token_df = process_zebu_bfo_data(output_path)
         copy_from_dataframe(token_df)
         
-        delete_shoonya_temp_data(output_path)
+        delete_zebu_temp_data(output_path)
         
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
     except Exception as e:

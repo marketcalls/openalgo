@@ -144,16 +144,11 @@ def broker_callback(broker,para=None):
             forward_url = 'firstock.html'
 
     elif broker == 'flattrade':
-        if request.method == 'GET':
-            return render_template('flattrade.html')
-        
-        elif request.method == 'POST':
-            userid = request.form.get('userid')
-            password = request.form.get('password')
-            totp_code = request.form.get('totp')
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'flattrade.html'
+        code = request.args.get('code')
+        client = request.args.get('client')  # Flattrade returns client ID as well
+        print(f'The code is {code} for client {client}')
+        auth_token, error_message = auth_function(code)  # Only pass the code parameter
+        forward_url = 'broker.html'
 
     elif broker=='kotak':
         print(f"The Broker is {broker}")

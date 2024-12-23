@@ -5,6 +5,13 @@
 {% block head %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Function to extract API key for Flattrade
+        function getFlattradeApiKey(fullKey) {
+            if (!fullKey) return '';
+            const parts = fullKey.split(':::');
+            return parts.length > 1 ? parts[1] : fullKey;
+        }
+
         // Auto-select the enabled broker
         const select = document.getElementById('platform-select');
         const enabledOption = Array.from(select.options).find(option => !option.disabled);
@@ -35,7 +42,8 @@
                     loginUrl = '/firstock/callback';
                     break;
                 case 'flattrade':
-                    loginUrl = '/flattrade/callback';
+                    const flattradeApiKey = getFlattradeApiKey('{{broker_api_key}}');
+                    loginUrl = 'https://auth.flattrade.in/?app_key=' + flattradeApiKey;
                     break;
                 case 'fyers':
                     loginUrl = 'https://api-t1.fyers.in/api/v3/generate-authcode?client_id={{broker_api_key}}&redirect_uri={{redirect_url}}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c';

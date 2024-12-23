@@ -298,14 +298,11 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                print(f"Shoonya Portfolio - Product Value for {symbol} Not Found or Changed.")
+                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
     return portfolio_data
 
 def calculate_portfolio_statistics(holdings_data):
-    """
-    Calculates portfolio statistics according to Shoonya API specifications.
-    """
     totalholdingvalue = 0
     totalinvvalue = 0
     totalprofitandloss = 0
@@ -328,72 +325,68 @@ def calculate_portfolio_statistics(holdings_data):
             print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
             continue
 
-        # Get NSE entry
+        # Filter out the NSE entry and ignore BSE for the same symbol
         nse_entry = next((exch for exch in holding.get('exch_tsym', []) if exch.get('exch') == 'NSE'), None)
         if not nse_entry:
-            continue
+            continue  # Skip if no NSE entry is found
 
-        # Get quantities from API response
+        # Process only the NSE entry
+        quantity = float(holding.get('holdqty', 0)) + max(float(holding.get('npoadt1qty', 0)) , float(holding.get('dpqty', 0)))
+        upload_price = float(holding.get('upldprc', 0))
+        market_price = float(nse_entry.get('upldprc', 0))  # Assuming 'pp' is the market price for NSE
+
+        # Calculate investment value and holding value for NSE
+        inv_value = quantity * upload_price
+        holding_value = quantity * upload_price
+        profit_and_loss = holding_value - inv_value
+        pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
+
+        # Accumulate the totals
+        #totalholdingvalue += holding_value
+        totalinvvalue += inv_value
+        totalprofitandloss += profit_and_loss
+
+        # Valuation formula from API
         holdqty = float(holding.get('holdqty', 0))
         btstqty = float(holding.get('btstqty', 0))
         brkcolqty = float(holding.get('brkcolqty', 0))
         unplgdqty = float(holding.get('unplgdqty', 0))
         benqty = float(holding.get('benqty', 0))
-        npoadqty = float(holding.get('npoadqty', 0))
+        npoadqty = float(holding.get('npoadt1qty', 0))
         dpqty = float(holding.get('dpqty', 0))
         usedqty = float(holding.get('usedqty', 0))
 
-        # Calculate valuation using Shoonya's formula
-        upldprc = float(holding.get('upldprc', 0))
-        valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty) * upldprc
-
-        # Calculate investment value and P&L
-        totalinvvalue += valuation
+        # Valuation formula from API
+        valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
+        print("test valuation :"+str(npoadqty))
+        print("test valuation :"+str(upload_price))
+        # Accumulate total valuation
         totalholdingvalue += valuation
 
     # Calculate overall P&L percentage
-    if totalinvvalue > 0:
-        totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100
+    totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
 
     return {
-        'totalholdingvalue': round(totalholdingvalue, 2),
-        'totalinvvalue': round(totalinvvalue, 2),
-        'totalprofitandloss': round(totalprofitandloss, 2),
-        'totalpnlpercentage': round(totalpnlpercentage, 2)
+        'totalholdingvalue': totalholdingvalue,
+        'totalinvvalue': totalinvvalue,
+        'totalprofitandloss': totalprofitandloss,
+        'totalpnlpercentage': totalpnlpercentage
     }
 
 def transform_holdings_data(holdings_data):
-    """
-    Transforms holdings data according to Shoonya API specifications.
-    """
     transformed_data = []
     if isinstance(holdings_data, list):
         for holding in holdings_data:
-            if holding.get('stat') != 'Ok':
-                continue
-
-            # Get NSE entry
+            # Filter out only NSE exchange
             nse_entries = [exch for exch in holding.get('exch_tsym', []) if exch.get('exch') == 'NSE']
             for exch_tsym in nse_entries:
-                # Calculate total quantity using Shoonya's formula
-                holdqty = float(holding.get('holdqty', 0))
-                btstqty = float(holding.get('btstqty', 0))
-                brkcolqty = float(holding.get('brkcolqty', 0))
-                unplgdqty = float(holding.get('unplgdqty', 0))
-                benqty = float(holding.get('benqty', 0))
-                npoadqty = float(holding.get('npoadqty', 0))
-                dpqty = float(holding.get('dpqty', 0))
-                usedqty = float(holding.get('usedqty', 0))
-
-                total_qty = btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty) - usedqty
-
                 transformed_position = {
                     "symbol": exch_tsym.get('tsym', ''),
                     "exchange": exch_tsym.get('exch', ''),
-                    "quantity": int(total_qty),
-                    "product": holding.get('s_prdt_ali', 'CNC'),
-                    "pnl": 0.0,  # Will be calculated when market price is available
-                    "pnlpercent": 0.0  # Will be calculated when market price is available
+                    "quantity": int(holding.get('holdqty', 0)) + max(int(holding.get('npoadt1qty', 0)) , int(holding.get('dpqty', 0))),
+                    "product": exch_tsym.get('product', 'CNC'),
+                    "pnl": holding.get('profitandloss', 0.0),
+                    "pnlpercent": holding.get('pnlpercentage', 0.0)
                 }
                 transformed_data.append(transformed_position)
     return transformed_data

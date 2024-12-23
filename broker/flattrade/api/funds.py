@@ -3,14 +3,13 @@ import http.client
 import json
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Shoonya's API using the provided auth token."""
+    """Fetch margin data from Zebu's API using the provided auth token."""
     
-    # Shoonya API endpoint for fetching margin data
-    url = "api.shoonya.com"
+    # Zebu API endpoint for fetching margin data
+    url = "go.mynt.in"
     
     # Fetch UserID and AccountID from environment variables
     userid = os.getenv('BROKER_API_KEY')
-    userid = userid[:-2]  # Trim the last two characters
     actid = userid  # Assuming AccountID is the same as UserID
 
     # Prepare the payload for the request
@@ -30,7 +29,7 @@ def get_margin_data(auth_token):
         'Content-Type': 'application/json'
     }
 
-    # Send the POST request to Shoonya's API
+    # Send the POST request to Zebu's API
     conn.request("POST", "/NorenWClientTP/Limits", payload, headers)
 
     # Get the response
@@ -69,3 +68,4 @@ def get_margin_data(auth_token):
         # Log the exception and return an empty dictionary if there's an unexpected error
         print(f"Error processing margin data: {str(e)}")
         return {}
+
