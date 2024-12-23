@@ -131,6 +131,30 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'shoonya.html'
 
+    elif broker == 'firstock':
+        if request.method == 'GET':
+            return render_template('firstock.html')
+        
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            auth_token, error_message = auth_function(userid, password, totp_code)
+            forward_url = 'firstock.html'
+
+    elif broker == 'flattrade':
+        if request.method == 'GET':
+            return render_template('flattrade.html')
+        
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            auth_token, error_message = auth_function(userid, password, totp_code)
+            forward_url = 'flattrade.html'
+
     elif broker=='kotak':
         print(f"The Broker is {broker}")
         if request.method == 'GET':
