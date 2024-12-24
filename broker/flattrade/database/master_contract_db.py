@@ -1,13 +1,14 @@
 import os
 import requests
-import zipfile
-import io
 import pandas as pd
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from extensions import socketio  # Import SocketIO
+try:
+    from extensions import socketio  # Import SocketIO
+except ImportError:
+    socketio = None
 
 
 
@@ -38,7 +39,14 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
+    """Initialize the database and create tables"""
     print("Initializing Master Contract DB")
+    
+    # Create database directory if it doesn't exist
+    db_path = os.path.dirname(DATABASE_URL.replace('sqlite:///', ''))
+    if db_path and not os.path.exists(db_path):
+        os.makedirs(db_path)
+    
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
@@ -69,66 +77,83 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-# Define the Zebu URLs for downloading the symbol files
-zebu_urls = {
-    "NSE": "https://go.mynt.in/NSE_symbols.txt.zip",
-    "NFO": "https://go.mynt.in/NFO_symbols.txt.zip",
-    "CDS": "https://go.mynt.in/CDS_symbols.txt.zip",
-    "MCX": "https://go.mynt.in/MCX_symbols.txt.zip",
-    "BSE": "https://go.mynt.in/BSE_symbols.txt.zip",
-    "BFO": "https://go.mynt.in/BFO_symbols.txt.zip"
+# Define the Flattrade URLs for downloading the symbol files
+flattrade_urls = {
+    "NSE": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/NSE_Equity.csv",
+    "NFO_EQ": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Equity_Derivatives.csv",
+    "NFO_IDX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Index_Derivatives.csv",
+    "CDS": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Currency_Derivatives.csv",
+    "MCX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Commodity.csv",
+    "BSE": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/BSE_Equity.csv",
+    "BFO_IDX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Index_Derivatives.csv",
+    "BFO_EQ": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Equity_Derivatives.csv"
 }
 
-def download_and_unzip_zebu_data(output_path):
+def download_csv_data(output_path):
     """
-    Downloads and unzips the Zebu text files to the tmp folder.
+    Downloads CSV files directly to the tmp folder.
     """
-    print("Downloading and Unzipping Zebu Data")
+    print("Downloading CSV Data")
 
-    # Create the tmp directory if it doesn't exist
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
     downloaded_files = []
 
-    # Iterate through the Zebu URLs and download/unzip files
-    for key, url in zebu_urls.items():
+    for key, url in flattrade_urls.items():
         try:
-            # Send GET request to download the zip file
             response = requests.get(url, timeout=10)
-            
             if response.status_code == 200:
                 print(f"Successfully downloaded {key} from {url}")
-                
-                # Use in-memory file to handle the downloaded zip file
-                z = zipfile.ZipFile(io.BytesIO(response.content))
-                z.extractall(output_path)
-                downloaded_files.append(f"{key}.txt")
+                output_file = os.path.join(output_path, f"{key}.csv")
+                with open(output_file, 'wb') as f:
+                    f.write(response.content)
+                downloaded_files.append(f"{key}.csv")
             else:
                 print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
         except Exception as e:
             print(f"Error downloading {key} from {url}: {e}")
 
+    # Combine NFO and BFO files
+    combine_nfo_files(output_path)
+    combine_bfo_files(output_path)
+
     return downloaded_files
 
 # Placeholder functions for processing data
 
-def process_zebu_nse_data(output_path):
+def process_flattrade_nse_data(output_path):
     """
-    Processes the Zebu NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Flattrade NSE data (NSE_Equity.csv) to generate OpenAlgo symbols.
     Separates EQ, BE symbols, and Index symbols.
     """
-    print("Processing Zebu NSE Data")
-    file_path = f'{output_path}/NSE_symbols.txt'
+    print("Processing Flattrade NSE Data")
+    file_path = f'{output_path}/NSE.csv'
 
-    # Read the NSE symbols file, specifying the exact columns to use and ignoring extra columns
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Instrument', 'TickSize'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in NSE CSV:", df.columns.tolist())
+
+    # Read the NSE symbols file with the correct column names
+    df = pd.read_csv(file_path)
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
 
-    # Add missing columns to ensure DataFrame matches the database structure
+    # Add missing columns
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
+    df['tick_size'] = 0.05  # Default tick size for NSE
 
     # Apply transformation for OpenAlgo symbols
     def get_openalgo_symbol(broker_symbol):
@@ -149,15 +174,16 @@ def process_zebu_nse_data(output_path):
     df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
     # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    df['expiry'] = ''  # No expiry for these instruments
-    df['strike'] = -1  # Set default value -1 for strike price where missing
+    if 'expiry' not in df.columns:
+        df['expiry'] = ''  # No expiry for these instruments
+    if 'strike' not in df.columns:
+        df['strike'] = -1  # Set default value -1 for strike price where missing
 
     # Ensure the instrument type is consistent
     df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'EQ' if x in ['EQ', 'BE'] else x)
 
-    # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
+    # Handle missing or invalid numeric values in 'lotsize'
     df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce').fillna(0).astype(float)  # Convert to float, default to 0.0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -168,19 +194,34 @@ def process_zebu_nse_data(output_path):
 
 
 
-def process_zebu_nfo_data(output_path):
+def process_flattrade_nfo_data(output_path):
     """
-    Processes the Zebu NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Flattrade NFO data (NFO.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu NFO Data")
-    file_path = f'{output_path}/NFO_symbols.txt'
+    print("Processing Flattrade NFO Data")
+    file_path = f'{output_path}/NFO.csv'
 
-    # Read the NFO symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'OptionType', 'StrikePrice', 'TickSize'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in NFO CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for NFO
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -206,7 +247,7 @@ def process_zebu_nfo_data(output_path):
             return f"{row['name']}{row['expiry']}FUT"
         else:
             # Ensure strike prices are either integers or floats
-            formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
@@ -228,6 +269,9 @@ def process_zebu_nfo_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -235,19 +279,34 @@ def process_zebu_nfo_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_zebu_cds_data(output_path):
+def process_flattrade_cds_data(output_path):
     """
-    Processes the Zebu CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Flattrade CDS data (Currency_Derivatives.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu CDS Data")
-    file_path = f'{output_path}/CDS_symbols.txt'
+    print("Processing Flattrade CDS Data")
+    file_path = f'{output_path}/CDS.csv'
 
-    # Read the CDS symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Precision', 'Multiplier', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'OptionType', 'StrikePrice', 'TickSize'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in CDS CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'precision', 'multiplier', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.0025  # Default tick size for CDS
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -265,17 +324,16 @@ def process_zebu_cds_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['instrumenttype'], axis=1)
-
-    # Update instrumenttype to 'CE' or 'PE' based on the option type
-    df['instrumenttype'] = df.apply(lambda row: row['optiontype'] if row['instrumenttype'] == 'OPTCUR' else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{row['expiry']}FUT"
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            # Ensure strike prices are either integers or floats
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
+            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -296,6 +354,9 @@ def process_zebu_cds_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -303,19 +364,34 @@ def process_zebu_cds_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_zebu_mcx_data(output_path):
+def process_flattrade_mcx_data(output_path):
     """
-    Processes the Zebu MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Flattrade MCX data (Commodity.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu MCX Data")
-    file_path = f'{output_path}/MCX_symbols.txt'
+    print("Processing Flattrade MCX Data")
+    file_path = f'{output_path}/MCX.csv'
 
-    # Read the MCX symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'GNGD', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'OptionType', 'StrikePrice', 'TickSize'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in MCX CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'gngd', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for MCX
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -333,17 +409,16 @@ def process_zebu_mcx_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['instrumenttype'], axis=1)
-
-    # Update instrumenttype to 'CE' or 'PE' based on the option type
-    df['instrumenttype'] = df.apply(lambda row: row['optiontype'] if row['instrumenttype'] == 'OPTFUT' else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{row['expiry']}FUT"
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            # Ensure strike prices are either integers or floats
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
+            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -364,6 +439,9 @@ def process_zebu_mcx_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -371,26 +449,35 @@ def process_zebu_mcx_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_zebu_bse_data(output_path):
+def process_flattrade_bse_data(output_path):
     """
-    Processes the Zebu BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
+    Processes the Flattrade BSE data (BSE_Equity.csv) to generate OpenAlgo symbols.
     Ensures that the instrument type is always 'EQ'.
     """
-    print("Processing Zebu BSE Data")
-    file_path = f'{output_path}/BSE_symbols.txt'
+    print("Processing Flattrade BSE Data")
+    file_path = f'{output_path}/BSE.csv'
 
-    # Read the BSE symbols file
+    # First read the CSV to check columns
     df = pd.read_csv(file_path)
-
-    # Read the BSE symbols file, specifying the exact columns to use and ignoring extra columns
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Instrument', 'TickSize'])
+    print("Available columns in BSE CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
 
-
-    # Add missing columns to ensure DataFrame matches the database structure
+    # Add missing columns
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
+    df['tick_size'] = 0.05  # Default tick size for BSE
 
     # Apply transformation for OpenAlgo symbols (no special logic needed here)
     def get_openalgo_symbol(broker_symbol):
@@ -401,18 +488,19 @@ def process_zebu_bse_data(output_path):
 
     # Set Exchange: 'BSE' for all rows
     df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
+    df['brexchange'] = df['exchange']
 
-    # Set expiry and strike, fill -1 for missing strike prices
-    df['expiry'] = ''  # No expiry for these instruments
-    df['strike'] = -1  # Default to -1 for strike price
+    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
+    if 'expiry' not in df.columns:
+        df['expiry'] = ''  # No expiry for these instruments
+    if 'strike' not in df.columns:
+        df['strike'] = -1  # Set default value -1 for strike price where missing
 
-    # Ensure the instrument type is always 'EQ'
-    df['instrumenttype'] = 'EQ'
+    # Ensure the instrument type is consistent
+    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
 
-    # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
+    # Handle missing or invalid numeric values in 'lotsize'
     df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce').fillna(0).astype(float)  # Convert to float, default to 0.0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -421,19 +509,34 @@ def process_zebu_bse_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def process_zebu_bfo_data(output_path):
+def process_flattrade_bfo_data(output_path):
     """
-    Processes the Zebu BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
-    Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
+    Processes the Flattrade BFO data (BFO.csv) to generate OpenAlgo symbols.
+    Handles both futures and options formatting.
     """
-    print("Processing Zebu BFO Data")
-    file_path = f'{output_path}/BFO_symbols.txt'
+    print("Processing Flattrade BFO Data")
+    file_path = f'{output_path}/BFO.csv'
 
-    # Read the BFO symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'Strike', 'TickSize'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in BFO CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'strike', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for BFO
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -450,28 +553,23 @@ def process_zebu_bfo_data(output_path):
     # Apply the expiry date format
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
-    # Extract the 'name' from the 'TradingSymbol'
-    def extract_name(tradingsymbol):
-        import re
-        match = re.match(r'([A-Za-z]+)', tradingsymbol)
-        return match.group(1) if match else tradingsymbol
+    # Replace the 'XX' option type with 'FUT' for futures
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
-    # Apply name extraction
-    df['name'] = df['brsymbol'].apply(extract_name)
-
-    # Extract the instrument type (CE, PE, FUT) from TradingSymbol
-    def extract_instrument_type(tradingsymbol):
-        if tradingsymbol.endswith('FUT'):
-            return 'FUT'
-        elif tradingsymbol.endswith('CE'):
-            return 'CE'
-        elif tradingsymbol.endswith('PE'):
-            return 'PE'
+    # Format the symbol column based on the instrument type
+    def format_symbol(row):
+        if row['instrumenttype'] == 'FUT':
+            return f"{row['name']}{row['expiry']}FUT"
         else:
-            return 'UNKNOWN'  # Handle cases where the suffix is not FUT, CE, or PE
+            # Ensure strike prices are either integers or floats
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
+            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
-    # Apply instrument type extraction
-    df['instrumenttype'] = df['brsymbol'].apply(extract_instrument_type)
+    df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Define Exchange
+    df['exchange'] = 'BFO'
+    df['brexchange'] = df['exchange']
 
     # Ensure strike prices are handled as either float or int
     def handle_strike_price(strike):
@@ -483,23 +581,11 @@ def process_zebu_bfo_data(output_path):
         except (ValueError, TypeError):
             return -1  # If there's an error or it's empty, return -1
 
+    # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
-    # Format the symbol column based on the instrument type and correctly handle the strike price
-    def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
-        else:
-            # Correctly format the strike price based on whether it's an integer or a float
-            formatted_strike = f"{int(row['strike'])}" if isinstance(row['strike'], int) else f"{row['strike']:.2f}".rstrip('0').rstrip('.')
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
-
-    # Apply the symbol format
-    df['symbol'] = df.apply(format_symbol, axis=1)
-
-    # Define Exchange and Broker Exchange
-    df['exchange'] = 'BFO'
-    df['brexchange'] = df['exchange']
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -508,44 +594,66 @@ def process_zebu_bfo_data(output_path):
     # Return the processed DataFrame
     return df_filtered
 
-def delete_zebu_temp_data(output_path):
+def combine_nfo_files(output_path):
+    """Combines NFO equity and index files into one"""
+    print("Combining NFO files")
+    nfo_eq = pd.read_csv(f"{output_path}/NFO_EQ.csv")
+    nfo_idx = pd.read_csv(f"{output_path}/NFO_IDX.csv")
+    combined = pd.concat([nfo_eq, nfo_idx], ignore_index=True)
+    combined.to_csv(f"{output_path}/NFO.csv", index=False)
+
+def combine_bfo_files(output_path):
+    """Combines BFO equity and index files into one"""
+    print("Combining BFO files")
+    bfo_eq = pd.read_csv(f"{output_path}/BFO_EQ.csv")
+    bfo_idx = pd.read_csv(f"{output_path}/BFO_IDX.csv")
+    combined = pd.concat([bfo_eq, bfo_idx], ignore_index=True)
+    combined.to_csv(f"{output_path}/BFO.csv", index=False)
+
+def delete_flattrade_temp_data(output_path):
     """
-    Deletes the Zebu symbol files from the tmp folder after processing.
+    Deletes the Flattrade symbol files from the tmp folder after processing.
     """
     for filename in os.listdir(output_path):
         file_path = os.path.join(output_path, filename)
-        if filename.endswith(".txt") and os.path.isfile(file_path):
+        if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
             print(f"Deleted {file_path}")
 
 def master_contract_download():
     """
-    Downloads, processes, and deletes Zebu data.
+    Downloads, processes, and deletes Flattrade data.
     """
-    print("Downloading Zebu Master Contract")
+    print("Downloading Flattrade Master Contract")
 
     output_path = 'tmp'
     try:
-        download_and_unzip_zebu_data(output_path)
+        download_csv_data(output_path)
         delete_symtoken_table()
         
         # Placeholders for processing different exchanges
-        token_df = process_zebu_nse_data(output_path)
+        token_df = process_flattrade_nse_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_zebu_bse_data(output_path)
+        token_df = process_flattrade_bse_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_zebu_nfo_data(output_path)
+        token_df = process_flattrade_nfo_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_zebu_cds_data(output_path)
+        token_df = process_flattrade_cds_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_zebu_mcx_data(output_path)
+        token_df = process_flattrade_mcx_data(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_zebu_bfo_data(output_path)
+        token_df = process_flattrade_bfo_data(output_path)
         copy_from_dataframe(token_df)
         
-        delete_zebu_temp_data(output_path)
+        delete_flattrade_temp_data(output_path)
         
-        return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+        if socketio:
+            return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+        else:
+            print("Successfully downloaded and processed all contracts")
     except Exception as e:
-        print(str(e))
-        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        error_msg = f"Error in master contract download: {e}"
+        print(error_msg)
+        if socketio:
+            return socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
+        raise e
