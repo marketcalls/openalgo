@@ -3,23 +3,24 @@ import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.zebu.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.flattrade.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
 
-    api_key = os.getenv('BROKER_API_KEY')
+    full_api_key = os.getenv('BROKER_API_KEY')
+    api_key = full_api_key.split(':::')[0]
 
     data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
 
-    if(endpoint == "/NorenWClientTP/Holdings"):
+    if(endpoint == "/PiConnectTP/Holdings"):
         data = f'{{"uid": "{api_key}", "actid": "{api_key}", "prd": "C"}}'
 
     payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("go.mynt.in")
+    conn = http.client.HTTPSConnection("piconnect.flattrade.in")
     headers = {'Content-Type': 'application/json'}
 
     conn.request(method, endpoint, payload, headers)
@@ -29,16 +30,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/NorenWClientTP/OrderBook",auth,method="POST")
+    return get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
 
 def get_trade_book(auth):
-    return get_api_response("/NorenWClientTP/TradeBook",auth,method="POST")
+    return get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
 
 def get_positions(auth):
-    return get_api_response("/NorenWClientTP/PositionBook",auth,method="POST")
+    return get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
 
 def get_holdings(auth):
-    return get_api_response("/NorenWClientTP/Holdings",auth,method="POST")
+    return get_api_response("/PiConnectTP/Holdings",auth,method="POST")
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -64,7 +65,9 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+    full_api_key = os.getenv('BROKER_API_KEY')
+    BROKER_API_KEY = full_api_key.split(':::')[0]
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
@@ -73,8 +76,8 @@ def place_order_api(data,auth):
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
     print(payload)
-    conn = http.client.HTTPSConnection("go.mynt.in")
-    conn.request("POST", "/NorenWClientTP/PlaceOrder", payload, headers)
+    conn = http.client.HTTPSConnection("piconnect.flattrade.in")
+    conn.request("POST", "/PiConnectTP/PlaceOrder", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
     if response_data['stat'] == "Ok":
@@ -241,8 +244,8 @@ def cancel_order(orderid,auth):
 
     
     # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("go.mynt.in")  # Adjust the URL as necessary
-    conn.request("POST", "/NorenWClientTP/CancelOrder", payload, headers)
+    conn = http.client.HTTPSConnection("piconnect.flattrade.in")  # Adjust the URL as necessary
+    conn.request("POST", "/PiConnectTP/CancelOrder", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
     print(data)
@@ -272,8 +275,8 @@ def modify_order(data,auth):
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
 
-    conn = http.client.HTTPSConnection("go.mynt.in")
-    conn.request("POST", "/NorenWClientTP/ModifyOrder", payload, headers)
+    conn = http.client.HTTPSConnection("piconnect.flattrade.in")
+    conn.request("POST", "/PiConnectTP/ModifyOrder", payload, headers)
     res = conn.getresponse()
     response = json.loads(res.read().decode("utf-8"))
 

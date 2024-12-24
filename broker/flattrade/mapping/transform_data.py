@@ -8,6 +8,10 @@ def transform_data(data,token):
     Transforms the new API request structure to the current expected structure.
     """
     symbol = get_br_symbol(data["symbol"],data["exchange"])
+    # Handle special characters in symbol
+    if symbol and '&' in symbol:
+        symbol = symbol.replace('&', '%26')
+        
     # Basic mapping
     transformed = {
         "uid": data["apikey"],
@@ -85,4 +89,3 @@ def reverse_map_product_type(product):
         "I": "MIS",
     }
     return reverse_product_type_mapping.get(product)  
-

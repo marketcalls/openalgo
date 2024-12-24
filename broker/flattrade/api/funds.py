@@ -6,10 +6,14 @@ def get_margin_data(auth_token):
     """Fetch margin data from Zebu's API using the provided auth token."""
     
     # Zebu API endpoint for fetching margin data
-    url = "go.mynt.in"
+    url = "piconnect.flattrade.in"
     
     # Fetch UserID and AccountID from environment variables
-    userid = os.getenv('BROKER_API_KEY')
+
+    full_api_key = os.getenv('BROKER_API_KEY')
+    BROKER_API_KEY = full_api_key.split(':::')[0]
+    
+    userid = BROKER_API_KEY
     actid = userid  # Assuming AccountID is the same as UserID
 
     # Prepare the payload for the request
@@ -30,7 +34,7 @@ def get_margin_data(auth_token):
     }
 
     # Send the POST request to Zebu's API
-    conn.request("POST", "/NorenWClientTP/Limits", payload, headers)
+    conn.request("POST", "/PiConnectTP/Limits", payload, headers)
 
     # Get the response
     res = conn.getresponse()
