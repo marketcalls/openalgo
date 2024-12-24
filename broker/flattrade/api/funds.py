@@ -56,7 +56,7 @@ def get_margin_data(auth_token):
         total_available_margin = float(margin_data.get('cash',0)) + float(margin_data.get('payin',0)) - float(margin_data.get('marginused',0))
         total_collateral = float(margin_data.get('brkcollamt',0))
         total_used_margin = float(margin_data.get('marginused',0))
-        total_realised = float(margin_data.get('rpnl',0))
+        total_realised = -float(margin_data.get('rpnl',0))
         total_unrealised = float(margin_data.get('urmtom',0))
 
         # Construct and return the processed margin data
