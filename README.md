@@ -16,6 +16,8 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **AliceBlue**
 - **AngelOne**
 - **Dhan**
+- **Firstock**
+- **Flattrade**
 - **Fyers**
 - **ICICI Direct**
 - **Kotak** 
