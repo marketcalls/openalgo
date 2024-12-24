@@ -232,7 +232,8 @@ def close_all_positions(current_api_key,auth):
 def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    full_api_key = os.getenv('BROKER_API_KEY')
+    api_key = full_api_key.split(':::')[0]
     data = {"uid": api_key, "norenordno": orderid}
     
 
@@ -300,7 +301,7 @@ def cancel_all_orders_api(data,auth):
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response
-                        if order['status'] in ['OPEN', 'TRIGGER PENDING']]
+                        if order['status'] in ['OPEN', 'TRIGGER_PENDING']]
     #print(orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []

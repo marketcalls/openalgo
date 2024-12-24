@@ -5,7 +5,10 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from extensions import socketio  # Import SocketIO
+try:
+    from extensions import socketio  # Import SocketIO
+except ImportError:
+    socketio = None
 
 
 
@@ -36,7 +39,14 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
+    """Initialize the database and create tables"""
     print("Initializing Master Contract DB")
+    
+    # Create database directory if it doesn't exist
+    db_path = os.path.dirname(DATABASE_URL.replace('sqlite:///', ''))
+    if db_path and not os.path.exists(db_path):
+        os.makedirs(db_path)
+    
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
@@ -120,14 +130,30 @@ def process_flattrade_nse_data(output_path):
     print("Processing Flattrade NSE Data")
     file_path = f'{output_path}/NSE.csv'
 
-    # Read the NSE symbols file, specifying the exact columns to use and ignoring extra columns
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in NSE CSV:", df.columns.tolist())
+
+    # Read the NSE symbols file with the correct column names
+    df = pd.read_csv(file_path)
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
 
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    # Add missing columns
+    df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
+    df['tick_size'] = 0.05  # Default tick size for NSE
 
     # Apply transformation for OpenAlgo symbols
     def get_openalgo_symbol(broker_symbol):
@@ -141,22 +167,23 @@ def process_flattrade_nse_data(output_path):
             return broker_symbol
 
     # Update the 'symbol' column
-    df['symbol'] = df['symbol'].apply(get_openalgo_symbol)
+    df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
     # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
     df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
     df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
     # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    df['expiry'] = ''  # No expiry for these instruments
-    df['strike'] = -1  # Set default value -1 for strike price where missing
+    if 'expiry' not in df.columns:
+        df['expiry'] = ''  # No expiry for these instruments
+    if 'strike' not in df.columns:
+        df['strike'] = -1  # Set default value -1 for strike price where missing
 
     # Ensure the instrument type is consistent
     df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'EQ' if x in ['EQ', 'BE'] else x)
 
-    # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
+    # Handle missing or invalid numeric values in 'lotsize'
     df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce').fillna(0).astype(float)  # Convert to float, default to 0.0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -169,20 +196,36 @@ def process_flattrade_nse_data(output_path):
 
 def process_flattrade_nfo_data(output_path):
     """
-    Processes the Flattrade NFO data (Nfo_Equity_Derivatives.csv) to generate OpenAlgo symbols.
+    Processes the Flattrade NFO data (NFO.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
     print("Processing Flattrade NFO Data")
     file_path = f'{output_path}/NFO.csv'
 
-    # Read the NFO symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'EXPIRY_DT', 'STRIKE_PR', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in NFO CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for NFO
 
     # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
     # Define a function to format the expiry date as DDMMMYY
     def format_expiry_date(date_str):
@@ -196,7 +239,7 @@ def process_flattrade_nfo_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['instrumenttype'] == 'FUT' else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
@@ -204,7 +247,7 @@ def process_flattrade_nfo_data(output_path):
             return f"{row['name']}{row['expiry']}FUT"
         else:
             # Ensure strike prices are either integers or floats
-            formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
@@ -226,6 +269,9 @@ def process_flattrade_nfo_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -241,14 +287,30 @@ def process_flattrade_cds_data(output_path):
     print("Processing Flattrade CDS Data")
     file_path = f'{output_path}/CDS.csv'
 
-    # Read the CDS symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'EXPIRY_DT', 'STRIKE_PR', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in CDS CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.0025  # Default tick size for CDS
 
     # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
     # Define a function to format the expiry date as DDMMMYY
     def format_expiry_date(date_str):
@@ -262,17 +324,16 @@ def process_flattrade_cds_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['instrumenttype'] == 'FUT' else row['instrumenttype'], axis=1)
-
-    # Update instrumenttype to 'CE' or 'PE' based on the option type
-    df['instrumenttype'] = df.apply(lambda row: row['instrumenttype'] if row['instrumenttype'] in ['CE', 'PE'] else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{row['expiry']}FUT"
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            # Ensure strike prices are either integers or floats
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
+            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -293,6 +354,9 @@ def process_flattrade_cds_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -308,14 +372,30 @@ def process_flattrade_mcx_data(output_path):
     print("Processing Flattrade MCX Data")
     file_path = f'{output_path}/MCX.csv'
 
-    # Read the MCX symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'EXPIRY_DT', 'STRIKE_PR', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in MCX CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for MCX
 
     # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
     # Define a function to format the expiry date as DDMMMYY
     def format_expiry_date(date_str):
@@ -329,17 +409,16 @@ def process_flattrade_mcx_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['instrumenttype'] == 'FUT' else row['instrumenttype'], axis=1)
-
-    # Update instrumenttype to 'CE' or 'PE' based on the option type
-    df['instrumenttype'] = df.apply(lambda row: row['instrumenttype'] if row['instrumenttype'] in ['CE', 'PE'] else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{row['expiry']}FUT"
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            # Ensure strike prices are either integers or floats
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
+            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -360,6 +439,9 @@ def process_flattrade_mcx_data(output_path):
     # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
 
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
@@ -375,40 +457,50 @@ def process_flattrade_bse_data(output_path):
     print("Processing Flattrade BSE Data")
     file_path = f'{output_path}/BSE.csv'
 
-    # Read the BSE symbols file
+    # First read the CSV to check columns
     df = pd.read_csv(file_path)
-
-    # Read the BSE symbols file, specifying the exact columns to use and ignoring extra columns
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    print("Available columns in BSE CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
 
-
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    # Add missing columns
+    df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
+    df['tick_size'] = 0.05  # Default tick size for BSE
 
     # Apply transformation for OpenAlgo symbols (no special logic needed here)
     def get_openalgo_symbol(broker_symbol):
         return broker_symbol
 
     # Update the 'symbol' column
-    df['symbol'] = df['symbol'].apply(get_openalgo_symbol)
+    df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
     # Set Exchange: 'BSE' for all rows
     df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
+    df['brexchange'] = df['exchange']
 
-    # Set expiry and strike, fill -1 for missing strike prices
-    df['expiry'] = ''  # No expiry for these instruments
-    df['strike'] = -1  # Default to -1 for strike price
+    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
+    if 'expiry' not in df.columns:
+        df['expiry'] = ''  # No expiry for these instruments
+    if 'strike' not in df.columns:
+        df['strike'] = -1  # Set default value -1 for strike price where missing
 
-    # Ensure the instrument type is always 'EQ'
-    df['instrumenttype'] = 'EQ'
+    # Ensure the instrument type is consistent
+    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
 
-    # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
+    # Handle missing or invalid numeric values in 'lotsize'
     df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce').fillna(0).astype(float)  # Convert to float, default to 0.0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -419,20 +511,36 @@ def process_flattrade_bse_data(output_path):
 
 def process_flattrade_bfo_data(output_path):
     """
-    Processes the Flattrade BFO data (Bfo_Equity_Derivatives.csv) to generate OpenAlgo symbols and correctly extract the name column.
-    Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
+    Processes the Flattrade BFO data (BFO.csv) to generate OpenAlgo symbols.
+    Handles both futures and options formatting.
     """
     print("Processing Flattrade BFO Data")
     file_path = f'{output_path}/BFO.csv'
 
-    # Read the BFO symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['SYMBOL', 'NAME', 'EXCHANGE', 'TOKEN', 'EXPIRY_DT', 'STRIKE_PR', 'LOT_SIZE', 'INSTRUMENT_TYPE', 'TICK_SIZE'])
+    # First read the CSV to check columns
+    df = pd.read_csv(file_path)
+    print("Available columns in BFO CSV:", df.columns.tolist())
 
     # Rename columns to match your schema
-    df.columns = ['symbol', 'name', 'exchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+    column_mapping = {
+        'Token': 'token',
+        'Lotsize': 'lotsize',
+        'Symbol': 'name',
+        'Tradingsymbol': 'brsymbol',
+        'Instrument': 'instrumenttype',
+        'Expiry': 'expiry',
+        'Strike': 'strike',
+        'Optiontype': 'optiontype'
+    }
+    
+    df = df.rename(columns=column_mapping)
+
+    # Add missing columns
+    df['tick_size'] = 0.05  # Default tick size for BFO
 
     # Add missing columns to ensure DataFrame matches the database structure
-    df['brsymbol'] = df['symbol']  # Initialize 'brsymbol' with 'symbol'
+    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
     # Define a function to format the expiry date as DDMMMYY
     def format_expiry_date(date_str):
@@ -446,7 +554,7 @@ def process_flattrade_bfo_data(output_path):
     df['expiry'] = df['expiry'].apply(format_expiry_date)
 
     # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['instrumenttype'] == 'FUT' else row['instrumenttype'], axis=1)
+    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
@@ -454,7 +562,7 @@ def process_flattrade_bfo_data(output_path):
             return f"{row['name']}{row['expiry']}FUT"
         else:
             # Ensure strike prices are either integers or floats
-            formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
+            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
@@ -473,7 +581,11 @@ def process_flattrade_bfo_data(output_path):
         except (ValueError, TypeError):
             return -1  # If there's an error or it's empty, return -1
 
+    # Apply the function to strike column
     df['strike'] = df['strike'].apply(handle_strike_price)
+
+    # Handle missing or invalid numeric values in 'lotsize'
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
@@ -535,7 +647,13 @@ def master_contract_download():
         
         delete_flattrade_temp_data(output_path)
         
-        return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+        if socketio:
+            return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
+        else:
+            print("Successfully downloaded and processed all contracts")
     except Exception as e:
-        print(str(e))
-        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        error_msg = f"Error in master contract download: {e}"
+        print(error_msg)
+        if socketio:
+            return socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
+        raise e
