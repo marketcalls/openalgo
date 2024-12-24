@@ -477,31 +477,44 @@ def map_position_data(position_data):
     """
     # If it's a list, data is already mapped
     if isinstance(position_data, list):
+        print("DEBUG: Position data is already mapped, returning as is")
+        print(f"DEBUG: Number of positions: {len(position_data)}")
         return position_data
 
     # If it's a dict with status/data, it's raw API response
     if isinstance(position_data, dict):
+        print("DEBUG: Raw position data received:")
+        print(f"DEBUG: Status: {position_data.get('status')}")
+        print(f"DEBUG: Data type: {type(position_data.get('data'))}")
         if position_data.get('status') != 'success':
             print("No data available or invalid response.")
+            print(f"DEBUG: Error message: {position_data.get('message', 'No error message')}")
             return []
-        positions = [position_data.get('data')] if position_data.get('data') else []  # Firstock returns single object
+        positions = position_data.get('data', [])  # Firstock returns list of positions
+        print(f"DEBUG: Number of positions extracted: {len(positions)}")
     else:
-        print("Invalid position data format")
+        print(f"DEBUG: Invalid position data format. Type received: {type(position_data)}")
         return []
 
     mapped_positions = []
     for position in positions:
+        print("\nDEBUG: Processing position:")
+        print(f"DEBUG: Raw position data: {json.dumps(position, indent=2)}")
         mapped_position = {}
         # Get OpenAlgo symbol from token
         symbol_from_db = get_symbol(position.get('token'), position.get('exchange'))
+        print(f"DEBUG: Looking up symbol - Token: {position.get('token')}, Exchange: {position.get('exchange')}")
         if symbol_from_db:
             mapped_position['tsym'] = symbol_from_db
+            print(f"DEBUG: Symbol found in DB: {symbol_from_db}")
         else:
-            print(f"Symbol not found for token {position.get('token')} and exchange {position.get('exchange')}.")
+            print(f"DEBUG: Symbol not found for token {position.get('token')} and exchange {position.get('exchange')}.")
             mapped_position['tsym'] = position.get('tradingSymbol', '')
+            print(f"DEBUG: Using trading symbol from response: {mapped_position['tsym']}")
 
         # Map product type (will be converted to CNC/MIS/NRML)
         mapped_position['prd'] = position.get('product', '')
+        print(f"DEBUG: Product type: {mapped_position['prd']}")
         
         # Map other fields
         mapped_position['exch'] = position.get('exchange', '')
@@ -515,8 +528,10 @@ def map_position_data(position_data):
         mapped_position['unrealizedmtom'] = position.get('unrealizedMTOM', '0.00')
         mapped_position['realizedpnl'] = position.get('RealizedPNL', '0.00')
         
+        print(f"DEBUG: Mapped position data: {json.dumps(mapped_position, indent=2)}")
         mapped_positions.append(mapped_position)
-        
+
+    print(f"\nDEBUG: Total positions mapped: {len(mapped_positions)}")
     return mapped_positions
 
 def transform_positions_data(positions):
