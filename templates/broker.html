@@ -5,6 +5,13 @@
 {% block head %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Function to extract API key for Flattrade
+        function getFlattradeApiKey(fullKey) {
+            if (!fullKey) return '';
+            const parts = fullKey.split(':::');
+            return parts.length > 1 ? parts[1] : fullKey;
+        }
+
         // Auto-select the enabled broker
         const select = document.getElementById('platform-select');
         const enabledOption = Array.from(select.options).find(option => !option.disabled);
@@ -30,6 +37,13 @@
                     break;
                 case 'dhan':
                     loginUrl = '/dhan/callback';
+                    break;
+                case 'firstock':
+                    loginUrl = '/firstock/callback';
+                    break;
+                case 'flattrade':
+                    const flattradeApiKey = getFlattradeApiKey('{{broker_api_key}}');
+                    loginUrl = 'https://auth.flattrade.in/?app_key=' + flattradeApiKey;
                     break;
                 case 'fyers':
                     loginUrl = 'https://api-t1.fyers.in/api/v3/generate-authcode?client_id={{broker_api_key}}&redirect_uri={{redirect_url}}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c';
@@ -86,6 +100,8 @@
                                 <option value="aliceblue" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
                                 <option value="angel" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
                                 <option value="dhan" {{ 'disabled' if broker_name != 'dhan' }}>Dhan {{ '(Disabled)' if broker_name != 'dhan' }}</option>
+                                <option value="firstock" {{ 'disabled' if broker_name != 'firstock' }}>Firstock {{ '(Disabled)' if broker_name != 'firstock' }}</option>
+                                <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="icici" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
