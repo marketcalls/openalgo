@@ -242,9 +242,16 @@ def transform_holdings_data(holdings_data):
             "exchange": holding.get('exchangeSegment', ''),
             "quantity": holding.get('quantity', 0),
             "product": holding.get('instrumentType', ''),
-            "pnl": round((float(holding.get('mktValue', 0.0)) - float(holding.get('holdingCost', 0.0))),2),
-            "pnlpercent": round((float(holding.get('mktValue', 0.0)) - float(holding.get('holdingCost', 0.0)))/float(holding.get('holdingCost', 0.0))*100,2)
+            "pnl": round((float(holding.get('mktValue', 0.0)) - float(holding.get('holdingCost', 0.0))), 2),
+            "pnlpercent": round(
+                (
+                    (float(holding.get('mktValue', 0.0)) - float(holding.get('holdingCost', 0.0))) 
+                    / float(holding.get('holdingCost', 0.0)) 
+                    * 100 
+                ) if float(holding.get('holdingCost', 0.0)) != 0 else 0, 2
+            )
         }
+
         transformed_data.append(transformed_position)
     print("Holdings Data")
     print(transformed_data)
