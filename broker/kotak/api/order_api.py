@@ -15,19 +15,20 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     access_token_parts = AUTH_TOKEN.split(":::")
     token = access_token_parts[0]
     sid = access_token_parts[1]
-    
-    api_secret = os.getenv('BROKER_API_SECRET')
-    print(api_secret) 
+    hsServerId = access_token_parts[2]
+    access_token = access_token_parts[3]
+  
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     payload = ''
+    query_params = {"sId": hsServerId}
     headers = {
     'accept': 'application/json',
     'Sid': sid,
     'Auth': token,
     'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {api_secret}'
+    'Authorization': f'Bearer {access_token}'
     }
-    conn.request(method, endpoint, payload, headers)
+    conn.request(method, f"{endpoint}?" + urllib.parse.urlencode(query_params), payload, headers)
     res = conn.getresponse()
     data = res.read()
     print(data.decode("utf-8"))
@@ -35,13 +36,13 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/Orders/2.0/quick/user/orders?sId=server1",auth)
+    return get_api_response("/Orders/2.0/quick/user/orders",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/Orders/2.0/quick/user/trades?sId=server1",auth)
+    return get_api_response("/Orders/2.0/quick/user/trades",auth)
 
 def get_positions(auth):
-    return get_api_response("/Orders/2.0/quick/user/positions?sId=server1",auth)
+    return get_api_response("/Orders/2.0/quick/user/positions",auth)
 
 def get_holdings(auth):
     return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false",auth)
@@ -91,7 +92,7 @@ def place_order_api(data,auth):
     
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?sId=server1", payload, headers)
+    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place", payload, headers)
     res = conn.getresponse()
     data = res.read()
     
@@ -281,7 +282,7 @@ def cancel_order(orderid,auth):
     
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/cancel?sId=server1", payload, headers)
+    conn.request("POST", "/Orders/2.0/quick/order/cancel", payload, headers)
     res = conn.getresponse()
     data = res.read()
     response_data = data.decode("utf-8")
@@ -327,7 +328,7 @@ def modify_order(data,auth):
     
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/vr/modify?sId=server1", payload, headers)
+    conn.request("POST", "/Orders/2.0/quick/order/vr/modify", payload, headers)
     res = conn.getresponse()
     data = res.read()
     

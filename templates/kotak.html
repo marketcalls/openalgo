@@ -18,22 +18,23 @@
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>
                                 <span class="label-text-alt">
-                                    <div class="tooltip" data-tip="Enter your 10-digit mobile number">
+                                    <div class="tooltip" data-tip="Enter your mobile number without +91">
                                         <button class="btn btn-circle btn-xs btn-ghost">?</button>
                                     </div>
                                 </span>
                             </label>
-                            <div class="join w-full">
-                                <span class="join-item flex items-center px-3 bg-base-200">+91</span>
+                            <div class="flex">
+                                <span class="inline-flex items-center px-3 text-sm bg-base-200 border border-r-0 border-base-300 rounded-l-md">
+                                    +91
+                                </span>
                                 <input type="tel" 
-                                       id="mobileInput" 
+                                       id="mobilenumber" 
+                                       name="mobilenumber" 
                                        required 
-                                       class="input input-bordered join-item flex-1" 
+                                       class="input input-bordered w-full rounded-l-none" 
                                        placeholder="9999955555"
                                        pattern="[0-9]{10}"
                                        title="Please enter a valid 10-digit mobile number" />
-                                <!-- Hidden input that will contain the number with +91 prefix -->
-                                <input type="hidden" id="mobilenumber" name="mobilenumber" />
                             </div>
                             <label class="label">
                                 <span class="label-text-alt text-info">Your registered mobile number</span>
@@ -123,24 +124,30 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const mobileInput = document.getElementById('mobileInput');
-    const hiddenMobileNumber = document.getElementById('mobilenumber');
     const form = document.getElementById('kotakForm');
+    const mobileInput = document.getElementById('mobilenumber');
 
-    // Update hidden input whenever visible input changes
-    mobileInput.addEventListener('input', function() {
-        hiddenMobileNumber.value = '+91' + this.value;
-    });
-
-    // Handle form submission
     form.addEventListener('submit', function(e) {
-        if (mobileInput.value.length !== 10) {
-            e.preventDefault();
+        e.preventDefault();
+        
+        // Validate mobile number
+        const mobileNumber = mobileInput.value.replace(/\D/g, '');
+        if (mobileNumber.length !== 10) {
             alert('Please enter a valid 10-digit mobile number');
             return;
         }
-        // Ensure the hidden field has the complete number with prefix
-        hiddenMobileNumber.value = '+91' + mobileInput.value;
+
+        // Add +91 prefix
+        const formattedNumber = '+91' + mobileNumber;
+        mobileInput.value = formattedNumber;
+        
+        // Submit form
+        this.submit();
+    });
+
+    // Clean up mobile number input - remove any non-digits
+    mobileInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '');
     });
 });
 </script>

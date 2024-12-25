@@ -1,6 +1,5 @@
 # api/funds.py
-
-import os
+import urllib.parse
 import http.client
 import json
 
@@ -9,20 +8,21 @@ def get_margin_data(auth_token):
     access_token_parts = auth_token.split(":::")
     token = access_token_parts[0]
     sid = access_token_parts[1]
+    hsServerId = access_token_parts[2]
+    access_token = access_token_parts[3]
     
-    api_secret = os.getenv('BROKER_API_SECRET')
-    print(api_secret) 
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     payload = 'jData=%7B%22seg%22%3A%22ALL%22%2C%22exch%22%3A%22ALL%22%2C%22prod%22%3A%22ALL%22%7D'
+    query_params = {"sId": hsServerId}
     headers = {
     'accept': 'application/json',
     'Sid': sid,
     'Auth': token,
     'neo-fin-key': 'neotradeapi',
     'Content-Type': 'application/x-www-form-urlencoded',
-    'Authorization': f'Bearer {api_secret}'
+    'Authorization': f'Bearer {access_token}'
     }
-    conn.request("POST", "/Orders/2.0/quick/user/limits?sId=server1", payload, headers)
+    conn.request("POST", "/Orders/2.0/quick/user/limits?" + urllib.parse.urlencode(query_params), payload, headers)
     try:
         res = conn.getresponse()
         data = res.read()

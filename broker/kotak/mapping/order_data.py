@@ -313,5 +313,3 @@ def calculate_portfolio_statistics(holdings_data):
         'totalprofitandloss': totalprofitandloss,
         'totalpnlpercentage': totalpnlpercentage
     }
-
-
