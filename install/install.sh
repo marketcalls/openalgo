@@ -153,7 +153,7 @@ done
 
 # Get broker name
 while true; do
-    log_message "\nValid brokers: fivepaisa, aliceblue, angel, dhan, fyers, icici, kotak, shoonya, upstox, zebu, zerodha" "$BLUE"
+    log_message "\nValid brokers: fivepaisa, aliceblue, angel, dhan, firstock,flattrade, fyers, icici, kotak, shoonya, upstox, zebu, zerodha" "$BLUE"
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
         break
