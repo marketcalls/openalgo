@@ -130,69 +130,100 @@ def process_flattrade_nse_data(output_path):
     print("Processing Flattrade NSE Data")
     file_path = f'{output_path}/NSE.csv'
 
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in NSE CSV:", df.columns.tolist())
+    try:
+        # Read the CSV file once
+        df = pd.read_csv(file_path)
+        
+        if df.empty:
+            print("Warning: NSE CSV file is empty")
+            return pd.DataFrame()  # Return empty DataFrame if file is empty
+            
+        print("Available columns in NSE CSV:", df.columns.tolist())
 
-    # Read the NSE symbols file with the correct column names
-    df = pd.read_csv(file_path)
+        # Validate required columns
+        required_columns = ['Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns in NSE CSV: {missing_columns}")
 
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
-    
-    df = df.rename(columns=column_mapping)
+        # Rename columns to match your schema
+        column_mapping = {
+            'Token': 'token',
+            'Lotsize': 'lotsize',
+            'Symbol': 'name',
+            'Tradingsymbol': 'brsymbol',
+            'Instrument': 'instrumenttype',
+            'Expiry': 'expiry',
+            'Strike': 'strike',
+            'Optiontype': 'optiontype'
+        }
+        
+        df = df.rename(columns=column_mapping)
 
-    # Add missing columns
-    df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
-    df['tick_size'] = 0.05  # Default tick size for NSE
+        # Fill NaN values in required fields
+        df['name'] = df['name'].fillna('')
+        df['brsymbol'] = df['brsymbol'].fillna('')
+        df['token'] = df['token'].fillna('').astype(str)
+        
+        # Remove rows where brsymbol is empty (required field)
+        df = df[df['brsymbol'] != '']
+        
+        # Add missing columns
+        df['symbol'] = df['brsymbol'].copy()  # Initialize 'symbol' with 'brsymbol'
+        df['tick_size'] = 0.05  # Default tick size for NSE
 
-    # Apply transformation for OpenAlgo symbols
-    def get_openalgo_symbol(broker_symbol):
-        # Separate by hyphen and apply logic for EQ and BE
-        if '-EQ' in broker_symbol:
-            return broker_symbol.replace('-EQ', '')
-        elif '-BE' in broker_symbol:
-            return broker_symbol.replace('-BE', '')
-        else:
-            # For other symbols (including index), OpenAlgo symbol remains the same as broker symbol
-            return broker_symbol
+        # Apply transformation for OpenAlgo symbols
+        def get_openalgo_symbol(broker_symbol):
+            if pd.isna(broker_symbol) or not broker_symbol:  # Handle NaN and empty values
+                return broker_symbol  # Return as is, will be filtered out later
+            broker_symbol = str(broker_symbol)  # Convert to string to ensure string operations work
+            # Separate by hyphen and apply logic for EQ and BE
+            if '-EQ' in broker_symbol:
+                return broker_symbol.replace('-EQ', '')
+            elif '-BE' in broker_symbol:
+                return broker_symbol.replace('-BE', '')
+            else:
+                # For other symbols (including index), OpenAlgo symbol remains the same as broker symbol
+                return broker_symbol
 
-    # Update the 'symbol' column
-    df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
+        # Update the 'symbol' column
+        df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
-    df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
-    df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
+        # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
+        df['instrumenttype'] = df['instrumenttype'].fillna('EQ')  # Fill NaN values with 'EQ'
+        df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
+        df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
-    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    if 'expiry' not in df.columns:
-        df['expiry'] = ''  # No expiry for these instruments
-    if 'strike' not in df.columns:
-        df['strike'] = -1  # Set default value -1 for strike price where missing
+        # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
+        df['expiry'] = df.get('expiry', '').fillna('')
+        df['strike'] = pd.to_numeric(df.get('strike', pd.Series([-1] * len(df))), errors='coerce').fillna(-1)
 
-    # Ensure the instrument type is consistent
-    df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'EQ' if x in ['EQ', 'BE'] else x)
+        # Ensure the instrument type is consistent
+        df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'EQ' if x in ['EQ', 'BE'] else x)
 
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+        # Handle missing or invalid numeric values in 'lotsize'
+        df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(1).astype(int)  # Default lotsize to 1
 
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
+        # Reorder the columns to match the database structure
+        columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+        df_filtered = df[columns_to_keep]
 
-    # Return the processed DataFrame
-    return df_filtered
+        # Final validation - remove any rows with empty required fields
+        df_filtered = df_filtered[
+            (df_filtered['symbol'].notna()) & 
+            (df_filtered['brsymbol'].notna()) & 
+            (df_filtered['token'].notna()) & 
+            (df_filtered['symbol'] != '') & 
+            (df_filtered['brsymbol'] != '') & 
+            (df_filtered['token'] != '')
+        ]
 
-
+        print(f"Successfully processed {len(df_filtered)} NSE records")
+        return df_filtered
+        
+    except Exception as e:
+        print(f"Error processing NSE data: {str(e)}")
+        raise  # Re-raise the exception after logging
 
 def process_flattrade_nfo_data(output_path):
     """
