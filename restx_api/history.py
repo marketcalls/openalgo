@@ -56,7 +56,7 @@ class History(Resource):
 
             try:
                 # Initialize broker's data handler
-                data_handler = broker_module.FyersData(AUTH_TOKEN)
+                data_handler = broker_module.BrokerData(AUTH_TOKEN)
                 df = data_handler.get_history(
                     history_data['symbol'],
                     history_data['exchange'],

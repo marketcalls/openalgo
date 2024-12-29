@@ -88,22 +88,23 @@ class Holdings(Resource):
                 }), 404)
 
             try:
-                # Get holdings data using broker's implementation
-                holdings_data = broker_funcs['get_holdings'](AUTH_TOKEN)
+                # Initialize broker's data handler
+                data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                holdings = data_handler.get_holdings()
                 
-                if 'status' in holdings_data and holdings_data['status'] == 'error':
+                if 'status' in holdings and holdings['status'] == 'error':
                     return make_response(jsonify({
                         'status': 'error',
-                        'message': holdings_data.get('message', 'Error fetching holdings data')
+                        'message': holdings.get('message', 'Error fetching holdings data')
                     }), 500)
 
                 # Transform data using mapping functions
-                holdings_data = broker_funcs['map_portfolio_data'](holdings_data)
-                portfolio_stats = broker_funcs['calculate_portfolio_statistics'](holdings_data)
-                holdings_data = broker_funcs['transform_holdings_data'](holdings_data)
+                holdings = broker_funcs['map_portfolio_data'](holdings)
+                portfolio_stats = broker_funcs['calculate_portfolio_statistics'](holdings)
+                holdings = broker_funcs['transform_holdings_data'](holdings)
                 
                 # Format numeric values to 2 decimal places
-                formatted_holdings = format_holdings_data(holdings_data)
+                formatted_holdings = format_holdings_data(holdings)
                 formatted_stats = format_statistics(portfolio_stats)
                 
                 return make_response(jsonify({

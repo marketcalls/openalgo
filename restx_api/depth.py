@@ -55,7 +55,7 @@ class Depth(Resource):
 
             try:
                 # Initialize broker's data handler
-                data_handler = broker_module.FyersData(AUTH_TOKEN)
+                data_handler = broker_module.BrokerData(AUTH_TOKEN)
                 depth = data_handler.get_depth(
                     depth_data['symbol'],
                     depth_data['exchange']
