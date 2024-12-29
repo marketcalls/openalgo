@@ -62,9 +62,9 @@ class Intervals(Resource):
                     'seconds': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('s')]),
                     'minutes': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('m')]),
                     'hours': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('h')]),
-                    'days': ['D'],
-                    'weeks': ['W'],
-                    'months': ['M']
+                    'days': sorted([k for k in data_handler.timeframe_map.keys() if k == 'D']),
+                    'weeks': sorted([k for k in data_handler.timeframe_map.keys() if k == 'W']),
+                    'months': sorted([k for k in data_handler.timeframe_map.keys() if k == 'M'])
                 }
                 
                 return make_response(jsonify({

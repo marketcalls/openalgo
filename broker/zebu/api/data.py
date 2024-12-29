@@ -8,16 +8,14 @@ from database.token_db import get_token, get_br_symbol, get_oa_symbol
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Shoonya
+    Common function to make API calls to Zebu
     """
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-    api_key = api_key[:-2]  # Shoonya specific requirement
 
     if payload is None:
         data = {
-            "uid": api_key,
-            "actid": api_key
+            "uid": api_key
         }
     else:
         data = payload
@@ -25,7 +23,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
     payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("api.shoonya.com")
+    conn = http.client.HTTPSConnection("go.mynt.in")  # Zebu API endpoint
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
     conn.request(method, endpoint, payload_str, headers)
@@ -36,9 +34,9 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize Shoonya data handler with authentication token"""
+        """Initialize Zebu data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Shoonya resolutions
+        # Map common timeframe format to Zebu resolutions
         # Note: Weekly and Monthly intervals are not supported
         self.timeframe_map = {
             # Minutes
@@ -71,6 +69,7 @@ class BrokerData:
             token = get_token(symbol, exchange)
             
             payload = {
+                "uid": os.getenv('BROKER_API_KEY'),
                 "exch": exchange,
                 "token": token
             }
@@ -78,7 +77,7 @@ class BrokerData:
             response = get_api_response("/NorenWClientTP/GetQuotes", self.auth_token, payload=payload)
             
             if response.get('stat') != 'Ok':
-                raise Exception(f"Error from Shoonya API: {response.get('emsg', 'Unknown error')}")
+                raise Exception(f"Error from Zebu API: {response.get('emsg', 'Unknown error')}")
             
             # Return simplified quote data
             return {
@@ -110,6 +109,7 @@ class BrokerData:
             token = get_token(symbol, exchange)
             
             payload = {
+                "uid": os.getenv('BROKER_API_KEY'),
                 "exch": exchange,
                 "token": token
             }
@@ -117,7 +117,7 @@ class BrokerData:
             response = get_api_response("/NorenWClientTP/GetQuotes", self.auth_token, payload=payload)
             
             if response.get('stat') != 'Ok':
-                raise Exception(f"Error from Shoonya API: {response.get('emsg', 'Unknown error')}")
+                raise Exception(f"Error from Zebu API: {response.get('emsg', 'Unknown error')}")
             
             # Format bids and asks data
             bids = []
@@ -147,7 +147,7 @@ class BrokerData:
                 'open': float(response.get('o', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                 'volume': int(response.get('v', 0)),
-                'oi': 0  # Shoonya doesn't provide OI in quotes response
+                'oi': 0  # Not provided in Zebu quotes response
             }
             
         except Exception as e:
@@ -184,80 +184,51 @@ class BrokerData:
 
             # For daily data, use EODChartData endpoint
             if interval == 'D':
-                # Format symbol for EOD data
-                sym = f"{exchange}:{br_symbol}"
-                
                 payload = {
-                    "sym": sym,
-                    "from": str(start_ts),
-                    "to": str(end_ts)
+                    "sym": f"{exchange}:{br_symbol}",
+                    "from": start_ts,
+                    "to": end_ts
                 }
-                
-                # Add debug logging
-                print(f"EOD Request payload: {payload}")
-                
                 response = get_api_response("/NorenWClientTP/EODChartData", self.auth_token, payload=payload)
-                
-                # Parse EOD response
-                if isinstance(response, list):
-                    data = []
-                    for item in response:
-                        if isinstance(item, str):
-                            item = json.loads(item)
-                        data.append({
-                            'timestamp': int(item['ssboe']),
-                            'open': float(item['into']),
-                            'high': float(item['inth']),
-                            'low': float(item['intl']),
-                            'close': float(item['intc']),
-                            'volume': float(item['intv'])
-                        })
-                    return pd.DataFrame(data)
-                else:
-                    raise Exception(f"Invalid response format for EOD data: {response}")
-            
-            # For intraday data, use TPSeries endpoint
             else:
-                # Add debug logging
-                print(f"TPSeries Request payload:")
-                print(f"Exchange: {exchange}")
-                print(f"Token: {token}")
-                print(f"Start timestamp: {start_ts}")
-                print(f"End timestamp: {end_ts}")
-                print(f"Interval: {self.timeframe_map[interval]}")
-                
+                # For intraday data, use TPSeries endpoint
                 payload = {
-                    "uid": os.getenv('BROKER_API_KEY')[:-2],  # Required by Shoonya
+                    "uid": os.getenv('BROKER_API_KEY'),
                     "exch": exchange,
                     "token": token,
                     "st": str(start_ts),
                     "et": str(end_ts),
                     "intrv": self.timeframe_map[interval]
                 }
-                
                 response = get_api_response("/NorenWClientTP/TPSeries", self.auth_token, payload=payload)
             
-            # Add debug logging
-            print(f"API Response: {response}")
-
             if not isinstance(response, list):
                 if response.get('stat') == 'Not_Ok':
-                    raise Exception(f"Error from Shoonya API: {response.get('emsg', 'Unknown error')}")
-                raise Exception("Invalid response format from Shoonya API")
+                    raise Exception(f"Error from Zebu API: {response.get('emsg', 'Unknown error')}")
+                raise Exception("Invalid response format from Zebu API")
             
             # Convert response to DataFrame
             data = []
             for candle in response:
-                if candle.get('stat') == 'Ok':
-                    timestamp = datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp()
-                    data.append({
-                        'timestamp': int(timestamp),
-                        'open': float(candle['into']),
-                        'high': float(candle['inth']),
-                        'low': float(candle['intl']),
-                        'close': float(candle['intc']),
-                        'volume': int(candle['intv'])
-                    })
+                if isinstance(candle, str):
+                    candle = json.loads(candle)
+                
+                # Parse timestamp based on interval
+                if interval == 'D':
+                    # Daily data format: "21-SEP-2022"
+                    timestamp = int(candle.get('ssboe', 0))
+                else:
+                    # Intraday format: "dd-mm-yyyy HH:MM:SS"
+                    timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
+                
+                data.append({
+                    'timestamp': timestamp,
+                    'open': float(candle.get('into', 0)),
+                    'high': float(candle.get('inth', 0)),
+                    'low': float(candle.get('intl', 0)),
+                    'close': float(candle.get('intc', 0)),
+                    'volume': float(candle.get('intv', 0))
+                })
             
             df = pd.DataFrame(data)
             if df.empty:
@@ -268,5 +239,4 @@ class BrokerData:
             return df
             
         except Exception as e:
-            print(f"Error in get_history: {str(e)}")  # Add debug logging
             raise Exception(f"Error fetching historical data: {str(e)}")
