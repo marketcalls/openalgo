@@ -55,7 +55,7 @@ class Intervals(Resource):
 
             try:
                 # Initialize broker's data handler
-                data_handler = broker_module.FyersData(AUTH_TOKEN)
+                data_handler = broker_module.BrokerData(AUTH_TOKEN)
                 
                 # Get supported intervals from the timeframe map
                 intervals = {
