@@ -89,13 +89,19 @@ class BrokerData:
             quote = fetched_data[0]
             
             # Return quote in common format
+            depth = quote.get('depth', {})
+            bids = depth.get('buy', [])
+            asks = depth.get('sell', [])
+            
             return {
-                'ltp': quote.get('ltp', 0),
-                'open': quote.get('open', 0),
-                'high': quote.get('high', 0),
-                'low': quote.get('low', 0),
-                'close': quote.get('close', 0),
-                'volume': quote.get('tradeVolume', 0)
+                'bid': float(bids[0].get('price', 0)) if bids else 0,
+                'ask': float(asks[0].get('price', 0)) if asks else 0,
+                'open': float(quote.get('open', 0)),
+                'high': float(quote.get('high', 0)),
+                'low': float(quote.get('low', 0)),
+                'ltp': float(quote.get('ltp', 0)),
+                'prev_close': float(quote.get('close', 0)),
+                'volume': int(quote.get('tradeVolume', 0))
             }
             
         except Exception as e:
