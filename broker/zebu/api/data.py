@@ -186,10 +186,17 @@ class BrokerData:
             if interval == 'D':
                 payload = {
                     "sym": f"{exchange}:{br_symbol}",
-                    "from": start_ts,
-                    "to": end_ts
+                    "from": str(start_ts),
+                    "to": str(end_ts)
                 }
-                response = get_api_response("/NorenWClientTP/EODChartData", self.auth_token, payload=payload)
+                
+                print("EOD Payload:", payload)  # Debug print
+                try:
+                    response = get_api_response("/NorenWClientTP/EODChartData", self.auth_token, payload=payload)
+                    print("EOD Response:", response)  # Debug print
+                except Exception as e:
+                    print(f"Error in EOD request: {str(e)}")
+                    response = []  # Continue with empty response to try quotes
             else:
                 # For intraday data, use TPSeries endpoint
                 payload = {
@@ -200,43 +207,93 @@ class BrokerData:
                     "et": str(end_ts),
                     "intrv": self.timeframe_map[interval]
                 }
+                
+                print("Intraday Payload:", payload)  # Debug print
                 response = get_api_response("/NorenWClientTP/TPSeries", self.auth_token, payload=payload)
-            
-            if not isinstance(response, list):
-                if response.get('stat') == 'Not_Ok':
-                    raise Exception(f"Error from Zebu API: {response.get('emsg', 'Unknown error')}")
-                raise Exception("Invalid response format from Zebu API")
-            
+                print("Intraday Response:", response)  # Debug print
+
             # Convert response to DataFrame
             data = []
             for candle in response:
                 if isinstance(candle, str):
                     candle = json.loads(candle)
                 
-                # Parse timestamp based on interval
-                if interval == 'D':
-                    # Daily data format: "21-SEP-2022"
-                    timestamp = int(candle.get('ssboe', 0))
-                else:
-                    # Intraday format: "dd-mm-yyyy HH:MM:SS"
-                    timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
-                
-                data.append({
-                    'timestamp': timestamp,
-                    'open': float(candle.get('into', 0)),
-                    'high': float(candle.get('inth', 0)),
-                    'low': float(candle.get('intl', 0)),
-                    'close': float(candle.get('intc', 0)),
-                    'volume': float(candle.get('intv', 0))
-                })
-            
+                try:
+                    if interval == 'D':
+                        # EOD data format
+                        timestamp = int(candle.get('ssboe', 0))
+                        data.append({
+                            'timestamp': timestamp,
+                            'open': float(candle.get('into', 0)),
+                            'high': float(candle.get('inth', 0)),
+                            'low': float(candle.get('intl', 0)),
+                            'close': float(candle.get('intc', 0)),
+                            'volume': float(candle.get('intv', 0))
+                        })
+                    else:
+                        # Skip candles with all zero values
+                        if (float(candle.get('into', 0)) == 0 and 
+                            float(candle.get('inth', 0)) == 0 and 
+                            float(candle.get('intl', 0)) == 0 and 
+                            float(candle.get('intc', 0)) == 0):
+                            continue
+
+                        # Intraday format
+                        timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
+                        data.append({
+                            'timestamp': timestamp,
+                            'open': float(candle.get('into', 0)),
+                            'high': float(candle.get('inth', 0)),
+                            'low': float(candle.get('intl', 0)),
+                            'close': float(candle.get('intc', 0)),
+                            'volume': float(candle.get('intv', 0))
+                        })
+                except (KeyError, ValueError) as e:
+                    print(f"Error parsing candle data: {e}, Candle: {candle}")
+                    continue
+
             df = pd.DataFrame(data)
             if df.empty:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # Sort by timestamp in ascending order
+                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            # For daily data, append today's data from quotes if it's missing
+            if interval == 'D':
+                today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+                
+                # Only get today's data if it's within the requested range
+                if today_ts >= start_ts and today_ts <= end_ts:
+                    if df.empty or df['timestamp'].max() < today_ts:
+                        try:
+                            # Get today's data from quotes
+                            payload = {
+                                "exch": exchange,
+                                "token": token
+                            }
+                            quotes_response = get_api_response("/NorenWClientTP/GetQuotes", self.auth_token, payload=payload)
+                            print("Quotes Response:", quotes_response)  # Debug print
+                            
+                            if quotes_response and quotes_response.get('stat') == 'Ok':
+                                today_data = {
+                                    'timestamp': today_ts,
+                                    'open': float(quotes_response.get('o', 0)),
+                                    'high': float(quotes_response.get('h', 0)),
+                                    'low': float(quotes_response.get('l', 0)),
+                                    'close': float(quotes_response.get('lp', 0)),  # Use LTP as close
+                                    'volume': float(quotes_response.get('v', 0))
+                                }
+                                print(f"Today's quote data: {today_data}")
+                                # Append today's data
+                                df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
+                                print(f"Added today's data from quotes")
+                        except Exception as e:
+                            print(f"Error fetching today's data from quotes: {e}")
+                else:
+                    print(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
+
+            # Sort by timestamp
             df = df.sort_values('timestamp')
             return df
             
         except Exception as e:
+            print(f"Error in get_history: {str(e)}")  # Add debug logging
             raise Exception(f"Error fetching historical data: {str(e)}")
