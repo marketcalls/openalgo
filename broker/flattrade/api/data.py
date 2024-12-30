@@ -197,10 +197,10 @@ class BrokerData:
                 payload = {
                     "uid": os.getenv('BROKER_API_KEY').split(':::')[0],
                     "exch": exchange,
-                    "token": token,  # Changed from token to trading symbol
-                    "from": start_date,  # Changed to date format
-                    "to": end_date,      # Changed to date format
-                    "type": self.timeframe_map[interval]  # Changed from intrv to type
+                    "token": token,
+                    "st": str(start_ts),  # Start time in epoch
+                    "et": str(end_ts),    # End time in epoch
+                    "intrv": self.timeframe_map[interval]  # Changed to intrv
                 }
                 print("Intraday Payload:", payload)  # Debug print
                 response = get_api_response("/PiConnectTP/TPSeries", self.auth_token, payload=payload)
@@ -233,15 +233,27 @@ class BrokerData:
                             'volume': float(candle.get('intv', 0))  # EOD uses 'intv' for volume
                         })
                     else:
-                        # Intraday format: "dd-mm-yyyy HH:MM:SS"
-                        timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
+                        # Intraday format: "02-06-2020 15:46:23"
+                        try:
+                            timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
+                        except ValueError:
+                            print(f"Error parsing timestamp: {candle['time']}")
+                            continue
+
+                        # Skip candles with all zero values
+                        if (float(candle.get('into', 0)) == 0 and 
+                            float(candle.get('inth', 0)) == 0 and 
+                            float(candle.get('intl', 0)) == 0 and 
+                            float(candle.get('intc', 0)) == 0):
+                            continue
+
                         data.append({
                             'timestamp': timestamp,
-                            'open': float(candle.get('o', 0)),
-                            'high': float(candle.get('h', 0)),
-                            'low': float(candle.get('l', 0)),
-                            'close': float(candle.get('c', 0)),
-                            'volume': float(candle.get('v', 0))
+                            'open': float(candle.get('into', 0)),   # Intraday also uses 'into' for open
+                            'high': float(candle.get('inth', 0)),   # Intraday also uses 'inth' for high
+                            'low': float(candle.get('intl', 0)),    # Intraday also uses 'intl' for low
+                            'close': float(candle.get('intc', 0)),  # Intraday also uses 'intc' for close
+                            'volume': float(candle.get('intv', 0))  # Intraday also uses 'intv' for volume
                         })
                 except (KeyError, ValueError) as e:
                     print(f"Error parsing candle data: {e}, Candle: {candle}")
