@@ -106,6 +106,125 @@ class BrokerData:
             print(f"Traceback: {traceback.format_exc()}")
             return None
 
+    def get_depth(self, symbol: str, exchange: str) -> dict:
+        """
+        Get market depth for given symbol
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
+        Returns:
+            dict: Market depth data with bids, asks, and other market data
+        """
+        try:
+            # Get token from symbol
+            token = get_token(symbol, exchange)
+            br_symbol = get_br_symbol(symbol, exchange)
+
+            # Get market snapshot for overall data
+            snapshot_data = {
+                "head": {
+                    "key": api_key
+                },
+                "body": {
+                    "ClientCode": client_id,
+                    "Data": [
+                        {
+                            "Exchange": map_exchange(exchange),
+                            "ExchangeType": map_exchange_type(exchange),
+                            "ScripCode": token,
+                            "ScripData": br_symbol if token == "0" else ""
+                        }
+                    ]
+                }
+            }
+
+            snapshot_response = get_api_response(
+                "/VendorsAPI/Service1.svc/MarketSnapshot",
+                self.auth_token,
+                method="POST",
+                payload=json.dumps(snapshot_data)
+            )
+
+            if snapshot_response['head']['statusDescription'] != 'Success':
+                return None
+
+            quote_data = snapshot_response['body']['Data'][0]
+
+            # Get market depth data
+            depth_data = {
+                "head": {
+                    "key": api_key
+                },
+                "body": {
+                    "ClientCode": client_id,
+                    "Exchange": map_exchange(exchange),
+                    "ExchangeType": map_exchange_type(exchange),
+                    "ScripCode": token,
+                    "ScripData": br_symbol if token == "0" else ""
+                }
+            }
+
+            depth_response = get_api_response(
+                "/VendorsAPI/Service1.svc/V2/MarketDepth",
+                self.auth_token,
+                method="POST",
+                payload=json.dumps(depth_data)
+            )
+
+            if depth_response['head']['statusDescription'] != 'Success':
+                return None
+
+            market_depth = depth_response['body'].get('MarketDepthData', [])
+            
+            # Initialize empty bids and asks arrays
+            bids = [{"price": 0, "quantity": 0} for _ in range(5)]
+            asks = [{"price": 0, "quantity": 0} for _ in range(5)]
+
+            # Process market depth data
+            buy_orders = [order for order in market_depth if order['BbBuySellFlag'] == 66]  # 66 = Buy
+            sell_orders = [order for order in market_depth if order['BbBuySellFlag'] == 83]  # 83 = Sell
+
+            # Sort orders by price (highest buy, lowest sell)
+            buy_orders.sort(key=lambda x: float(x['Price']), reverse=True)
+            sell_orders.sort(key=lambda x: float(x['Price']))
+
+            # Fill bids and asks arrays
+            for i in range(min(len(buy_orders), 5)):
+                bids[i] = {
+                    "price": float(buy_orders[i]['Price']),
+                    "quantity": int(buy_orders[i]['Quantity'])
+                }
+
+            for i in range(min(len(sell_orders), 5)):
+                asks[i] = {
+                    "price": float(sell_orders[i]['Price']),
+                    "quantity": int(sell_orders[i]['Quantity'])
+                }
+
+            # Calculate total buy/sell quantities
+            total_buy_qty = sum(int(order['Quantity']) for order in buy_orders)
+            total_sell_qty = sum(int(order['Quantity']) for order in sell_orders)
+
+            # Return standardized format
+            return {
+                "asks": asks,
+                "bids": bids,
+                "high": float(quote_data.get('High', 0)),
+                "low": float(quote_data.get('Low', 0)),
+                "ltp": float(quote_data.get('LastTradedPrice', 0)),
+                "ltq": int(quote_data.get('LastTradedQty', 0)),
+                "oi": int(quote_data.get('OpenInterest', 0)),
+                "open": float(quote_data.get('Open', 0)),
+                "prev_close": float(quote_data.get('PClose', 0)),
+                "totalbuyqty": total_buy_qty,
+                "totalsellqty": total_sell_qty,
+                "volume": int(quote_data.get('Volume', 0))
+            }
+
+        except Exception as e:
+            print(f"Error in get_depth: {str(e)}")
+            return None
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol

@@ -61,9 +61,15 @@ class Depth(Resource):
                     depth_data['exchange']
                 )
                 
+                if depth is None:
+                    return make_response(jsonify({
+                        'status': 'error',
+                        'message': 'Failed to fetch market depth'
+                    }), 500)
+
                 return make_response(jsonify({
-                    'status': 'success',
-                    'data': depth
+                    'data': depth,
+                    'status': 'success'
                 }), 200)
             except Exception as e:
                 logger.error(f"Error in broker_module.get_depth: {e}")
