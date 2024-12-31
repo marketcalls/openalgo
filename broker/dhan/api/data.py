@@ -391,7 +391,28 @@ class BrokerData:
                             logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
                             continue
 
-            # Convert all candles to DataFrame
+            # For daily timeframe, check if today's date is within the range
+            if interval == 'D':
+                today = datetime.now().strftime("%Y-%m-%d")
+                if start_date <= today <= end_date:
+                    logger.info("Today's date is within range for daily timeframe, fetching current day data from quotes API")
+                    try:
+                        # Get today's data from quotes API
+                        quotes = self.get_quotes(symbol, exchange)
+                        if quotes and quotes.get('ltp', 0) > 0:  # Only add if we got valid data
+                            today_candle = {
+                                'timestamp': int(datetime.strptime(today + " 15:30:00", "%Y-%m-%d %H:%M:%S").timestamp()),
+                                'open': float(quotes.get('open', 0)),
+                                'high': float(quotes.get('high', 0)),
+                                'low': float(quotes.get('low', 0)),
+                                'close': float(quotes.get('ltp', 0)),  # Use LTP as current close
+                                'volume': int(quotes.get('volume', 0))
+                            }
+                            all_candles.append(today_candle)
+                    except Exception as e:
+                        logger.error(f"Error fetching today's data from quotes: {str(e)}")
+
+            # Create DataFrame from all candles
             df = pd.DataFrame(all_candles)
             if df.empty:
                 df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
