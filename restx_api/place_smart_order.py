@@ -208,6 +208,17 @@ class PlaceSmartOrder(Resource):
                         'message': ' Positions Already Matched. No Action needed.'
                     })
                     return make_response(jsonify(order_response_data), 200)
+
+                # Log successful order immediately after placement
+                if res and res.status == 200:
+                    order_response_data = {'status': 'success', 'orderid': order_id}
+                    executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
+                    socketio.emit('order_event', {
+                        'symbol': order_data.get('symbol'),
+                        'action': order_data.get('action'),
+                        'orderid': order_id,
+                        'mode': 'live'
+                    })
                 
             except Exception as e:
                 logger.error(f"Error in broker_module.place_smartorder_api: {e}")
@@ -227,14 +238,6 @@ class PlaceSmartOrder(Resource):
                 traceback.print_exc()
 
             if res and res.status == 200:
-                socketio.emit('order_event', {
-                    'symbol': order_data.get('symbol'),
-                    'action': order_data.get('action'),
-                    'orderid': order_id,
-                    'mode': 'live'
-                })
-                order_response_data = {'status': 'success', 'orderid': order_id}
-                executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
                 return make_response(jsonify(order_response_data), 200)
             else:
                 message = response_data.get('message', 'Failed to place smart order') if isinstance(response_data, dict) else 'Failed to place smart order'
