@@ -20,12 +20,11 @@ class BrokerData:
         
         # Map common timeframe format to ICICI resolutions
         self.timeframe_map = {
-            '1m': '1', 
-            '5m': '5',
-            '15m': '15',
-            '30m': '30',
-            '1h': '60',
-            'D': '1D'
+            '1m': '1minute', 
+            '5m': '5minute',
+            '15m': '15minute',
+            '30m': '30minute',
+            'D': '1day'
         }
 
     def _generate_headers(self, payload=''):
@@ -257,6 +256,17 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_history: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching historical data: {str(e)}")
+
+    def get_supported_intervals(self):
+        """Return supported intervals for ICICI broker"""
+        return {
+            "minutes": ["1m", "5m", "15m", "30m"],
+            "hours": [],
+            "days": ["D"],
+            "weeks": [],
+            "months": [],
+            "seconds": []
+        }
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
