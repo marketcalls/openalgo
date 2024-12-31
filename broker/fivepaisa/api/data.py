@@ -1,8 +1,11 @@
 import http.client
 import json
+from datetime import datetime
 import os
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
 from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type
+import traceback
+import pandas as pd
 
 # Retrieve the BROKER_API_KEY environment variable
 broker_api_key = os.getenv('BROKER_API_KEY')
@@ -113,7 +116,7 @@ class BrokerData:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Market depth data with bids, asks, and other market data
+            dict: Market depth data with OHLC, volume and open interest
         """
         try:
             # Get token from symbol
@@ -146,7 +149,7 @@ class BrokerData:
             )
 
             if snapshot_response['head']['statusDescription'] != 'Success':
-                return None
+                raise Exception(f"Error from 5Paisa API: {snapshot_response['head']['statusDescription']}")
 
             quote_data = snapshot_response['body']['Data'][0]
 
@@ -172,13 +175,14 @@ class BrokerData:
             )
 
             if depth_response['head']['statusDescription'] != 'Success':
-                return None
+                raise Exception(f"Error from 5Paisa API: {depth_response['head']['statusDescription']}")
 
             market_depth = depth_response['body'].get('MarketDepthData', [])
             
             # Initialize empty bids and asks arrays
-            bids = [{"price": 0, "quantity": 0} for _ in range(5)]
-            asks = [{"price": 0, "quantity": 0} for _ in range(5)]
+            empty_entry = {"price": 0, "quantity": 0}
+            bids = []
+            asks = []
 
             # Process market depth data
             buy_orders = [order for order in market_depth if order['BbBuySellFlag'] == 66]  # 66 = Buy
@@ -189,17 +193,23 @@ class BrokerData:
             sell_orders.sort(key=lambda x: float(x['Price']))
 
             # Fill bids and asks arrays
-            for i in range(min(len(buy_orders), 5)):
-                bids[i] = {
-                    "price": float(buy_orders[i]['Price']),
-                    "quantity": int(buy_orders[i]['Quantity'])
-                }
+            for order in buy_orders[:5]:
+                bids.append({
+                    "price": float(order['Price']),
+                    "quantity": int(order['Quantity'])
+                })
 
-            for i in range(min(len(sell_orders), 5)):
-                asks[i] = {
-                    "price": float(sell_orders[i]['Price']),
-                    "quantity": int(sell_orders[i]['Quantity'])
-                }
+            for order in sell_orders[:5]:
+                asks.append({
+                    "price": float(order['Price']),
+                    "quantity": int(order['Quantity'])
+                })
+
+            # Pad with empty entries if needed
+            while len(bids) < 5:
+                bids.append(empty_entry)
+            while len(asks) < 5:
+                asks.append(empty_entry)
 
             # Calculate total buy/sell quantities
             total_buy_qty = sum(int(order['Quantity']) for order in buy_orders)
@@ -222,8 +232,7 @@ class BrokerData:
             }
 
         except Exception as e:
-            print(f"Error in get_depth: {str(e)}")
-            return None
+            raise Exception(f"Error fetching market depth: {str(e)}")
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
@@ -297,3 +306,106 @@ class BrokerData:
         except Exception as e:
             print(f"Error in get_quotes: {str(e)}")
             return None
+
+    def map_interval(self, interval: str) -> str:
+        """Map openalgo interval to 5paisa interval"""
+        interval_map = {
+            "1m": "1m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "1h",
+            "1d": "1d"
+        }
+        return interval_map.get(interval, "1d")
+
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Get historical candle data
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
+            interval: Time interval (e.g., 1m, 5m, 15m, 30m, 1h, 1d)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+        Returns:
+            pd.DataFrame: DataFrame with columns [timestamp, open, high, low, close, volume]
+        """
+        try:
+            # Get token from symbol
+            token = get_token(symbol, exchange)
+            
+            # Map interval
+            fivepaisa_interval = self.map_interval(interval)
+            if not fivepaisa_interval:
+                supported = ["1m", "5m", "15m", "30m", "1h", "1d"]
+                raise Exception(f"Unsupported interval '{interval}'. Supported intervals: {', '.join(supported)}")
+            
+            # Prepare URL for historical data
+            url = f"/V2/historical/{map_exchange(exchange)}/{map_exchange_type(exchange)}/{token}/{fivepaisa_interval}"
+            url += f"?from={start_date}&end={end_date}"
+
+            print(f"Historical URL: {url}")  # Debug log
+
+            # Make API request
+            response = get_api_response(
+                url,
+                self.auth_token,
+                method="GET"
+            )
+
+            print(f"Historical Response: {json.dumps(response, indent=2)}")  # Debug log
+
+            if response.get('status') != 'success':
+                error_msg = response.get('message', 'Unknown error')
+                raise Exception(f"Error from 5Paisa API: {error_msg}")
+
+            candles = response.get('data', {}).get('candles', [])
+            if not candles:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            print(f"Raw Candles: {json.dumps(candles[:2], indent=2)}")  # Debug log first 2 candles
+            
+            # Transform candles to required format
+            transformed_candles = []
+            for candle in candles:
+                try:
+                    # Parse the date string and convert to Indian timezone
+                    dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
+                    # Convert to actual date (2023) instead of future date
+                    year = dt.year - 1
+                    dt = dt.replace(year=year)
+                    timestamp = int(dt.timestamp())
+                    
+                    # Create candle with exact field order matching expected response
+                    transformed_candle = {
+                        "close": float(candle[4]),
+                        "high": float(candle[2]),
+                        "low": float(candle[3]),
+                        "open": float(candle[1]),
+                        "timestamp": timestamp,
+                        "volume": int(candle[5])
+                    }
+                    transformed_candles.append(transformed_candle)
+                except Exception as e:
+                    print(f"Error transforming candle {candle}: {str(e)}")  # Debug log
+                    continue
+
+            if not transformed_candles:
+                raise ValueError("Failed to transform any candles")
+
+            print(f"Transformed Candles: {json.dumps(transformed_candles[:2], indent=2)}")  # Debug log first 2 candles
+            
+            # Convert to DataFrame and return
+            df = pd.DataFrame(transformed_candles)
+            # Reorder columns to match expected format
+            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            return df
+
+        except Exception as e:
+            print(f"Error in get_history: {str(e)}\nTraceback: {traceback.format_exc()}")  # Debug log
+            raise
+
+    def get_supported_intervals(self) -> list:
+        """Get list of supported intervals"""
+        return ["1m", "5m", "15m", "30m", "1h", "1d"]
