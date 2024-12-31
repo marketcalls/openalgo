@@ -93,37 +93,15 @@ class BrokerData:
             
         return security_id, exchange_segment
 
-    def _convert_date_to_utc(self, date_str: str, is_intraday: bool = False) -> str:
+    def _convert_date_to_utc(self, date_str: str) -> str:
         """Convert IST date to UTC date for API request"""
         # Convert IST date string to datetime
         ist_date = datetime.strptime(date_str, "%Y-%m-%d")
-        
-        if is_intraday:
-            # For intraday, use market open time (9:15 IST) for start date
-            ist_datetime = ist_date.replace(hour=9, minute=15)
-        else:
-            # For daily, use market close time (15:30 IST)
-            ist_datetime = ist_date.replace(hour=15, minute=30)
-            
+        # Set time to market close (15:30 IST)
+        ist_datetime = ist_date.replace(hour=15, minute=30)
         # Convert to UTC (IST is UTC+5:30)
         utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
         return utc_datetime.strftime("%Y-%m-%d")
-
-    def _convert_date_to_utc_with_time(self, date_str: str, is_start: bool = True) -> str:
-        """Convert IST date to UTC datetime string with time for intraday data"""
-        # Convert IST date string to datetime
-        ist_date = datetime.strptime(date_str, "%Y-%m-%d")
-        
-        if is_start:
-            # For start date, use market open time (9:15 IST)
-            ist_datetime = ist_date.replace(hour=9, minute=15)
-        else:
-            # For end date, use market close time (15:30 IST)
-            ist_datetime = ist_date.replace(hour=15, minute=30)
-            
-        # Convert to UTC (IST is UTC+5:30)
-        utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
-        return utc_datetime.strftime("%Y-%m-%d %H:%M:%S")
 
     def _convert_timestamp_to_ist(self, timestamp: int) -> int:
         """Convert UTC timestamp to IST timestamp"""
@@ -151,19 +129,25 @@ class BrokerData:
         return chunks
 
     def _get_instrument_type(self, exchange: str, symbol: str) -> str:
-        """Get the correct instrument type based on exchange and symbol"""
-        if exchange == 'NFO':
-            # Check if it's an index future
-            index_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']
-            if any(index in symbol for index in index_symbols):
-                return 'FUTIDX'
-            return 'FUTSTK'
-        
+        """Get instrument type based on exchange and symbol"""
         instrument_map = {
             'NSE': 'EQUITY',
             'BSE': 'EQUITY',
-            'MCX': 'FUTCOM'
+            'NFO': 'FUTIDX'  # Default for NFO
         }
+        
+        # Special handling for NFO
+        if exchange == 'NFO':
+            # Check for options
+            if 'CE' in symbol or 'PE' in symbol:
+                return 'OPTIDX'
+            # Check for index futures
+            elif any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY']):
+                return 'FUTIDX'
+            # Check for stock futures
+            else:
+                return 'FUTSTK'
+                
         return instrument_map.get(exchange, 'EQUITY')
 
     def _is_trading_day(self, date_str: str) -> bool:
@@ -185,6 +169,16 @@ class BrokerData:
             end -= timedelta(days=1)
             
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+    def _get_intraday_time_range(self, date_str: str) -> tuple:
+        """Get intraday time range in IST for a given date"""
+        date = datetime.strptime(date_str, "%Y-%m-%d")
+        
+        # Market hours in IST
+        start_time = date.replace(hour=9, minute=15)  # 9:15 AM IST
+        end_time = date.replace(hour=15, minute=30)   # 3:30 PM IST
+        
+        return start_time.strftime("%Y-%m-%d %H:%M:%S"), end_time.strftime("%Y-%m-%d %H:%M:%S")
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -288,14 +282,16 @@ class BrokerData:
                 endpoint = "/v2/charts/intraday"
                 
                 if start_date == end_date:
-                    # For same day intraday data
+                    # For same day intraday data, use exact time range in IST
+                    from_time, to_time = self._get_intraday_time_range(start_date)
+                    
                     request_data = {
                         "securityId": str(security_id),
                         "exchangeSegment": exchange_segment,
                         "instrument": instrument_type,
                         "interval": self.timeframe_map[interval],
-                        "fromDate": self._convert_date_to_utc_with_time(start_date, True),  # 9:15 IST
-                        "toDate": self._convert_date_to_utc_with_time(end_date, False)     # 15:30 IST
+                        "fromDate": from_time,
+                        "toDate": to_time
                     }
                     
                     logger.info(f"Making intraday history request to {endpoint}")
@@ -334,13 +330,17 @@ class BrokerData:
                         if not self._is_trading_day(chunk_start) and not self._is_trading_day(chunk_end):
                             continue
 
+                        # Get time range for each day
+                        from_time, _ = self._get_intraday_time_range(chunk_start)
+                        _, to_time = self._get_intraday_time_range(chunk_end)
+
                         request_data = {
                             "securityId": str(security_id),
                             "exchangeSegment": exchange_segment,
                             "instrument": instrument_type,
                             "interval": self.timeframe_map[interval],
-                            "fromDate": self._convert_date_to_utc_with_time(chunk_start, True),
-                            "toDate": self._convert_date_to_utc_with_time(chunk_end, False)
+                            "fromDate": from_time,
+                            "toDate": to_time
                         }
                         
                         logger.info(f"Making intraday history request to {endpoint}")
