@@ -128,27 +128,53 @@ class BrokerData:
             
         return chunks
 
+    def _get_exchange_segment(self, exchange: str) -> str:
+        """Get exchange segment based on exchange"""
+        exchange_map = {
+            'NSE': 'NSE_EQ',      # NSE Cash
+            'BSE': 'BSE_EQ',      # BSE Cash
+            'NFO': 'NSE_FNO',     # NSE F&O
+            'BFO': 'BSE_FNO',     # BSE F&O
+            'MCX': 'MCX_COMM',    # MCX Commodity
+            'CDS': 'NSE_CURRENCY',  # NSE Currency
+            'BCD': 'BSE_CURRENCY'   # BSE Currency
+        }
+        return exchange_map.get(exchange)
+
     def _get_instrument_type(self, exchange: str, symbol: str) -> str:
         """Get instrument type based on exchange and symbol"""
-        instrument_map = {
-            'NSE': 'EQUITY',
-            'BSE': 'EQUITY',
-            'NFO': 'FUTIDX'  # Default for NFO
-        }
-        
-        # Special handling for NFO
-        if exchange == 'NFO':
-            # Check for options
-            if 'CE' in symbol or 'PE' in symbol:
+        # For cash market (NSE, BSE)
+        if exchange in ['NSE', 'BSE']:
+            return 'EQUITY'
+            
+        # For F&O market (NFO, BFO)
+        elif exchange in ['NFO', 'BFO']:
+            # Check for index options
+            if ('CE' in symbol or 'PE' in symbol) and any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY','MIDCPNIFTY','SENSEX','BANKEX']):
                 return 'OPTIDX'
+            # Check for stock options
+            elif 'CE' in symbol or 'PE' in symbol:
+                return 'OPTSTK'
             # Check for index futures
-            elif any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY']):
+            elif any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY','MIDCPNIFTY','SENSEX','BANKEX']):
                 return 'FUTIDX'
-            # Check for stock futures
+            # Stock futures
             else:
                 return 'FUTSTK'
-                
-        return instrument_map.get(exchange, 'EQUITY')
+        
+        # For commodity market (MCX)
+        elif exchange == 'MCX':
+            if 'CE' in symbol or 'PE' in symbol:
+                return 'OPTFUT'  # Options on commodity futures
+            return 'FUTCOM'      # Commodity futures
+        
+        # For currency market (CDS, BCD)
+        elif exchange in ['CDS', 'BCD']:
+            if 'CE' in symbol or 'PE' in symbol:
+                return 'OPTCUR'  # Currency options
+            return 'FUTCUR'      # Currency futures
+        
+        raise Exception(f"Unsupported exchange: {exchange}")
 
     def _is_trading_day(self, date_str: str) -> bool:
         """Check if the given date is a trading day (not weekend)"""
@@ -214,20 +240,13 @@ class BrokerData:
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
             
-            # Map exchange to Dhan's format
-            exchange_map = {
-                'NSE': 'NSE_EQ',
-                'BSE': 'BSE_EQ',
-                'NFO': 'NSE_FNO',
-                'MCX': 'MCX_COMM'
-            }
-            exchange_segment = exchange_map.get(exchange)
+            # Get exchange segment and instrument type
+            exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
 
-            # Get instrument type
             instrument_type = self._get_instrument_type(exchange, symbol)
-
+            
             all_candles = []
 
             # Choose endpoint and prepare request data
