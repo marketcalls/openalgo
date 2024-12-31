@@ -1,8 +1,9 @@
 import http.client
 import json
 import os
+from datetime import datetime, timedelta
+import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
-from broker.dhan.mapping.transform_data import map_exchange_type
 import urllib.parse
 import logging
 import jwt
@@ -19,7 +20,8 @@ def extract_client_id(auth_token):
         logger.error(f"Error decoding JWT: {str(e)}")
         return None
 
-def get_api_response(endpoint, auth, method="POST", payload=''):
+def get_api_response(endpoint, auth, method="POST", payload=None):
+    """Make API request to Dhan"""
     AUTH_TOKEN = auth
     client_id = extract_client_id(AUTH_TOKEN)
     
@@ -28,11 +30,14 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     
     conn = http.client.HTTPSConnection("api.dhan.co")
     headers = {
+        'Content-Type': 'application/json',
         'access-token': AUTH_TOKEN,
         'client-id': client_id,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        'Accept': 'application/json'
     }
+    
+    if payload:
+        payload = json.dumps(payload)
     
     logger.info(f"Making request to {endpoint}")
     logger.info(f"Headers: {headers}")
@@ -41,26 +46,28 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
+    
     response = json.loads(data.decode("utf-8"))
     
     logger.info(f"Response status: {res.status}")
     logger.info(f"Response: {json.dumps(response, indent=2)}")
     
     # Handle Dhan API error codes
-    if response.get('status') == 'failed':
-        error_data = response.get('data', {})  
-        error_code = list(error_data.keys())[0] if error_data else 'unknown'
-        error_message = error_data.get(error_code, 'Unknown error')
+    if response.get('errorCode'):
+        error_code = response.get('errorCode')
+        error_message = response.get('errorMessage', 'Unknown error')
+        error_type = response.get('errorType', 'Unknown')
         
         error_mapping = {
             '806': "Data APIs not subscribed. Please subscribe to Dhan's market data service.",
             '810': "Authentication failed: Invalid client ID",
             '401': "Invalid or expired access token",
             '820': "Market data subscription required",
-            '821': "Market data subscription required"
+            '821': "Market data subscription required",
+            'DH-907': "No data available for the specified parameters"
         }
         
-        error_msg = error_mapping.get(error_code, f"Dhan API Error {error_code}: {error_message}")
+        error_msg = error_mapping.get(error_code, f"Dhan API Error {error_code} ({error_type}): {error_message}")
         logger.error(f"API Error: {error_msg}")
         raise Exception(error_msg)
     
@@ -70,6 +77,105 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize Dhan data handler with authentication token"""
         self.auth_token = auth_token
+        # Map common timeframe format to Dhan intervals
+        self.timeframe_map = {
+            '1m': '1',
+            '5m': '5',
+            '15m': '15', 
+            '25m': '25',
+            '1h': '60',
+            'D': 'D'  # Daily timeframe
+        }
+    
+    def _convert_to_dhan_request(self, symbol, exchange):
+        """Convert symbol and exchange to Dhan format"""
+        br_symbol = get_br_symbol(symbol, exchange)
+        # Extract security ID and determine exchange segment
+        # This needs to be implemented based on your symbol mapping logic
+        security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
+        
+        if exchange == "NSE":
+            exchange_segment = "NSE_EQ"
+        elif exchange == "BSE":
+            exchange_segment = "BSE_EQ"
+        else:
+            raise ValueError(f"Unsupported exchange: {exchange}")
+            
+        return security_id, exchange_segment
+
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Get historical data from Dhan"""
+        try:
+            security_id, exchange_segment = self._convert_to_dhan_request(symbol, exchange)
+            
+            # Determine if we should use intraday or daily API
+            is_intraday = interval in ['1m', '5m', '15m', '25m', '1h']
+            
+            if is_intraday:
+                endpoint = "/v2/charts/intraday"
+                payload = {
+                    "securityId": security_id,
+                    "exchangeSegment": exchange_segment,
+                    "instrument": "EQUITY",
+                    "interval": self.timeframe_map[interval],
+                    "fromDate": start_date,
+                    "toDate": end_date
+                }
+            else:
+                endpoint = "/v2/charts/historical"
+                payload = {
+                    "securityId": security_id,
+                    "exchangeSegment": exchange_segment,
+                    "instrument": "EQUITY",
+                    "expiryCode": 0,
+                    "fromDate": start_date,
+                    "toDate": end_date
+                }
+            
+            try:
+                response = get_api_response(endpoint, self.auth_token, payload=payload)
+            except Exception as e:
+                if "No data available" in str(e):
+                    logger.warning(f"No data available for {symbol} on {start_date}")
+                    return pd.DataFrame()  # Return empty DataFrame for no data
+                raise  # Re-raise other exceptions
+                
+            # Check if we have the required fields for both intraday and daily
+            required_fields = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            if not all(field in response for field in required_fields):
+                logger.error(f"Missing required fields in response. Available fields: {response.keys()}")
+                return pd.DataFrame()
+            
+            # Convert array-based response to list of dicts for both intraday and daily
+            data = []
+            for i in range(len(response['timestamp'])):
+                data.append({
+                    'timestamp': int(response['timestamp'][i]),  # Already in epoch format
+                    'open': float(response['open'][i]),
+                    'high': float(response['high'][i]),
+                    'low': float(response['low'][i]),
+                    'close': float(response['close'][i]),
+                    'volume': int(float(response['volume'][i]))  # Convert to float first to handle scientific notation
+                })
+            
+            if not data:
+                logger.warning(f"No data available for {symbol}")
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(data)
+            
+            # Sort by timestamp
+            df = df.sort_values('timestamp')
+            
+            # Reset index
+            df = df.reset_index(drop=True)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error fetching history data: {str(e)}")
+            logger.error(f"Payload: {payload}")
+            raise Exception(f"Error fetching history data: {str(e)}")
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
