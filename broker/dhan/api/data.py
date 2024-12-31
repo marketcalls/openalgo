@@ -14,7 +14,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-
 def get_api_response(endpoint, auth, method="POST", payload=''):
     AUTH_TOKEN = auth
     client_id = os.getenv('BROKER_API_KEY')
@@ -94,6 +93,22 @@ class BrokerData:
             
         return security_id, exchange_segment
 
+    def _get_intraday_chunks(self, start_date: str, end_date: str) -> list:
+        """Split date range into 5-day chunks for intraday data"""
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        chunks = []
+        
+        while start < end:
+            chunk_end = min(start + timedelta(days=5), end)
+            chunks.append((
+                start.strftime("%Y-%m-%d"),
+                chunk_end.strftime("%Y-%m-%d")
+            ))
+            start = chunk_end
+            
+        return chunks
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
@@ -131,8 +146,11 @@ class BrokerData:
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
 
+            all_candles = []
+
             # Choose endpoint and prepare request data
             if interval == 'D':
+                # For daily data, make a single request
                 endpoint = "/v2/charts/historical"
                 request_data = {
                     "securityId": str(security_id),
@@ -142,53 +160,78 @@ class BrokerData:
                     "fromDate": start_date,
                     "toDate": end_date
                 }
-            else:
-                endpoint = "/v2/charts/intraday"
-                # Convert dates to match Dhan's format (YYYY-MM-DD)
-                from_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%Y-%m-%d")
-                to_date = datetime.strptime(end_date, "%Y-%m-%d").strftime("%Y-%m-%d")
                 
-                request_data = {
-                    "securityId": str(security_id),
-                    "exchangeSegment": exchange_segment,
-                    "instrument": "EQUITY",
-                    "interval": self.timeframe_map[interval],
-                    "fromDate": from_date,
-                    "toDate": to_date
-                }
+                logger.info(f"Making daily history request to {endpoint}")
+                logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                
+                response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
+                
+                # Process response
+                timestamps = response.get('timestamp', [])
+                opens = response.get('open', [])
+                highs = response.get('high', [])
+                lows = response.get('low', [])
+                closes = response.get('close', [])
+                volumes = response.get('volume', [])
 
-            logger.info(f"Making history request to {endpoint}")
-            logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
-            
-            # Use get_api_response for consistent error handling
-            response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
-            
-            # Transform array response to list of dictionaries
-            candles = []
-            timestamps = response.get('timestamp', [])
-            opens = response.get('open', [])
-            highs = response.get('high', [])
-            lows = response.get('low', [])
-            closes = response.get('close', [])
-            volumes = response.get('volume', [])
+                for i in range(len(timestamps)):
+                    all_candles.append({
+                        'timestamp': timestamps[i],
+                        'open': float(opens[i]) if opens[i] else 0,
+                        'high': float(highs[i]) if highs[i] else 0,
+                        'low': float(lows[i]) if lows[i] else 0,
+                        'close': float(closes[i]) if closes[i] else 0,
+                        'volume': int(float(volumes[i])) if volumes[i] else 0
+                    })
+            else:
+                # For intraday data, split into 5-day chunks
+                endpoint = "/v2/charts/intraday"
+                date_chunks = self._get_intraday_chunks(start_date, end_date)
+                
+                for chunk_start, chunk_end in date_chunks:
+                    request_data = {
+                        "securityId": str(security_id),
+                        "exchangeSegment": exchange_segment,
+                        "instrument": "EQUITY",
+                        "interval": self.timeframe_map[interval],
+                        "fromDate": chunk_start,
+                        "toDate": chunk_end
+                    }
+                    
+                    logger.info(f"Making intraday history request to {endpoint}")
+                    logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                    
+                    try:
+                        response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
+                        
+                        # Process response
+                        timestamps = response.get('timestamp', [])
+                        opens = response.get('open', [])
+                        highs = response.get('high', [])
+                        lows = response.get('low', [])
+                        closes = response.get('close', [])
+                        volumes = response.get('volume', [])
 
-            for i in range(len(timestamps)):
-                candles.append({
-                    'timestamp': timestamps[i],
-                    'open': float(opens[i]) if opens[i] else 0,
-                    'high': float(highs[i]) if highs[i] else 0,
-                    'low': float(lows[i]) if lows[i] else 0,
-                    'close': float(closes[i]) if closes[i] else 0,
-                    'volume': int(float(volumes[i])) if volumes[i] else 0
-                })
+                        for i in range(len(timestamps)):
+                            all_candles.append({
+                                'timestamp': timestamps[i],
+                                'open': float(opens[i]) if opens[i] else 0,
+                                'high': float(highs[i]) if highs[i] else 0,
+                                'low': float(lows[i]) if lows[i] else 0,
+                                'close': float(closes[i]) if closes[i] else 0,
+                                'volume': int(float(volumes[i])) if volumes[i] else 0
+                            })
+                    except Exception as e:
+                        logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
+                        continue  # Continue with next chunk if one fails
 
-            # Convert to DataFrame
-            df = pd.DataFrame(candles)
+            # Convert all candles to DataFrame
+            df = pd.DataFrame(all_candles)
             if df.empty:
                 df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             else:
-                # Sort by timestamp
-                df = df.sort_values('timestamp').reset_index(drop=True)
+                # Sort by timestamp and remove duplicates
+                df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
 
             return df
 
