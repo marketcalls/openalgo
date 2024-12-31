@@ -93,15 +93,37 @@ class BrokerData:
             
         return security_id, exchange_segment
 
-    def _convert_date_to_utc(self, date_str: str) -> str:
+    def _convert_date_to_utc(self, date_str: str, is_intraday: bool = False) -> str:
         """Convert IST date to UTC date for API request"""
         # Convert IST date string to datetime
         ist_date = datetime.strptime(date_str, "%Y-%m-%d")
-        # Set time to market close (15:30 IST)
-        ist_datetime = ist_date.replace(hour=15, minute=30)
+        
+        if is_intraday:
+            # For intraday, use market open time (9:15 IST) for start date
+            ist_datetime = ist_date.replace(hour=9, minute=15)
+        else:
+            # For daily, use market close time (15:30 IST)
+            ist_datetime = ist_date.replace(hour=15, minute=30)
+            
         # Convert to UTC (IST is UTC+5:30)
         utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
         return utc_datetime.strftime("%Y-%m-%d")
+
+    def _convert_date_to_utc_with_time(self, date_str: str, is_start: bool = True) -> str:
+        """Convert IST date to UTC datetime string with time for intraday data"""
+        # Convert IST date string to datetime
+        ist_date = datetime.strptime(date_str, "%Y-%m-%d")
+        
+        if is_start:
+            # For start date, use market open time (9:15 IST)
+            ist_datetime = ist_date.replace(hour=9, minute=15)
+        else:
+            # For end date, use market close time (15:30 IST)
+            ist_datetime = ist_date.replace(hour=15, minute=30)
+            
+        # Convert to UTC (IST is UTC+5:30)
+        utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
+        return utc_datetime.strftime("%Y-%m-%d %H:%M:%S")
 
     def _convert_timestamp_to_ist(self, timestamp: int) -> int:
         """Convert UTC timestamp to IST timestamp"""
@@ -188,12 +210,6 @@ class BrokerData:
             # Adjust dates for trading days
             start_date, end_date = self._adjust_dates(start_date, end_date)
             
-            # Convert dates to UTC for API request
-            utc_start_date = self._convert_date_to_utc(start_date)
-            # For end date, add one day to include the end date in results
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-            utc_end_date = self._convert_date_to_utc(end_dt.strftime("%Y-%m-%d"))
-            
             # If both dates are weekends, return empty DataFrame
             if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
                 logger.info("Both start and end dates are non-trading days")
@@ -224,6 +240,13 @@ class BrokerData:
             if interval == 'D':
                 # For daily data, use historical endpoint
                 endpoint = "/v2/charts/historical"
+                
+                # Convert dates to UTC for API request
+                utc_start_date = self._convert_date_to_utc(start_date)
+                # For end date, add one day to include the end date in results
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                utc_end_date = self._convert_date_to_utc(end_dt.strftime("%Y-%m-%d"))
+                
                 request_data = {
                     "securityId": str(security_id),
                     "exchangeSegment": exchange_segment,
@@ -261,27 +284,18 @@ class BrokerData:
                         'volume': int(float(volumes[i])) if volumes[i] else 0
                     })
             else:
-                # For intraday data, split into 5-day chunks
+                # For intraday data
                 endpoint = "/v2/charts/intraday"
-                date_chunks = self._get_intraday_chunks(start_date, end_date)
                 
-                for chunk_start, chunk_end in date_chunks:
-                    # Skip if both dates are non-trading days
-                    if not self._is_trading_day(chunk_start) and not self._is_trading_day(chunk_end):
-                        continue
-
-                    # Convert chunk dates to UTC
-                    utc_chunk_start = self._convert_date_to_utc(chunk_start)
-                    chunk_end_dt = datetime.strptime(chunk_end, "%Y-%m-%d") + timedelta(days=1)
-                    utc_chunk_end = self._convert_date_to_utc(chunk_end_dt.strftime("%Y-%m-%d"))
-
+                if start_date == end_date:
+                    # For same day intraday data
                     request_data = {
                         "securityId": str(security_id),
                         "exchangeSegment": exchange_segment,
                         "instrument": instrument_type,
                         "interval": self.timeframe_map[interval],
-                        "fromDate": utc_chunk_start,
-                        "toDate": utc_chunk_end
+                        "fromDate": self._convert_date_to_utc_with_time(start_date, True),  # 9:15 IST
+                        "toDate": self._convert_date_to_utc_with_time(end_date, False)     # 15:30 IST
                     }
                     
                     logger.info(f"Making intraday history request to {endpoint}")
@@ -310,8 +324,53 @@ class BrokerData:
                                 'volume': int(float(volumes[i])) if volumes[i] else 0
                             })
                     except Exception as e:
-                        logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
-                        continue  # Continue with next chunk if one fails
+                        logger.error(f"Error fetching intraday data: {str(e)}")
+                else:
+                    # For multiple days, split into chunks
+                    date_chunks = self._get_intraday_chunks(start_date, end_date)
+                    
+                    for chunk_start, chunk_end in date_chunks:
+                        # Skip if both dates are non-trading days
+                        if not self._is_trading_day(chunk_start) and not self._is_trading_day(chunk_end):
+                            continue
+
+                        request_data = {
+                            "securityId": str(security_id),
+                            "exchangeSegment": exchange_segment,
+                            "instrument": instrument_type,
+                            "interval": self.timeframe_map[interval],
+                            "fromDate": self._convert_date_to_utc_with_time(chunk_start, True),
+                            "toDate": self._convert_date_to_utc_with_time(chunk_end, False)
+                        }
+                        
+                        logger.info(f"Making intraday history request to {endpoint}")
+                        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                        
+                        try:
+                            response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
+                            
+                            # Process response
+                            timestamps = response.get('timestamp', [])
+                            opens = response.get('open', [])
+                            highs = response.get('high', [])
+                            lows = response.get('low', [])
+                            closes = response.get('close', [])
+                            volumes = response.get('volume', [])
+
+                            for i in range(len(timestamps)):
+                                # Convert UTC timestamp to IST
+                                ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
+                                all_candles.append({
+                                    'timestamp': ist_timestamp,
+                                    'open': float(opens[i]) if opens[i] else 0,
+                                    'high': float(highs[i]) if highs[i] else 0,
+                                    'low': float(lows[i]) if lows[i] else 0,
+                                    'close': float(closes[i]) if closes[i] else 0,
+                                    'volume': int(float(volumes[i])) if volumes[i] else 0
+                                })
+                        except Exception as e:
+                            logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
+                            continue
 
             # Convert all candles to DataFrame
             df = pd.DataFrame(all_candles)
