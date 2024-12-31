@@ -13,18 +13,11 @@ import requests
 # Configure logging
 logger = logging.getLogger(__name__)
 
-def extract_client_id(auth_token):
-    """Extract client ID from JWT token"""
-    try:
-        decoded = jwt.decode(auth_token, options={"verify_signature": False})
-        return decoded.get('dhanClientId')
-    except Exception as e:
-        logger.error(f"Error decoding JWT: {str(e)}")
-        return None
+
 
 def get_api_response(endpoint, auth, method="POST", payload=''):
     AUTH_TOKEN = auth
-    client_id = extract_client_id(AUTH_TOKEN)
+    client_id = os.getenv('BROKER_API_KEY')
     
     if not client_id:
         raise Exception("Could not extract client ID from auth token")
@@ -124,6 +117,8 @@ class BrokerData:
 
             # Convert symbol to broker format and get securityId
             security_id = get_token(symbol, exchange)
+            if not security_id:
+                raise Exception(f"Could not find security ID for {symbol} on {exchange}")
             
             # Map exchange to Dhan's format
             exchange_map = {
@@ -136,63 +131,69 @@ class BrokerData:
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
 
-            # Prepare common request parameters
-            request_data = {
-                "securityId": security_id,
-                "exchangeSegment": exchange_segment,
-                "instrument": "EQUITY",  # Default to EQUITY, can be extended for other instruments
-                "fromDate": start_date,
-                "toDate": end_date
-            }
-
-            # Choose endpoint based on interval
+            # Choose endpoint and prepare request data
             if interval == 'D':
-                # Daily data
-                endpoint = "https://api.dhan.co/v2/charts/historical"
+                endpoint = "/v2/charts/historical"
+                request_data = {
+                    "securityId": str(security_id),
+                    "exchangeSegment": exchange_segment,
+                    "instrument": "EQUITY",
+                    "expiryCode": 0,
+                    "fromDate": start_date,
+                    "toDate": end_date
+                }
             else:
-                # Intraday data
-                endpoint = "https://api.dhan.co/v2/charts/intraday"
-                request_data["interval"] = self.timeframe_map[interval]
+                endpoint = "/v2/charts/intraday"
+                # Convert dates to match Dhan's format (YYYY-MM-DD)
+                from_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                to_date = datetime.strptime(end_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                
+                request_data = {
+                    "securityId": str(security_id),
+                    "exchangeSegment": exchange_segment,
+                    "instrument": "EQUITY",
+                    "interval": self.timeframe_map[interval],
+                    "fromDate": from_date,
+                    "toDate": to_date
+                }
 
-            # Make API request
-            headers = {
-                'Content-Type': 'application/json',
-                'access-token': self.auth_token
-            }
+            logger.info(f"Making history request to {endpoint}")
+            logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
             
-            response = requests.post(endpoint, json=request_data, headers=headers)
-            if not response.ok:
-                raise Exception(f"Error from Dhan API: {response.text}")
-
-            data = response.json()
+            # Use get_api_response for consistent error handling
+            response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
             
             # Transform array response to list of dictionaries
             candles = []
-            timestamps = data.get('timestamp', [])
-            opens = data.get('open', [])
-            highs = data.get('high', [])
-            lows = data.get('low', [])
-            closes = data.get('close', [])
-            volumes = data.get('volume', [])
+            timestamps = response.get('timestamp', [])
+            opens = response.get('open', [])
+            highs = response.get('high', [])
+            lows = response.get('low', [])
+            closes = response.get('close', [])
+            volumes = response.get('volume', [])
 
             for i in range(len(timestamps)):
                 candles.append({
                     'timestamp': timestamps[i],
-                    'open': opens[i],
-                    'high': highs[i],
-                    'low': lows[i],
-                    'close': closes[i],
-                    'volume': volumes[i]
+                    'open': float(opens[i]) if opens[i] else 0,
+                    'high': float(highs[i]) if highs[i] else 0,
+                    'low': float(lows[i]) if lows[i] else 0,
+                    'close': float(closes[i]) if closes[i] else 0,
+                    'volume': int(float(volumes[i])) if volumes[i] else 0
                 })
 
             # Convert to DataFrame
             df = pd.DataFrame(candles)
             if df.empty:
                 df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            else:
+                # Sort by timestamp
+                df = df.sort_values('timestamp').reset_index(drop=True)
 
             return df
 
         except Exception as e:
+            logger.error(f"Error fetching historical data: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
