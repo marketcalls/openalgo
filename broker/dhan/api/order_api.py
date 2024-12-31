@@ -25,16 +25,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth):
-    return get_api_response("/orders",auth)
+    return get_api_response("/v2/orders",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/trades",auth)
+    return get_api_response("/v2/trades",auth)
 
 def get_positions(auth):
-    return get_api_response("/positions",auth)
+    return get_api_response("/v2/positions",auth)
 
 def get_holdings(auth):
-    return get_api_response("/holdings",auth)
+    return get_api_response("/v2/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, product, auth):
 
@@ -67,7 +67,7 @@ def place_order_api(data,auth):
     print(payload)
 
     conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("POST", "/orders", payload, headers)
+    conn.request("POST", "/v2/orders", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
     print(response_data)
@@ -231,7 +231,7 @@ def cancel_order(orderid,auth):
     
     # Establish the connection and send the request
     conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("DELETE", f"/orders/{orderid}", headers=headers)  # Append the order ID to the URL
+    conn.request("DELETE", f"/v2/orders/{orderid}", headers=headers)  # Append the order ID to the URL
     
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
@@ -270,7 +270,7 @@ def modify_order(data,auth):
     print(payload)
 
     conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("PUT", f"/orders/{orderid}", payload, headers)
+    conn.request("PUT", f"/v2/orders/{orderid}", payload, headers)
     res = conn.getresponse()
     data = json.loads(res.read().decode("utf-8"))
     print(data)
@@ -307,4 +307,3 @@ def cancel_all_orders_api(data,auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-

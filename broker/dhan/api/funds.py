@@ -17,7 +17,7 @@ def get_margin_data(auth_token):
         'Accept': 'application/json',
     }
 
-    conn.request("GET", "/fundlimit", '', headers)
+    conn.request("GET", "/v2/fundlimit", '', headers)
 
     res = conn.getresponse()
     data = res.read()

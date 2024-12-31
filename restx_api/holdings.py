@@ -88,9 +88,8 @@ class Holdings(Resource):
                 }), 404)
 
             try:
-                # Initialize broker's data handler
-                data_handler = broker_module.BrokerData(AUTH_TOKEN)
-                holdings = data_handler.get_holdings()
+                # Get holdings using broker functions
+                holdings = broker_funcs['get_holdings'](AUTH_TOKEN)
                 
                 if 'status' in holdings and holdings['status'] == 'error':
                     return make_response(jsonify({
