@@ -5,6 +5,7 @@ from database.token_db import get_token, get_br_symbol, get_oa_symbol
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
+import numpy as np
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """Common function to make API calls to Upstox"""
@@ -238,8 +239,12 @@ class BrokerData:
             # Upstox format: [timestamp, open, high, low, close, volume, oi]
             df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
-            # Convert timestamp to Unix timestamp
-            df['timestamp'] = pd.to_datetime(df['timestamp']).astype(int) // 10**9
+            # Convert timestamp to datetime and handle timezone properly
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # First convert to UTC, then to naive timestamp to avoid timezone issues
+            if not df.empty:
+                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9
             
             # Drop oi column and reorder columns to match expected format
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
