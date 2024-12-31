@@ -93,6 +93,25 @@ class BrokerData:
             
         return security_id, exchange_segment
 
+    def _convert_date_to_utc(self, date_str: str) -> str:
+        """Convert IST date to UTC date for API request"""
+        # Convert IST date string to datetime
+        ist_date = datetime.strptime(date_str, "%Y-%m-%d")
+        # Set time to market close (15:30 IST)
+        ist_datetime = ist_date.replace(hour=15, minute=30)
+        # Convert to UTC (IST is UTC+5:30)
+        utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
+        return utc_datetime.strftime("%Y-%m-%d")
+
+    def _convert_timestamp_to_ist(self, timestamp: int) -> int:
+        """Convert UTC timestamp to IST timestamp"""
+        # Convert to datetime in UTC
+        utc_dt = datetime.utcfromtimestamp(timestamp)
+        # Add IST offset (+5:30)
+        ist_dt = utc_dt + timedelta(hours=5, minutes=30)
+        # Return new timestamp
+        return int(ist_dt.timestamp())
+
     def _get_intraday_chunks(self, start_date: str, end_date: str) -> list:
         """Split date range into 5-day chunks for intraday data"""
         start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -109,6 +128,42 @@ class BrokerData:
             
         return chunks
 
+    def _get_instrument_type(self, exchange: str, symbol: str) -> str:
+        """Get the correct instrument type based on exchange and symbol"""
+        if exchange == 'NFO':
+            # Check if it's an index future
+            index_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']
+            if any(index in symbol for index in index_symbols):
+                return 'FUTIDX'
+            return 'FUTSTK'
+        
+        instrument_map = {
+            'NSE': 'EQUITY',
+            'BSE': 'EQUITY',
+            'MCX': 'FUTCOM'
+        }
+        return instrument_map.get(exchange, 'EQUITY')
+
+    def _is_trading_day(self, date_str: str) -> bool:
+        """Check if the given date is a trading day (not weekend)"""
+        date = datetime.strptime(date_str, "%Y-%m-%d")
+        return date.weekday() < 5  # 0-4 are Monday to Friday
+
+    def _adjust_dates(self, start_date: str, end_date: str) -> tuple:
+        """Adjust dates to nearest trading days"""
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        # If start date is weekend, move to next Monday
+        while start.weekday() >= 5:
+            start += timedelta(days=1)
+            
+        # If end date is weekend, move to previous Friday
+        while end.weekday() >= 5:
+            end -= timedelta(days=1)
+            
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
@@ -119,8 +174,8 @@ class BrokerData:
                      Minutes: 1m, 5m, 15m, 25m
                      Hours: 1h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD) in IST
+            end_date: End date (YYYY-MM-DD) in IST
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
@@ -129,6 +184,20 @@ class BrokerData:
             if interval not in self.timeframe_map:
                 supported = list(self.timeframe_map.keys())
                 raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
+
+            # Adjust dates for trading days
+            start_date, end_date = self._adjust_dates(start_date, end_date)
+            
+            # Convert dates to UTC for API request
+            utc_start_date = self._convert_date_to_utc(start_date)
+            # For end date, add one day to include the end date in results
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            utc_end_date = self._convert_date_to_utc(end_dt.strftime("%Y-%m-%d"))
+            
+            # If both dates are weekends, return empty DataFrame
+            if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
+                logger.info("Both start and end dates are non-trading days")
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             # Convert symbol to broker format and get securityId
             security_id = get_token(symbol, exchange)
@@ -146,20 +215,26 @@ class BrokerData:
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
 
+            # Get instrument type
+            instrument_type = self._get_instrument_type(exchange, symbol)
+
             all_candles = []
 
             # Choose endpoint and prepare request data
             if interval == 'D':
-                # For daily data, make a single request
+                # For daily data, use historical endpoint
                 endpoint = "/v2/charts/historical"
                 request_data = {
                     "securityId": str(security_id),
                     "exchangeSegment": exchange_segment,
-                    "instrument": "EQUITY",
-                    "expiryCode": 0,
-                    "fromDate": start_date,
-                    "toDate": end_date
+                    "instrument": instrument_type,
+                    "fromDate": utc_start_date,
+                    "toDate": utc_end_date
                 }
+                
+                # Add expiryCode only for EQUITY
+                if instrument_type == 'EQUITY':
+                    request_data["expiryCode"] = 0
                 
                 logger.info(f"Making daily history request to {endpoint}")
                 logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -175,8 +250,10 @@ class BrokerData:
                 volumes = response.get('volume', [])
 
                 for i in range(len(timestamps)):
+                    # Convert UTC timestamp to IST
+                    ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
                     all_candles.append({
-                        'timestamp': timestamps[i],
+                        'timestamp': ist_timestamp,
                         'open': float(opens[i]) if opens[i] else 0,
                         'high': float(highs[i]) if highs[i] else 0,
                         'low': float(lows[i]) if lows[i] else 0,
@@ -189,13 +266,22 @@ class BrokerData:
                 date_chunks = self._get_intraday_chunks(start_date, end_date)
                 
                 for chunk_start, chunk_end in date_chunks:
+                    # Skip if both dates are non-trading days
+                    if not self._is_trading_day(chunk_start) and not self._is_trading_day(chunk_end):
+                        continue
+
+                    # Convert chunk dates to UTC
+                    utc_chunk_start = self._convert_date_to_utc(chunk_start)
+                    chunk_end_dt = datetime.strptime(chunk_end, "%Y-%m-%d") + timedelta(days=1)
+                    utc_chunk_end = self._convert_date_to_utc(chunk_end_dt.strftime("%Y-%m-%d"))
+
                     request_data = {
                         "securityId": str(security_id),
                         "exchangeSegment": exchange_segment,
-                        "instrument": "EQUITY",
+                        "instrument": instrument_type,
                         "interval": self.timeframe_map[interval],
-                        "fromDate": chunk_start,
-                        "toDate": chunk_end
+                        "fromDate": utc_chunk_start,
+                        "toDate": utc_chunk_end
                     }
                     
                     logger.info(f"Making intraday history request to {endpoint}")
@@ -213,8 +299,10 @@ class BrokerData:
                         volumes = response.get('volume', [])
 
                         for i in range(len(timestamps)):
+                            # Convert UTC timestamp to IST
+                            ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
                             all_candles.append({
-                                'timestamp': timestamps[i],
+                                'timestamp': ist_timestamp,
                                 'open': float(opens[i]) if opens[i] else 0,
                                 'high': float(highs[i]) if highs[i] else 0,
                                 'low': float(lows[i]) if lows[i] else 0,
@@ -300,8 +388,8 @@ class BrokerData:
                 
                 return result
                 
-            except Exception as api_error:
-                if "not subscribed" in str(api_error).lower():
+            except Exception as e:
+                if "not subscribed" in str(e).lower():
                     logger.error("Market data subscription error", exc_info=True)
                     return {
                         'ltp': 0,
@@ -312,7 +400,7 @@ class BrokerData:
                         'bid': 0,
                         'ask': 0,
                         'prev_close': 0,
-                        'error': str(api_error)
+                        'error': str(e)
                     }
                 raise
             
