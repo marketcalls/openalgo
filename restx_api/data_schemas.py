@@ -20,3 +20,12 @@ class DepthSchema(Schema):
 
 class IntervalsSchema(Schema):
     apikey = fields.Str(required=True)
+
+class TickerSchema(Schema):
+    apikey = fields.Str(required=True)
+    symbol = fields.Str(required=True)      # Combined exchange:symbol format
+    interval = fields.Str(required=True)    # Supported intervals: 1m, 5m, 15m, 30m, 1h, 4h, D, W, M etc.
+    from_ = fields.Str(data_key='from', required=True)  # YYYY-MM-DD or millisecond timestamp
+    to = fields.Str(required=True)          # YYYY-MM-DD or millisecond timestamp
+    adjusted = fields.Bool(required=False, default=True)  # Adjust for splits
+    sort = fields.Str(required=False, default='asc', validate=lambda x: x in ['asc', 'desc'])  # Sort direction
