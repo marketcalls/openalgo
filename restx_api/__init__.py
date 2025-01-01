@@ -24,6 +24,7 @@ from .basket_order import api as basket_order_ns
 from .split_order import api as split_order_ns
 from .orderstatus import api as orderstatus_ns
 from .openposition import api as openposition_ns
+from .ticker import api as ticker_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -45,3 +46,4 @@ api.add_namespace(basket_order_ns, path='/basketorder')
 api.add_namespace(split_order_ns, path='/splitorder')
 api.add_namespace(orderstatus_ns, path='/orderstatus')
 api.add_namespace(openposition_ns, path='/openposition')
+api.add_namespace(ticker_ns, path='/ticker')
