@@ -32,8 +32,10 @@
 
                     <form action="/kotak/callback" method="POST" class="space-y-4">
                         <!-- Hidden fields for session data -->
+                        <input type="hidden" name="access_token" value="{{ para.access_token }}">
                         <input type="hidden" name="token" value="{{ para.token }}">
                         <input type="hidden" name="sid" value="{{ para.sid }}">
+                        <input type="hidden" name="hsServerId" value="{{ para.hsServerId }}">
                         <input type="hidden" name="userid" value="{{ para.userid }}">
 
                         <div class="form-control">
