@@ -55,15 +55,21 @@ class Depth(Resource):
 
             try:
                 # Initialize broker's data handler
-                data_handler = broker_module.FyersData(AUTH_TOKEN)
+                data_handler = broker_module.BrokerData(AUTH_TOKEN)
                 depth = data_handler.get_depth(
                     depth_data['symbol'],
                     depth_data['exchange']
                 )
                 
+                if depth is None:
+                    return make_response(jsonify({
+                        'status': 'error',
+                        'message': 'Failed to fetch market depth'
+                    }), 500)
+
                 return make_response(jsonify({
-                    'status': 'success',
-                    'data': depth
+                    'data': depth,
+                    'status': 'success'
                 }), 200)
             except Exception as e:
                 logger.error(f"Error in broker_module.get_depth: {e}")

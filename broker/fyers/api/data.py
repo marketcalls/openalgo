@@ -21,7 +21,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     data = res.read()
     return json.loads(data.decode("utf-8"))
 
-class FyersData:
+class BrokerData:
     def __init__(self, auth_token):
         """Initialize Fyers data handler with authentication token"""
         self.auth_token = auth_token

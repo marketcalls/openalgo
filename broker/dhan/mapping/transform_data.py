@@ -1,5 +1,5 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Upstox Broking Parameters https://dhanhq.co/docs/v1/orders/
+#Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
 
 def transform_data(data,token):
     """
