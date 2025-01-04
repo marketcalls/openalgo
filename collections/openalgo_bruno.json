@@ -1,0 +1,496 @@
+{
+  "name": "openalgo",
+  "version": "1",
+  "items": [
+    {
+      "type": "http",
+      "name": "BasketOrder",
+      "seq": 17,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/basketorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"your-strategy\",\n    \"orders\": [\n        {\n            \"symbol\": \"RELIANCE\",\n            \"exchange\": \"NSE\",\n            \"action\": \"BUY\",\n            \"quantity\": \"1\",\n            \"pricetype\": \"MARKET\",\n            \"product\": \"MIS\"\n        },\n        {\n            \"symbol\": \"INFY\",\n            \"exchange\": \"NSE\",\n            \"action\": \"SELL\",\n            \"quantity\": \"1\",\n            \"pricetype\": \"MARKET\",\n            \"product\": \"MIS\"\n        }\n    ]\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "CancelAllOrder",
+      "seq": 7,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/cancelallorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "CancelOrder",
+      "seq": 5,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/cancelorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"orderid\": \"241214000000015\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "Chartink",
+      "seq": 21,
+      "request": {
+        "url": "http://8d32-49-207-193-1.ngrok-free.app/chartink/webhook/0fd7ee15-c83b-4f6e-97ae-68cb4b9bdf95",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"stocks\": \"RELIANCE\",\n    \"trigger_prices\": \"3.75,541.8,2.1,0.2,329.6,166.8,1.25\",\n    \"triggered_at\": \"2:34 pm\",\n    \"scan_name\": \"SELL\",\n    \"scan_url\": \"short-term-breakouts\",\n    \"alert_name\": \"Alert for Short term breakouts\",\n    \"webhook_url\": \"http://8d32-49-207-193-1.ngrok-free.app/chartink/webhook/835e678a-b278-4371-bb4a-f8055426b28e\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "CloseAllPositions",
+      "seq": 4,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/closeposition",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "ModifyOrder",
+      "seq": 6,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/modifyorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Message\",\n    \"symbol\": \"GOLDPETAL31OCT24FUT\",\n    \"action\": \"BUY\",\n    \"exchange\": \"MCX\",\n    \"orderid\":\"427510324509895\",\n    \"product\":\"MIS\",\n    \"pricetype\":\"LIMIT\",\n    \"price\":\"7410\",\n    \"quantity\":\"1\",\n    \"disclosed_quantity\":\"0\",\n    \"trigger_price\":\"0\"\n}\n",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "PlaceOrder",
+      "seq": 3,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/placeorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"My Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"M&M\",\n    \"action\": \"buy\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"100\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "PlaceSmartOrder",
+      "seq": 2,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/placesmartorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"BUY\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"10\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\",\n    \"position_size\": \"10\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "SplitOrder",
+      "seq": 18,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/splitorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"SELL\",\n    \"quantity\": \"105\",\n    \"splitsize\": \"20\",\n    \"pricetype\": \"MARKET\",\n    \"product\": \"MIS\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "depth",
+      "seq": 10,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/depth",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\": \"M&M\",\n    \"exchange\": \"NSE\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "funds",
+      "seq": 12,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/funds",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "historical",
+      "seq": 9,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/history",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\": \"SBIN\",\n    \"exchange\": \"NSE\",\n    \"interval\": \"1m\",\n    \"start_date\": \"2024-12-17\",\n    \"end_date\": \"2024-12-18\"\n  \n}\n",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "holdings",
+      "seq": 16,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/holdings",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "intervals",
+      "seq": 11,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/intervals",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "openposition",
+      "seq": 20,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/openposition",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"symbol\": \"YESBANK\",\n    \"exchange\": \"NSE\",\n    \"product\": \"CNC\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "orderbook",
+      "seq": 13,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/orderbook",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "orderstatus",
+      "seq": 19,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/orderstatus",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"orderid\": \"24120900146469\"\n  \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "positionbook",
+      "seq": 15,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/positionbook",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "quotes",
+      "seq": 8,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/quotes",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\":\"SBIN\", \n    \"exchange\":\"NSE\"    \n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "tradebook",
+      "seq": 14,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/tradebook",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    }
+  ],
+  "environments": [],
+  "brunoConfig": {
+    "version": "1",
+    "name": "openalgo",
+    "type": "collection",
+    "ignore": [
+      "node_modules",
+      ".git"
+    ]
+  }
+}
