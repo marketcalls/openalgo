@@ -235,37 +235,69 @@ class BasketOrder(Resource):
                 log_executor.submit(async_log_order, 'basketorder', data, error_response)
                 return make_response(jsonify(error_response), 404)
 
-            # Process orders concurrently
-            results = []
-            total_orders = len(basket_data['orders'])
+            # Sort orders to prioritize BUY orders before SELL orders
+            buy_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'BUY']
+            sell_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'SELL']
+            sorted_orders = buy_orders + sell_orders
             
-            # Create a ThreadPoolExecutor for concurrent order placement
-            with ThreadPoolExecutor(max_workers=10) as order_executor:
-                # Submit all orders to the executor
-                future_to_order = {
-                    order_executor.submit(
-                        place_single_order,
-                        {**order, 'apikey': api_key, 'strategy': basket_data['strategy']},
-                        broker_module,
-                        AUTH_TOKEN,
-                        total_orders,
-                        i
-                    ): order for i, order in enumerate(basket_data['orders'])
-                }
-
-                # Collect results as they complete
-                for future in as_completed(future_to_order):
+            results = []
+            total_orders = len(sorted_orders)
+            
+            # Process BUY orders first
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Process all BUY orders first
+                buy_futures = []
+                for i, order in enumerate(buy_orders):
+                    order['strategy'] = basket_data['strategy']
+                    buy_futures.append(
+                        executor.submit(
+                            place_single_order,
+                            {**order, 'apikey': api_key},
+                            broker_module,
+                            AUTH_TOKEN,
+                            total_orders,
+                            i
+                        )
+                    )
+                
+                # Wait for all BUY orders to complete
+                for future in as_completed(buy_futures):
                     result = future.result()
-                    results.append(result)
+                    if result:
+                        results.append(result)
+                
+                # Then process SELL orders
+                sell_futures = []
+                for i, order in enumerate(sell_orders, start=len(buy_orders)):
+                    order['strategy'] = basket_data['strategy']
+                    sell_futures.append(
+                        executor.submit(
+                            place_single_order,
+                            {**order, 'apikey': api_key},
+                            broker_module,
+                            AUTH_TOKEN,
+                            total_orders,
+                            i
+                        )
+                    )
+                
+                # Wait for all SELL orders to complete
+                for future in as_completed(sell_futures):
+                    result = future.result()
+                    if result:
+                        results.append(result)
 
-                # Log the basket order results
-                response_data = {
-                    'status': 'success',
-                    'results': results
-                }
-                log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
+            # Sort results to maintain order consistency
+            results.sort(key=lambda x: 0 if x.get('action', '').upper() == 'BUY' else 1)
 
-                return make_response(jsonify(response_data), 200)
+            # Log the basket order results
+            response_data = {
+                'status': 'success',
+                'results': results
+            }
+            log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
+
+            return make_response(jsonify(response_data), 200)
 
         except Exception as e:
             logger.error("An unexpected error occurred in BasketOrder endpoint.")
