@@ -207,63 +207,45 @@ class BrokerData:
             
             # For daily data, handle differently
             if interval == 'D':
-                # Get historical daily data
+                # Format dates for API (use full day range)
+                start_str = start_dt.strftime('%d/%m/%Y') + ' 00:00:00'
+                end_str = end_dt.strftime('%d/%m/%Y') + ' 23:59:59'
+                
+                print(f"Getting daily data for {br_symbol} from {start_str} to {end_str}")
+                
                 payload = {
                     "userId": os.getenv('BROKER_API_KEY')[:-4],
                     "exchange": exchange,
                     "tradingSymbol": br_symbol,
+                    "startTime": start_str,
+                    "endTime": end_str,
+                    "interval": self.timeframe_map[interval],
                     "jKey": self.auth_token
                 }
                 
-                print("Getting historical daily data...")
-                hist_response = get_api_response("/historicalData", self.auth_token, payload=payload)
-                if hist_response.get('status') == 'success':
-                    hist_data = hist_response.get('data', [])
-                    for candle in hist_data:
+                response = get_api_response("/timePriceSeries", self.auth_token, payload=payload)
+                if response.get('status') == 'success':
+                    for candle in response.get('data', []):
                         try:
-                            candle_dt = datetime.strptime(candle.get('date', ''), '%Y-%m-%d')
-                            candle_ts = int(candle_dt.timestamp())
+                            # For daily data, time comes in DD-MMM-YYYY format
+                            dt = datetime.strptime(candle.get('time', ''), '%d-%b-%Y')
+                            # Set to market close time (15:30) for consistency
+                            dt = dt.replace(hour=15, minute=30, second=0)
+                            candle_ts = int(dt.timestamp())
+                            
+                            # Only include data within the requested range
                             if start_ts <= candle_ts <= end_ts:
                                 data.append({
                                     'timestamp': candle_ts,
-                                    'open': float(candle.get('open', 0)),
-                                    'high': float(candle.get('high', 0)),
-                                    'low': float(candle.get('low', 0)),
-                                    'close': float(candle.get('close', 0)),
-                                    'volume': int(candle.get('volume', 0))
+                                    'open': float(candle.get('into', 0)),
+                                    'high': float(candle.get('inth', 0)),
+                                    'low': float(candle.get('intl', 0)),
+                                    'close': float(candle.get('intc', 0)),
+                                    'volume': float(candle.get('intv', 0))  # Changed to float as volume comes as decimal
                                 })
                         except (ValueError, TypeError) as e:
                             print(f"Error processing candle: {e}")
                             continue
-                
-                # For current day's data, always try to get from quotes
-                today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-                if today_ts >= start_ts and today_ts <= end_ts:
-                    print("Getting current day's data from quotes...")
-                    try:
-                        quotes_response = self.get_quotes(symbol, exchange)
-                        if quotes_response:
-                            quote_data = quotes_response.get('data', {})
-                            if quote_data:
-                                # Only add quote data if we have valid price information
-                                open_price = float(quote_data.get('dayOpenPrice', 0))
-                                high_price = float(quote_data.get('dayHighPrice', 0))
-                                low_price = float(quote_data.get('dayLowPrice', 0))
-                                close_price = float(quote_data.get('lastTradedPrice', 0))
-                                volume = int(quote_data.get('volume', 0))
-                                
-                                if any([open_price, high_price, low_price, close_price]):
-                                    data.append({
-                                        'timestamp': today_ts,
-                                        'open': open_price,
-                                        'high': high_price,
-                                        'low': low_price,
-                                        'close': close_price,
-                                        'volume': volume
-                                    })
-                                    print(f"Added today's data from quotes")
-                    except Exception as e:
-                        print(f"Error getting quotes data: {str(e)}")
             else:
                 # For intraday data
                 # Add market hours to timestamps (9:15 AM to 3:30 PM IST)
