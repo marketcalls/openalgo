@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    <div class="flex justify-center">
+        <div class="card w-full max-w-2xl bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title text-2xl mb-6">Create New Strategy</h2>
+                
+                <form method="POST" action="{{ url_for('strategy_bp.new_strategy') }}" class="space-y-6">
+                    <!-- Strategy Name -->
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Strategy Name</span>
+                            <span class="label-text-alt">Use only letters, numbers, underscore, and hyphen</span>
+                        </label>
+                        <input type="text" class="input input-bordered w-full" 
+                               id="name" name="name" required
+                               pattern="[a-zA-Z0-9_-]+" />
+                    </div>
+
+                    <!-- Platform Selection -->
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Platform</span>
+                        </label>
+                        <select class="select select-bordered w-full" id="platform" name="platform" required>
+                            <option value="">Select Platform</option>
+                            {% for platform in platforms %}
+                            <option value="{{ platform }}">{{ platform }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Trading Mode -->
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Trading Mode</span>
+                        </label>
+                        <select class="select select-bordered w-full" id="mode" name="mode" required>
+                            <option value="">Select Mode</option>
+                            {% for mode in modes %}
+                            <option value="{{ mode }}">{{ mode }}</option>
+                            {% endfor %}
+                        </select>
+                        <label class="label">
+                            <span class="label-text-alt">
+                                LONG: BUY/SELL only<br>
+                                SHORT: SHORT/COVER only<br>
+                                BOTH: All actions allowed
+                            </span>
+                        </label>
+                    </div>
+
+                    <!-- Intraday Toggle -->
+                    <div class="form-control">
+                        <label class="label cursor-pointer justify-start gap-4">
+                            <input type="checkbox" class="toggle toggle-primary" 
+                                   id="is_intraday" name="is_intraday" value="true" checked />
+                            <span class="label-text">Intraday Strategy</span>
+                        </label>
+                    </div>
+
+                    <!-- Time Settings -->
+                    <div id="timeSettings" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Start Time</span>
+                                <span class="label-text-alt text-error">*</span>
+                            </label>
+                            <input type="time" class="input input-bordered" 
+                                   id="start_time" name="start_time" value="09:15" />
+                            <label class="label">
+                                <span class="label-text-alt">When to start taking trades</span>
+                            </label>
+                        </div>
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">End Time</span>
+                                <span class="label-text-alt text-error">*</span>
+                            </label>
+                            <input type="time" class="input input-bordered" 
+                                   id="end_time" name="end_time" value="15:00" />
+                            <label class="label">
+                                <span class="label-text-alt">Last trade entry time</span>
+                            </label>
+                        </div>
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Squareoff Time</span>
+                                <span class="label-text-alt text-error">*</span>
+                            </label>
+                            <input type="time" class="input input-bordered" 
+                                   id="squareoff_time" name="squareoff_time" value="15:15" />
+                            <label class="label">
+                                <span class="label-text-alt">Auto square off time</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card-actions justify-end mt-6">
+                        <a href="{{ url_for('strategy_bp.index') }}" class="btn btn-ghost">Cancel</a>
+                        <button type="submit" class="btn btn-primary">Create Strategy</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const isIntradayCheckbox = document.getElementById('is_intraday');
+    const timeSettings = document.getElementById('timeSettings');
+    
+    function toggleTimeSettings() {
+        if (isIntradayCheckbox.checked) {
+            timeSettings.classList.remove('hidden');
+            timeSettings.querySelectorAll('input[type="time"]').forEach(input => {
+                input.required = true;
+            });
+        } else {
+            timeSettings.classList.add('hidden');
+            timeSettings.querySelectorAll('input[type="time"]').forEach(input => {
+                input.required = false;
+                input.value = '';
+            });
+        }
+    }
+    
+    isIntradayCheckbox.addEventListener('change', toggleTimeSettings);
+    toggleTimeSettings();
+});
+</script>
+{% endblock %}
+{% endblock %}
