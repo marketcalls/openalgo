@@ -27,24 +27,35 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         print(f"Payload: {json.dumps(data, indent=2)}")
 
         conn = http.client.HTTPSConnection("connect.thefirstock.com")
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
 
-        # Convert payload to JSON string
+        # Convert payload to JSON string and encode
         payload_str = json.dumps(data)
+        payload_bytes = payload_str.encode('utf-8')
 
         # Use the full endpoint path as provided
-        conn.request(method, f"/api/V4{endpoint}", payload_str, headers)
+        conn.request(method, f"/api/V4{endpoint}", payload_bytes, headers)
         res = conn.getresponse()
         data = res.read()
         
         # Debug print
-        response = json.loads(data.decode("utf-8"))
+        response_text = data.decode("utf-8")
+        print(f"Raw Response: {response_text}")
+        
+        if not response_text:
+            return {"status": "error", "message": "Empty response from server"}
+            
+        response = json.loads(response_text)
         print(f"Response: {json.dumps(response, indent=2)}")
         
         return response
 
     except Exception as e:
         print(f"API Error: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         raise
 
 class BrokerData:
@@ -211,41 +222,49 @@ class BrokerData:
                 start_str = start_dt.strftime('%d/%m/%Y') + ' 00:00:00'
                 end_str = end_dt.strftime('%d/%m/%Y') + ' 23:59:59'
                 
-                print(f"Getting daily data for {br_symbol} from {start_str} to {end_str}")
+                # Handle special characters in symbol
+                encoded_symbol = br_symbol.replace('&', '%26')
+                
+                print(f"Getting daily data for {encoded_symbol} from {start_str} to {end_str}")
                 
                 payload = {
                     "userId": os.getenv('BROKER_API_KEY')[:-4],
                     "exchange": exchange,
-                    "tradingSymbol": br_symbol,
+                    "tradingSymbol": encoded_symbol,
                     "startTime": start_str,
                     "endTime": end_str,
                     "interval": self.timeframe_map[interval],
                     "jKey": self.auth_token
                 }
                 
-                response = get_api_response("/timePriceSeries", self.auth_token, payload=payload)
-                if response.get('status') == 'success':
-                    for candle in response.get('data', []):
-                        try:
-                            # For daily data, time comes in DD-MMM-YYYY format
-                            dt = datetime.strptime(candle.get('time', ''), '%d-%b-%Y')
-                            # Set to market close time (15:30) for consistency
-                            dt = dt.replace(hour=15, minute=30, second=0)
-                            candle_ts = int(dt.timestamp())
-                            
-                            # Only include data within the requested range
-                            if start_ts <= candle_ts <= end_ts:
-                                data.append({
-                                    'timestamp': candle_ts,
-                                    'open': float(candle.get('into', 0)),
-                                    'high': float(candle.get('inth', 0)),
-                                    'low': float(candle.get('intl', 0)),
-                                    'close': float(candle.get('intc', 0)),
-                                    'volume': float(candle.get('intv', 0))  # Changed to float as volume comes as decimal
-                                })
-                        except (ValueError, TypeError) as e:
-                            print(f"Error processing candle: {e}")
-                            continue
+                try:
+                    response = get_api_response("/timePriceSeries", self.auth_token, payload=payload)
+                    if response.get('status') == 'success':
+                        for candle in response.get('data', []):
+                            try:
+                                # For daily data, time comes in DD-MMM-YYYY format
+                                dt = datetime.strptime(candle.get('time', ''), '%d-%b-%Y')
+                                # Set to market close time (15:30) for consistency
+                                dt = dt.replace(hour=15, minute=30, second=0)
+                                candle_ts = int(dt.timestamp())
+                                
+                                # Only include data within the requested range
+                                if start_ts <= candle_ts <= end_ts:
+                                    data.append({
+                                        'timestamp': candle_ts,
+                                        'open': float(candle.get('into', 0)),
+                                        'high': float(candle.get('inth', 0)),
+                                        'low': float(candle.get('intl', 0)),
+                                        'close': float(candle.get('intc', 0)),
+                                        'volume': float(candle.get('intv', 0))
+                                    })
+                            except (ValueError, TypeError) as e:
+                                print(f"Error processing candle: {e}")
+                                continue
+                except Exception as e:
+                    print(f"Error in get_history: {str(e)}")
+                    print(f"Traceback: {traceback.format_exc()}")
+                    raise Exception(f"Error fetching historical data: {str(e)}")
             else:
                 # For intraday data
                 # Add market hours to timestamps (9:15 AM to 3:30 PM IST)
