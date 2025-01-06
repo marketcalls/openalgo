@@ -110,6 +110,11 @@ class BrokerData:
     def __init__(self, auth_token, ws_url="wss://mlhsm.kotaksecurities.com"):
         self.auth_token, self.sid, _, _ = auth_token.split(":::")
         self.ws_url = ws_url
+        # Define empty timeframe map since Kotak Neo doesn't support historical data
+        self.timeframe_map = {
+            # Empty mapping to maintain compatibility
+        }
+        logger.warning("Kotak Neo does not support historical data intervals")
 
     def get_quotes(self, symbol, exchange):
         try:
@@ -200,12 +205,14 @@ class BrokerData:
         return empty_df
 
     def get_supported_intervals(self) -> dict:
-        """Return empty intervals as historical data is not supported"""
-        return {
-            "minutes": [],
-            "hours": [],
-            "days": [],
-            "weeks": [],
-            "months": [],
-            "seconds": []
+        """Return supported intervals matching the format expected by intervals.py"""
+        intervals = {
+            'seconds': sorted([k for k in self.timeframe_map.keys() if k.endswith('s')]),
+            'minutes': sorted([k for k in self.timeframe_map.keys() if k.endswith('m')]),
+            'hours': sorted([k for k in self.timeframe_map.keys() if k.endswith('h')]),
+            'days': sorted([k for k in self.timeframe_map.keys() if k == 'D']),
+            'weeks': sorted([k for k in self.timeframe_map.keys() if k == 'W']),
+            'months': sorted([k for k in self.timeframe_map.keys() if k == 'M'])
         }
+        logger.warning("Kotak Neo does not support historical data intervals")
+        return intervals
