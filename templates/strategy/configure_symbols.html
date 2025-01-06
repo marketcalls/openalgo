@@ -57,8 +57,9 @@
                             <span class="label-text-alt text-error">*</span>
                         </label>
                         <select name="exchange" class="select select-bordered" required>
-                            <option value="NSE" selected>NSE</option>
-                            <option value="BSE">BSE</option>
+                            {% for exchange in exchanges %}
+                            <option value="{{ exchange }}" {% if exchange == 'NSE' %}selected{% endif %}>{{ exchange }}</option>
+                            {% endfor %}
                         </select>
                     </div>
 
@@ -77,10 +78,11 @@
                             <span class="label-text-alt text-error">*</span>
                         </label>
                         <select name="product_type" class="select select-bordered" required>
-                            {% if strategy.is_intraday %}
-                            <option value="MIS">MIS (Intraday)</option>
-                            {% endif %}
-                            <option value="CNC">CNC (Delivery)</option>
+                            {% for product_type in product_types %}
+                            <option value="{{ product_type }}" {% if strategy.is_intraday and product_type == 'MIS' %}selected{% endif %}>
+                                {{ product_type }}{% if product_type == 'MIS' %} (Intraday){% elif product_type == 'CNC' %} (Delivery){% elif product_type == 'NRML' %} (Normal){% endif %}
+                            </option>
+                            {% endfor %}
                         </select>
                     </div>
 
@@ -113,8 +115,8 @@
                             <p class="text-sm">Each line should contain: Symbol,Exchange,Quantity,Product</p>
                             <ul class="list-disc list-inside text-sm mt-2">
                                 <li>Symbol: {{ strategy.platform }} format</li>
-                                <li>Exchange: NSE or BSE</li>
-                                <li>Product: {% if strategy.is_intraday %}MIS or {% endif %}CNC</li>
+                                <li>Exchange: {% for exchange in exchanges %}{{ exchange }}{% if loop.last %}{% else %}, {% endif %}{% endfor %}</li>
+                                <li>Product: {% for product_type in product_types %}{{ product_type }}{% if loop.last %}{% else %}, {% endif %}{% endfor %}</li>
                                 <li>Quantity: Whole numbers only</li>
                             </ul>
                         </div>

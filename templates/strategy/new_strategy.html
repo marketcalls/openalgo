@@ -93,13 +93,13 @@
                             <input type="time" class="input input-bordered" 
                                    id="squareoff_time" name="squareoff_time" value="15:15" />
                             <label class="label">
-                                <span class="label-text-alt">Auto square off time</span>
+                                <span class="label-text-alt">When to square off all positions</span>
                             </label>
                         </div>
                     </div>
 
                     <div class="card-actions justify-end mt-6">
-                        <a href="{{ url_for('strategy_bp.index') }}" class="btn btn-ghost">Cancel</a>
+                        <a href="{{ url_for('strategy_bp.strategy_list') }}" class="btn btn-ghost">Cancel</a>
                         <button type="submit" class="btn btn-primary">Create Strategy</button>
                     </div>
                 </form>

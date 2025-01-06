@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Strategies - OpenAlgo</title>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Strategies</h1>
+        <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+            </svg>
+            New Strategy
+        </a>
+    </div>
+
+    {% if strategies %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {% for strategy in strategies %}
+        <div class="card bg-base-200 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title flex justify-between">
+                    {{ strategy.name }}
+                    <div class="badge badge-{{ 'success' if strategy.is_active else 'ghost' }}">
+                        {{ 'Active' if strategy.is_active else 'Inactive' }}
+                    </div>
+                </h2>
+                <div class="flex flex-wrap gap-2 my-2">
+                    <div class="badge badge-primary">{{ strategy.platform }}</div>
+                    <div class="badge badge-secondary">{{ strategy.mode }}</div>
+                    {% if strategy.is_intraday %}
+                    <div class="badge badge-accent">Intraday</div>
+                    {% endif %}
+                </div>
+                <p class="text-sm opacity-70">{{ strategy.description or 'No description provided' }}</p>
+                <div class="card-actions justify-end mt-4">
+                    <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm btn-primary">
+                        Configure Symbols
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body items-center text-center">
+            <h2 class="card-title mb-4">No Strategies Found</h2>
+            <p class="mb-6">Create your first strategy to get started!</p>
+            <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+                </svg>
+                Create Strategy
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

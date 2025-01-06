@@ -9,6 +9,12 @@ from database.strategy_db import (
 from database.symbol import enhanced_search_symbols
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
+from utils.constants import (
+    VALID_EXCHANGES, VALID_PRODUCT_TYPES,
+    EXCHANGE_NSE, EXCHANGE_NFO, EXCHANGE_CDS, EXCHANGE_BSE,
+    EXCHANGE_BFO, EXCHANGE_BCD, EXCHANGE_MCX, EXCHANGE_NCDEX,
+    PRODUCT_CNC, PRODUCT_NRML, PRODUCT_MIS
+)
 import json
 from datetime import datetime, time
 import pytz
@@ -26,6 +32,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Strategy Blueprint
 strategy_bp = Blueprint('strategy_bp', __name__, url_prefix='/strategy')
 
 # Initialize scheduler for time-based controls
@@ -251,11 +258,10 @@ def squareoff_positions(strategy_id):
 
 @strategy_bp.route('/')
 @check_session_validity
-def index():
+def strategy_list():
     """List all strategies"""
-    user_id = session.get('user')
-    strategies = get_user_strategies(user_id)
-    return render_template('strategy/index.html', strategies=strategies)
+    strategies = get_user_strategies(session.get('user'))
+    return render_template('strategy/list.html', strategies=strategies)
 
 @strategy_bp.route('/new', methods=['GET', 'POST'])
 @check_session_validity
@@ -332,9 +338,11 @@ def new_strategy():
                 return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy.id))
             else:
                 flash('Error creating strategy', 'error')
+                return redirect(url_for('strategy_bp.strategy_list'))
         except Exception as e:
             logger.error(f'Error creating strategy: {str(e)}')
             flash('Error creating strategy', 'error')
+            return redirect(url_for('strategy_bp.strategy_list'))
         
         return redirect(url_for('strategy_bp.new_strategy'))
     
@@ -359,11 +367,11 @@ def configure_symbols(strategy_id):
                 if not all(k in mapping for k in ['symbol', 'exchange', 'quantity', 'product_type']):
                     return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
                 
-                if mapping['exchange'] not in ['NSE', 'BSE']:
-                    return jsonify({'status': 'error', 'message': 'Invalid exchange'}), 400
+                if mapping['exchange'] not in VALID_EXCHANGES:
+                    return jsonify({'status': 'error', 'message': f'Invalid exchange. Must be one of: {", ".join(VALID_EXCHANGES)}'}), 400
                 
-                if mapping['product_type'] not in ['MIS', 'CNC']:
-                    return jsonify({'status': 'error', 'message': 'Invalid product type'}), 400
+                if mapping['product_type'] not in VALID_PRODUCT_TYPES:
+                    return jsonify({'status': 'error', 'message': f'Invalid product type. Must be one of: {", ".join(VALID_PRODUCT_TYPES)}'}), 400
                 
                 if not isinstance(mapping['quantity'], int) or mapping['quantity'] < 1:
                     return jsonify({'status': 'error', 'message': 'Invalid quantity'}), 400
@@ -383,9 +391,11 @@ def configure_symbols(strategy_id):
             return jsonify({'status': 'error', 'message': 'Error configuring symbols'}), 500
     
     symbol_mappings = get_symbol_mappings(strategy_id)
-    return render_template('strategy/configure_symbols.html', 
-                         strategy=strategy, 
-                         symbol_mappings=symbol_mappings)
+    return render_template('strategy/configure_symbols.html',
+                         strategy=strategy,
+                         symbol_mappings=symbol_mappings,
+                         exchanges=VALID_EXCHANGES,
+                         product_types=VALID_PRODUCT_TYPES)
 
 @strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
 @check_session_validity
@@ -440,7 +450,7 @@ def delete_strategy_route(strategy_id):
     else:
         flash('Error deleting strategy.', 'error')
     
-    return redirect(url_for('strategy_bp.index'))
+    return redirect(url_for('strategy_bp.strategy_list'))
 
 @strategy_bp.route('/<int:strategy_id>/toggle', methods=['POST'])
 @check_session_validity
@@ -552,7 +562,7 @@ def webhook(webhook_id):
         data = request.get_json()
         
         # Validate required fields
-        required_fields = ['Strategy', 'symbol', 'exchange', 'action', 'quantity']
+        required_fields = ['Strategy', 'symbol', 'exchange', 'action']
         for field in required_fields:
             if field not in data:
                 return jsonify({'status': 'error', 'message': f'Missing required field: {field}'}), 400
@@ -584,6 +594,9 @@ def webhook(webhook_id):
         if not api_key:
             return jsonify({'status': 'error', 'message': 'API key not found'}), 400
         
+        # Use quantity from webhook if provided, otherwise use from symbol mapping
+        quantity = data.get('quantity', matching_mapping.quantity)
+        
         # Prepare order payload with default values
         payload = {
             'apikey': api_key,
@@ -591,7 +604,7 @@ def webhook(webhook_id):
             'symbol': matching_mapping.symbol,
             'exchange': matching_mapping.exchange,
             'action': action,
-            'quantity': str(matching_mapping.quantity),  # Convert to string as required by API
+            'quantity': str(quantity),  # Convert to string as required by API
             'product': matching_mapping.product_type,
             'pricetype': 'MARKET',  # Default to market order
             'price': '0',  # Default price for market order
