@@ -1,235 +1,157 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mx-auto px-4">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- Main Content -->
-        <div class="lg:col-span-2">
+<div class="container mx-auto px-4 py-8">
+    <!-- Strategy Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div class="flex items-center gap-4">
+            <h1 class="text-2xl font-bold">{{ strategy.name }}</h1>
+            <form action="{{ url_for('strategy_bp.toggle_strategy_route', strategy_id=strategy.id) }}" 
+                  method="POST" class="inline">
+                <button type="submit" class="btn {% if strategy.is_active %}btn-error{% else %}btn-success{% endif %}">
+                    {% if strategy.is_active %}Deactivate{% else %}Activate{% endif %}
+                </button>
+            </form>
+            <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" 
+               class="btn btn-ghost">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+                </svg>
+                Configure
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Left Column -->
+        <div class="space-y-6">
+            <!-- Strategy Details -->
             <div class="card bg-base-100 shadow-xl">
                 <div class="card-body">
-                    <div class="flex justify-between items-center">
-                        <h2 class="card-title text-2xl">{{ strategy.name }}</h2>
-                        <div class="flex gap-2">
-                            <form action="{{ url_for('strategy_bp.toggle_strategy_route', strategy_id=strategy.id) }}" 
-                                  method="POST" class="inline">
-                                <button type="submit" class="btn btn-sm {% if strategy.is_active %}btn-error{% else %}btn-success{% endif %}">
-                                    {% if strategy.is_active %}
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                                        </svg>
-                                        Deactivate
-                                    {% else %}
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-                                        </svg>
-                                        Activate
-                                    {% endif %}
-                                </button>
-                            </form>
-                            <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" 
-                               class="btn btn-sm btn-warning">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
-                                </svg>
-                                Configure
-                            </a>
+                    <h2 class="card-title">Strategy Details</h2>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-sm opacity-70">Platform</label>
+                            <p class="font-semibold">{{ strategy.platform }}</p>
+                        </div>
+                        <div>
+                            <label class="text-sm opacity-70">Mode</label>
+                            <p class="font-semibold">{{ strategy.mode }}</p>
+                        </div>
+                        <div>
+                            <label class="text-sm opacity-70">Type</label>
+                            <p class="font-semibold">{{ 'Delivery' if not strategy.is_intraday else 'Intraday' }}</p>
+                        </div>
+                        <div>
+                            <label class="text-sm opacity-70">Status</label>
+                            <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
+                                {{ 'Active' if strategy.is_active else 'Inactive' }}
+                            </div>
                         </div>
                     </div>
+                </div>
+            </div>
 
-                    <div class="divider"></div>
-
-                    <!-- Strategy Details -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <h3 class="text-lg font-semibold mb-4">Strategy Details</h3>
-                            <div class="stats stats-vertical shadow">
-                                <div class="stat">
-                                    <div class="stat-title">Platform</div>
-                                    <div class="stat-value text-lg">{{ strategy.platform }}</div>
-                                </div>
-                                <div class="stat">
-                                    <div class="stat-title">Mode</div>
-                                    <div class="stat-value text-lg">{{ strategy.mode }}</div>
-                                </div>
-                                <div class="stat">
-                                    <div class="stat-title">Type</div>
-                                    <div class="stat-value text-lg">{{ 'Intraday' if strategy.is_intraday else 'Delivery' }}</div>
-                                </div>
-                                <div class="stat">
-                                    <div class="stat-title">Status</div>
-                                    <div class="stat-value text-lg">
-                                        <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %} badge-lg">
-                                            {{ 'Active' if strategy.is_active else 'Inactive' }}
-                                        </div>
-                                    </div>
-                                </div>
-                                {% if strategy.is_intraday %}
-                                <div class="stat">
-                                    <div class="stat-title">Trading Hours</div>
-                                    <div class="stat-value text-lg">{{ strategy.start_time }} - {{ strategy.end_time }}</div>
-                                    {% if strategy.squareoff_time %}
-                                    <div class="stat-desc text-warning">Squareoff at {{ strategy.squareoff_time }}</div>
-                                    {% endif %}
-                                </div>
-                                {% endif %}
+            <!-- Webhook Details -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">Webhook Details</h2>
+                    <div class="space-y-4">
+                        <div class="form-control">
+                            <div class="input-group">
+                                <input type="text" class="input input-bordered flex-1" value="{{ webhook_url }}" id="webhookUrl" readonly />
+                                <button class="btn" onclick="copyWebhookUrl()">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                                        <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                                    </svg>
+                                </button>
                             </div>
                         </div>
-
-                        <!-- Webhook Details -->
-                        <div>
-                            <h3 class="text-lg font-semibold mb-4">Webhook Details</h3>
-                            <div class="form-control">
-                                <div class="input-group">
-                                    <input type="text" class="input input-bordered flex-1" value="{{ webhook_url }}" id="webhookUrl" readonly />
-                                    <button class="btn btn-square" onclick="copyWebhookUrl()">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div class="mockup-code mt-4">
-                                <pre><code>{
+                        <div class="mockup-code bg-neutral text-neutral-content">
+                            <pre><code>{
     "Strategy": "{{ strategy.name }}",
     "symbol": "SYMBOL",
     "exchange": "EXCHANGE",
-    "action": "{% if strategy.mode == 'LONG' %}BUY/SELL{% elif strategy.mode == 'SHORT' %}SHORT/COVER{% else %}BUY/SELL/SHORT/COVER{% endif %}",
+    "action": "BUY/SELL",
     "quantity": "QUANTITY"
 }</code></pre>
-                            </div>
                         </div>
-                    </div>
-
-                    <div class="divider"></div>
-
-                    <!-- Configured Symbols -->
-                    <div>
-                        <h3 class="text-lg font-semibold mb-4">Configured Symbols</h3>
-                        {% if symbol_mappings %}
-                        <div class="overflow-x-auto">
-                            <table class="table table-zebra w-full">
-                                <thead>
-                                    <tr>
-                                        <th>Symbol</th>
-                                        <th>Exchange</th>
-                                        <th>Segment</th>
-                                        <th>Quantity</th>
-                                        <th>Product</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for mapping in symbol_mappings %}
-                                    <tr class="hover">
-                                        <td>{{ mapping.symbol }}</td>
-                                        <td>
-                                            <div class="badge badge-ghost">{{ mapping.exchange }}</div>
-                                        </td>
-                                        <td>
-                                            <div class="badge badge-primary">{{ mapping.segment }}</div>
-                                        </td>
-                                        <td>{{ mapping.quantity }}</td>
-                                        <td>
-                                            <div class="badge {% if mapping.product_type == 'MIS' %}badge-warning{% else %}badge-info{% endif %}">
-                                                {{ mapping.product_type }}
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <button class="btn btn-square btn-sm btn-error" 
-                                                    onclick="deleteSymbol({{ strategy.id }}, {{ mapping.id }})">
-                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                </svg>
-                                            </button>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        {% else %}
-                        <div class="alert alert-warning">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            <div>
-                                <h3 class="font-bold">No symbols configured</h3>
-                                <div class="text-xs">Click "Configure" to add symbols.</div>
-                            </div>
-                        </div>
-                        {% endif %}
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Trading Rules -->
-        <div class="lg:col-span-1">
+        <!-- Right Column -->
+        <div class="space-y-6">
+            <!-- Trading Rules -->
             <div class="card bg-base-100 shadow-xl">
                 <div class="card-body">
                     <h2 class="card-title">Trading Rules</h2>
-                    <div class="divider"></div>
+                    <div class="space-y-4">
+                        <p class="font-semibold">Mode: {{ strategy.mode }}</p>
+                        <div class="space-y-2">
+                            {% if strategy.mode in ['LONG', 'BOTH'] %}
+                            <div class="flex items-center text-success gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                                </svg>
+                                <span>Accepts BUY and SELL orders</span>
+                            </div>
+                            {% endif %}
+                            {% if strategy.mode not in ['LONG', 'BOTH'] %}
+                            <div class="flex items-center text-error gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                                <span>Does not accept SHORT and COVER orders</span>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                    <h3 class="font-semibold mb-2">Mode: {{ strategy.mode }}</h3>
-                    <ul class="space-y-2">
-                        {% if strategy.mode == 'LONG' %}
-                        <li class="flex items-center text-success">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                            </svg>
-                            Accepts BUY and SELL orders
-                        </li>
-                        <li class="flex items-center text-error">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                            </svg>
-                            Does not accept SHORT and COVER orders
-                        </li>
-                        {% elif strategy.mode == 'SHORT' %}
-                        <li class="flex items-center text-success">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                            </svg>
-                            Accepts SHORT and COVER orders
-                        </li>
-                        <li class="flex items-center text-error">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                            </svg>
-                            Does not accept BUY and SELL orders
-                        </li>
-                        {% else %}
-                        <li class="flex items-center text-success">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                            </svg>
-                            Accepts all order types:
-                        </li>
-                        <li class="ml-7">• BUY and SELL for long positions</li>
-                        <li class="ml-7">• SHORT and COVER for short positions</li>
-                        {% endif %}
-                    </ul>
-
-                    {% if strategy.is_intraday %}
-                    <div class="divider"></div>
-                    <h3 class="font-semibold mb-2">Trading Hours</h3>
-                    <ul class="space-y-2">
-                        <li class="flex items-center text-success">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
-                            </svg>
-                            Trading active: {{ strategy.start_time }} - {{ strategy.end_time }}
-                        </li>
-                        {% if strategy.squareoff_time %}
-                        <li class="flex items-center text-warning">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
-                            </svg>
-                            Auto squareoff at: {{ strategy.squareoff_time }}
-                        </li>
-                        {% endif %}
-                    </ul>
+            <!-- Configured Symbols -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">Configured Symbols</h2>
+                    {% if symbol_mappings %}
+                    <div class="overflow-x-auto">
+                        <table class="table table-zebra w-full">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Exchange</th>
+                                    <th>Quantity</th>
+                                    <th>Product</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for mapping in symbol_mappings %}
+                                <tr>
+                                    <td>{{ mapping.symbol }}</td>
+                                    <td>
+                                        <div class="badge badge-ghost">{{ mapping.exchange }}</div>
+                                    </td>
+                                    <td>{{ mapping.quantity }}</td>
+                                    <td>
+                                        <div class="badge {% if mapping.product_type == 'MIS' %}badge-warning{% else %}badge-info{% endif %}">
+                                            {{ mapping.product_type }}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        <div>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            <span>No symbols configured yet. Click Configure to add symbols.</span>
+                        </div>
+                    </div>
                     {% endif %}
                 </div>
             </div>
@@ -243,30 +165,16 @@ function copyWebhookUrl() {
     const webhookUrl = document.getElementById('webhookUrl');
     webhookUrl.select();
     document.execCommand('copy');
-    showToast('Webhook URL copied to clipboard!', 'success');
-}
-
-function deleteSymbol(strategyId, mappingId) {
-    if (confirm('Are you sure you want to delete this symbol mapping?')) {
-        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                location.reload();
-            } else {
-                showToast('Error deleting symbol mapping: ' + data.message, 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error deleting symbol mapping', 'error');
-        });
-    }
+    
+    // Show toast notification
+    const toast = document.createElement('div');
+    toast.className = 'alert alert-success fixed bottom-4 right-4 w-auto max-w-sm z-50';
+    toast.innerHTML = `
+        <span>Webhook URL copied to clipboard!</span>
+        <button class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()">×</button>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
 }
 </script>
 {% endblock %}

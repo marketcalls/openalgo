@@ -47,13 +47,10 @@ class StrategySymbolMapping(Base):
     
     id = Column(Integer, primary_key=True)
     strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False)
-    symbol = Column(String(50), nullable=False)
-    exchange = Column(String(20), nullable=False)
-    segment = Column(String(20), nullable=False)  # CASH/FUT/OPT/etc
+    symbol = Column(String(50), nullable=False)  # Platform-specific symbol
+    exchange = Column(String(20), nullable=False)  # NSE/BSE
     quantity = Column(Integer, nullable=False)
     product_type = Column(String(10), nullable=False)  # MIS/CNC
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
     strategy = relationship("Strategy", back_populates="symbol_mappings")
@@ -145,14 +142,13 @@ def toggle_strategy(strategy_id):
         db_session.rollback()
         return False
 
-def add_symbol_mapping(strategy_id, symbol, exchange, segment, quantity, product_type):
+def add_symbol_mapping(strategy_id, symbol, exchange, quantity, product_type):
     """Add symbol mapping to strategy"""
     try:
         mapping = StrategySymbolMapping(
             strategy_id=strategy_id,
             symbol=symbol,
             exchange=exchange,
-            segment=segment,
             quantity=quantity,
             product_type=product_type
         )

@@ -1,60 +1,82 @@
 {% extends "base.html" %}
 
+{% block title %}Configure Symbols - {{ strategy.name }}{% endblock %}
+
 {% block content %}
-<div class="container mx-auto px-4">
-    <div class="flex justify-center">
-        <div class="card w-full max-w-2xl bg-base-100 shadow-xl">
+<!-- Delete Confirmation Modal -->
+<dialog id="delete_confirm_modal" class="modal modal-bottom sm:modal-middle">
+    <form method="dialog" class="modal-box">
+        <h3 class="font-bold text-lg">Delete Symbol</h3>
+        <p class="py-4">Are you sure you want to delete this symbol mapping?</p>
+        <div class="modal-action">
+            <button class="btn" id="cancel_delete">Cancel</button>
+            <button class="btn btn-error" id="confirm_delete">Delete</button>
+        </div>
+    </form>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Configure Symbols - {{ strategy.name }}</h1>
+        <div class="space-x-2">
+            <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn">
+                Back to Strategy
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Single Symbol Form -->
+        <div class="card bg-base-100 shadow-xl">
             <div class="card-body">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="card-title text-2xl">Configure Symbols - {{ strategy.name }}</h2>
-                    <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn btn-ghost">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-                        </svg>
-                        Back to Strategy
-                    </a>
-                </div>
-
-                <div class="divider"></div>
-
-                <!-- Add Symbol Form -->
-                <form method="POST" action="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="space-y-6">
-                    <!-- Symbol Search -->
+                <h2 class="card-title">Add Single Symbol</h2>
+                
+                <form id="singleSymbolForm" class="space-y-4">
                     <div class="form-control">
                         <label class="label">
                             <span class="label-text">Symbol</span>
-                            <span class="label-text-alt">Start typing to search</span>
+                            <span class="label-text-alt text-error">*</span>
                         </label>
                         <div class="relative">
-                            <input type="text" id="symbolSearch" class="input input-bordered w-full" 
-                                   placeholder="Search for symbols..." autocomplete="off" />
-                            <div id="symbolSuggestions" class="absolute z-10 w-full hidden">
-                                <ul class="menu bg-base-200 w-full rounded-box shadow-lg max-h-48 overflow-auto">
-                                    <!-- Suggestions will be populated here -->
+                            <input type="text" id="symbolSearch" name="symbol" class="input input-bordered w-full" 
+                                   placeholder="Search {{ strategy.platform }} symbol..." required readonly>
+                            <div id="searchResults" class="absolute z-10 w-full mt-1 hidden">
+                                <ul class="menu bg-base-200 rounded-box shadow-lg max-h-60 overflow-y-auto">
+                                    <!-- Search results will be populated here -->
                                 </ul>
                             </div>
                         </div>
-                        <input type="hidden" id="selectedSymbol" name="symbol" required />
-                        <input type="hidden" id="selectedExchange" name="exchange" required />
-                        <input type="hidden" id="selectedSegment" name="segment" required />
                     </div>
 
-                    <!-- Quantity -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Exchange</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <select name="exchange" class="select select-bordered" required>
+                            <option value="NSE" selected>NSE</option>
+                            <option value="BSE">BSE</option>
+                        </select>
+                    </div>
+
                     <div class="form-control">
                         <label class="label">
                             <span class="label-text">Quantity</span>
-                            <span class="label-text-alt">Enter trading quantity</span>
+                            <span class="label-text-alt text-error">*</span>
                         </label>
-                        <input type="number" class="input input-bordered" name="quantity" required min="1" />
+                        <input type="number" name="quantity" class="input input-bordered" 
+                               min="1" step="1" required>
                     </div>
 
-                    <!-- Product Type -->
                     <div class="form-control">
                         <label class="label">
                             <span class="label-text">Product Type</span>
+                            <span class="label-text-alt text-error">*</span>
                         </label>
-                        <select class="select select-bordered w-full" name="product_type" required>
-                            <option value="">Select Product Type</option>
+                        <select name="product_type" class="select select-bordered" required>
                             {% if strategy.is_intraday %}
                             <option value="MIS">MIS (Intraday)</option>
                             {% endif %}
@@ -62,161 +84,310 @@
                         </select>
                     </div>
 
-                    <div class="card-actions justify-end mt-6">
+                    <div class="card-actions justify-end">
                         <button type="submit" class="btn btn-primary">Add Symbol</button>
                     </div>
                 </form>
+            </div>
+        </div>
 
-                <div class="divider"></div>
-
-                <!-- Configured Symbols -->
-                <div>
-                    <h3 class="text-lg font-semibold mb-4">Configured Symbols</h3>
-                    {% if symbol_mappings %}
-                    <div class="overflow-x-auto">
-                        <table class="table table-zebra w-full">
-                            <thead>
-                                <tr>
-                                    <th>Symbol</th>
-                                    <th>Exchange</th>
-                                    <th>Segment</th>
-                                    <th>Quantity</th>
-                                    <th>Product</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for mapping in symbol_mappings %}
-                                <tr class="hover">
-                                    <td>{{ mapping.symbol }}</td>
-                                    <td>
-                                        <div class="badge badge-ghost">{{ mapping.exchange }}</div>
-                                    </td>
-                                    <td>
-                                        <div class="badge badge-primary">{{ mapping.segment }}</div>
-                                    </td>
-                                    <td>{{ mapping.quantity }}</td>
-                                    <td>
-                                        <div class="badge {% if mapping.product_type == 'MIS' %}badge-warning{% else %}badge-info{% endif %}">
-                                            {{ mapping.product_type }}
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <button class="btn btn-square btn-sm btn-error" 
-                                                onclick="deleteSymbol({{ strategy.id }}, {{ mapping.id }})">
-                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                            </svg>
-                                        </button>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+        <!-- Bulk Symbols Form -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Add Multiple Symbols</h2>
+                
+                <form id="bulkSymbolsForm" class="space-y-4">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Symbols (CSV format)</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <textarea name="symbols" class="textarea textarea-bordered h-48" required
+                                  placeholder="Format: Symbol,Exchange,Quantity,Product&#10;Example:&#10;SBIN,NSE,100,MIS&#10;INFY,NSE,50,CNC"></textarea>
                     </div>
-                    {% else %}
-                    <div class="alert alert-warning">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
+
+                    <div class="alert alert-info">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         <div>
-                            <h3 class="font-bold">No symbols configured</h3>
-                            <div class="text-xs">Use the form above to add symbols.</div>
+                            <h3 class="font-bold">CSV Format for {{ strategy.platform }}</h3>
+                            <p class="text-sm">Each line should contain: Symbol,Exchange,Quantity,Product</p>
+                            <ul class="list-disc list-inside text-sm mt-2">
+                                <li>Symbol: {{ strategy.platform }} format</li>
+                                <li>Exchange: NSE or BSE</li>
+                                <li>Product: {% if strategy.is_intraday %}MIS or {% endif %}CNC</li>
+                                <li>Quantity: Whole numbers only</li>
+                            </ul>
                         </div>
                     </div>
-                    {% endif %}
-                </div>
+
+                    <div class="card-actions justify-end">
+                        <button type="submit" class="btn btn-primary">Add Symbols</button>
+                    </div>
+                </form>
             </div>
+        </div>
+    </div>
+
+    <!-- Current Mappings -->
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title">Current Symbol Mappings</h2>
+
+            {% if symbol_mappings %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full" id="symbolTable">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th>Quantity</th>
+                            <th>Product</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mapping in symbol_mappings %}
+                        <tr data-mapping-id="{{ mapping.id }}">
+                            <td>{{ mapping.symbol }}</td>
+                            <td><div class="badge badge-ghost">{{ mapping.exchange }}</div></td>
+                            <td>{{ mapping.quantity }}</td>
+                            <td>
+                                <div class="badge {% if mapping.product_type == 'MIS' %}badge-warning{% else %}badge-info{% endif %}">
+                                    {{ mapping.product_type }}
+                                </div>
+                            </td>
+                            <td>
+                                <button class="btn btn-error btn-xs delete-symbol">
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <h3 class="text-lg font-semibold mb-2">No symbols configured</h3>
+                <p class="text-base-content/70">Add symbols using the forms above</p>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
 
 {% block scripts %}
 <script>
-let searchTimeout;
-const symbolSearch = document.getElementById('symbolSearch');
-const symbolSuggestions = document.getElementById('symbolSuggestions');
-const selectedSymbol = document.getElementById('selectedSymbol');
-const selectedExchange = document.getElementById('selectedExchange');
-const selectedSegment = document.getElementById('selectedSegment');
+document.addEventListener('DOMContentLoaded', function() {
+    const symbolSearch = document.getElementById('symbolSearch');
+    const searchResults = document.getElementById('searchResults');
+    const singleSymbolForm = document.getElementById('singleSymbolForm');
+    const bulkSymbolsForm = document.getElementById('bulkSymbolsForm');
+    const symbolTable = document.getElementById('symbolTable');
+    const deleteModal = document.getElementById('delete_confirm_modal');
+    const platform = '{{ strategy.platform }}';
+    let currentMappingId = null;
+    let currentRow = null;
 
-symbolSearch.addEventListener('input', function() {
-    clearTimeout(searchTimeout);
-    const query = this.value.trim();
+    // Symbol search with debouncing
+    let debounceTimer;
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'input input-bordered w-full';
+    searchInput.placeholder = `Type to search ${platform} symbols...`;
     
-    if (query.length < 2) {
-        symbolSuggestions.classList.add('hidden');
-        return;
-    }
-    
-    searchTimeout = setTimeout(() => {
-        fetch(`/api/search_symbols?query=${encodeURIComponent(query)}`)
-            .then(response => response.json())
-            .then(data => {
-                const suggestions = data.suggestions;
-                if (suggestions.length > 0) {
-                    const suggestionsList = suggestions.map(item => `
-                        <li>
-                            <a class="flex justify-between items-center" 
-                               onclick="selectSymbol('${item.symbol}', '${item.exchange}', '${item.segment}')">
-                                <span class="font-medium">${item.symbol}</span>
+    symbolSearch.parentNode.insertBefore(searchInput, symbolSearch);
+    symbolSearch.style.display = 'none';
+
+    searchInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        const query = this.value.trim();
+        
+        if (query.length < 2) {
+            searchResults.classList.add('hidden');
+            return;
+        }
+
+        debounceTimer = setTimeout(async () => {
+            try {
+                const exchange = document.querySelector('select[name="exchange"]').value;
+                const response = await fetch(`/strategy/search?q=${encodeURIComponent(query)}&exchange=${exchange}&platform=${platform}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    showToast('error', data.error);
+                    return;
+                }
+
+                const resultsList = searchResults.querySelector('ul');
+                resultsList.innerHTML = '';
+
+                if (data.results.length > 0) {
+                    data.results.forEach(result => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `
+                            <a class="flex justify-between items-center">
+                                <span class="font-medium">${result.symbol}</span>
                                 <div class="flex gap-2">
-                                    <span class="badge badge-ghost">${item.exchange}</span>
-                                    <span class="badge badge-primary">${item.segment}</span>
+                                    <span class="badge badge-ghost">${result.exchange}</span>
                                 </div>
                             </a>
-                        </li>
-                    `).join('');
-                    
-                    symbolSuggestions.querySelector('ul').innerHTML = suggestionsList;
-                    symbolSuggestions.classList.remove('hidden');
+                        `;
+                        li.querySelector('a').addEventListener('click', () => {
+                            symbolSearch.value = result.symbol;
+                            searchInput.value = result.symbol;
+                            document.querySelector('select[name="exchange"]').value = result.exchange;
+                            searchResults.classList.add('hidden');
+                        });
+                        resultsList.appendChild(li);
+                    });
+                    searchResults.classList.remove('hidden');
                 } else {
-                    symbolSuggestions.classList.add('hidden');
+                    searchResults.classList.add('hidden');
                 }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showToast('Error searching symbols', 'error');
-            });
-    }, 300);
-});
-
-function selectSymbol(symbol, exchange, segment) {
-    symbolSearch.value = symbol;
-    selectedSymbol.value = symbol;
-    selectedExchange.value = exchange;
-    selectedSegment.value = segment;
-    symbolSuggestions.classList.add('hidden');
-}
-
-document.addEventListener('click', function(e) {
-    if (!symbolSearch.contains(e.target) && !symbolSuggestions.contains(e.target)) {
-        symbolSuggestions.classList.add('hidden');
-    }
-});
-
-function deleteSymbol(strategyId, mappingId) {
-    if (confirm('Are you sure you want to delete this symbol mapping?')) {
-        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
+            } catch (error) {
+                console.error('Error searching symbols:', error);
+                showToast('error', 'Error searching symbols');
             }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
+        }, 300);
+    });
+
+    // Handle single symbol form submission
+    singleSymbolForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        if (!symbolSearch.value) {
+            showToast('error', 'Please select a symbol from the search results');
+            return;
+        }
+
+        const formData = {
+            symbol: symbolSearch.value,
+            exchange: this.exchange.value,
+            quantity: parseInt(this.quantity.value),
+            product_type: this.product_type.value
+        };
+
+        try {
+            const response = await fetch(`/strategy/configure/{{ strategy.id }}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify([formData])
+            });
+
+            const result = await response.json();
+            if (result.status === 'success') {
                 location.reload();
             } else {
-                showToast('Error deleting symbol mapping: ' + data.message, 'error');
+                showToast('error', result.message || 'Error adding symbol');
             }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error deleting symbol mapping', 'error');
+        } catch (error) {
+            console.error('Error adding symbol:', error);
+            showToast('error', 'Error adding symbol');
+        }
+    });
+
+    // Handle bulk symbols form submission
+    bulkSymbolsForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const symbols = this.symbols.value.trim();
+        if (!symbols) {
+            showToast('error', 'Please enter symbols in CSV format');
+            return;
+        }
+
+        try {
+            const mappings = symbols.split('\n').map(line => {
+                const [symbol, exchange, quantity, product_type] = line.split(',').map(s => s.trim());
+                return { symbol, exchange, quantity: parseInt(quantity), product_type };
+            });
+
+            const response = await fetch(`/strategy/configure/{{ strategy.id }}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(mappings)
+            });
+
+            const result = await response.json();
+            if (result.status === 'success') {
+                location.reload();
+            } else {
+                showToast('error', result.message || 'Error adding symbols');
+            }
+        } catch (error) {
+            console.error('Error adding symbols:', error);
+            showToast('error', 'Error adding symbols. Please check the CSV format');
+        }
+    });
+
+    // Handle symbol deletion
+    document.querySelectorAll('.delete-symbol').forEach(button => {
+        button.addEventListener('click', function() {
+            const row = this.closest('tr');
+            currentMappingId = row.dataset.mappingId;
+            currentRow = row;
+            deleteModal.showModal();
         });
+    });
+
+    document.getElementById('confirm_delete').addEventListener('click', () => {
+        if (currentMappingId && currentRow) {
+            deleteSymbol(currentMappingId, currentRow);
+        }
+    });
+
+    async function deleteSymbol(mappingId, row) {
+        try {
+            const response = await fetch(`/strategy/{{ strategy.id }}/symbol/${mappingId}/delete`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                row.remove();
+                if (symbolTable.querySelector('tbody').children.length === 0) {
+                    location.reload();
+                }
+                showToast('success', 'Symbol deleted successfully');
+            } else {
+                showToast('error', 'Error deleting symbol');
+            }
+        } catch (error) {
+            console.error('Error deleting symbol:', error);
+            showToast('error', 'Error deleting symbol');
+        }
     }
+
+    // Close search results when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+            searchResults.classList.add('hidden');
+        }
+    });
+});
+
+function showToast(type, message) {
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} fixed bottom-4 right-4 w-auto max-w-sm z-50`;
+    toast.innerHTML = `
+        <span>${message}</span>
+        <button class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()">×</button>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
 }
 </script>
+{% endblock %}
+
+{% block styles %}
+<style>
+.symbol-result {
+    @apply block px-4 py-2 hover:bg-base-300 transition-colors duration-200;
+}
+</style>
 {% endblock %}
 {% endblock %}

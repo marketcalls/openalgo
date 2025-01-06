@@ -22,6 +22,7 @@ import queue
 import threading
 from collections import deque
 from time import time
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -137,31 +138,51 @@ def queue_order(endpoint, payload):
 def validate_strategy_times(start_time, end_time, squareoff_time):
     """Validate strategy time settings"""
     try:
-        if start_time:
-            datetime.strptime(start_time, '%H:%M')
-        if end_time:
-            datetime.strptime(end_time, '%H:%M')
-        if squareoff_time:
-            datetime.strptime(squareoff_time, '%H:%M')
-        return True
-    except ValueError:
-        return False
+        # Check time format
+        for time_str in [start_time, end_time, squareoff_time]:
+            if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', time_str):
+                return False, 'Invalid time format. Use HH:MM format.'
+        
+        # Parse times
+        start = datetime.strptime(start_time, '%H:%M').time()
+        end = datetime.strptime(end_time, '%H:%M').time()
+        squareoff = datetime.strptime(squareoff_time, '%H:%M').time()
+        
+        # Validate time sequence
+        if not (start < end <= squareoff):
+            return False, 'Invalid time sequence. Start time must be before end time, and end time must be before or equal to squareoff time.'
+        
+        # Validate against market hours (9:15 AM to 3:30 PM)
+        market_open = time(9, 15)
+        market_close = time(15, 30)
+        
+        if start < market_open:
+            return False, 'Start time cannot be before market open (09:15)'
+        
+        if squareoff > market_close:
+            return False, 'Squareoff time cannot be after market close (15:30)'
+        
+        return True, ''
+    except Exception as e:
+        logger.error(f'Error validating times: {str(e)}')
+        return False, 'Error validating times'
 
 def validate_strategy_name(name):
     """Validate strategy name format"""
     if not name:
-        return False
+        return False, 'Strategy name is required'
     
-    # Check length
-    if len(name) < 3 or len(name) > 50:
-        return False
-    
-    # Check for valid characters (alphanumeric, underscore, hyphen)
-    import re
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):
-        return False
+        return False, 'Invalid strategy name. Use only alphanumeric characters, underscore, and hyphen.'
     
-    return True
+    # Add platform prefix if not present
+    platform_prefixes = {'AMI': 'AMIBroker', 'TV': 'Tradingview', 'PY': 'Python', 'MT': 'Metatrader'}
+    has_prefix = any(name.startswith(prefix + '_') for prefix in platform_prefixes)
+    
+    if not has_prefix:
+        return False, 'Strategy name must start with platform prefix (AMI_, TV_, PY_, MT_)'
+    
+    return True, name
 
 def schedule_squareoff(strategy_id):
     """Schedule squareoff for intraday strategy"""
@@ -248,18 +269,18 @@ def new_strategy():
                 logger.error("No user_id found in session")
                 flash('Session expired. Please login again.', 'error')
                 return redirect(url_for('auth.login'))
-
-            name = request.form.get('name')
+            
+            # Validate strategy name
+            name = request.form.get('name', '').strip()
+            is_valid_name, name_result = validate_strategy_name(name)
+            if not is_valid_name:
+                flash(name_result, 'error')
+                return redirect(url_for('strategy_bp.new_strategy'))
+            name = name_result  # Use the validated and prefixed name
+            
+            # Get platform and mode
             platform = request.form.get('platform')
             mode = request.form.get('mode')
-            is_intraday = request.form.get('is_intraday') == 'true'
-            start_time = request.form.get('start_time')
-            end_time = request.form.get('end_time')
-            squareoff_time = request.form.get('squareoff_time')
-            
-            if not validate_strategy_name(name):
-                flash('Invalid strategy name. Use only alphanumeric characters, underscore, and hyphen.', 'error')
-                return redirect(url_for('strategy_bp.new_strategy'))
             
             if platform not in VALID_PLATFORMS:
                 flash('Invalid platform selected.', 'error')
@@ -269,12 +290,27 @@ def new_strategy():
                 flash('Invalid mode selected.', 'error')
                 return redirect(url_for('strategy_bp.new_strategy'))
             
-            if is_intraday and not validate_strategy_times(start_time, end_time, squareoff_time):
-                flash('Invalid time format. Use HH:MM format.', 'error')
-                return redirect(url_for('strategy_bp.new_strategy'))
+            # Get time settings
+            is_intraday = request.form.get('type') == 'intraday'
+            start_time = request.form.get('start_time') if is_intraday else None
+            end_time = request.form.get('end_time') if is_intraday else None
+            squareoff_time = request.form.get('squareoff_time') if is_intraday else None
             
+            if is_intraday:
+                if not all([start_time, end_time, squareoff_time]):
+                    flash('All time fields are required for intraday strategy', 'error')
+                    return redirect(url_for('strategy_bp.new_strategy'))
+                
+                # Validate time settings
+                is_valid, error_msg = validate_strategy_times(start_time, end_time, squareoff_time)
+                if not is_valid:
+                    flash(error_msg, 'error')
+                    return redirect(url_for('strategy_bp.new_strategy'))
+            
+            # Generate unique webhook ID
             webhook_id = str(uuid.uuid4())
             
+            # Create strategy
             strategy = create_strategy(
                 name=name,
                 webhook_id=webhook_id,
@@ -282,25 +318,91 @@ def new_strategy():
                 platform=platform,
                 mode=mode,
                 is_intraday=is_intraday,
-                start_time=start_time if is_intraday else None,
-                end_time=end_time if is_intraday else None,
-                squareoff_time=squareoff_time if is_intraday else None
+                start_time=start_time,
+                end_time=end_time,
+                squareoff_time=squareoff_time
             )
             
             if strategy:
+                # Schedule squareoff if intraday
                 if is_intraday and squareoff_time:
                     schedule_squareoff(strategy.id)
-                flash('Strategy created successfully!', 'success')
+                
+                flash('Strategy created successfully', 'success')
                 return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy.id))
             else:
-                flash('Error creating strategy.', 'error')
+                flash('Error creating strategy', 'error')
         except Exception as e:
             logger.error(f'Error creating strategy: {str(e)}')
-            flash('Error creating strategy.', 'error')
+            flash('Error creating strategy', 'error')
         
         return redirect(url_for('strategy_bp.new_strategy'))
     
     return render_template('strategy/new_strategy.html', platforms=VALID_PLATFORMS, modes=VALID_MODES)
+
+@strategy_bp.route('/configure/<int:strategy_id>', methods=['GET', 'POST'])
+@check_session_validity
+def configure_symbols(strategy_id):
+    """Configure symbols for strategy"""
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.user_id != session.get('user'):
+        abort(404)
+    
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            if not data or not isinstance(data, list):
+                return jsonify({'status': 'error', 'message': 'Invalid data format'}), 400
+            
+            # Validate each mapping
+            for mapping in data:
+                if not all(k in mapping for k in ['symbol', 'exchange', 'quantity', 'product_type']):
+                    return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+                
+                if mapping['exchange'] not in ['NSE', 'BSE']:
+                    return jsonify({'status': 'error', 'message': 'Invalid exchange'}), 400
+                
+                if mapping['product_type'] not in ['MIS', 'CNC']:
+                    return jsonify({'status': 'error', 'message': 'Invalid product type'}), 400
+                
+                if not isinstance(mapping['quantity'], int) or mapping['quantity'] < 1:
+                    return jsonify({'status': 'error', 'message': 'Invalid quantity'}), 400
+            
+            # Add mappings
+            try:
+                if bulk_add_symbol_mappings(strategy_id, data):
+                    return jsonify({'status': 'success', 'message': 'Symbols configured successfully'})
+                else:
+                    return jsonify({'status': 'error', 'message': 'Error configuring symbols'}), 500
+            except Exception as e:
+                logger.error(f'Error adding symbol mappings: {str(e)}')
+                return jsonify({'status': 'error', 'message': str(e)}), 500
+                
+        except Exception as e:
+            logger.error(f'Error configuring symbols: {str(e)}')
+            return jsonify({'status': 'error', 'message': 'Error configuring symbols'}), 500
+    
+    symbol_mappings = get_symbol_mappings(strategy_id)
+    return render_template('strategy/configure_symbols.html', 
+                         strategy=strategy, 
+                         symbol_mappings=symbol_mappings)
+
+@strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
+@check_session_validity
+def delete_symbol(strategy_id, mapping_id):
+    """Delete symbol mapping"""
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.user_id != session.get('user'):
+        abort(404)
+    
+    try:
+        if delete_symbol_mapping(mapping_id):
+            return jsonify({'status': 'success', 'message': 'Symbol deleted successfully'})
+        else:
+            return jsonify({'status': 'error', 'message': 'Error deleting symbol'}), 500
+    except Exception as e:
+        logger.error(f'Error deleting symbol: {str(e)}')
+        return jsonify({'status': 'error', 'message': 'Error deleting symbol'}), 500
 
 @strategy_bp.route('/<int:strategy_id>')
 @check_session_validity
@@ -340,56 +442,6 @@ def delete_strategy_route(strategy_id):
     
     return redirect(url_for('strategy_bp.index'))
 
-@strategy_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
-@check_session_validity
-def configure_symbols(strategy_id):
-    """Configure symbols for strategy"""
-    strategy = get_strategy(strategy_id)
-    if not strategy or strategy.user_id != session.get('user'):
-        abort(404)
-    
-    if request.method == 'POST':
-        try:
-            data = request.get_json()
-            mappings = []
-            
-            for item in data['symbols']:
-                mapping_data = {
-                    'symbol': item['symbol'],
-                    'exchange': item['exchange'],
-                    'segment': item['segment'],
-                    'quantity': int(item['quantity']),
-                    'product_type': item['product_type']
-                }
-                mappings.append(mapping_data)
-            
-            if bulk_add_symbol_mappings(strategy_id, mappings):
-                return jsonify({'status': 'success'})
-            else:
-                return jsonify({'status': 'error', 'message': 'Error adding symbols'}), 400
-                
-        except Exception as e:
-            logger.error(f'Error in configure_symbols: {str(e)}')
-            return jsonify({'status': 'error', 'message': str(e)}), 400
-    
-    symbol_mappings = get_symbol_mappings(strategy_id)
-    return render_template('strategy/configure_symbols.html',
-                         strategy=strategy,
-                         symbol_mappings=symbol_mappings)
-
-@strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
-@check_session_validity
-def delete_symbol(strategy_id, mapping_id):
-    """Delete symbol mapping"""
-    strategy = get_strategy(strategy_id)
-    if not strategy or strategy.user_id != session.get('user'):
-        abort(404)
-    
-    if delete_symbol_mapping(mapping_id):
-        return jsonify({'status': 'success'})
-    else:
-        return jsonify({'status': 'error', 'message': 'Error deleting symbol mapping'}), 400
-
 @strategy_bp.route('/<int:strategy_id>/toggle', methods=['POST'])
 @check_session_validity
 def toggle_strategy_route(strategy_id):
@@ -406,16 +458,79 @@ def toggle_strategy_route(strategy_id):
     
     return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
 
-@strategy_bp.route('/search_symbols')
+@strategy_bp.route('/search')
 @check_session_validity
 def search_symbols():
-    """Search symbols endpoint"""
-    query = request.args.get('q', '')
-    if len(query) < 2:
-        return jsonify([])
+    """Search symbols endpoint with platform-specific search"""
+    query = request.args.get('q', '').strip()
+    exchange = request.args.get('exchange')
+    platform = request.args.get('platform')
     
-    symbols = enhanced_search_symbols(query)
-    return jsonify(symbols)
+    if not query:
+        return jsonify({'results': []})
+    
+    if not platform:
+        return jsonify({'error': 'Platform is required'}), 400
+        
+    try:
+        # Get platform-specific search function
+        search_func = PLATFORM_SEARCH_FUNCTIONS.get(platform)
+        if not search_func:
+            return jsonify({'error': f'Unsupported platform: {platform}'}), 400
+            
+        results = search_func(query, exchange)
+        return jsonify({
+            'results': [format_symbol_result(result, platform) for result in results]
+        })
+    except Exception as e:
+        logger.error(f'Error searching symbols: {str(e)}')
+        return jsonify({'error': 'Error searching symbols'}), 500
+
+def format_symbol_result(result, platform):
+    """Format search result based on platform"""
+    if platform == 'AMIBroker':
+        return {
+            'symbol': result.brsymbol,
+            'name': result.name,
+            'exchange': result.brexchange
+        }
+    else:
+        return {
+            'symbol': result.symbol,
+            'name': result.name,
+            'exchange': result.exchange
+        }
+
+# Platform-specific search functions
+def search_amibroker_symbols(query, exchange):
+    """Search symbols for AMIBroker platform"""
+    from database.symbol import enhanced_search_symbols
+    results = enhanced_search_symbols(query, exchange)
+    return [r for r in results if r.brsymbol and r.brexchange]  # Filter for valid AMIBroker symbols
+
+def search_tradingview_symbols(query, exchange):
+    """Search symbols for TradingView platform"""
+    from database.symbol import enhanced_search_symbols
+    return enhanced_search_symbols(query, exchange)
+
+def search_python_symbols(query, exchange):
+    """Search symbols for Python platform"""
+    from database.symbol import enhanced_search_symbols
+    return enhanced_search_symbols(query, exchange)
+
+def search_metatrader_symbols(query, exchange):
+    """Search symbols for MetaTrader platform"""
+    from database.symbol import enhanced_search_symbols
+    # Add MetaTrader-specific symbol filtering if needed
+    return enhanced_search_symbols(query, exchange)
+
+# Map platforms to their search functions
+PLATFORM_SEARCH_FUNCTIONS = {
+    'AMIBroker': search_amibroker_symbols,
+    'Tradingview': search_tradingview_symbols,
+    'Python': search_python_symbols,
+    'Metatrader': search_metatrader_symbols
+}
 
 @strategy_bp.route('/webhook/<webhook_id>', methods=['POST'])
 def webhook(webhook_id):
@@ -464,15 +579,24 @@ def webhook(webhook_id):
         if not matching_mapping:
             return jsonify({'status': 'error', 'message': 'Symbol not configured for strategy'}), 400
         
-        # Prepare order payload
+        # Get API key for the user
+        api_key = get_api_key_for_tradingview(strategy.user_id)
+        if not api_key:
+            return jsonify({'status': 'error', 'message': 'API key not found'}), 400
+        
+        # Prepare order payload with default values
         payload = {
+            'apikey': api_key,
             'strategy': strategy.name,
             'symbol': matching_mapping.symbol,
             'exchange': matching_mapping.exchange,
-            'segment': matching_mapping.segment,
             'action': action,
-            'quantity': matching_mapping.quantity,
-            'product_type': matching_mapping.product_type
+            'quantity': str(matching_mapping.quantity),  # Convert to string as required by API
+            'product': matching_mapping.product_type,
+            'pricetype': 'MARKET',  # Default to market order
+            'price': '0',  # Default price for market order
+            'trigger_price': '0',  # Default trigger price
+            'disclosed_quantity': '0'  # Default disclosed quantity
         }
         
         # Queue the order
