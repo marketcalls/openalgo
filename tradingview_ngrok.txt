@@ -1,0 +1,9 @@
+
+
+authtoken: 2rIPEs4wSlJNlQGx9ccDXWfVvkK_yhdeJAnp3QtoXpecAK8c
+region: us
+tunnels:
+  openalgo:
+    proto: http
+    addr: 127.0.0.1:5000
+    hostname: model-enormous-jackal.ngrok-free.app
