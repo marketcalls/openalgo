@@ -3,41 +3,55 @@
 
 def transform_data(data,token):
     """
-    Transforms the new API request structure to the current expected structure.
+    Transforms the OpenAlgo API request structure to Dhan v2 API structure.
+    
+    Parameters required by Dhan v2:
+    - dhanClientId (required): string
+    - correlationId: string
+    - transactionType (required): BUY/SELL
+    - exchangeSegment (required): Exchange segment enum
+    - productType (required): Product type enum
+    - orderType (required): Order type enum
+    - validity (required): DAY/IOC
+    - securityId (required): string
+    - quantity (required): int
+    - disclosedQuantity: int
+    - price (required): float
+    - triggerPrice: float (required for SL orders)
+    - afterMarketOrder: boolean
+    - amoTime: string (OPEN/OPEN_30/OPEN_60)
+    - boProfitValue: float
+    - boStopLossValue: float
     """
-    drv_expiry_date = None
-    drv_options_type = None
-    drv_strike_price = None
-
-
-
     # Basic mapping
     transformed = {
         "dhanClientId": data["apikey"],
-        "correlationId":None,
-        "transactionType": data['action'].upper(),
+        "correlationId": data.get("correlation_id", None),  # Optional correlation ID
+        "transactionType": data["action"].upper(),
         "exchangeSegment": map_exchange_type(data["exchange"]),
         "productType": map_product_type(data["product"]),
         "orderType": map_order_type(data["pricetype"]),
-        "validity":"DAY",
+        "validity": "DAY",  # Default to DAY, can be overridden if IOC is needed
         "securityId": token,
         "quantity": int(data["quantity"]),
         "disclosedQuantity": int(data.get("disclosed_quantity", 0)),
-
         "price": float(data.get("price", 0)),
-        "afterMarketOrder": False,
-        "boProfitValue": None,
-        "boStopLossValue": None,
-        "drvExpiryDate": drv_expiry_date,  
-        "drvOptionType": drv_options_type,
-        "drvStrikePrice": drv_strike_price  # Assuming false as default; you might need logic to handle this if it can vary
+        "triggerPrice": float(data.get("trigger_price", 0)),
+        "afterMarketOrder": data.get("after_market_order", False),
+        "amoTime": data.get("amo_time", None),  # OPEN/OPEN_30/OPEN_60
+        "boProfitValue": float(data.get("bo_profit_value", 0)) if data.get("bo_profit_value") else None,
+        "boStopLossValue": float(data.get("bo_stop_loss_value", 0)) if data.get("bo_stop_loss_value") else None
     }
 
+    # Handle validity for IOC orders if specified
+    if data.get("validity") == "IOC":
+        transformed["validity"] = "IOC"
 
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
-    
+    # For SL and SL-M orders, trigger price is required
+    if data["pricetype"] in ["SL", "SL-M"] and not transformed["triggerPrice"]:
+        raise ValueError("Trigger price is required for Stop Loss orders")
+
+
     return transformed
 
 
@@ -54,7 +68,6 @@ def transform_modify_order_data(data):
         "validity": "DAY"
 
     }
-
 
 
 def map_order_type(pricetype):

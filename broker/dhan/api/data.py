@@ -95,13 +95,8 @@ class BrokerData:
 
     def _convert_date_to_utc(self, date_str: str) -> str:
         """Convert IST date to UTC date for API request"""
-        # Convert IST date string to datetime
-        ist_date = datetime.strptime(date_str, "%Y-%m-%d")
-        # Set time to market close (15:30 IST)
-        ist_datetime = ist_date.replace(hour=15, minute=30)
-        # Convert to UTC (IST is UTC+5:30)
-        utc_datetime = ist_datetime - timedelta(hours=5, minutes=30)
-        return utc_datetime.strftime("%Y-%m-%d")
+        # Simply return the date string as the API expects YYYY-MM-DD format
+        return date_str
 
     def _convert_timestamp_to_ist(self, timestamp: int) -> int:
         """Convert UTC timestamp to IST timestamp"""
@@ -145,34 +140,44 @@ class BrokerData:
         """Get instrument type based on exchange and symbol"""
         # For cash market (NSE, BSE)
         if exchange in ['NSE', 'BSE']:
+            # For indices like NIFTY, BANKNIFTY etc.
+            if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                return 'INDEX'
+            # For regular equity
             return 'EQUITY'
             
         # For F&O market (NFO, BFO)
         elif exchange in ['NFO', 'BFO']:
-            # Check for index options
-            if ('CE' in symbol or 'PE' in symbol) and any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY','MIDCPNIFTY','SENSEX','BANKEX']):
-                return 'OPTIDX'
-            # Check for stock options
-            elif 'CE' in symbol or 'PE' in symbol:
+            # First check for options (CE/PE at the end)
+            if symbol.endswith('CE') or symbol.endswith('PE'):
+                # For index options like NIFTY23JAN20200CE
+                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                    return 'OPTIDX'
+                # For stock options
                 return 'OPTSTK'
-            # Check for index futures
-            elif any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY','MIDCPNIFTY','SENSEX','BANKEX']):
-                return 'FUTIDX'
-            # Stock futures
+            # Then check for futures
             else:
+                # For index futures like NIFTY23JAN
+                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                    return 'FUTIDX'
+                # For stock futures
                 return 'FUTSTK'
         
         # For commodity market (MCX)
         elif exchange == 'MCX':
-            if 'CE' in symbol or 'PE' in symbol:
-                return 'OPTFUT'  # Options on commodity futures
-            return 'FUTCOM'      # Commodity futures
+            # For commodity options on futures
+            if symbol.endswith('CE') or symbol.endswith('PE'):
+                return 'OPTFUT'
+            # For commodity futures
+            return 'FUTCOM'
         
         # For currency market (CDS, BCD)
         elif exchange in ['CDS', 'BCD']:
-            if 'CE' in symbol or 'PE' in symbol:
-                return 'OPTCUR'  # Currency options
-            return 'FUTCUR'      # Currency futures
+            # For currency options
+            if symbol.endswith('CE') or symbol.endswith('PE'):
+                return 'OPTCUR'
+            # For currency futures
+            return 'FUTCUR'
         
         raise Exception(f"Unsupported exchange: {exchange}")
 
@@ -197,14 +202,16 @@ class BrokerData:
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
     def _get_intraday_time_range(self, date_str: str) -> tuple:
-        """Get intraday time range in IST for a given date"""
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        
-        # Market hours in IST
-        start_time = date.replace(hour=9, minute=15)  # 9:15 AM IST
-        end_time = date.replace(hour=15, minute=30)   # 3:30 PM IST
-        
-        return start_time.strftime("%Y-%m-%d %H:%M:%S"), end_time.strftime("%Y-%m-%d %H:%M:%S")
+        """
+        Get intraday time range in IST for a given date
+        Args:
+            date_str: Date string in YYYY-MM-DD format
+        Returns:
+            tuple: (start_date, end_date) in YYYY-MM-DD format
+        """
+        # Simply return the same date for both start and end
+        # The API will handle the full day's data automatically
+        return date_str, date_str
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -234,6 +241,12 @@ class BrokerData:
             if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
                 logger.info("Both start and end dates are non-trading days")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            # If start and end dates are same, increase end date by one day
+            if start_date == end_date:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                end_date = end_dt.strftime("%Y-%m-%d")
+                logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
 
             # Convert symbol to broker format and get securityId
             security_id = get_token(symbol, exchange)
@@ -300,9 +313,10 @@ class BrokerData:
                 # For intraday data
                 endpoint = "/v2/charts/intraday"
                 
-                if start_date == end_date:
+                if start_date == (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"):
                     # For same day intraday data, use exact time range in IST
-                    from_time, to_time = self._get_intraday_time_range(start_date)
+                    from_time = start_date
+                    to_time = end_date  # This will be the next day as adjusted above
                     
                     request_data = {
                         "securityId": str(security_id),
