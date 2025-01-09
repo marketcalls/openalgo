@@ -1,6 +1,8 @@
 from flask import Blueprint, render_template, redirect, request, url_for, session, flash
 from database.user_db import add_user, find_user_by_username
 from utils.session import invalidate_session_if_invalid
+from blueprints.apikey import generate_api_key
+from database.auth_db import upsert_api_key
 import logging
 import qrcode
 import io
@@ -39,6 +41,14 @@ def setup():
         user = add_user(username, email, password, is_admin=True)
         if user:
             logger.info(f"New admin user {username} created successfully")
+            
+            # Automatically generate and save API key
+            api_key = generate_api_key()
+            key_id = upsert_api_key(username, api_key)
+            if not key_id:
+                logger.error(f"Failed to create API key for user {username}")
+            else:
+                logger.info(f"API key created successfully for user {username}")
             
             # Generate QR code
             qr = qrcode.QRCode(version=1, box_size=10, border=5)

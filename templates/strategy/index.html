@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Trading Strategies{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Trading Strategies</h1>
+        <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn btn-primary">
+            New Strategy
+        </a>
+    </div>
+
+    {% if strategies %}
+    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        {% for strategy in strategies %}
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body min-h-[250px] flex flex-col justify-between">
+                <div>
+                    <h2 class="card-title flex justify-between">
+                        {{ strategy.name }}
+                        <div class="flex gap-2">
+                            <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
+                                {{ 'Active' if strategy.is_active else 'Inactive' }}
+                            </div>
+                            <div class="badge {% if strategy.trading_mode == 'LONG' %}badge-primary{% elif strategy.trading_mode == 'SHORT' %}badge-warning{% else %}badge-secondary{% endif %}">
+                                {{ strategy.trading_mode }}
+                            </div>
+                        </div>
+                    </h2>
+                    
+                    <div class="text-sm opacity-70 mt-4 space-y-2">
+                        <p>Type: {{ 'Intraday' if strategy.is_intraday else 'Positional' }}</p>
+                        {% if strategy.is_intraday %}
+                        <p>Trading Hours: {{ strategy.start_time }} - {{ strategy.end_time }}</p>
+                        <p>Square Off: {{ strategy.squareoff_time }}</p>
+                        {% else %}
+                        <!-- Spacer divs to maintain consistent height -->
+                        <div class="h-5"></div>
+                        <div class="h-5"></div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="card-actions justify-end mt-4 gap-2">
+                    <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm flex-1">
+                        Configure Symbols
+                    </a>
+                    <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn btn-primary btn-sm flex-1">
+                        View Details
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-12">
+        <h3 class="text-lg font-semibold mb-2">No strategies found</h3>
+        <p class="text-base-content/70">Create your first strategy to get started</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Webhook Setup Instructions -->
+<div class="container mx-auto px-4 py-8">
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-4">How to Setup Webhook</h2>
+            <div class="space-y-4">
+                <p>1. Go to your trading platform and find the webhook/alert settings</p>
+                <p>2. In the alert form, find the "Webhook URL" field</p>
+                <p>3. Enter your webhook URL in the format:</p>
+                <div class="mockup-code cursor-pointer" id="webhookUrl">
+                    <pre><code>{{ request.host_url }}strategy/webhook/YOUR_WEBHOOK_ID</code></pre>
+                    <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                        Click to copy
+                    </div>
+                </div>
+                <p>4. Replace YOUR_WEBHOOK_ID with the webhook ID from your strategy details</p>
+                <p>5. Save the alert settings</p>
+                <div class="alert alert-info mt-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <div>
+                        <h3 class="font-bold">Alert Name Keywords</h3>
+                        <p class="text-sm mt-2">Include one of these keywords in your alert name:</p>
+                        <ul class="list-disc list-inside text-sm mt-2">
+                            <li><span class="font-semibold">BUY</span> - For long entry</li>
+                            <li><span class="font-semibold">SELL</span> - For long exit</li>
+                            <li><span class="font-semibold">SHORT</span> - For short entry</li>
+                            <li><span class="font-semibold">COVER</span> - For short cover</li>
+                        </ul>
+                        <p class="text-sm mt-2">Keywords are not case-sensitive and can be anywhere in the alert name.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Copy webhook URL on click
+    const webhookUrlContainer = document.getElementById('webhookUrl');
+    const copyHint = webhookUrlContainer.querySelector('.copy-hint');
+    
+    webhookUrlContainer.addEventListener('mouseenter', () => {
+        copyHint.classList.remove('hidden');
+    });
+    
+    webhookUrlContainer.addEventListener('mouseleave', () => {
+        copyHint.classList.add('hidden');
+    });
+    
+    webhookUrlContainer.addEventListener('click', async () => {
+        const code = webhookUrlContainer.querySelector('code').textContent;
+        try {
+            await navigator.clipboard.writeText(code);
+            showToast('success', 'Webhook URL copied to clipboard!');
+        } catch (err) {
+            showToast('error', 'Failed to copy webhook URL');
+        }
+    });
+});
+
+function showToast(type, message) {
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} fixed bottom-4 right-4 w-auto max-w-sm z-50`;
+    toast.innerHTML = `
+        <div>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+</script>
+{% endblock %}
+
+{% block styles %}
+<style>
+.mockup-code {
+    position: relative;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.mockup-code:hover {
+    opacity: 0.8;
+}
+
+.copy-hint {
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+</style>
+{% endblock %}
+
+{% endblock %}

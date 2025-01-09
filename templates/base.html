@@ -152,6 +152,12 @@
                             Chartink
                         </a>
                     </li>
+                    <li>
+                        <a href="{{ url_for('strategy_bp.index') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
+                            Strategy
+                        </a>
+                    </li>
                     <div class="divider"></div>
                     <li>
                         <a href="{{ url_for('auth.change_password') }}" 

@@ -24,6 +24,7 @@ from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
+from blueprints.strategy import strategy_bp  # Import the strategy blueprint
 
 from restx_api import api_v1_bp, api
 
@@ -36,6 +37,7 @@ from database.settings_db import init_db as ensure_settings_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
+from database.strategy_db import init_db as ensure_strategy_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -79,6 +81,7 @@ def create_app():
     app.register_blueprint(chartink_bp)
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
+    app.register_blueprint(strategy_bp)
 
     # Initialize latency monitoring (after registering API blueprint)
     with app.app_context():
@@ -108,6 +111,7 @@ def setup_environment(app):
         ensure_chartink_tables_exists()
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
+        ensure_strategy_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
