@@ -29,7 +29,14 @@ logger = logging.getLogger(__name__)
 strategy_bp = Blueprint('strategy_bp', __name__, url_prefix='/strategy')
 
 # Initialize scheduler for time-based controls
-scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Kolkata'))
+scheduler = BackgroundScheduler(
+    timezone=pytz.timezone('Asia/Kolkata'),
+    job_defaults={
+        'coalesce': True,
+        'misfire_grace_time': 300,
+        'max_instances': 1
+    }
+)
 scheduler.start()
 
 # Get base URL from environment or default to localhost
@@ -197,26 +204,25 @@ def schedule_squareoff(strategy_id):
     if not strategy or not strategy.is_intraday or not strategy.squareoff_time:
         return
     
-    # Remove any existing job
-    job_id = f'squareoff_{strategy_id}'
-    scheduler.remove_job(job_id, jobstore='default')
-    
-    # Parse squareoff time
     try:
         hours, minutes = map(int, strategy.squareoff_time.split(':'))
-        squareoff_time = time(hour=hours, minute=minutes)
+        job_id = f'squareoff_{strategy_id}'
         
-        # Schedule new job
+        # Remove existing job if any
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+        
+        # Add new job
         scheduler.add_job(
             squareoff_positions,
             'cron',
             hour=hours,
             minute=minutes,
-            id=job_id,
             args=[strategy_id],
-            replace_existing=True
+            id=job_id,
+            timezone=pytz.timezone('Asia/Kolkata')
         )
-        logger.info(f'Scheduled squareoff for strategy {strategy_id} at {squareoff_time}')
+        logger.info(f'Scheduled squareoff for strategy {strategy_id} at {hours}:{minutes}')
     except Exception as e:
         logger.error(f'Error scheduling squareoff for strategy {strategy_id}: {str(e)}')
 
@@ -224,36 +230,38 @@ def squareoff_positions(strategy_id):
     """Square off all positions for intraday strategy"""
     try:
         strategy = get_strategy(strategy_id)
-        if not strategy or not strategy.is_active:
+        if not strategy or not strategy.is_intraday:
             return
         
-        symbol_mappings = get_symbol_mappings(strategy_id)
-        for mapping in symbol_mappings:
-            # Prepare order payload
+        # Get API key for authentication
+        api_key = get_api_key_for_tradingview(strategy.user_id)
+        if not api_key:
+            logger.error(f'No API key found for strategy {strategy_id}')
+            return
+            
+        # Get all symbol mappings
+        mappings = get_symbol_mappings(strategy_id)
+        
+        for mapping in mappings:
+            # Use placesmartorder with quantity=0 and position_size=0 for squareoff
             payload = {
+                'apikey': api_key,
+                'strategy': strategy.name,
                 'symbol': mapping.symbol,
                 'exchange': mapping.exchange,
-                'quantity': mapping.quantity,
-                'product_type': mapping.product_type,
-                'strategy': strategy.name,
-                'order_type': 'MARKET',
-                'transaction_type': 'SELL'  # For squareoff, always SELL
+                'action': 'SELL',  # Direction doesn't matter for closing
+                'product': mapping.product_type,
+                'pricetype': 'MARKET',
+                'quantity': '0',
+                'position_size': '0',  # This will close the position
+                'price': '0',
+                'trigger_price': '0',
+                'disclosed_quantity': '0'
             }
             
-            try:
-                # Place order
-                response = requests.post(f'{BASE_URL}/api/v1/placeorder', json=payload)
-                if response.ok:
-                    logger.info(f'Squareoff order placed for {mapping.symbol} in strategy {strategy.name}')
-                else:
-                    logger.error(f'Error placing squareoff order for {mapping.symbol}: {response.text}')
-            except Exception as e:
-                logger.error(f'Error placing squareoff order: {str(e)}')
-                continue
+            # Queue the order instead of executing directly
+            queue_order('placesmartorder', payload)
             
-            # Small delay between orders
-            time_module.sleep(0.1)
-        
     except Exception as e:
         logger.error(f'Error in squareoff_positions for strategy {strategy_id}: {str(e)}')
 
@@ -342,6 +350,8 @@ def new_strategy():
             
             if strategy:
                 flash('Strategy created successfully!', 'success')
+                if strategy.is_intraday:
+                    schedule_squareoff(strategy.id)
                 return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy.id))
             else:
                 flash('Error creating strategy', 'error')
@@ -375,27 +385,30 @@ def view_strategy(strategy_id):
                          strategy=strategy,
                          symbol_mappings=symbol_mappings)
 
-@strategy_bp.route('/<int:strategy_id>/toggle', methods=['POST'])
+@strategy_bp.route('/toggle/<int:strategy_id>', methods=['POST'])
 def toggle_strategy_route(strategy_id):
     """Toggle strategy active status"""
     if not is_session_valid():
         return redirect(url_for('auth.login'))
-    
-    strategy = get_strategy(strategy_id)
-    if not strategy:
-        flash('Strategy not found', 'error')
+        
+    try:
+        strategy = toggle_strategy(strategy_id)
+        if strategy.is_active:
+            # Schedule squareoff if being activated
+            schedule_squareoff(strategy_id)
+            flash('Strategy activated successfully', 'success')
+        else:
+            # Remove squareoff job if being deactivated
+            try:
+                scheduler.remove_job(f'squareoff_{strategy_id}')
+            except Exception:
+                pass
+            flash('Strategy deactivated successfully', 'success')
+            
+        return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+    except Exception as e:
+        flash(f'Error toggling strategy: {str(e)}', 'error')
         return redirect(url_for('strategy_bp.index'))
-    
-    if strategy.user_id != session.get('user'):
-        flash('Unauthorized access', 'error')
-        return redirect(url_for('strategy_bp.index'))
-    
-    if toggle_strategy(strategy_id):
-        flash('Strategy status updated successfully', 'success')
-    else:
-        flash('Error updating strategy status', 'error')
-    
-    return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
 
 @strategy_bp.route('/<int:strategy_id>/delete', methods=['POST'])
 def delete_strategy_route(strategy_id):
@@ -403,19 +416,19 @@ def delete_strategy_route(strategy_id):
     if not is_session_valid():
         return redirect(url_for('auth.login'))
     
-    strategy = get_strategy(strategy_id)
-    if not strategy:
-        flash('Strategy not found', 'error')
-        return redirect(url_for('strategy_bp.index'))
-    
-    if strategy.user_id != session.get('user'):  
-        flash('Unauthorized access', 'error')
-        return redirect(url_for('strategy_bp.index'))
-    
-    if delete_strategy(strategy_id):
-        flash('Strategy deleted successfully', 'success')
-    else:
-        flash('Error deleting strategy', 'error')
+    try:
+        # Remove squareoff job if exists
+        try:
+            scheduler.remove_job(f'squareoff_{strategy_id}')
+        except Exception:
+            pass
+            
+        if delete_strategy(strategy_id):
+            flash('Strategy deleted successfully', 'success')
+        else:
+            flash('Error deleting strategy', 'error')
+    except Exception as e:
+        flash(f'Error deleting strategy: {str(e)}', 'error')
     
     return redirect(url_for('strategy_bp.index'))
 
@@ -677,7 +690,7 @@ def webhook(webhook_id):
         if use_smart_order:
             payload.update({
                 'quantity': '0',
-                'position_size': '0',
+                'position_size': '0',  # This will close the position
                 'price': '0',
                 'trigger_price': '0',
                 'disclosed_quantity': '0'
