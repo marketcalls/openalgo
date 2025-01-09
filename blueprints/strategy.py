@@ -275,9 +275,20 @@ def new_strategy():
                 return redirect(url_for('auth.login'))
             
             logger.info(f"Creating strategy for user: {user_id}")
-            name = request.form.get('name', '').strip()
 
             # Get form data
+            platform = request.form.get('platform', '').strip()
+            name = request.form.get('name', '').strip()
+
+            # Validate platform
+            if not platform:
+                flash('Please select a platform', 'error')
+                return redirect(url_for('strategy_bp.new_strategy'))
+
+            # Create prefixed strategy name
+            name = f"{platform}_{name}"
+
+            # Get other form data
             strategy_type = request.form.get('type')
             trading_mode = request.form.get('trading_mode', 'LONG')  # Default to LONG
             start_time = request.form.get('start_time')

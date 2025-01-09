@@ -14,10 +14,29 @@
                     <label class="label">
                         <span class="label-text">Strategy Name</span>
                     </label>
-                    <input type="text" name="name" class="input input-bordered" required
+                    <input type="text" name="name" id="strategyName" class="input input-bordered" required
                            pattern="[a-zA-Z0-9\s\-_]+" 
                            title="Use only letters, numbers, spaces, hyphens, and underscores"
                            placeholder="Enter strategy name">
+                    <label class="label">
+                        <span class="label-text-alt">Final name: <span id="finalName" class="font-mono">platform_strategyname</span></span>
+                    </label>
+                </div>
+
+                <!-- Platform -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Platform</span>
+                    </label>
+                    <select name="platform" id="platform" class="select select-bordered" required>
+                        <option value="">Select Platform</option>
+                        <option value="tradingview" selected>TradingView</option>
+                        <option value="amibroker">Amibroker</option>
+                        <option value="excel">Excel</option>
+                        <option value="python">Python</option>
+                        <option value="metatrader">Metatrader</option>
+                        <option value="other">Other</option>
+                    </select>
                 </div>
 
                 <!-- Strategy Type -->
@@ -65,7 +84,7 @@
                             <label class="label">
                                 <span class="label-text">End Time</span>
                             </label>
-                            <input type="time" name="end_time" class="input input-bordered" value="15:15">
+                            <input type="time" name="end_time" class="input input-bordered" value="15:00">
                         </div>
                     </div>
                     
@@ -93,6 +112,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const tradingTimes = document.getElementById('tradingTimes');
     const tradingMode = document.getElementById('tradingMode');
     const tradingModeHint = document.getElementById('tradingModeHint');
+    const platform = document.getElementById('platform');
+    const strategyName = document.getElementById('strategyName');
+    const finalName = document.getElementById('finalName');
     
     function toggleTradingTimes() {
         if (strategyType.value === 'intraday') {
@@ -112,12 +134,21 @@ document.addEventListener('DOMContentLoaded', function() {
             tradingModeHint.textContent = 'Position size required for all orders';
         }
     }
+
+    function updateFinalName() {
+        const platformValue = platform.value;
+        const nameValue = strategyName.value;
+        finalName.textContent = platformValue && nameValue ? `${platformValue}_${nameValue}` : 'platform_strategyname';
+    }
     
     strategyType.addEventListener('change', toggleTradingTimes);
     tradingMode.addEventListener('change', updateTradingModeHint);
+    platform.addEventListener('change', updateFinalName);
+    strategyName.addEventListener('input', updateFinalName);
     
     toggleTradingTimes();
     updateTradingModeHint();
+    updateFinalName();
 });
 </script>
 {% endblock %}
