@@ -397,68 +397,111 @@ def delete_strategy_route(strategy_id):
     return redirect(url_for('strategy_bp.index'))
 
 @strategy_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
+@check_session_validity
 def configure_symbols(strategy_id):
     """Configure symbols for strategy"""
-    if not is_session_valid():
+    user_id = session.get('user')
+    if not user_id:
+        flash('Session expired. Please login again.', 'error')
         return redirect(url_for('auth.login'))
-    
+        
     strategy = get_strategy(strategy_id)
     if not strategy:
-        flash('Strategy not found', 'error')
-        return redirect(url_for('strategy_bp.index'))
+        abort(404)
     
-    if strategy.user_id != session.get('user'):  
-        flash('Unauthorized access', 'error')
-        return redirect(url_for('strategy_bp.index'))
+    # Check if strategy belongs to user
+    if strategy.user_id != user_id:
+        abort(403)
     
     if request.method == 'POST':
         try:
-            # Get form data
-            symbol = request.form.get('symbol')
-            exchange = request.form.get('exchange')
-            quantity = request.form.get('quantity')
-            product_type = request.form.get('product_type')
-            
-            # Validate inputs
-            if not all([symbol, exchange, quantity, product_type]):
-                flash('All fields are required', 'error')
-                return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
-            
-            try:
-                quantity = int(quantity)
-                if quantity <= 0:
-                    raise ValueError
-            except ValueError:
-                flash('Quantity must be a positive number', 'error')
-                return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
-            
-            # Add symbol mapping
-            mapping = add_symbol_mapping(
-                strategy_id=strategy_id,
-                symbol=symbol,
-                exchange=exchange,
-                quantity=quantity,
-                product_type=product_type
-            )
-            
-            if mapping:
-                flash('Symbol added successfully', 'success')
+            # Get data from either JSON or form
+            if request.is_json:
+                data = request.get_json()
             else:
-                flash('Error adding symbol', 'error')
+                data = request.form.to_dict()
             
-            return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
+            logger.info(f"Received data: {data}")
             
+            # Handle bulk symbols
+            if 'symbols' in data:
+                symbols_text = data.get('symbols')
+                mappings = []
+                
+                for line in symbols_text.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    
+                    parts = line.strip().split(',')
+                    if len(parts) != 4:
+                        raise ValueError(f'Invalid format in line: {line}')
+                    
+                    symbol, exchange, quantity, product = parts
+                    if exchange not in VALID_EXCHANGES:
+                        raise ValueError(f'Invalid exchange: {exchange}')
+                    
+                    mappings.append({
+                        'symbol': symbol.strip(),
+                        'exchange': exchange.strip(),
+                        'quantity': int(quantity),
+                        'product_type': product.strip()
+                    })
+                
+                if mappings:
+                    bulk_add_symbol_mappings(strategy_id, mappings)
+                    return jsonify({'status': 'success'})
+            
+            # Handle single symbol
+            else:
+                symbol = data.get('symbol')
+                exchange = data.get('exchange')
+                quantity = data.get('quantity')
+                product_type = data.get('product_type')
+                
+                logger.info(f"Processing single symbol: symbol={symbol}, exchange={exchange}, quantity={quantity}, product_type={product_type}")
+                
+                if not all([symbol, exchange, quantity, product_type]):
+                    missing = []
+                    if not symbol: missing.append('symbol')
+                    if not exchange: missing.append('exchange')
+                    if not quantity: missing.append('quantity')
+                    if not product_type: missing.append('product_type')
+                    raise ValueError(f'Missing required fields: {", ".join(missing)}')
+                
+                if exchange not in VALID_EXCHANGES:
+                    raise ValueError(f'Invalid exchange: {exchange}')
+                
+                try:
+                    quantity = int(quantity)
+                except ValueError:
+                    raise ValueError('Quantity must be a valid number')
+                
+                if quantity <= 0:
+                    raise ValueError('Quantity must be greater than 0')
+                
+                mapping = add_symbol_mapping(
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    quantity=quantity,
+                    product_type=product_type
+                )
+                
+                if mapping:
+                    return jsonify({'status': 'success'})
+                else:
+                    raise ValueError('Failed to add symbol mapping')
+                
         except Exception as e:
-            logger.error(f"Error configuring symbols: {str(e)}")
-            flash('Error configuring symbols', 'error')
-            return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
+            error_msg = str(e)
+            logger.error(f'Error configuring symbols: {error_msg}')
+            return jsonify({'status': 'error', 'error': error_msg}), 400
     
-    # Get existing symbol mappings
     symbol_mappings = get_symbol_mappings(strategy_id)
-    
     return render_template('strategy/configure_symbols.html', 
-                         strategy=strategy,
-                         symbol_mappings=symbol_mappings)
+                         strategy=strategy, 
+                         symbol_mappings=symbol_mappings,
+                         exchanges=VALID_EXCHANGES)
 
 @strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
 def delete_symbol(strategy_id, mapping_id):
@@ -477,25 +520,24 @@ def delete_symbol(strategy_id, mapping_id):
     
     return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
 
-@strategy_bp.route('/search_symbols')
+@strategy_bp.route('/search')
+@check_session_validity
 def search_symbols():
-    """Search for symbols"""
-    if not is_session_valid():
-        return jsonify({'error': 'Unauthorized'}), 401
+    """Search symbols endpoint"""
+    query = request.args.get('q', '').strip()
+    exchange = request.args.get('exchange')
     
-    query = request.args.get('q', '').strip().upper()
-    if len(query) < 2:
-        return jsonify([])
+    if not query:
+        return jsonify({'results': []})
     
-    # For now, return a static list of symbols
-    # TODO: Integrate with actual symbol search API
-    symbols = [
-        'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
-        'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK'
-    ]
-    
-    filtered_symbols = [s for s in symbols if query in s]
-    return jsonify(filtered_symbols[:10])
+    results = enhanced_search_symbols(query, exchange)
+    return jsonify({
+        'results': [{
+            'symbol': result.symbol,
+            'name': result.name,
+            'exchange': result.exchange
+        } for result in results]
+    })
 
 @strategy_bp.route('/webhook/<webhook_id>', methods=['POST'])
 def webhook(webhook_id):
