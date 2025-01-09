@@ -238,6 +238,50 @@
                                 </div>
                             </div>
                         </div>
+
+                        {% if strategy.platform != 'tradingview' %}
+                        <!-- Collapsible Credentials Section -->
+                        <div class="collapse bg-base-200 rounded-box">
+                            <input type="checkbox" id="credentialsCollapse" /> 
+                            <div class="collapse-title font-medium">
+                                <div class="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                    </svg>
+                                    Click to Show/Hide Credentials
+                                </div>
+                            </div>
+                            <div class="collapse-content"> 
+                                <!-- Host URL -->
+                                <div class="mt-4">
+                                    <label class="label">
+                                        <span class="label-text">Host URL</span>
+                                        <span class="label-text-alt">Click to copy</span>
+                                    </label>
+                                    <div class="mockup-code host-url-container" id="hostUrl">
+                                        <pre><code>{{ request.host_url }}</code></pre>
+                                        <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Webhook ID -->
+                                <div class="mt-4">
+                                    <label class="label">
+                                        <span class="label-text">Webhook ID</span>
+                                        <span class="label-text-alt">Click to copy</span>
+                                    </label>
+                                    <div class="mockup-code webhook-id-container" id="webhookId">
+                                        <pre><code>{{ strategy.webhook_id }}</code></pre>
+                                        <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -285,7 +329,7 @@
                     </div>
                     {% else %}
                     <div class="alert alert-info">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         <div>
                             <h3 class="font-bold">No symbols configured</h3>
                             <div class="text-sm">Configure symbols to start trading</div>
@@ -339,31 +383,29 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const deleteModal = document.getElementById('delete_strategy_modal');
-    const webhookUrlContainer = document.querySelector('.webhook-url-container');
-    const copyHint = webhookUrlContainer.querySelector('.copy-hint');
-    const webhookUrl = webhookUrlContainer.querySelector('code').textContent;
+    // Initialize copy functionality for all copyable containers
+    const copyableContainers = [
+        { id: 'webhookUrl', label: 'Webhook URL' },
+        { id: 'hostUrl', label: 'Host URL' },
+        { id: 'webhookId', label: 'Webhook ID' }
+    ];
 
-    // Alert format copy functionality
-    window.copyAlertFormat = function() {
-        const alertFormat = document.getElementById('alertFormat');
-        navigator.clipboard.writeText(alertFormat.textContent.trim()).then(() => {
-            showToast('success', 'Alert format copied to clipboard!');
-        }).catch(err => {
-            showToast('error', 'Failed to copy alert format');
-            console.error('Failed to copy:', err);
-        });
-    };
+    copyableContainers.forEach(container => {
+        const element = document.getElementById(container.id);
+        if (element) {
+            const copyHint = element.querySelector('.copy-hint');
+            const code = element.querySelector('code');
 
-    // Webhook URL copy functionality
-    webhookUrlContainer.addEventListener('click', function() {
-        navigator.clipboard.writeText(webhookUrl).then(() => {
-            copyHint.classList.remove('hidden');
-            setTimeout(() => copyHint.classList.add('hidden'), 2000);
-            showToast('success', 'Webhook URL copied to clipboard!');
-        }).catch(() => {
-            showToast('error', 'Failed to copy webhook URL');
-        });
+            element.addEventListener('click', function() {
+                navigator.clipboard.writeText(code.textContent.trim()).then(() => {
+                    copyHint.classList.remove('hidden');
+                    setTimeout(() => copyHint.classList.add('hidden'), 2000);
+                    showToast('success', `${container.label} copied to clipboard!`);
+                }).catch(() => {
+                    showToast('error', `Failed to copy ${container.label.toLowerCase()}`);
+                });
+            });
+        }
     });
 
     // Handle strategy deletion
