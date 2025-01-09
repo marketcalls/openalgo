@@ -211,8 +211,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
         debounceTimer = setTimeout(() => {
             const exchange = document.querySelector('select[name="exchange"]').value;
-            fetch(`/api/strategy/search_symbols?q=${encodeURIComponent(query)}&exchange=${exchange}`)
-                .then(response => response.json())
+            fetch(`{{ url_for('strategy_bp.search_symbols') }}?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     const results = data.results || [];
                     searchResults.innerHTML = '';
@@ -225,7 +230,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         results.forEach(result => {
                             const li = document.createElement('li');
-                            li.innerHTML = `<a class="search-result" data-symbol="${result.symbol}">${result.symbol} - ${result.name}</a>`;
+                            li.innerHTML = `<a class="search-result" data-symbol="${result.symbol}" data-exchange="${result.exchange}">${result.symbol} - ${result.name || ''} (${result.exchange})</a>`;
                             ul.appendChild(li);
                         });
                         
@@ -236,6 +241,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .catch(error => {
                     console.error('Error searching symbols:', error);
+                    searchResults.innerHTML = '<li class="p-2 text-center text-error">Error searching symbols. Please try again.</li>';
+                    searchResults.classList.remove('hidden');
                     showToast('error', 'Error searching symbols');
                 });
         }, 300);
@@ -245,8 +252,10 @@ document.addEventListener('DOMContentLoaded', function() {
     searchResults.addEventListener('click', function(e) {
         if (e.target.classList.contains('search-result')) {
             const symbol = e.target.dataset.symbol;
+            const exchange = e.target.dataset.exchange;
             symbolSearch.value = symbol;
             searchInput.value = symbol;
+            document.querySelector('select[name="exchange"]').value = exchange;
             searchResults.classList.add('hidden');
         }
     });
@@ -262,33 +271,70 @@ document.addEventListener('DOMContentLoaded', function() {
     singleSymbolForm.addEventListener('submit', function(e) {
         e.preventDefault();
         
-        if (!symbolSearch.value) {
-            showToast('error', 'Please select a symbol from the search results');
+        const submitButton = this.querySelector('button[type="submit"]');
+        const originalButtonText = submitButton.innerHTML;
+        
+        // Validate form
+        const formData = new FormData(this);
+        const symbol = formData.get('symbol');
+        const exchange = formData.get('exchange');
+        const quantity = formData.get('quantity');
+        const product_type = formData.get('product_type');
+        
+        if (!symbol || !exchange || !quantity || !product_type) {
+            showToast('error', 'All fields are required');
             return;
         }
         
-        const formData = new FormData(this);
-        const data = Object.fromEntries(formData.entries());
+        // Show loading state
+        submitButton.classList.add('btn-loading');
+        submitButton.innerHTML = 'Adding...';
         
-        fetch(`/api/strategy/${strategyId}/symbols`, {
+        const payload = {
+            symbol: symbol,
+            exchange: exchange,
+            quantity: quantity,
+            product_type: product_type
+        };
+        
+        fetch(`{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Accept': 'application/json'
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify(payload)
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.status === 'success') {
-                showToast('success', 'Symbol added successfully');
-                location.reload();
+                showToast('success', 'Symbol added successfully', 2000);
+                // Reset form
+                singleSymbolForm.reset();
+                searchInput.value = '';
+                
+                // Delay page reload
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
             } else {
-                showToast('error', data.error || 'Error adding symbol');
+                showToast('error', data.error || 'Failed to add symbol');
+                // Reset button state
+                submitButton.classList.remove('btn-loading');
+                submitButton.innerHTML = originalButtonText;
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('error', 'Error adding symbol');
+            showToast('error', 'Failed to add symbol');
+            // Reset button state
+            submitButton.classList.remove('btn-loading');
+            submitButton.innerHTML = originalButtonText;
         });
     });
 
@@ -369,15 +415,32 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function showToast(type, message) {
+    function showToast(type, message, duration = 3000) {
+        // Remove any existing toasts
+        const existingToasts = document.querySelectorAll('.toast');
+        existingToasts.forEach(toast => toast.remove());
+
+        const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
+        const icon = type === 'success' ? 
+            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
+            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+
         const toast = document.createElement('div');
-        toast.className = `alert alert-${type} fixed bottom-4 right-4 w-auto max-w-sm z-50`;
+        toast.className = 'toast toast-end';
         toast.innerHTML = `
-            <span>${message}</span>
-            <button class="btn btn-ghost btn-xs" onclick="this.parentElement.remove()">×</button>
+            <div class="alert ${alertClass} shadow-lg">
+                ${icon}
+                <span>${message}</span>
+            </div>
         `;
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+
+        // Fade out animation
+        setTimeout(() => {
+            toast.style.transition = 'opacity 0.5s ease-out';
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 500);
+        }, duration);
     }
 });
 </script>
@@ -385,13 +448,43 @@ document.addEventListener('DOMContentLoaded', function() {
 
 {% block styles %}
 <style>
-.search-result {
-    cursor: pointer;
-    padding: 0.5rem 1rem;
-}
-.search-result:hover {
-    background-color: hsl(var(--b2));
-}
+    .btn-loading {
+        position: relative;
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .btn-loading:after {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        margin: auto;
+        border: 4px solid transparent;
+        border-top-color: currentColor;
+        border-radius: 50%;
+        animation: btn-loading-spinner 1s ease infinite;
+    }
+
+    @keyframes btn-loading-spinner {
+        from {
+            transform: rotate(0turn);
+        }
+        to {
+            transform: rotate(1turn);
+        }
+    }
+
+    .toast {
+        position: fixed;
+        bottom: 1rem;
+        right: 1rem;
+        z-index: 1000;
+    }
 </style>
 {% endblock %}
 

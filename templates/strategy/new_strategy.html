@@ -10,11 +10,11 @@
             
             <form method="POST" class="space-y-6">
                 <!-- Strategy Name -->
-                <div class="form-control">
+                <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text">Strategy Name</span>
                     </label>
-                    <input type="text" name="name" id="strategyName" class="input input-bordered" required
+                    <input type="text" name="name" id="strategyName" class="input input-bordered w-full" required
                            pattern="[a-zA-Z0-9\s\-_]+" 
                            title="Use only letters, numbers, spaces, hyphens, and underscores"
                            placeholder="Enter strategy name">
@@ -24,17 +24,17 @@
                 </div>
 
                 <!-- Platform -->
-                <div class="form-control">
+                <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text">Platform</span>
                     </label>
-                    <select name="platform" id="platform" class="select select-bordered" required>
-                        <option value="tradingview" selected>TradingView</option>
+                    <select name="platform" id="platform" class="select select-bordered w-full" required>
+                        <option value="tradingview">Tradingview</option>
                         <option value="amibroker">Amibroker</option>
-                        <option value="excel">Excel</option>
                         <option value="python">Python</option>
                         <option value="metatrader">Metatrader</option>
-                        <option value="other">Other</option>
+                        <option value="excel">Excel</option>
+                        <option value="others">Others</option>
                     </select>
                 </div>
 

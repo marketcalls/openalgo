@@ -345,7 +345,8 @@ def new_strategy():
                 trading_mode=trading_mode,
                 start_time=start_time,
                 end_time=end_time,
-                squareoff_time=squareoff_time
+                squareoff_time=squareoff_time,
+                platform=platform
             )
             
             if strategy:

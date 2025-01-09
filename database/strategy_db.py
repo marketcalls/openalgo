@@ -28,6 +28,7 @@ class Strategy(Base):
     name = Column(String(255), nullable=False)
     webhook_id = Column(String(36), unique=True, nullable=False)  # UUID
     user_id = Column(String(255), nullable=False)
+    platform = Column(String(50), nullable=False, default='tradingview')  # Platform type (tradingview, chartink, etc)
     is_active = Column(Boolean, default=True)
     is_intraday = Column(Boolean, default=True)
     trading_mode = Column(String(10), nullable=False, default='LONG')  # LONG, SHORT, or BOTH
@@ -61,7 +62,7 @@ def init_db():
     print("Initializing Strategy DB")
     Base.metadata.create_all(bind=engine)
 
-def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='LONG', start_time=None, end_time=None, squareoff_time=None):
+def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='LONG', start_time=None, end_time=None, squareoff_time=None, platform='tradingview'):
     """Create a new strategy"""
     try:
         strategy = Strategy(
@@ -72,7 +73,8 @@ def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='L
             trading_mode=trading_mode,
             start_time=start_time,
             end_time=end_time,
-            squareoff_time=squareoff_time
+            squareoff_time=squareoff_time,
+            platform=platform
         )
         db_session.add(strategy)
         db_session.commit()
