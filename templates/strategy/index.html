@@ -19,8 +19,13 @@
                 <div>
                     <h2 class="card-title flex justify-between">
                         {{ strategy.name }}
-                        <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
-                            {{ 'Active' if strategy.is_active else 'Inactive' }}
+                        <div class="flex gap-2">
+                            <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
+                                {{ 'Active' if strategy.is_active else 'Inactive' }}
+                            </div>
+                            <div class="badge {% if strategy.trading_mode == 'LONG' %}badge-primary{% elif strategy.trading_mode == 'SHORT' %}badge-warning{% else %}badge-secondary{% endif %}">
+                                {{ strategy.trading_mode }}
+                            </div>
                         </div>
                     </h2>
                     

@@ -59,6 +59,13 @@
                             </div>
                         </div>
 
+                        <div class="stat">
+                            <div class="stat-title">Trading Mode</div>
+                            <div class="stat-value text-sm">
+                                {{ strategy.trading_mode }}
+                            </div>
+                        </div>
+
                         {% if strategy.is_intraday %}
                         <div class="stat">
                             <div class="stat-title">Trading Hours</div>
@@ -110,6 +117,40 @@
                         <li>Positions squared off at {{ strategy.squareoff_time }}</li>
                         {% endif %}
                     </ul>
+                </div>
+            </div>
+
+            <!-- Webhook Request Format -->
+            <div class="alert alert-warning shadow-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                <div>
+                    <h3 class="font-bold">Webhook Request Format</h3>
+                    <div class="text-sm">
+                        Send a POST request to your webhook URL with this JSON body:
+                        <pre class="mockup-code mt-2 bg-base-300 text-xs">
+{
+  "strategy": "{{ strategy.name }}",
+  "symbol": "SYMBOL",
+  "action": "BUY|SELL"{% if strategy.trading_mode == 'BOTH' %},
+  "position_size": "0"  // Required{% endif %}
+}
+                        </pre>
+                        <p class="mt-2">
+                            {% if strategy.trading_mode == 'LONG' %}
+                            • For LONG mode: Use "BUY" to enter, "SELL" to exit
+                            • Regular orders for BUY, smart orders for SELL
+                            {% elif strategy.trading_mode == 'SHORT' %}
+                            • For SHORT mode: Use "SELL" to enter, "BUY" to exit
+                            • Regular orders for SELL, smart orders for BUY
+                            {% else %}
+                            • For BOTH mode: 
+                            • BUY with position_size > 0: Regular long entry
+                            • SELL with position_size = 0: Smart long exit
+                            • SELL with position_size > 0: Regular short entry
+                            • BUY with position_size = 0: Smart short exit
+                            {% endif %}
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>

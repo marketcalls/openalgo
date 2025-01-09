@@ -31,6 +31,26 @@
                     </select>
                 </div>
 
+                <!-- Trading Mode -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Trading Mode</span>
+                        <span class="label-text-alt">
+                            <div class="tooltip" data-tip="LONG: Only long trades (BUY to enter, SELL to exit). SHORT: Only short trades (SELL to enter, BUY to exit). BOTH: Both long and short trades (requires position size)">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            </div>
+                        </span>
+                    </label>
+                    <select name="trading_mode" class="select select-bordered" id="tradingMode">
+                        <option value="LONG">LONG Only</option>
+                        <option value="SHORT">SHORT Only</option>
+                        <option value="BOTH">BOTH (Long & Short)</option>
+                    </select>
+                    <label class="label">
+                        <span class="label-text-alt text-warning" id="tradingModeHint"></span>
+                    </label>
+                </div>
+
                 <!-- Trading Times (for intraday) -->
                 <div id="tradingTimes" class="space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -71,6 +91,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     const strategyType = document.getElementById('strategyType');
     const tradingTimes = document.getElementById('tradingTimes');
+    const tradingMode = document.getElementById('tradingMode');
+    const tradingModeHint = document.getElementById('tradingModeHint');
     
     function toggleTradingTimes() {
         if (strategyType.value === 'intraday') {
@@ -80,8 +102,22 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
+    function updateTradingModeHint() {
+        const mode = tradingMode.value;
+        if (mode === 'LONG') {
+            tradingModeHint.textContent = 'Use BUY to enter positions, SELL to exit';
+        } else if (mode === 'SHORT') {
+            tradingModeHint.textContent = 'Use SELL to enter positions, BUY to exit';
+        } else {
+            tradingModeHint.textContent = 'Position size required for all orders';
+        }
+    }
+    
     strategyType.addEventListener('change', toggleTradingTimes);
+    tradingMode.addEventListener('change', updateTradingModeHint);
+    
     toggleTradingTimes();
+    updateTradingModeHint();
 });
 </script>
 {% endblock %}

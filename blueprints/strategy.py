@@ -220,7 +220,6 @@ def squareoff_positions(strategy_id):
                 'quantity': mapping.quantity,
                 'product_type': mapping.product_type,
                 'strategy': strategy.name,
-                'strategy_id': strategy_id,
                 'order_type': 'MARKET',
                 'transaction_type': 'SELL'  # For squareoff, always SELL
             }
@@ -263,70 +262,67 @@ def index():
         return redirect(url_for('dashboard_bp.index'))
 
 @strategy_bp.route('/new', methods=['GET', 'POST'])
+@check_session_validity
 def new_strategy():
     """Create new strategy"""
-    if not is_session_valid():
-        return redirect(url_for('auth.login'))
-    
     if request.method == 'POST':
         try:
             # Get user_id from session
-            user_id = session.get('user')  
+            user_id = session.get('user')
             if not user_id:
-                logger.error("No user found in session")
+                logger.error("No user_id found in session")
                 flash('Session expired. Please login again.', 'error')
                 return redirect(url_for('auth.login'))
             
             logger.info(f"Creating strategy for user: {user_id}")
             name = request.form.get('name', '').strip()
+
+            # Get form data
+            strategy_type = request.form.get('type')
+            trading_mode = request.form.get('trading_mode', 'LONG')  # Default to LONG
+            start_time = request.form.get('start_time')
+            end_time = request.form.get('end_time')
+            squareoff_time = request.form.get('squareoff_time')
             
             # Validate strategy name
-            is_valid_name, name_error = validate_strategy_name(name)
-            if not is_valid_name:
-                flash(name_error, 'error')
+            if not validate_strategy_name(name):
+                flash('Invalid strategy name. Use only letters, numbers, spaces, hyphens, and underscores', 'error')
                 return redirect(url_for('strategy_bp.new_strategy'))
             
-            is_intraday = request.form.get('type') == 'intraday'
-            start_time = request.form.get('start_time') if is_intraday else None
-            end_time = request.form.get('end_time') if is_intraday else None
-            squareoff_time = request.form.get('squareoff_time') if is_intraday else None
-            
+            # Validate times for intraday strategy
+            is_intraday = strategy_type == 'intraday'
             if is_intraday:
-                if not all([start_time, end_time, squareoff_time]):
-                    flash('All time fields are required for intraday strategy', 'error')
+                if not validate_strategy_times(start_time, end_time, squareoff_time):
+                    flash('Invalid trading times. End time must be after start time and before square off time', 'error')
                     return redirect(url_for('strategy_bp.new_strategy'))
-                
-                # Validate time settings
-                is_valid_time, time_error = validate_strategy_times(start_time, end_time, squareoff_time)
-                if not is_valid_time:
-                    flash(time_error, 'error')
-                    return redirect(url_for('strategy_bp.new_strategy'))
+            else:
+                start_time = end_time = squareoff_time = None
             
-            # Generate webhook_id
+            # Generate webhook ID
             webhook_id = str(uuid.uuid4())
             
-            # Create strategy with user_id
+            # Create strategy with user ID
             strategy = create_strategy(
                 name=name,
                 webhook_id=webhook_id,
-                user_id=user_id,
+                user_id=user_id,  # Use username from session
                 is_intraday=is_intraday,
+                trading_mode=trading_mode,
                 start_time=start_time,
                 end_time=end_time,
                 squareoff_time=squareoff_time
             )
             
-            if not strategy:
-                flash('Error creating strategy. Please try again.', 'error')
+            if strategy:
+                flash('Strategy created successfully!', 'success')
+                return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy.id))
+            else:
+                flash('Error creating strategy', 'error')
                 return redirect(url_for('strategy_bp.new_strategy'))
-            
-            logger.info(f"Created strategy {strategy.id} for user {user_id}")
-            flash('Strategy created successfully', 'success')
-            return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy.id))
-            
+                
         except Exception as e:
-            logger.error(f"Error creating strategy: {str(e)}")
-            flash('Error creating strategy. Please try again.', 'error')
+            logger.error(f'Error creating strategy: {str(e)}')
+            flash('Error creating strategy', 'error')
             return redirect(url_for('strategy_bp.new_strategy'))
     
     return render_template('strategy/new_strategy.html')
@@ -566,53 +562,76 @@ def webhook(webhook_id):
         if not data:
             return jsonify({'error': 'No data received'}), 400
         
-        alert_name = data.get('alert_name', '').upper()
-        symbols = data.get('symbols', [])
+        # Validate required fields
+        required_fields = ['strategy', 'symbol', 'action']
+        if strategy.trading_mode == 'BOTH':
+            required_fields.append('position_size')
+            
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({'error': f'Missing required fields: {", ".join(missing_fields)}'}), 400
+            
+        # Validate action based on trading mode
+        action = data['action'].upper()
+        position_size = int(data.get('position_size', 0))
         
-        if not alert_name or not symbols:
-            return jsonify({'error': 'Invalid webhook data'}), 400
+        if strategy.trading_mode == 'LONG':
+            if action not in ['BUY', 'SELL']:
+                return jsonify({'error': 'Invalid action for LONG mode. Use BUY to enter, SELL to exit'}), 400
+            use_smart_order = action == 'SELL'
+        elif strategy.trading_mode == 'SHORT':
+            if action not in ['BUY', 'SELL']:
+                return jsonify({'error': 'Invalid action for SHORT mode. Use SELL to enter, BUY to exit'}), 400
+            use_smart_order = action == 'BUY'
+        else:  # BOTH mode
+            if action not in ['BUY', 'SELL']:
+                return jsonify({'error': 'Invalid action. Use BUY or SELL'}), 400
+            use_smart_order = (action == 'SELL' and position_size == 0) or (action == 'BUY' and position_size == 0)
+            
+        # Get symbol mapping
+        mapping = next((m for m in get_symbol_mappings(strategy.id) if m.symbol == data['symbol']), None)
+        if not mapping:
+            return jsonify({'error': f'No mapping found for symbol {data["symbol"]}'}), 400
+            
+        # Get API key from database
+        api_key = get_api_key_for_tradingview(strategy.user_id)
+        if not api_key:
+            logger.error(f'No API key found for user {strategy.user_id}')
+            return jsonify({'error': 'No API key found'}), 401
+
+        # Prepare order payload
+        payload = {
+            'apikey': api_key,
+            'symbol': mapping.symbol,
+            'exchange': mapping.exchange,
+            'product': mapping.product_type,
+            'strategy': strategy.name,
+            'action': action,
+            'pricetype': 'MARKET'
+        }
         
-        # Determine order type from alert name
-        order_type = None
-        if 'BUY' in alert_name:
-            order_type = 'BUY'
-        elif 'SELL' in alert_name:
-            order_type = 'SELL'
-        elif 'SHORT' in alert_name:
-            order_type = 'SHORT'
-        elif 'COVER' in alert_name:
-            order_type = 'COVER'
+        # Set quantity based on order type
+        if use_smart_order:
+            payload.update({
+                'quantity': '0',
+                'position_size': '0',
+                'price': '0',
+                'trigger_price': '0',
+                'disclosed_quantity': '0'
+            })
+            endpoint = 'placesmartorder'
         else:
-            return jsonify({'error': 'Invalid alert name'}), 400
-        
-        # Get symbol mappings
-        symbol_mappings = {m.symbol: m for m in get_symbol_mappings(strategy.id)}
-        
-        # Process orders
-        for symbol in symbols:
-            mapping = symbol_mappings.get(symbol)
-            if not mapping:
-                logger.warning(f'No mapping found for symbol {symbol} in strategy {strategy.name}')
-                continue
+            # For regular orders, use position_size if provided, otherwise use mapping quantity
+            quantity = position_size if position_size > 0 else mapping.quantity
+            payload.update({
+                'quantity': str(quantity)
+            })
+            endpoint = 'placeorder'
             
-            # Prepare order payload
-            payload = {
-                'symbol': mapping.symbol,
-                'exchange': mapping.exchange,
-                'quantity': mapping.quantity,
-                'product_type': mapping.product_type,
-                'strategy': strategy.name,
-                'strategy_id': strategy.id,
-                'order_type': 'MARKET',
-                'transaction_type': order_type
-            }
+        # Queue the order
+        queue_order(endpoint, payload)
+        return jsonify({'message': f'Order queued successfully for {data["symbol"]}'}), 200
             
-            # Queue order
-            endpoint = 'placesmartorder' if order_type in ['SHORT', 'COVER'] else 'placeorder'
-            queue_order(endpoint, payload)
-        
-        return jsonify({'message': 'Orders queued successfully'}), 200
-        
     except Exception as e:
         logger.error(f'Error processing webhook: {str(e)}')
         return jsonify({'error': 'Internal server error'}), 500
