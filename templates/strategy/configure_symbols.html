@@ -59,6 +59,12 @@
                         <select name="exchange" class="select select-bordered" required>
                             <option value="NSE" selected>NSE</option>
                             <option value="BSE">BSE</option>
+                            <option value="NFO">NFO</option>
+                            <option value="CDS">CDS</option>
+                            <option value="BFO">BFO</option>
+                            <option value="BCD">BCD</option>
+                            <option value="MCX">MCX</option>
+                            <option value="NCDEX">NCDEX</option>
                         </select>
                     </div>
 
@@ -79,6 +85,7 @@
                         <select name="product_type" class="select select-bordered" required>
                             <option value="MIS">MIS (Intraday)</option>
                             <option value="CNC">CNC (Delivery)</option>
+                            <option value="NRML">NRML (Normal)</option>
                         </select>
                     </div>
 
@@ -110,8 +117,9 @@
                             <h3 class="font-bold">CSV Format</h3>
                             <p class="text-sm">Each line should contain: Symbol,Exchange,Quantity,Product</p>
                             <ul class="list-disc list-inside text-sm mt-2">
-                                <li>Exchange: NSE or BSE</li>
-                                <li>Product: MIS or CNC</li>
+                                <li>Exchange: NSE, BSE, NFO, CDS, BFO, BCD, MCX, or NCDEX</li>
+                                <li>Product: MIS (Intraday), CNC (Delivery), or NRML (Normal)</li>
+                                <li>Note: CNC is only available for NSE/BSE, NRML for derivatives</li>
                                 <li>Quantity: Whole numbers only</li>
                             </ul>
                         </div>

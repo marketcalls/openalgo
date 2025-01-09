@@ -36,7 +36,23 @@ scheduler.start()
 BASE_URL = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
 
 # Valid exchanges
-VALID_EXCHANGES = ['NSE', 'BSE']
+VALID_EXCHANGES = ['NSE', 'BSE', 'NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX']
+
+# Product types per exchange
+EXCHANGE_PRODUCTS = {
+    'NSE': ['MIS', 'CNC'],
+    'BSE': ['MIS', 'CNC'],
+    'NFO': ['MIS', 'NRML'],
+    'CDS': ['MIS', 'NRML'],
+    'BFO': ['MIS', 'NRML'],
+    'BCD': ['MIS', 'NRML'],
+    'MCX': ['MIS', 'NRML'],
+    'NCDEX': ['MIS', 'NRML']
+}
+
+# Default values
+DEFAULT_EXCHANGE = 'NSE'
+DEFAULT_PRODUCT = 'MIS'
 
 # Separate queues for different order types
 regular_order_queue = queue.Queue()  # For placeorder (up to 10/sec)
