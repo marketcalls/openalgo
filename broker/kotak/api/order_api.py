@@ -2,54 +2,51 @@ import http.client
 import json
 import urllib.parse
 import os
+import logging
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.kotak.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data, reverse_map_exchange,map_exchange
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth_token, method="GET", payload=''):
 
-    AUTH_TOKEN = auth
+    token, sid, hsServerId, access_token = auth_token.split(":::")
 
-
-    access_token_parts = AUTH_TOKEN.split(":::")
-    token = access_token_parts[0]
-    sid = access_token_parts[1]
-    
-    api_secret = os.getenv('BROKER_API_SECRET')
-    print(api_secret) 
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     payload = ''
+    query_params = {"sId": hsServerId}
     headers = {
     'accept': 'application/json',
     'Sid': sid,
     'Auth': token,
     'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {api_secret}'
+    'Authorization': f'Bearer {access_token}'
     }
-    conn.request(method, endpoint, payload, headers)
+    conn.request(method, f"{endpoint}?" + urllib.parse.urlencode(query_params), payload, headers)
     res = conn.getresponse()
     data = res.read()
     print(data.decode("utf-8"))
         
     return json.loads(data.decode("utf-8"))
 
-def get_order_book(auth):
-    return get_api_response("/Orders/2.0/quick/user/orders?sId=server1",auth)
+def get_order_book(auth_token):
+    return get_api_response("/Orders/2.0/quick/user/orders", auth_token)
 
-def get_trade_book(auth):
-    return get_api_response("/Orders/2.0/quick/user/trades?sId=server1",auth)
+def get_trade_book(auth_token):
+    return get_api_response("/Orders/2.0/quick/user/trades", auth_token)
 
-def get_positions(auth):
-    return get_api_response("/Orders/2.0/quick/user/positions?sId=server1",auth)
+def get_positions(auth_token):
+    return get_api_response("/Orders/2.0/quick/user/positions", auth_token)
 
-def get_holdings(auth):
-    return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false",auth)
+def get_holdings(auth_token):
+    return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false", auth_token)
 
-def get_open_position(tradingsymbol, exchange, producttype,auth):
+def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    positions_data = get_positions(auth)
+    positions_data = get_positions(auth_token)
     print(positions_data)
     
     net_qty = '0'
@@ -63,50 +60,39 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
     return net_qty
 
-def place_order_api(data,auth):
-    AUTH_TOKEN = auth
-    access_token_parts = AUTH_TOKEN.split(":::")
-    auth_token_broker = access_token_parts[0]
-    sid = access_token_parts[1]
-    
-    api_secret = os.getenv('BROKER_API_SECRET')
+def place_order_api(data, auth_token):
+    token, sid, hsServerId, access_token = auth_token.split(":::")
     
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
-    
+    token_id = get_token(data['symbol'], data['exchange'])
+    newdata = transform_data(data, token_id)
     
     json_string = json.dumps(newdata)
-    print(json_string)
-    payload = urllib.parse.quote(json_string)
-    payload = f'jData={payload}'
+    payload = f'jData={urllib.parse.quote(json_string)}'
+    query_params = {"sId": hsServerId}
     
     headers = {
-    'accept': 'application/json',
-    'Sid': sid,
-    'Auth': auth_token_broker,
-    'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {api_secret}',
-    'Content-Type': 'application/x-www-form-urlencoded'
-    
+        'accept': 'application/json',
+        'Sid': sid,
+        'Auth': token,
+        'neo-fin-key': 'neotradeapi',
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
-    
-    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?sId=server1", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    response_data = data.decode("utf-8")
-    response_data = json.loads(response_data)
-    print(response_data)
-    if response_data['stat'] == 'Ok':
-        orderid = response_data['nOrdNo']
-    else:
-        orderid = None
-    return res, response_data, orderid
 
-def place_smartorder_api(data,auth):
+    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?" + urllib.parse.urlencode(query_params), payload, headers)
+    try:
+        res = conn.getresponse()
+        data = res.read()
+        response_data = json.loads(data.decode("utf-8"))
+        
+        orderid = response_data['nOrdNo'] if response_data['stat'] == 'Ok' else None
+        return res, response_data, orderid
+    except Exception as e:
+        logger.error(f"Error in place_order_api: {e}")
+        return None, {"stat": "NotOk", "error": str(e)}, None
 
-    AUTH_TOKEN = auth
+def place_smartorder_api(data, auth_token):
 
     #If no API call is made in this function then res will return None
     res = None
@@ -117,11 +103,8 @@ def place_smartorder_api(data,auth):
     product = data.get("product")
     position_size = int(data.get("position_size", "0"))
 
-    
-
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
-
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth_token))
 
     print(f"position_size : {position_size}") 
     print(f"Open Position : {current_position}") 
@@ -130,14 +113,13 @@ def place_smartorder_api(data,auth):
     action = None
     quantity = 0
 
-
     # If both position_size and current_position are 0, do nothing
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
         #print(f"action : {action}")
         #print(f"Quantity : {quantity}")
-        res, response, orderid = place_order_api(data,AUTH_TOKEN)
+        res, response, orderid = place_order_api(data, auth_token)
         #print(res)
         #print(response)
         
@@ -151,8 +133,6 @@ def place_smartorder_api(data,auth):
         orderid = None
         return res, response, orderid  # res remains None as no API call was made
    
-   
-
     if position_size == 0 and current_position>0 :
         action = "SELL"
         quantity = abs(current_position)
@@ -172,9 +152,6 @@ def place_smartorder_api(data,auth):
             quantity = current_position - position_size
             #print(f"smart sell quantity : {quantity}")
 
-
-
-
     if action:
         # Prepare data for placing the order
         order_data = data.copy()
@@ -183,21 +160,16 @@ def place_smartorder_api(data,auth):
 
         #print(order_data)
         # Place the order
-        res, response, orderid = place_order_api(order_data,auth)
+        res, response, orderid = place_order_api(order_data, auth_token)
         #print(res)
         print(response)
         print(orderid)
         
         return res , response, orderid
-    
 
-
-
-def close_all_positions(current_api_key,auth):
+def close_all_positions(current_api_key, auth_token):
     # Fetch the current open positions
-    AUTH_TOKEN = auth
-
-    positions_response = get_positions(AUTH_TOKEN)
+    positions_response = get_positions(auth_token)
     #print(positions_response)
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
@@ -214,7 +186,6 @@ def close_all_positions(current_api_key,auth):
             # Determine action based on net quantity
             action = 'SELL' if net_qty > 0 else 'BUY'
             quantity = abs(net_qty)
-
 
             #get openalgo symbol to send to placeorder function
             symboltoken = position['tok']
@@ -242,111 +213,80 @@ def close_all_positions(current_api_key,auth):
             print(place_order_payload)
 
             # Place the order to close the position
-            res, response, orderid =   place_order_api(place_order_payload,auth)
+            res, response, orderid =   place_order_api(place_order_payload, auth_token)
 
             print(res)
             print(response)
             print(orderid)
 
-
-            
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
-
-def cancel_order(orderid,auth):
-    AUTH_TOKEN = auth
-    access_token_parts = AUTH_TOKEN.split(":::")
-    auth_token_broker = access_token_parts[0]
-    sid = access_token_parts[1]
-    
-    api_secret = os.getenv('BROKER_API_SECRET')
+def cancel_order(orderid, auth_token):
+    token, sid, hsServerId, access_token = auth_token.split(":::")
     
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    orderid = {"on":orderid}
-    
-    json_string = json.dumps(orderid)
-    print(json_string)
-    payload = urllib.parse.quote(json_string)
-    payload = f'jData={payload}'
-    
+    payload = f'jData={urllib.parse.quote(json.dumps({"on": orderid}))}'
+    query_params = {"sId": hsServerId}
+
     headers = {
-    'accept': 'application/json',
-    'Sid': sid,
-    'Auth': auth_token_broker,
-    'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {api_secret}',
-    'Content-Type': 'application/x-www-form-urlencoded'
-    
+        'accept': 'application/json',
+        'Sid': sid,
+        'Auth': token,
+        'neo-fin-key': 'neotradeapi',
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/cancel?sId=server1", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    response_data = data.decode("utf-8")
-    response_data = json.loads(response_data)
-    print(response_data)
-    # Check if the request was successful
-    if response_data.get("stat"):
-        # Return a success response
-        return {"status": "success", "orderid": response_data.get("result")}, 200
-    else:
-        # Return an error response
+    conn.request("POST", "/Orders/2.0/quick/order/cancel?" + urllib.parse.urlencode(query_params), payload, headers)
+    try:
+        res = conn.getresponse()
+        data = res.read()
+        response_data = json.loads(data.decode("utf-8"))
+        
+        if response_data.get("stat"):
+            return {"status": "success", "orderid": response_data.get("result")}, 200
         return {"status": "error", "message": response_data.get("message", "Failed to cancel order")}, res.status
+    except Exception as e:
+        logger.error(f"Error in cancel_order: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
-
-def modify_order(data,auth):
-
-    AUTH_TOKEN = auth
-    access_token_parts = AUTH_TOKEN.split(":::")
-    auth_token_broker = access_token_parts[0]
-    sid = access_token_parts[1]
-    
-    api_secret = os.getenv('BROKER_API_SECRET')
+def modify_order(data, auth_token):
+    token, sid, hsServerId, access_token = auth_token.split(":::")
     
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    token = get_token(data['symbol'], data['exchange'])
-    print(data)
-    print(token)
-    newdata = transform_modify_order_data(data, token)  
+    token_id = get_token(data['symbol'], data['exchange'])
+    newdata = transform_modify_order_data(data, token_id)
     
-    
-    json_string = json.dumps(newdata)
-    print(json_string)
-    payload = urllib.parse.quote(json_string)
-    payload = f'jData={payload}'
-    
+    payload = f'jData={urllib.parse.quote(json.dumps(newdata))}'
+    query_params = {"sId": hsServerId}
+
     headers = {
-    'accept': 'application/json',
-    'Sid': sid,
-    'Auth': auth_token_broker,
-    'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {api_secret}',
-    'Content-Type': 'application/x-www-form-urlencoded'
-    
+        'accept': 'application/json',
+        'Sid': sid,
+        'Auth': token,
+        'neo-fin-key': 'neotradeapi',
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/vr/modify?sId=server1", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    response_data = data.decode("utf-8")
-    response_data = json.loads(response_data)
-    print(response_data)
-    if response_data.get("stat") == "Ok":
-        return {"status": "success", "orderid": response_data["nOrdNo"]}, 200
-    else:
+    conn.request("POST", "/Orders/2.0/quick/order/vr/modify?" + urllib.parse.urlencode(query_params), payload, headers)
+    try:
+        res = conn.getresponse()
+        data = res.read()
+        response_data = json.loads(data.decode("utf-8"))
+        
+        if response_data.get("stat") == "Ok":
+            return {"status": "success", "orderid": response_data["nOrdNo"]}, 200
         return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, res.status
+    except Exception as e:
+        logger.error(f"Error in modify_order: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
-
-def cancel_all_orders_api(data,auth):
+def cancel_all_orders_api(data, auth_token):
     # Get the order book
-
-    AUTH_TOKEN = auth
-    
-
-    order_book_response = get_order_book(AUTH_TOKEN)
+    order_book_response = get_order_book(auth_token)
     
     if order_book_response['data'] is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
@@ -361,7 +301,7 @@ def cancel_all_orders_api(data,auth):
     # Cancel the filtered orders
     for order in orders_to_cancel:
         orderid = order['nOrdNo']
-        cancel_response, status_code = cancel_order(orderid,auth)
+        cancel_response, status_code = cancel_order(orderid, auth_token)
         if status_code == 200:
             canceled_orders.append(orderid)
         else:

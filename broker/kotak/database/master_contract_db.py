@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
+from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
 
 
@@ -249,12 +250,15 @@ def process_kotak_nfo_csv(path):
     return tokensymbols
 
 def get_kotak_master_filepaths():
-    api_secret = os.getenv('BROKER_API_SECRET')
+    login_username = find_user_by_username().username
+    auth_token = get_auth_token(login_username)
+    access_token_parts = auth_token.split(":::")
+    access_token = access_token_parts[3]
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     payload = ''
     headers = {
     'accept': '*/*',
-    'Authorization': f'Bearer {api_secret}'
+    'Authorization': f'Bearer {access_token}'
     }
     conn.request("GET", "/Files/1.0/masterscrip/v1/file-paths", payload, headers)
     res = conn.getresponse()

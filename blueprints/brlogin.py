@@ -6,6 +6,7 @@ from utils.auth_utils import handle_auth_success, handle_auth_failure
 import http.client
 import json
 import jwt
+import base64
 import hashlib
 
 BROKER_API_KEY = get_broker_api_key()
@@ -160,9 +161,10 @@ def broker_callback(broker,para=None):
             token = request.form.get('token')
             sid = request.form.get('sid')
             userid = request.form.get('userid')
-            api_secret = get_broker_api_secret()
-
-            auth_token, error_message = auth_function(otp,token,sid,userid,api_secret)
+            access_token = request.form.get('access_token')
+            hsServerId = request.form.get('hsServerId')
+            
+            auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
             forward_url = 'kotak.html'
 
     else:
@@ -193,47 +195,83 @@ def broker_loginflow(broker):
         return redirect(url_for('auth.login'))
 
     if broker == 'kotak':
-        mobilenumber = request.form.get('mobilenumber')
+        # Get form data
+        mobile_number = request.form.get('mobilenumber', '')
         password = request.form.get('password')
-        conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-        payload = json.dumps({
-            "mobileNumber": mobilenumber,
-            "password": password
-        })
+
+        # Strip any existing prefix and add +91
+        mobile_number = mobile_number.replace('+91', '').strip()
+        if not mobile_number.startswith('+91'):
+            mobile_number = f'+91{mobile_number}'
+        
+        # First get the access token
         api_secret = get_broker_api_secret()
+        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
+        # Define the connection
+        conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
+
+        # Define the payload
+        payload = json.dumps({
+            'grant_type': 'client_credentials'
+        })
+
+        # Define the headers with Basic Auth
         headers = {
             'accept': '*/*',
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_secret}'
+            'Authorization': f'Basic {auth_string}'
         }
-        conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
+
+        # Make API request
+        conn.request("POST", "/oauth2/token", payload, headers)
+
+        # Get the response
         res = conn.getresponse()
-        data = res.read().decode("utf-8")
+        data = json.loads(res.read().decode("utf-8"))
 
-        data_dict = json.loads(data)
-        print(data_dict)
-
-        if 'data' in data_dict:
-            token = data_dict['data']['token']
-            sid = data_dict['data']['sid']
-            decode_jwt = jwt.decode(token, options={"verify_signature": False})
-            userid = decode_jwt.get("sub")
-
-            para = {
-                "token": token,
-                "sid": sid,
-                "userid": userid
+        if 'access_token' in data:
+            access_token = data['access_token']
+            # Login with mobile number and password
+            conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+            payload = json.dumps({
+                "mobileNumber": mobile_number,
+                "password": password
+            })
+            headers = {
+                'accept': '*/*',
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {access_token}'
             }
-            getKotakOTP(userid, api_secret)
-            return render_template('kotakotp.html', para=para)
-        else:
-            error_message = data_dict.get('message', 'Unknown error occurred')
-            return render_template('kotak.html', error_message=error_message)
+            conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
+            res = conn.getresponse()
+            data = res.read().decode("utf-8")
+
+            data_dict = json.loads(data)
+
+            if 'data' in data_dict:
+                token = data_dict['data']['token']
+                sid = data_dict['data']['sid']
+                hsServerId = data_dict['data']['hsServerId']
+                decode_jwt = jwt.decode(token, options={"verify_signature": False})
+                userid = decode_jwt.get("sub")
+
+                para = {
+                    "access_token": access_token,
+                    "token": token,
+                    "sid": sid,
+                    "hsServerId": hsServerId,
+                    "userid": userid
+                }
+                getKotakOTP(userid, access_token)
+                return render_template('kotakotp.html', para=para)
+            else:
+                error_message = data_dict.get('message', 'Unknown error occurred')
+                return render_template('kotak.html', error_message=error_message)
         
     return
 
 
-def getKotakOTP(userid,token):
+def getKotakOTP(userid,access_token):
     conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
     payload = json.dumps({
     "userId": userid,
@@ -243,7 +281,7 @@ def getKotakOTP(userid,token):
     headers = {
     'accept': '*/*',
     'Content-Type': 'application/json',
-    'Authorization': f'Bearer {token}'
+    'Authorization': f'Bearer {access_token}'
     }
     conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
     res = conn.getresponse()
