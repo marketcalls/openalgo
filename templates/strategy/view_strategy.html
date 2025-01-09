@@ -136,7 +136,7 @@
                             <span class="ml-2">Send a request to your webhook URL with this JSON body:</span>
                         </div>
 
-                        <div class="mockup-code bg-neutral text-neutral-content">
+                        <div class="mockup-code" id="webhookUrlSample">
                             <pre><code>{
   <span class="text-success">"symbol"</span>: <span class="text-info">"SYMBOL"</span>,
   <span class="text-success">"action"</span>: <span class="text-info">"BUY|SELL"</span>{% if strategy.trading_mode == 'BOTH' %},
@@ -171,7 +171,7 @@
                         {% else %}
                         <div class="grid gap-4">
                             <div class="alert alert-info shadow-lg">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                                 <span>Position size is required for all orders</span>
                             </div>
                             <div class="overflow-x-auto">
@@ -225,14 +225,18 @@
                         <div>
                             <label class="label">
                                 <span class="label-text">Webhook URL</span>
+                                <span class="label-text-alt">Click to copy</span>
                             </label>
-                            <div class="mockup-code bg-[#1e2124]">
-                                <pre><code class="text-gray-200">{{ request.host_url }}strategy/webhook/{{ strategy.webhook_id }}</code></pre>
+                            <div class="mockup-code" id="webhookUrl">
+                                <pre><code>{{ request.host_url }}strategy/webhook/{{ strategy.webhook_id }}</code></pre>
+                                <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                    <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                </div>
                             </div>
                         </div>
 
                         <div class="alert alert-info">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                             <div>
                                 <h3 class="font-bold">Setup Instructions</h3>
                                 <ol class="list-decimal list-inside text-sm mt-2 space-y-1">
@@ -300,17 +304,36 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const deleteModal = document.getElementById('delete_strategy_modal');
-    
+    const webhookUrlContainer = document.getElementById('webhookUrl');
+    const copyHint = webhookUrlContainer.querySelector('.copy-hint');
+    const webhookUrl = webhookUrlContainer.querySelector('code').textContent;
+
+    // Copy webhook URL on click
+    webhookUrlContainer.addEventListener('click', function() {
+        navigator.clipboard.writeText(webhookUrl).then(() => {
+            copyHint.classList.remove('hidden');
+            setTimeout(() => copyHint.classList.add('hidden'), 2000);
+            showToast('success', 'Webhook URL copied to clipboard!');
+        }).catch(() => {
+            showToast('error', 'Failed to copy webhook URL');
+        });
+    });
+
     // Handle strategy deletion
     document.getElementById('confirm_strategy_delete').addEventListener('click', function() {
         fetch(`/strategy/{{ strategy.id }}/delete`, {
             method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
         })
-        .then(response => {
-            if (response.ok) {
-                window.location.href = '{{ url_for("strategy_bp.index") }}';
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                window.location.href = "{{ url_for('strategy_bp.index') }}";
             } else {
-                throw new Error('Failed to delete strategy');
+                showToast('error', data.error || 'Error deleting strategy');
             }
         })
         .catch(error => {
@@ -318,53 +341,85 @@ document.addEventListener('DOMContentLoaded', function() {
             showToast('error', 'Error deleting strategy');
         });
     });
-
-    function showToast(type, message) {
-        const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
-        const icon = type === 'success' ? 
-            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
-            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
-
-        const toast = document.createElement('div');
-        toast.className = 'toast toast-end z-50';
-        toast.innerHTML = `
-            <div class="alert ${alertClass}">
-                ${icon}
-                <span>${message}</span>
-            </div>
-        `;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-    }
 });
+
+function showToast(type, message) {
+    const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
+    const icon = type === 'success' ? 
+        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
+        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end z-50';
+    toast.innerHTML = `
+        <div class="alert ${alertClass}">
+            ${icon}
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
 </script>
 {% endblock %}
 
 {% block styles %}
 <style>
-.mockup-code {
-    position: relative;
+#webhookUrl {
     cursor: pointer;
+    position: relative;
     transition: all 0.2s ease;
+}
+
+#webhookUrl:hover {
+    opacity: 0.95;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+#webhookUrl pre {
     margin: 0;
+    background: transparent;
     padding: 1rem;
 }
 
-.mockup-code:hover {
-    opacity: 0.9;
-}
-
-.mockup-code pre {
-    padding: 0;
-    margin: 0;
-    background: transparent;
+#webhookUrl code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .copy-hint {
-    background: hsl(var(--b3));
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.25rem;
     z-index: 10;
+}
+
+.copy-hint .badge {
+    font-size: 0.75rem;
+    padding: 0.5rem 1rem;
+}
+
+.mockup-code .text-success {
+    color: #4ade80 !important;
+}
+
+.mockup-code .text-info {
+    color: #60a5fa !important;
+}
+
+/* Theme-specific styles */
+[data-theme="light"] .mockup-code,
+[data-theme="garden"] .mockup-code {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+}
+
+[data-theme="light"] .mockup-code .badge,
+[data-theme="garden"] .mockup-code .badge {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+
+[data-theme="dark"] .mockup-code {
+    background-color: hsl(var(--p)) !important;
+    color: hsl(var(--pc)) !important;
 }
 </style>
 {% endblock %}
