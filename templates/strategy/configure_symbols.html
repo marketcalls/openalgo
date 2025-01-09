@@ -342,28 +342,54 @@ document.addEventListener('DOMContentLoaded', function() {
     bulkSymbolsForm.addEventListener('submit', function(e) {
         e.preventDefault();
         
-        const formData = new FormData(this);
-        const data = Object.fromEntries(formData.entries());
+        const submitButton = this.querySelector('button[type="submit"]');
+        const originalButtonText = submitButton.innerHTML;
         
-        fetch(`/api/strategy/${strategyId}/symbols`, {
+        // Show loading state
+        submitButton.classList.add('btn-loading');
+        submitButton.innerHTML = 'Adding...';
+        
+        const formData = new FormData(this);
+        const symbols = formData.get('symbols');
+        
+        fetch(`{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Accept': 'application/json'
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify({
+                symbols: symbols
+            })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.status === 'success') {
-                showToast('success', 'Symbols added successfully');
-                location.reload();
+                showToast('success', 'Symbols added successfully', 2000);
+                // Reset form
+                bulkSymbolsForm.reset();
+                
+                // Delay page reload
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
             } else {
-                showToast('error', data.error || 'Error adding symbols');
+                showToast('error', data.error || 'Failed to add symbols');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('error', 'Error adding symbols');
+            showToast('error', 'Failed to add symbols');
+        })
+        .finally(() => {
+            // Reset button state
+            submitButton.classList.remove('btn-loading');
+            submitButton.innerHTML = originalButtonText;
         });
     });
 
