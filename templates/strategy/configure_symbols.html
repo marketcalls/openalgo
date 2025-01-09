@@ -180,7 +180,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const strategyId = {{ strategy.id }};
+    const strategyId = "{{ strategy.id }}";
     const symbolSearch = document.getElementById('symbolSearch');
     const searchResults = document.getElementById('searchResults');
     const singleSymbolForm = document.getElementById('singleSymbolForm');
@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         debounceTimer = setTimeout(() => {
             const exchange = document.querySelector('select[name="exchange"]').value;
-            fetch(`/strategy/search?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+            fetch(`/api/strategy/search_symbols?q=${encodeURIComponent(query)}&exchange=${exchange}`)
                 .then(response => response.json())
                 .then(data => {
                     const results = data.results || [];
@@ -270,7 +270,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData(this);
         const data = Object.fromEntries(formData.entries());
         
-        fetch(`/strategy/${strategyId}/configure`, {
+        fetch(`/api/strategy/${strategyId}/symbols`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -299,7 +299,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData(this);
         const data = Object.fromEntries(formData.entries());
         
-        fetch(`/strategy/${strategyId}/configure`, {
+        fetch(`/api/strategy/${strategyId}/symbols`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -347,7 +347,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function deleteSymbol(mappingId, row) {
-        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
+        fetch(`/api/strategy/${strategyId}/symbols/${mappingId}/delete`, {
             method: 'POST',
         })
         .then(response => {

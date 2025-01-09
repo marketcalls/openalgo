@@ -225,13 +225,9 @@
                         <div>
                             <label class="label">
                                 <span class="label-text">Webhook URL</span>
-                                <span class="label-text-alt">Click to copy</span>
                             </label>
-                            <div class="mockup-code cursor-pointer relative bg-[#1e2124]" id="webhookUrl">
+                            <div class="mockup-code bg-[#1e2124]">
                                 <pre><code class="text-gray-200">{{ request.host_url }}strategy/webhook/{{ strategy.webhook_id }}</code></pre>
-                                <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                                    Click to copy
-                                </div>
                             </div>
                         </div>
 
@@ -250,10 +246,6 @@
                                     <li>Click "Create" button</li>
                                 </ol>
                             </div>
-                        </div>
-
-                        <div class="card-actions justify-end mt-6">
-                            <button class="btn btn-primary btn-sm" onclick="copyWebhookUrl()">Copy Webhook URL</button>
                         </div>
                     </div>
                 </div>
@@ -308,26 +300,7 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const deleteModal = document.getElementById('delete_strategy_modal');
-    const webhookUrlContainer = document.getElementById('webhookUrl');
-    const copyHint = webhookUrlContainer.querySelector('.copy-hint');
-    const webhookUrl = webhookUrlContainer.querySelector('code');
     
-    webhookUrlContainer.addEventListener('mouseenter', () => {
-        copyHint.classList.remove('hidden');
-    });
-    
-    webhookUrlContainer.addEventListener('mouseleave', () => {
-        copyHint.classList.add('hidden');
-    });
-    
-    webhookUrlContainer.addEventListener('click', function() {
-        navigator.clipboard.writeText(webhookUrl.textContent).then(() => {
-            showToast('success', 'Webhook URL copied to clipboard!');
-        }).catch(() => {
-            showToast('error', 'Failed to copy webhook URL');
-        });
-    });
-
     // Handle strategy deletion
     document.getElementById('confirm_strategy_delete').addEventListener('click', function() {
         fetch(`/strategy/{{ strategy.id }}/delete`, {
