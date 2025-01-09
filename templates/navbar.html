@@ -58,6 +58,12 @@
                 </a>
             </li>
             <li>
+                <a href="{{ url_for('strategy_bp.index') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
+                    Strategy
+                </a>
+            </li>
+            <li>
                 <a href="{{ url_for('analyzer_bp.analyzer') }}" 
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
                     API Analyzer

@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+
+{% block title %}Configure Symbols{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Configure Symbols</h1>
+        <div class="space-x-2">
+            <button class="btn btn-primary" id="addSymbolBtn">Add Symbol</button>
+            <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn">Back to Strategy</a>
+        </div>
+    </div>
+
+    <!-- Symbol List -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Symbol Mappings</h2>
+            
+            {% if symbol_mappings %}
+            <div class="overflow-x-auto">
+                <table class="table w-full">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th>Quantity</th>
+                            <th>Product Type</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mapping in symbol_mappings %}
+                        <tr>
+                            <td>{{ mapping.symbol }}</td>
+                            <td>{{ mapping.exchange }}</td>
+                            <td>{{ mapping.quantity }}</td>
+                            <td>{{ mapping.product_type }}</td>
+                            <td>
+                                <form method="POST" action="{{ url_for('strategy_bp.delete_symbol', strategy_id=strategy.id, mapping_id=mapping.id) }}" 
+                                      class="inline" onsubmit="return confirm('Remove this symbol?')">
+                                    <button type="submit" class="btn btn-error btn-xs">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <p class="text-base-content/70">No symbols configured yet</p>
+                <p class="text-sm mt-2">Click "Add Symbol" to get started</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Add Symbol Modal -->
+<dialog id="addSymbolModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Add Symbol</h3>
+        <form id="addSymbolForm" class="space-y-4">
+            <!-- Symbol Search -->
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text">Symbol</span>
+                </label>
+                <div class="relative">
+                    <input type="text" id="symbolSearch" class="input input-bordered w-full" 
+                           placeholder="Search for symbol..." autocomplete="off">
+                    <div id="symbolResults" class="absolute z-10 w-full mt-1 bg-base-100 shadow-lg rounded-lg hidden">
+                        <!-- Search results will be populated here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Exchange -->
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text">Exchange</span>
+                </label>
+                <select id="exchange" class="select select-bordered" required>
+                    <option value="NSE">NSE</option>
+                    <option value="BSE">BSE</option>
+                </select>
+            </div>
+
+            <!-- Quantity -->
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text">Quantity</span>
+                </label>
+                <input type="number" id="quantity" class="input input-bordered" required min="1">
+            </div>
+
+            <!-- Product Type -->
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text">Product Type</span>
+                </label>
+                <select id="productType" class="select select-bordered" required>
+                    <option value="MIS">MIS (Intraday)</option>
+                    <option value="CNC">CNC (Delivery)</option>
+                </select>
+            </div>
+
+            <div class="modal-action">
+                <button type="button" class="btn" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Symbol</button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+{% block scripts %}
+<script>
+let selectedSymbol = '';
+const modal = document.getElementById('addSymbolModal');
+const addSymbolBtn = document.getElementById('addSymbolBtn');
+const symbolSearch = document.getElementById('symbolSearch');
+const symbolResults = document.getElementById('symbolResults');
+const addSymbolForm = document.getElementById('addSymbolForm');
+
+// Show modal
+addSymbolBtn.addEventListener('click', () => {
+    modal.showModal();
+});
+
+// Close modal
+function closeModal() {
+    modal.close();
+    resetForm();
+}
+
+// Reset form
+function resetForm() {
+    addSymbolForm.reset();
+    symbolSearch.value = '';
+    selectedSymbol = '';
+    symbolResults.innerHTML = '';
+    symbolResults.classList.add('hidden');
+}
+
+// Symbol search
+let searchTimeout;
+symbolSearch.addEventListener('input', (e) => {
+    clearTimeout(searchTimeout);
+    const query = e.target.value.trim();
+    
+    if (query.length < 2) {
+        symbolResults.innerHTML = '';
+        symbolResults.classList.add('hidden');
+        return;
+    }
+    
+    searchTimeout = setTimeout(async () => {
+        try {
+            const response = await fetch(`/strategy/search_symbols?q=${encodeURIComponent(query)}`);
+            const data = await response.json();
+            
+            if (data.length > 0) {
+                symbolResults.innerHTML = data.map(symbol => `
+                    <div class="p-2 hover:bg-base-200 cursor-pointer" onclick="selectSymbol('${symbol}')">
+                        ${symbol}
+                    </div>
+                `).join('');
+                symbolResults.classList.remove('hidden');
+            } else {
+                symbolResults.innerHTML = '<div class="p-2">No results found</div>';
+                symbolResults.classList.remove('hidden');
+            }
+        } catch (err) {
+            console.error('Error searching symbols:', err);
+            showToast('error', 'Error searching symbols');
+        }
+    }, 300);
+});
+
+// Select symbol
+function selectSymbol(symbol) {
+    selectedSymbol = symbol;
+    symbolSearch.value = symbol;
+    symbolResults.classList.add('hidden');
+}
+
+// Handle form submission
+addSymbolForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    if (!selectedSymbol) {
+        showToast('error', 'Please select a valid symbol');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('symbol', selectedSymbol);
+    formData.append('exchange', document.getElementById('exchange').value);
+    formData.append('quantity', document.getElementById('quantity').value);
+    formData.append('product_type', document.getElementById('productType').value);
+    
+    try {
+        const response = await fetch(`{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (response.redirected) {
+            window.location.href = response.url;
+        } else {
+            showToast('error', 'Error adding symbol');
+        }
+    } catch (err) {
+        console.error('Error adding symbol:', err);
+        showToast('error', 'Error adding symbol');
+    }
+});
+
+// Close results when clicking outside
+document.addEventListener('click', (e) => {
+    if (!symbolSearch.contains(e.target) && !symbolResults.contains(e.target)) {
+        symbolResults.classList.add('hidden');
+    }
+});
+
+function showToast(type, message) {
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} fixed bottom-4 right-4 w-auto max-w-sm z-50`;
+    toast.innerHTML = `
+        <div>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+</script>
+{% endblock %}
+
+{% block styles %}
+<style>
+#symbolResults {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 0.5rem;
+}
+
+#symbolResults > div {
+    transition: background-color 0.2s ease;
+}
+</style>
+{% endblock %}
+
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}New Strategy{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-2xl">
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-6">Create New Strategy</h2>
+            
+            <form method="POST" class="space-y-6">
+                <!-- Strategy Name -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Strategy Name</span>
+                    </label>
+                    <input type="text" name="name" class="input input-bordered" required
+                           pattern="[a-zA-Z0-9\s\-_]+" 
+                           title="Use only letters, numbers, spaces, hyphens, and underscores"
+                           placeholder="Enter strategy name">
+                </div>
+
+                <!-- Strategy Type -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Strategy Type</span>
+                    </label>
+                    <select name="type" class="select select-bordered" id="strategyType">
+                        <option value="intraday">Intraday</option>
+                        <option value="positional">Positional</option>
+                    </select>
+                </div>
+
+                <!-- Trading Times (for intraday) -->
+                <div id="tradingTimes" class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Start Time</span>
+                            </label>
+                            <input type="time" name="start_time" class="input input-bordered" value="09:15">
+                        </div>
+                        
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">End Time</span>
+                            </label>
+                            <input type="time" name="end_time" class="input input-bordered" value="15:15">
+                        </div>
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Square Off Time</span>
+                        </label>
+                        <input type="time" name="squareoff_time" class="input input-bordered" value="15:15">
+                    </div>
+                </div>
+
+                <div class="card-actions justify-end mt-6">
+                    <a href="{{ url_for('strategy_bp.index') }}" class="btn">Cancel</a>
+                    <button type="submit" class="btn btn-primary">Create Strategy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const strategyType = document.getElementById('strategyType');
+    const tradingTimes = document.getElementById('tradingTimes');
+    
+    function toggleTradingTimes() {
+        if (strategyType.value === 'intraday') {
+            tradingTimes.classList.remove('hidden');
+        } else {
+            tradingTimes.classList.add('hidden');
+        }
+    }
+    
+    strategyType.addEventListener('change', toggleTradingTimes);
+    toggleTradingTimes();
+});
+</script>
+{% endblock %}
+
+{% endblock %}
