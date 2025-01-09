@@ -172,6 +172,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const strategyId = {{ strategy.id }};
     const symbolSearch = document.getElementById('symbolSearch');
     const searchResults = document.getElementById('searchResults');
     const singleSymbolForm = document.getElementById('singleSymbolForm');
@@ -261,7 +262,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData(this);
         const data = Object.fromEntries(formData.entries());
         
-        fetch(`/strategy/${strategy.id}/configure`, {
+        fetch(`/strategy/${strategyId}/configure`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -290,7 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData(this);
         const data = Object.fromEntries(formData.entries());
         
-        fetch(`/strategy/${strategy.id}/configure`, {
+        fetch(`/strategy/${strategyId}/configure`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -338,7 +339,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function deleteSymbol(mappingId, row) {
-        fetch(`/strategy/${strategy.id}/symbol/${mappingId}/delete`, {
+        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
             method: 'POST',
         })
         .then(response => {
