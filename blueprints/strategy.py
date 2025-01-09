@@ -578,11 +578,37 @@ def webhook(webhook_id):
             now = datetime.now(pytz.timezone('Asia/Kolkata'))
             current_time = now.strftime('%H:%M')
             
-            if strategy.start_time and current_time < strategy.start_time:
-                return jsonify({'error': 'Trading not yet started'}), 400
+            # Determine if this is an entry or exit order
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data received'}), 400
             
-            if strategy.end_time and current_time > strategy.end_time:
-                return jsonify({'error': 'Trading hours ended'}), 400
+            action = data['action'].upper()
+            position_size = int(data.get('position_size', 0))
+            
+            is_exit_order = False
+            if strategy.trading_mode == 'LONG':
+                is_exit_order = action == 'SELL'
+            elif strategy.trading_mode == 'SHORT':
+                is_exit_order = action == 'BUY'
+            else:  # BOTH mode
+                is_exit_order = position_size == 0
+            
+            # For entry orders, check if within entry time window
+            if not is_exit_order:
+                if strategy.start_time and current_time < strategy.start_time:
+                    return jsonify({'error': 'Entry orders not allowed before start time'}), 400
+                
+                if strategy.end_time and current_time > strategy.end_time:
+                    return jsonify({'error': 'Entry orders not allowed after end time'}), 400
+            
+            # For exit orders, check if within exit time window (up to square off time)
+            else:
+                if strategy.start_time and current_time < strategy.start_time:
+                    return jsonify({'error': 'Exit orders not allowed before start time'}), 400
+                
+                if strategy.squareoff_time and current_time > strategy.squareoff_time:
+                    return jsonify({'error': 'Exit orders not allowed after square off time'}), 400
         
         # Parse webhook data
         data = request.get_json()
@@ -615,12 +641,15 @@ def webhook(webhook_id):
                 return jsonify({'error': 'Invalid action. Use BUY or SELL'}), 400
             
             # Validate position size based on action
-            if action == 'BUY' and position_size <= 0:
-                return jsonify({'error': 'For BUY orders in BOTH mode, position_size must be > 0 for long entry'}), 400
-            if action == 'SELL' and position_size >= 0 and position_size != 0:
-                return jsonify({'error': 'For SELL orders in BOTH mode, position_size must be < 0 for short entry or = 0 for long exit'}), 400
+            if action == 'BUY' and position_size < 0:
+                return jsonify({'error': 'For BUY orders in BOTH mode, position_size must be >= 0'}), 400
+            if action == 'SELL' and position_size > 0:
+                return jsonify({'error': 'For SELL orders in BOTH mode, position_size must be <= 0'}), 400
             
-            use_smart_order = (action == 'SELL' and position_size == 0) or (action == 'BUY' and position_size == 0)
+            # Smart order logic:
+            # - BUY with position_size=0 means exit SHORT position
+            # - SELL with position_size=0 means exit LONG position
+            use_smart_order = position_size == 0
             
         # Get symbol mapping
         mapping = next((m for m in get_symbol_mappings(strategy.id) if m.symbol == data['symbol']), None)
