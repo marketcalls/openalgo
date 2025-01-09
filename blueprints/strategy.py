@@ -613,6 +613,13 @@ def webhook(webhook_id):
         else:  # BOTH mode
             if action not in ['BUY', 'SELL']:
                 return jsonify({'error': 'Invalid action. Use BUY or SELL'}), 400
+            
+            # Validate position size based on action
+            if action == 'BUY' and position_size <= 0:
+                return jsonify({'error': 'For BUY orders in BOTH mode, position_size must be > 0 for long entry'}), 400
+            if action == 'SELL' and position_size >= 0 and position_size != 0:
+                return jsonify({'error': 'For SELL orders in BOTH mode, position_size must be < 0 for short entry or = 0 for long exit'}), 400
+            
             use_smart_order = (action == 'SELL' and position_size == 0) or (action == 'BUY' and position_size == 0)
             
         # Get symbol mapping
@@ -648,8 +655,8 @@ def webhook(webhook_id):
             })
             endpoint = 'placesmartorder'
         else:
-            # For regular orders, use position_size if provided, otherwise use mapping quantity
-            quantity = position_size if position_size > 0 else mapping.quantity
+            # For regular orders, use absolute value of position_size if provided, otherwise use mapping quantity
+            quantity = abs(position_size) if position_size != 0 else mapping.quantity
             payload.update({
                 'quantity': str(quantity)
             })

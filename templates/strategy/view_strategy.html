@@ -121,34 +121,94 @@
             </div>
 
             <!-- Webhook Request Format -->
-            <div class="alert bg-gradient-to-br from-sky-50 to-indigo-50 shadow-xl">
-                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-sky-600 shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                <div>
-                    <h3 class="font-bold text-sky-700">Webhook Request Format</h3>
-                    <div class="text-sm text-sky-900">
-                        Send a POST request to your webhook URL with this JSON body:
-                        <pre class="mockup-code mt-2 bg-white/80 shadow-inner text-xs">
-{
-  "symbol": "SYMBOL",
-  "action": "BUY|SELL"{% if strategy.trading_mode == 'BOTH' %},
-  "position_size": "0"  // Required{% endif %}
-}
-                        </pre>
-                        <p class="mt-2">
-                            {% if strategy.trading_mode == 'LONG' %}
-                            • For LONG mode: Use "BUY" to enter, "SELL" to exit
-                            • Regular orders for BUY, smart orders for SELL
-                            {% elif strategy.trading_mode == 'SHORT' %}
-                            • For SHORT mode: Use "SELL" to enter, "BUY" to exit
-                            • Regular orders for SELL, smart orders for BUY
-                            {% else %}
-                            • For BOTH mode: 
-                            • BUY with position_size > 0: Regular long entry
-                            • SELL with position_size = 0: Smart long exit
-                            • SELL with position_size > 0: Regular short entry
-                            • BUY with position_size = 0: Smart short exit
-                            {% endif %}
-                        </p>
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-primary shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Webhook Request Format
+                    </h2>
+                    
+                    <div class="text-sm space-y-4">
+                        <div class="alert bg-base-200/50">
+                            <div class="badge badge-primary">POST</div>
+                            <span class="ml-2">Send a request to your webhook URL with this JSON body:</span>
+                        </div>
+
+                        <div class="mockup-code bg-neutral text-neutral-content">
+                            <pre><code>{
+  <span class="text-success">"symbol"</span>: <span class="text-info">"SYMBOL"</span>,
+  <span class="text-success">"action"</span>: <span class="text-info">"BUY|SELL"</span>{% if strategy.trading_mode == 'BOTH' %},
+  <span class="text-success">"position_size"</span>: <span class="text-info">"0"</span>{% endif %}
+}</code></pre>
+                        </div>
+
+                        <div class="divider">Trading Instructions</div>
+
+                        {% if strategy.trading_mode == 'LONG' %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="alert bg-success/10">
+                                <div class="badge badge-success">ENTRY</div>
+                                <span class="ml-2">Use "BUY" to enter positions</span>
+                            </div>
+                            <div class="alert bg-error/10">
+                                <div class="badge badge-error">EXIT</div>
+                                <span class="ml-2">Use "SELL" to exit positions</span>
+                            </div>
+                        </div>
+                        {% elif strategy.trading_mode == 'SHORT' %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="alert bg-success/10">
+                                <div class="badge badge-success">ENTRY</div>
+                                <span class="ml-2">Use "SELL" to enter positions</span>
+                            </div>
+                            <div class="alert bg-error/10">
+                                <div class="badge badge-error">EXIT</div>
+                                <span class="ml-2">Use "BUY" to exit positions</span>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="grid gap-4">
+                            <div class="alert alert-info shadow-lg">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                <span>Position size is required for all orders</span>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="table table-zebra bg-base-200/50">
+                                    <thead>
+                                        <tr>
+                                            <th>Action</th>
+                                            <th>Position Size</th>
+                                            <th>Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><div class="badge badge-success">BUY</div></td>
+                                            <td>> 0</td>
+                                            <td>Regular long entry</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-error">SELL</div></td>
+                                            <td>= 0</td>
+                                            <td>Smart long exit</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-success">SELL</div></td>
+                                            <td>< 0</td>
+                                            <td>Regular short entry</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-error">BUY</div></td>
+                                            <td>= 0</td>
+                                            <td>Smart short exit</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
