@@ -563,7 +563,7 @@ def webhook(webhook_id):
             return jsonify({'error': 'No data received'}), 400
         
         # Validate required fields
-        required_fields = ['strategy', 'symbol', 'action']
+        required_fields = ['symbol', 'action']
         if strategy.trading_mode == 'BOTH':
             required_fields.append('position_size')
             
