@@ -541,21 +541,25 @@ def configure_symbols(strategy_id):
                          exchanges=VALID_EXCHANGES)
 
 @strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
+@check_session_validity
 def delete_symbol(strategy_id, mapping_id):
     """Delete symbol mapping"""
-    if not is_session_valid():
-        return redirect(url_for('auth.login'))
-    
+    username = session.get('user')
+    if not username:
+        return jsonify({'status': 'error', 'error': 'Session expired'}), 401
+        
     strategy = get_strategy(strategy_id)
-    if not strategy or strategy.user_id != session.get('user_id'):
-        abort(404)
+    if not strategy or strategy.user_id != username:
+        return jsonify({'status': 'error', 'error': 'Strategy not found'}), 404
     
-    if delete_symbol_mapping(mapping_id):
-        flash('Symbol removed successfully!', 'success')
-    else:
-        flash('Error removing symbol', 'error')
-    
-    return redirect(url_for('strategy_bp.configure_symbols', strategy_id=strategy_id))
+    try:
+        if delete_symbol_mapping(mapping_id):
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'status': 'error', 'error': 'Symbol mapping not found'}), 404
+    except Exception as e:
+        logger.error(f'Error deleting symbol mapping: {str(e)}')
+        return jsonify({'status': 'error', 'error': str(e)}), 400
 
 @strategy_bp.route('/search')
 @check_session_validity

@@ -419,7 +419,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function deleteSymbol(mappingId, row) {
-        fetch(`/api/strategy/${strategyId}/symbols/${mappingId}/delete`, {
+        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
             method: 'POST',
         })
         .then(response => {
