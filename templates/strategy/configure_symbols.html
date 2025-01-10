@@ -243,7 +243,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error('Error searching symbols:', error);
                     searchResults.innerHTML = '<li class="p-2 text-center text-error">Error searching symbols. Please try again.</li>';
                     searchResults.classList.remove('hidden');
-                    showToast('error', 'Error searching symbols');
                 });
         }, 300);
     });
@@ -282,7 +281,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const product_type = formData.get('product_type');
         
         if (!symbol || !exchange || !quantity || !product_type) {
-            showToast('error', 'All fields are required');
             return;
         }
         
@@ -313,17 +311,11 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(data => {
             if (data.status === 'success') {
-                showToast('success', 'Symbol added successfully', 2000);
-                // Reset form
+                // Reset form and reload immediately
                 singleSymbolForm.reset();
                 searchInput.value = '';
-                
-                // Delay page reload
-                setTimeout(() => {
-                    location.reload();
-                }, 2000);
+                location.reload();
             } else {
-                showToast('error', data.error || 'Failed to add symbol');
                 // Reset button state
                 submitButton.classList.remove('btn-loading');
                 submitButton.innerHTML = originalButtonText;
@@ -331,7 +323,6 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('error', 'Failed to add symbol');
             // Reset button state
             submitButton.classList.remove('btn-loading');
             submitButton.innerHTML = originalButtonText;
@@ -370,21 +361,13 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(data => {
             if (data.status === 'success') {
-                showToast('success', 'Symbols added successfully', 2000);
-                // Reset form
+                // Reset form and reload immediately
                 bulkSymbolsForm.reset();
-                
-                // Delay page reload
-                setTimeout(() => {
-                    location.reload();
-                }, 2000);
-            } else {
-                showToast('error', data.error || 'Failed to add symbols');
+                location.reload();
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('error', 'Failed to add symbols');
         })
         .finally(() => {
             // Reset button state
@@ -425,7 +408,6 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => {
             if (response.ok) {
                 row.remove();
-                showToast('success', 'Symbol deleted successfully');
                 
                 // If no more symbols, reload to show empty state
                 if (symbolTable.getElementsByTagName('tr').length <= 1) {
@@ -437,36 +419,7 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('error', 'Error deleting symbol');
         });
-    }
-
-    function showToast(type, message, duration = 3000) {
-        // Remove any existing toasts
-        const existingToasts = document.querySelectorAll('.toast');
-        existingToasts.forEach(toast => toast.remove());
-
-        const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
-        const icon = type === 'success' ? 
-            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
-            '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
-
-        const toast = document.createElement('div');
-        toast.className = 'toast toast-end';
-        toast.innerHTML = `
-            <div class="alert ${alertClass} shadow-lg">
-                ${icon}
-                <span>${message}</span>
-            </div>
-        `;
-        document.body.appendChild(toast);
-
-        // Fade out animation
-        setTimeout(() => {
-            toast.style.transition = 'opacity 0.5s ease-out';
-            toast.style.opacity = '0';
-            setTimeout(() => toast.remove(), 500);
-        }, duration);
     }
 });
 </script>
@@ -503,13 +456,6 @@ document.addEventListener('DOMContentLoaded', function() {
         to {
             transform: rotate(1turn);
         }
-    }
-
-    .toast {
-        position: fixed;
-        bottom: 1rem;
-        right: 1rem;
-        z-index: 1000;
     }
 </style>
 {% endblock %}
