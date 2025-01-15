@@ -299,7 +299,7 @@ def transform_positions_data(positions_data):
 
     for position in positions_data:
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(float(position.get('avgPrice', 0.0)))
+        average_price_formatted = "{:.2f}".format(float(position.get('netAvg', 0.0)))
 
 
         if(position.get("productType")=="CNC"):
