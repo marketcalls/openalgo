@@ -106,7 +106,6 @@ def download_csv_zerodha_data(output_path):
         print(f"Failed to download. Status code: {res.status}")
 
 
-
 def reformat_symbol(row):
     symbol = row['symbol']
     instrument_type = row['instrumenttype']
@@ -135,10 +134,6 @@ def process_zerodha_csv(path):
     print("Processing Zerodha CSV Data")
     df = pd.read_csv(path)
 
-    #return df
-
-    # Assume your JSON structure requires some transformations to match your schema
-    # For the sake of this example, let's assume 'df' now represents your transformed DataFrame
     # Map exchange names
     exchange_map = {
         "NSE": "NSE",
@@ -155,36 +150,35 @@ def process_zerodha_csv(path):
     
     df['exchange'] = df['exchange'].map(exchange_map)
 
-
     # Update exchange names based on the instrument type
     df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
     df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
     df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
     df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'CDS'), 'exchange'] = 'CDS_INDEX'
 
-
+    # Format expiry date
     df['expiry'] = pd.to_datetime(df['expiry']).dt.strftime('%d-%b-%y').str.upper()
-    #df['symbol'] =  df['tradingsymbol']
 
+    # Combine instrument_token and exchange_token
+    df['token'] = df['instrument_token'].astype(str) + '::::' + df['exchange_token'].astype(str)
 
-    df = df[['exchange_token', 'tradingsymbol', 'name', 'expiry', 
-                       'strike', 'lot_size', 'instrument_type', 'exchange', 
-                       'tick_size']].rename(columns={
-    'exchange_token': 'token',
-    'tradingsymbol': 'symbol',
-    'name': 'name',
-    'expiry': 'expiry',
-    'strike': 'strike',
-    'lot_size': 'lotsize',
-    'instrument_type': 'instrumenttype',
-    'exchange': 'exchange',
-    'tick_size': 'tick_size'
+    # Select and rename columns
+    df = df[['token', 'tradingsymbol', 'name', 'expiry', 
+             'strike', 'lot_size', 'instrument_type', 'exchange', 
+             'tick_size']].rename(columns={
+        'tradingsymbol': 'symbol',
+        'name': 'name',
+        'expiry': 'expiry',
+        'strike': 'strike',
+        'lot_size': 'lotsize',
+        'instrument_type': 'instrumenttype',
+        'exchange': 'exchange',
+        'tick_size': 'tick_size'
     })
 
-    df['brsymbol'] =  df['symbol']
+    df['brsymbol'] = df['symbol']
     df['symbol'] = df.apply(reformat_symbol, axis=1)
     df['brexchange'] = df['exchange']
-
 
     # Fill NaN values in the 'expiry' column with an empty string
     df['expiry'] = df['expiry'].fillna('')
@@ -216,8 +210,6 @@ def delete_zerodha_temp_data(output_path):
             print(f"The temporary file {output_path} does not exist.")
     except Exception as e:
         print(f"An error occurred while deleting the file: {e}")
-    
-
 
 
 def master_contract_download():
@@ -242,7 +234,6 @@ def master_contract_download():
     except Exception as e:
         print(str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
-
 
 
 def search_symbols(symbol, exchange):
