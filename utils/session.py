@@ -50,19 +50,14 @@ def is_session_valid():
     # Parse login time
     login_time = datetime.fromisoformat(session['login_time'])
     
-    # Get configured expiry time
-    expiry_time = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-    hour, minute = map(int, expiry_time.split(':'))
+    # Calculate expiry time
+    expiry_time = login_time + get_session_expiry_time()
     
-    # Get today's expiry time
-    daily_expiry = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    
-    # If current time is past expiry time and login was before expiry time
-    if now_ist > daily_expiry and login_time < daily_expiry:
-        logger.info(f"Session expired at {daily_expiry} IST")
+    # Check if current time is past expiry
+    if now_ist > expiry_time:
+        logger.info("Session expired")
         return False
     
-    logger.debug(f"Session valid. Current time: {now_ist}, Login time: {login_time}, Daily expiry: {daily_expiry}")
     return True
 
 def check_session_validity(f):
@@ -70,10 +65,9 @@ def check_session_validity(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
-            session.clear()
-            logger.info("Invalid session detected - redirecting to login")
+            logger.info("Invalid session detected - clearing session")
+            clear_session()
             return redirect(url_for('auth.login'))
-        logger.debug("Session validated successfully")
         return f(*args, **kwargs)
     return decorated_function
 
@@ -83,6 +77,14 @@ def invalidate_session_if_invalid(f):
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
             logger.info("Invalid session detected - clearing session")
-            session.clear()
+            clear_session()
         return f(*args, **kwargs)
     return decorated_function
+
+def clear_session():
+    """Clear the current session"""
+    session.pop('user', None)
+    session.pop('broker', None)
+    session.pop('logged_in', None)
+    session.pop('login_time', None)
+    logger.info("Session cleared")

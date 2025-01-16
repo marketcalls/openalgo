@@ -1,17 +1,15 @@
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
+from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
 from flask import current_app as app
-from limiter import limiter  # Import the limiter instance
-from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
+from limiter import limiter
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+from database.broker_db import get_broker_config, save_broker_config, delete_broker_config
+from utils.config import get_login_rate_limit_min, get_login_rate_limit_hour
+from utils.session import check_session_validity
 import http.client
 import json
 import jwt
 import base64
 import hashlib
-
-BROKER_API_KEY = get_broker_api_key()
-LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
-LOGIN_RATE_LIMIT_HOUR = get_login_rate_limit_hour()
 
 brlogin_bp = Blueprint('brlogin', __name__, url_prefix='/')
 
@@ -19,17 +17,84 @@ brlogin_bp = Blueprint('brlogin', __name__, url_prefix='/')
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
+@brlogin_bp.route('/broker/login')
+@check_session_validity
+def broker_login():
+    # Get all broker configurations for the current user
+    broker_configs = {}
+    for broker in ['zerodha', 'fivepaisa']:  # Add more brokers as needed
+        config = get_broker_config(session['user']['id'], broker)
+        if config:
+            broker_configs[broker] = config
+    
+    return render_template('broker.html', broker_configs=broker_configs)
+
+@brlogin_bp.route('/broker/config/<broker>', methods=['GET', 'POST'])
+@check_session_validity
+def broker_config(broker):
+    if request.method == 'GET':
+        config = get_broker_config(session['user']['id'], broker)
+        return render_template('broker_config.html', broker_name=broker, config=config)
+    
+    return redirect(url_for('brlogin.broker_login'))
+
+@brlogin_bp.route('/broker/config/<broker>/save', methods=['POST'])
+@check_session_validity
+def save_broker_config_route(broker):
+    api_key = request.form.get('api_key')
+    api_secret = request.form.get('api_secret')
+    redirect_url = request.form.get('redirect_url')
+    
+    if not all([api_key, api_secret, redirect_url]):
+        flash('All fields are required', 'error')
+        return redirect(url_for('brlogin.broker_config', broker=broker))
+    
+    try:
+        save_broker_config(
+            session['user']['id'],
+            broker,
+            api_key,
+            api_secret,
+            redirect_url
+        )
+        flash('Broker configuration saved successfully!', 'success')
+        return redirect(url_for('brlogin.broker_login'))
+            
+    except Exception as e:
+        flash(f'Error saving configuration: {str(e)}', 'error')
+    
+    return redirect(url_for('brlogin.broker_config', broker=broker))
+
+@brlogin_bp.route('/broker/config/<broker>/delete', methods=['GET'])
+@check_session_validity
+def delete_broker_config_route(broker):
+    try:
+        if delete_broker_config(session['user']['id'], broker):
+            flash('Broker configuration deleted successfully!', 'success')
+            
+            # If user was logged in with this broker, log them out
+            if session.get('broker') == broker:
+                session.pop('broker', None)
+                session.pop('logged_in', None)
+        else:
+            flash('No configuration found to delete.', 'info')
+    except Exception as e:
+        flash(f'Error deleting configuration: {str(e)}', 'error')
+    
+    return redirect(url_for('brlogin.broker_login'))
+
 @brlogin_bp.route('/<broker>/callback', methods=['POST','GET'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+@limiter.limit(f"{get_login_rate_limit_min()}")
+@limiter.limit(f"{get_login_rate_limit_hour()}")
+@check_session_validity
 def broker_callback(broker,para=None):
-    print(f'Broker is {broker}')
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
+    # Check if broker is configured
+    config = get_broker_config(session['user']['id'], broker)
+    if not config:
+        flash('Please configure your broker settings first.', 'error')
+        return redirect(url_for('brlogin.broker_config', broker=broker))
 
     if session.get('logged_in'):
-        # Store broker in session and g
         session['broker'] = broker
         return redirect(url_for('dashboard_bp.dashboard'))
 
@@ -37,254 +102,18 @@ def broker_callback(broker,para=None):
     auth_function = broker_auth_functions.get(f'{broker}_auth')
 
     if not auth_function:
-        return jsonify(error="Broker authentication function not found."), 404
-    
-    if broker == 'fivepaisa':
-        if request.method == 'GET':
-            return render_template('5paisa.html')
-        
-        elif request.method == 'POST':
-            clientcode = request.form.get('clientid')
-            broker_pin = request.form.get('pin')
-            totp_code = request.form.get('totp')
+        flash('Unsupported broker.', 'error')
+        return redirect(url_for('brlogin.broker_login'))
 
-            auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
-            forward_url = '5paisa.html'
-
-    elif broker == 'angel':
-        if request.method == 'GET':
-            return render_template('angel.html')
-        
-        elif request.method == 'POST':
-            clientcode = request.form.get('clientid')
-            broker_pin = request.form.get('pin')
-            totp_code = request.form.get('totp')
-            auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
-            forward_url = 'angel.html'
-    
-    elif broker == 'aliceblue':
-        if request.method == 'GET':
-            return render_template('aliceblue.html')
-        
-        elif request.method == 'POST':
-            print('Aliceblue Login Flow')
-            userid = request.form.get('userid')
-            conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-            payload = json.dumps({
-                "userId": userid
-            })
-            headers = {
-                'Content-Type': 'application/json'
-            }
-            try:
-                conn.request("POST", "/rest/AliceBlueAPIService/api/customer/getAPIEncpkey", payload, headers)
-                res = conn.getresponse()
-                data = res.read().decode("utf-8")
-                data_dict = json.loads(data)
-                print(data_dict)
-                auth_token, error_message = auth_function(userid, data_dict['encKey'])
-                forward_url = 'aliceblue.html'
-            
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
-    elif broker=='fyers':
-        code = request.args.get('auth_code')
-        print(f'The code is {code}')
-        auth_token, error_message = auth_function(code)
-        forward_url = 'broker.html'
-
-    elif broker=='icici':
-        full_url = request.full_path
-        print(f'Full URL: {full_url}') 
-        code = request.args.get('apisession')
-        print(f'The code is {code}')
-        auth_token, error_message = auth_function(code)
-        forward_url = 'broker.html'
-
-    elif broker=='dhan':
-        code = 'dhan'
-        print(f'The code is {code}')
-        auth_token, error_message = auth_function(code)
-        forward_url = 'broker.html'
-
-    elif broker == 'zebu':  
-        if request.method == 'GET':
-            return render_template('zebu.html')
-        
-        elif request.method == 'POST':
-            userid = request.form.get('userid')
-            password = request.form.get('password')
-            totp_code = request.form.get('totp')
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'zebu.html'
-
-    elif broker == 'shoonya':  
-        if request.method == 'GET':
-            return render_template('shoonya.html')
-        
-        elif request.method == 'POST':
-            userid = request.form.get('userid')
-            password = request.form.get('password')
-            totp_code = request.form.get('totp')
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'shoonya.html'
-
-    elif broker == 'firstock':
-        if request.method == 'GET':
-            return render_template('firstock.html')
-        
-        elif request.method == 'POST':
-            userid = request.form.get('userid')
-            password = request.form.get('password')
-            totp_code = request.form.get('totp')
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'firstock.html'
-
-    elif broker == 'flattrade':
-        code = request.args.get('code')
-        client = request.args.get('client')  # Flattrade returns client ID as well
-        print(f'The code is {code} for client {client}')
-        auth_token, error_message = auth_function(code)  # Only pass the code parameter
-        forward_url = 'broker.html'
-
-    elif broker=='kotak':
-        print(f"The Broker is {broker}")
-        if request.method == 'GET':
-            return render_template('kotak.html')
-        
-        elif request.method == 'POST':
-            otp = request.form.get('otp')
-            token = request.form.get('token')
-            sid = request.form.get('sid')
-            userid = request.form.get('userid')
-            access_token = request.form.get('access_token')
-            hsServerId = request.form.get('hsServerId')
-            
-            auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
-            forward_url = 'kotak.html'
-
-    else:
-        code = request.args.get('code') or request.args.get('request_token')
-        print(f'The code is {code}')
-        auth_token, error_message = auth_function(code)
-        forward_url = 'broker.html'
-    
-    if auth_token:
-        # Store broker in session
-        session['broker'] = broker
-        print(f'Connected broker: {broker}')
-        if broker == 'zerodha':
-            auth_token = f'{BROKER_API_KEY}:{auth_token}'
-        if broker == 'dhan':
-            auth_token = f'{auth_token}'
-        return handle_auth_success(auth_token, session['user'], broker)
-    else:
-        return handle_auth_failure(error_message, forward_url=forward_url)
-    
-
-@brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def broker_loginflow(broker):
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
-
-    if broker == 'kotak':
-        # Get form data
-        mobile_number = request.form.get('mobilenumber', '')
-        password = request.form.get('password')
-
-        # Strip any existing prefix and add +91
-        mobile_number = mobile_number.replace('+91', '').strip()
-        if not mobile_number.startswith('+91'):
-            mobile_number = f'+91{mobile_number}'
-        
-        # First get the access token
-        api_secret = get_broker_api_secret()
-        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
-        # Define the connection
-        conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
-
-        # Define the payload
-        payload = json.dumps({
-            'grant_type': 'client_credentials'
-        })
-
-        # Define the headers with Basic Auth
-        headers = {
-            'accept': '*/*',
-            'Content-Type': 'application/json',
-            'Authorization': f'Basic {auth_string}'
-        }
-
-        # Make API request
-        conn.request("POST", "/oauth2/token", payload, headers)
-
-        # Get the response
-        res = conn.getresponse()
-        data = json.loads(res.read().decode("utf-8"))
-
-        if 'access_token' in data:
-            access_token = data['access_token']
-            # Login with mobile number and password
-            conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-            payload = json.dumps({
-                "mobileNumber": mobile_number,
-                "password": password
-            })
-            headers = {
-                'accept': '*/*',
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {access_token}'
-            }
-            conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-
-            data_dict = json.loads(data)
-
-            if 'data' in data_dict:
-                token = data_dict['data']['token']
-                sid = data_dict['data']['sid']
-                hsServerId = data_dict['data']['hsServerId']
-                decode_jwt = jwt.decode(token, options={"verify_signature": False})
-                userid = decode_jwt.get("sub")
-
-                para = {
-                    "access_token": access_token,
-                    "token": token,
-                    "sid": sid,
-                    "hsServerId": hsServerId,
-                    "userid": userid
-                }
-                getKotakOTP(userid, access_token)
-                return render_template('kotakotp.html', para=para)
-            else:
-                error_message = data_dict.get('message', 'Unknown error occurred')
-                return render_template('kotak.html', error_message=error_message)
-        
-    return
-
-
-def getKotakOTP(userid,access_token):
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = json.dumps({
-    "userId": userid,
-    "sendEmail": True,
-    "isWhitelisted": True
-    })
-    headers = {
-    'accept': '*/*',
-    'Content-Type': 'application/json',
-    'Authorization': f'Bearer {access_token}'
-    }
-    conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    return 'success'
+    try:
+        result = auth_function(request, config)
+        if result.get('success'):
+            handle_auth_success(result)
+            session['broker'] = broker
+            return redirect(url_for('dashboard_bp.dashboard'))
+        else:
+            handle_auth_failure(result)
+            return redirect(url_for('brlogin.broker_login'))
+    except Exception as e:
+        flash(f'Authentication failed: {str(e)}', 'error')
+        return redirect(url_for('brlogin.broker_login'))

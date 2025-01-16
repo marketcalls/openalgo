@@ -30,6 +30,7 @@ from restx_api import api_v1_bp, api
 
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.user_db import init_db as ensure_user_tables_exists
+from database.broker_db import init_db as ensure_broker_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
@@ -101,9 +102,10 @@ def setup_environment(app):
     with app.app_context():
         #load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
-        # Ensure all the tables exist
+        # Initialize all database tables
         ensure_auth_tables_exists()
         ensure_user_tables_exists()
+        ensure_broker_tables_exists()
         ensure_master_contract_tables_exists()
         ensure_api_log_tables_exists()
         ensure_analyzer_tables_exists()
@@ -111,7 +113,7 @@ def setup_environment(app):
         ensure_chartink_tables_exists()
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
-        ensure_strategy_tables_exists()
+        ensure_strategy_tables_exists()  # Initialize strategy tables before broker tables
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
