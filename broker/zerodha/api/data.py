@@ -193,45 +193,65 @@ class BrokerData:
                 
                 # Split token to get instrument_token for historical data
                 instrument_token = symbol_info.token.split('::::')[0]
+
+            # Convert dates to datetime objects
+            start_date = pd.to_datetime(from_date)
+            end_date = pd.to_datetime(to_date)
             
-            # Format dates - always use full day range to handle special sessions
-            from_str = f"{from_date}+00:00:00"
-            to_str = f"{to_date}+23:59:59"
+            # Initialize empty list to store DataFrames
+            dfs = []
             
-            # Log the request details
-            logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
-            
-            # Construct endpoint exactly like the curl example
-            endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}"
-            
-            logger.info(f"Making request to endpoint: {endpoint}")
-            
-            # Use get_api_response like quotes API
-            response = get_api_response(endpoint, self.auth_token)
-            
-            if not response or response.get('status') != 'success':
-                logger.error(f"API Response: {response}")
-                raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
-            
-            # Convert to DataFrame
-            candles = response.get('data', {}).get('candles', [])
-            if not candles:
+            # Process data in 60-day chunks
+            current_start = start_date
+            while current_start <= end_date:
+                # Calculate chunk end date (60 days or remaining period)
+                current_end = min(current_start + timedelta(days=59), end_date)
+                
+                # Format dates for API call
+                from_str = current_start.strftime('%Y-%m-%d+00:00:00')
+                to_str = current_end.strftime('%Y-%m-%d+23:59:59')
+                
+                # Log the request details
+                logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
+                
+                # Construct endpoint
+                endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}"
+                logger.info(f"Making request to endpoint: {endpoint}")
+                
+                # Use get_api_response
+                response = get_api_response(endpoint, self.auth_token)
+                
+                if not response or response.get('status') != 'success':
+                    logger.error(f"API Response: {response}")
+                    raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
+                
+                # Convert to DataFrame
+                candles = response.get('data', {}).get('candles', [])
+                if candles:
+                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    dfs.append(df)
+                
+                # Move to next chunk
+                current_start = current_end + timedelta(days=1)
+                
+            # If no data was found, return empty DataFrame
+            if not dfs:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # Create DataFrame and convert datetime to epoch
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            # Combine all chunks
+            final_df = pd.concat(dfs, ignore_index=True)
             
             # Convert timestamp to epoch properly using ISO format
-            df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
-            df['timestamp'] = df['timestamp'].astype('int64') // 10**9  # Convert nanoseconds to seconds
+            final_df['timestamp'] = pd.to_datetime(final_df['timestamp'], format='ISO8601')
+            final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9  # Convert nanoseconds to seconds
             
-            # Sort by timestamp to ensure proper order
-            df = df.sort_values('timestamp').reset_index(drop=True)
+            # Sort by timestamp and remove duplicates
+            final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
             # Ensure volume is integer
-            df['volume'] = df['volume'].astype(int)
+            final_df['volume'] = final_df['volume'].astype(int)
             
-            return df
+            return final_df
                 
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
