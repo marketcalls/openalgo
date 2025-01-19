@@ -31,7 +31,10 @@ def get_margin_data(auth_token):
 
     # Fetch margin data
     margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, conn)
+    
+    # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
+        # Log the error or return an empty dictionary to indicate failure
         print(f"Error fetching margin data: {margin_data.get('emsg')}")
         return {}
 
@@ -48,24 +51,22 @@ def get_margin_data(auth_token):
             total_realised += realized_pnl
             total_unrealised += unrealized_pnl
 
-    # Calculate margin details
     try:
-        total_available_margin = (
-            float(margin_data.get('cash', 0)) + 
-            float(margin_data.get('payin', 0)) - 
-            float(margin_data.get('marginused', 0))
-        )
-        total_collateral = float(margin_data.get('brkcollamt', 0))
-        total_used_margin = float(margin_data.get('marginused', 0))
+        # Calculate total_available_margin as the sum of 'cash' and 'payin'
+        total_available_margin = float(margin_data.get('cash',0)) + float(margin_data.get('payin',0)) - float(margin_data.get('marginused',0))
+        total_collateral = float(margin_data.get('brkcollamt',0))
+        total_used_margin = float(margin_data.get('marginused',0))
 
-        # Construct and return processed data
-        return {
-            "availablecash": f"{total_available_margin:.2f}",
-            "collateral": f"{total_collateral:.2f}",
-            "m2munrealized": f"{total_unrealised:.2f}",
-            "m2mrealized": f"{total_realised:.2f}",
-            "utiliseddebits": f"{total_used_margin:.2f}",
+        # Construct and return the processed margin data
+        processed_margin_data = {
+            "availablecash": "{:.2f}".format(total_available_margin),
+            "collateral": "{:.2f}".format(total_collateral),
+            "m2munrealized": "{:.2f}".format(total_unrealised),
+            "m2mrealized": "{:.2f}".format(total_realised),
+            "utiliseddebits": "{:.2f}".format(total_used_margin),
         }
-    except (KeyError, ValueError) as e:
+        return processed_margin_data
+    except KeyError as e:
+        # Log the exception and return an empty dictionary if there's an unexpected error
         print(f"Error processing margin data: {str(e)}")
         return {}
