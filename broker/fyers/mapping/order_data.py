@@ -408,3 +408,19 @@ def calculate_portfolio_statistics(holdings_data):
     }
 
 
+def calculate_darvas_statistics(darvas_data):
+    totalholdingvalue = sum(item['CMP'] * item['QTY'] for item in darvas_data)
+    totalinvvalue = sum(item['RATE'] * item['QTY'] for item in darvas_data)
+    totalprofitandloss = sum(item['Profit_Loss'] for item in darvas_data)
+    
+    # To avoid division by zero in the case when total_investment_value is 0
+    totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
+    totalpnlpercentage = round(totalpnlpercentage, 2)
+
+
+    return {
+        'totalholdingvalue': totalholdingvalue,
+        'totalinvvalue': totalinvvalue,
+        'totalprofitandloss': totalprofitandloss,
+        'totalpnlpercentage': totalpnlpercentage
+    }

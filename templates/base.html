@@ -135,6 +135,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('orders_bp.darvas') }}" 
+                           class="{{ 'active' if request.endpoint == 'orders_bp.darvas' }}">
+                            Darvas
+                        </a>
+                    </li>
+                    <li>
                         <a href="{{ url_for('orders_bp.holdings') }}" 
                            class="{{ 'active' if request.endpoint == 'orders_bp.holdings' }}">
                             Holdings

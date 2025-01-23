@@ -148,6 +148,49 @@ def positions():
     
     return render_template('positions.html', positions_data=positions_data)
 
+@orders_bp.route('/darvas')
+@check_session_validity
+def darvas():
+    broker = session.get('broker')
+    if not broker:
+        logger.error("Broker not set in session")
+        return "Broker not set in session", 400
+
+    # Dynamically import broker-specific modules for API and mapping
+    api_funcs = dynamic_import(broker, 'api.darvas', ['get_data'])
+    mapping_funcs = dynamic_import(broker, 'mapping.order_data', ['calculate_darvas_statistics'])
+
+    if not api_funcs or not mapping_funcs:
+        logger.error(f"Error loading broker-specific modules for {broker}")
+        return "Error loading broker-specific modules", 500
+
+    login_username = session['user']
+    auth_token = get_auth_token(login_username)
+
+    if auth_token is None:
+        logger.warning(f"No auth token found for user {login_username}")
+        return redirect(url_for('auth.logout'))
+
+    # Using the dynamically imported `get_positions` function
+    get_data = api_funcs['get_data']
+    darvas_data = get_data(auth_token)
+    logger.debug(f"Darvas data received: {darvas_data}")
+    # print(darvas_data)
+    # if 'status' in darvas_data and darvas_data['status'] == 'error':
+    #     logger.error("Error in Darvas data response")
+    #     return redirect(url_for('auth.logout'))
+
+    # # Using the dynamically imported mapping functions
+    # map_position_data = mapping_funcs['map_position_data']
+    # transform_positions_data = mapping_funcs['transform_darvas_data']
+    calculate_darvas_statistics = mapping_funcs['calculate_darvas_statistics']
+    # positions_data = map_position_data(positions_data)
+    # darvas_data = transform_positions_data(darvas_data)
+    portfolio_stats = calculate_darvas_statistics(darvas_data)
+    
+    return render_template('darvas.html', darvas_data=darvas_data,portfolio_stats=portfolio_stats)
+
+
 @orders_bp.route('/holdings')
 @check_session_validity
 def holdings():

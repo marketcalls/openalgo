@@ -1,0 +1,205 @@
+{% extends 'base.html' %}
+
+{% block head %}
+<style>
+    .stat-card {
+        @apply bg-base-100 rounded-lg shadow-lg p-6 transition-all duration-300;
+    }
+    
+    .stat-card:hover {
+        @apply shadow-xl transform -translate-y-1;
+    }
+
+    .table-container {
+        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg mt-8;
+    }
+
+    .table-header {
+        @apply sticky top-0 bg-base-200 z-10;
+    }
+
+    .position-long {
+        @apply text-success font-semibold;
+    }
+
+    .position-short {
+        @apply text-error font-semibold;
+    }
+
+    .position-neutral {
+        @apply text-base-content font-semibold;
+    }
+
+    .quick-action-btn {
+        @apply btn btn-sm;
+    }
+
+    /* Ensure dropdown is visible */
+    .dropdown.dropdown-end .dropdown-content {
+        @apply mt-2;
+        min-width: 12rem;
+        z-index: 50;
+    }
+
+    /* Add some padding to menu items */
+    .dropdown-content .menu li > * {
+        @apply py-3 px-4;
+    }
+
+    /* Ensure last row dropdown is visible */
+    tr:last-child .dropdown .dropdown-content {
+        bottom: 100%;
+        top: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="w-full">
+    <!-- Holdings Summary Dashboard Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- Total Holding Value Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Holding Value</div>
+                <div class="stat-value text-primary">
+                    {{ portfolio_stats.totalholdingvalue| round(2) }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Total Investment Value Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Investment Value</div>
+                <div class="stat-value text-secondary">
+                    {{ portfolio_stats.totalinvvalue| round(2) }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Total Profit and Loss Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total Profit and Loss</div>
+                <div class="stat-value {% if portfolio_stats.totalprofitandloss > 0 %}text-success{% else %}text-error{% endif %}">
+                    {{ portfolio_stats.totalprofitandloss| round(2) }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Total PnL Percentage Card -->
+        <div class="stat-card">
+            <div class="stat">
+                <div class="stat-title">Total PnL Percentage</div>
+                <div class="stat-value {% if portfolio_stats.totalpnlpercentage > 0 %}text-success{% else %}text-error{% endif %}">
+                    {{ portfolio_stats.totalpnlpercentage| round(2) }}%
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Header Section -->
+    <div class="mb-6">
+        <!-- <h1 class="text-3xl font-bold">Trading Positions</h1> -->
+        <p class="text-base-content/60">Monitor and Manage your active trading positions</p>
+    </div>
+    
+
+    <!-- Positions Table -->
+    <div id="positions-table-container" class="table-container">
+        <table class="table w-full">
+            <thead class="table-header">
+                <tr>
+                    <th class="cursor-pointer hover:bg-base-300">
+                        Rank
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                        </svg>
+                    </th>
+                    <th>COMPANY</th>
+                    <th>NSE CODE</th>
+                    <th>Net Qty</th>
+                    <th>Avg Price</th>
+                    <th>LTP</th>
+                    <th>P&L</th>
+                    <th class="w-20">P&L %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for data in darvas_data %}
+                <tr class="hover:bg-base-200">
+                    <td class="font-mono">{{ data.RANK }}</td>
+                    <td class="font-mono">{{ data.COMPANY }}</td>
+                    <td class="font-mono">{{ data.CODE }}</td>
+                    <td class="font-mono">{{ data.QTY }}</td>
+                    <td class="font-mono">{{ data.RATE }}</td>
+                    <td class="font-mono">{{ data.CMP }}</td>
+                    <td class="{% if data.Profit_Loss > 0 %}text-success{% elif data.Profit_Loss < 0 %}text-error{% endif %}">
+                        {{ data.Profit_Loss }}
+                    </td>
+                    <td class="{% if data.Profit_loss_per > 6.28 %}text-success{% elif data.Profit_loss_per > 3.14 and data.Profit_loss_per < 6.27%}text-warning{% elif data.Profit_loss_per < 0 %}text-error{% endif %}">
+                        {{ data.Profit_loss_per }}%
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add sorting functionality to table headers
+    document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
+        headerCell.addEventListener('click', () => {
+            const table = headerCell.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
+            
+            // Get current sort direction
+            const currentDirection = headerCell.getAttribute('data-sort') || 'asc';
+            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+            
+            // Update sort direction
+            headerCell.setAttribute('data-sort', newDirection);
+            
+            // Sort rows
+            rows.sort((a, b) => {
+                const aValue = a.children[index].textContent.trim();
+                const bValue = b.children[index].textContent.trim();
+                
+                // Check if values are numbers
+                const aNum = parseFloat(aValue);
+                const bNum = parseFloat(bValue);
+                
+                if (!isNaN(aNum) && !isNaN(bNum)) {
+                    return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
+                }
+                
+                return newDirection === 'asc' 
+                    ? aValue.localeCompare(bValue)
+                    : bValue.localeCompare(aValue);
+            });
+            
+            // Clear and repopulate tbody
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
+});
+
+// Position management functions
+function exitPosition(symbol, exchange) {
+    if (confirm(`Are you sure you want to exit position for ${symbol}?`)) {
+        // Implement position exit logic
+        console.log(`Exiting position for ${symbol} on ${exchange}`);
+    }
+}
+
+function modifyPosition(symbol, exchange) {
+    // Implement position modification logic
+    console.log(`Modifying position for ${symbol} on ${exchange}`);
+}
+</script>
+{% endblock %}

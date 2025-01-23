@@ -40,6 +40,12 @@
                 </a>
             </li>
             <li>
+                <a href="{{ url_for('orders_bp.darvas') }}" 
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.darvas' }}">
+                    Darvas
+                </a>
+            </li>
+            <li>
                 <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
                     Tradingview
