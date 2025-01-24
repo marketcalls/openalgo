@@ -5,6 +5,7 @@ from database.token_db import get_br_symbol, get_oa_symbol
 import pandas as pd
 from datetime import datetime
 import urllib.parse
+import time
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -97,7 +98,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            print(br_symbol)
+            print(f"Using broker symbol: {br_symbol}")
             
             # Check for unsupported timeframes first
             if interval in ['W', 'M']:
@@ -121,27 +122,126 @@ class BrokerData:
                     error_msg += f"{category}: {', '.join(timeframes)}\n"
                 raise Exception(error_msg)
             
-            # URL encode the symbol to handle special characters
-            encoded_symbol = urllib.parse.quote(br_symbol)
+            # Convert dates to datetime objects
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            current_dt = pd.Timestamp.now()
             
-            endpoint = (f"/data/history?symbol={encoded_symbol}&resolution={resolution}"
-                       f"&date_format=1&range_from={start_date}&range_to={end_date}")
+            # Adjust end date if it's in the future
+            if end_dt > current_dt:
+                print(f"Warning: End date {end_dt.date()} is in the future. Adjusting to current date {current_dt.date()}")
+                end_dt = current_dt
             
-            response = get_api_response(endpoint, self.auth_token)
+            # Validate date range
+            if start_dt > end_dt:
+                raise Exception(f"Start date {start_dt.date()} cannot be after end date {end_dt.date()}")
             
-            if response.get('s') != 'ok':
-                raise Exception(f"Error from Fyers API: {response.get('message', 'Unknown error')}")
+            # Initialize empty list to store DataFrames
+            dfs = []
             
-            # Convert to DataFrame with minimal columns
-            candles = response.get('candles', [])
-            if not candles:
+            # Determine chunk size based on resolution
+            if resolution == '1D':
+                chunk_days = 300  # Reduced from 200 to be safer
+            else:
+                chunk_days = 60   # Reduced from 60 to be safer
+            
+            # Process data in chunks
+            current_start = start_dt
+            retry_count = 0
+            max_retries = 3
+            
+            while current_start <= end_dt:
+                try:
+                    # Calculate chunk end date
+                    current_end = min(current_start + pd.Timedelta(days=chunk_days-1), end_dt)
+                    
+                    # Format dates for API call
+                    chunk_start = current_start.strftime('%Y-%m-%d')
+                    chunk_end = current_end.strftime('%Y-%m-%d')
+                    
+                    print(f"Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to {chunk_end}")
+                    
+                    # URL encode the symbol to handle special characters
+                    encoded_symbol = urllib.parse.quote(br_symbol)
+                    
+                    # Construct endpoint with query parameters
+                    endpoint = (f"/data/history?"
+                              f"symbol={encoded_symbol}&"
+                              f"resolution={resolution}&"
+                              f"date_format=1&"  # Keep epoch format
+                              f"range_from={chunk_start}&"
+                              f"range_to={chunk_end}")
+                    
+                    print(f"Making request to endpoint: {endpoint}")
+                    response = get_api_response(endpoint, self.auth_token)
+                    
+                    if response.get('s') != 'ok':
+                        error_msg = response.get('message', 'Unknown error')
+                        print(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
+                        
+                        if retry_count < max_retries:
+                            retry_count += 1
+                            print(f"Retrying... Attempt {retry_count} of {max_retries}")
+                            time.sleep(2 * retry_count)  # Exponential backoff
+                            continue
+                        
+                        # If max retries reached, move to next chunk
+                        retry_count = 0
+                        current_start = current_end + pd.Timedelta(days=1)
+                        time.sleep(1)
+                        continue
+                    
+                    # Reset retry count on success
+                    retry_count = 0
+                    
+                    # Get candles from response
+                    candles = response.get('candles', [])
+                    if candles:
+                        # Convert list of lists to DataFrame with epoch timestamp
+                        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        dfs.append(df)
+                        print(f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}")
+                    else:
+                        print(f"No data available for period {chunk_start} to {chunk_end}")
+                    
+                    # Add a small delay between chunks to avoid rate limiting
+                    time.sleep(0.5)
+                    
+                    # Move to next chunk
+                    current_start = current_end + pd.Timedelta(days=1)
+                    
+                except Exception as e:
+                    print(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"Retrying... Attempt {retry_count} of {max_retries}")
+                        time.sleep(2 * retry_count)
+                        continue
+                    
+                    # If max retries reached, move to next chunk
+                    retry_count = 0
+                    current_start = current_end + pd.Timedelta(days=1)
+                    time.sleep(1)
+                    continue
+            
+            # If no data was found, return empty DataFrame
+            if not dfs:
+                print("No data was collected for the entire period")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-            # Return DataFrame with epoch timestamp
-            return pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Combine all chunks
+            final_df = pd.concat(dfs, ignore_index=True)
+            
+            # Sort by timestamp and remove duplicates
+            final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp'], keep='first')
+            
+            print(f"Successfully collected data: {len(final_df)} total candles")
+            return final_df
             
         except Exception as e:
-            raise Exception(f"Error fetching historical data: {str(e)}")
+            error_msg = f"Error fetching historical data: {str(e)}"
+            print(error_msg)
+            raise Exception(error_msg)
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
