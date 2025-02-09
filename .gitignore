@@ -14,14 +14,18 @@ Thumbs.db
 config.ini
 
 
-#DB Files and Log/Tmp Files
+#DB Files, CSV Files and Log/Tmp Files
 
 *.egg-info/
 *.db
 *.sqlite
 *.log
 *.tmp
+checkpoint.txt
 
+# CSV Files (except symbols.csv)
+*.csv
+!symbols.csv
 
 # Environments 
 .env 
@@ -43,4 +47,3 @@ venv.bak/
 
 # Tailwind CSS output
 # **/output.css
-
