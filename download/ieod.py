@@ -7,7 +7,7 @@ from openalgo import api
 from datetime import datetime, timedelta
 
 # Initialize the API client
-client = api(api_key='1d7e1b2b3a0cf5ca50788f98ceacd64329c4bf408e564c4944ce565d1396d153', host='http://127.0.0.1:5000')
+client = api(api_key='your_api_key_here', host='http://127.0.0.1:5000')
 
 # Path to the CSV file
 symbols_file = "symbols.csv"
