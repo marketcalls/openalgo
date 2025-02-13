@@ -11,7 +11,7 @@ certifi==2024.7.4
 cffi==1.17.1
 charset-normalizer==3.3.2
 click==8.1.7
-cryptography==44.0.0
+cryptography==44.0.1
 darkdetect==0.8.0
 Deprecated==1.2.14
 dnspython==2.6.1
