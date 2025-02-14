@@ -208,7 +208,7 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
-
+    print(positions_response)
     # Check if the positions data is null or empty
     if positions_response['body']['NetPositionDetail'] is None or not positions_response['body']['NetPositionDetail']:
         return {"message": "No Open Positions Found"}, 200
@@ -226,7 +226,8 @@ def close_all_positions(current_api_key,auth):
 
             exchange = reverse_map_exchange(position['Exch'],position['ExchType'])
             #get openalgo symbol to send to placeorder function
-            symbol = get_oa_symbol(position['ScripName'].upper(),exchange)
+    
+            symbol = get_symbol(position['ScripCode'],exchange)
 
             # Prepare the order payload
             place_order_payload = {
