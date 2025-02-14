@@ -370,7 +370,7 @@ def cancel_all_orders_api(data,auth):
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['ExchOrderID']
+        orderid = order['BrokerOrderId']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
             canceled_orders.append(orderid)
