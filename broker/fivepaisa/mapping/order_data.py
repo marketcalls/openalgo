@@ -162,7 +162,7 @@ def transform_order_data(orders):
             "trigger_price": order.get("SLTriggerRate", 0.0),
             "pricetype": pricetype,
             "product": order.get("DelvIntra", ""),
-            "orderid": order.get("ExchOrderID", ""),
+            "orderid": order.get("BrokerOrderId", ""),
             "order_status": order.get("OrderStatus", ""),
             "timestamp": convert_date_string(order.get("BrokerOrderTime", ""))
         }

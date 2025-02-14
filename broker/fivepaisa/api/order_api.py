@@ -258,27 +258,42 @@ def close_all_positions(current_api_key,auth):
 
 
 def cancel_order(orderid,auth):
-    # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
 
+    # First get the order details from orderbook
+    orderbook_data = get_order_book(AUTH_TOKEN)
     
-    # Set up the request headers
+    # Find the order with matching BrokerOrderId and get its ExchOrderID
+    exch_order_id = None
+    order_data = None
+    if orderbook_data and orderbook_data.get('body') and orderbook_data['body'].get('OrderBookDetail'):
+        for order in orderbook_data['body']['OrderBookDetail']:
+            if str(order.get('BrokerOrderId')) == str(orderid):
+                exch_order_id = order.get('ExchOrderID')
+                order_data = order
+                break
+    
+    if not exch_order_id:
+        return {"status": "error", "message": f"Order {orderid} not found in orderbook"}
+
     headers = {
       'Authorization': f'bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': f'bearer {AUTH_TOKEN}'
     }
-    
+
     # Prepare the payload
     json_data = {
-            "head": {
-                "key": api_key
-            },
-            "body": {
-                "ExchOrderID": orderid,
-            }
+        "head": {
+            "key": api_key
+        },
+        "body": {
+                "ExchOrderID": exch_order_id,
         }
+    }
 
     payload = json.dumps(json_data)
+
     print(payload)
     
     # Establish the connection and send the request
