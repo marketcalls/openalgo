@@ -246,11 +246,11 @@ def squareoff_positions(strategy_id):
             # Use placesmartorder with quantity=0 and position_size=0 for squareoff
             payload = {
                 'apikey': api_key,
-                'strategy': strategy.name,
                 'symbol': mapping.symbol,
                 'exchange': mapping.exchange,
-                'action': 'SELL',  # Direction doesn't matter for closing
                 'product': mapping.product_type,
+                'strategy': strategy.name,
+                'action': 'SELL',  # Direction doesn't matter for closing
                 'pricetype': 'MARKET',
                 'quantity': '0',
                 'position_size': '0',  # This will close the position
@@ -692,22 +692,36 @@ def webhook(webhook_id):
         }
         
         # Set quantity based on order type
-        if use_smart_order:
+        if strategy.trading_mode == 'BOTH':
+            # For BOTH mode, always use placesmartorder with direct position size
+            # Set quantity to 0 if position_size is 0 (for exits)
+            quantity = '0' if position_size == 0 else str(mapping.quantity)
             payload.update({
-                'quantity': '0',
-                'position_size': '0',  # This will close the position
+                'quantity': quantity,
+                'position_size': str(position_size),  # Use position_size directly from webhook data
                 'price': '0',
                 'trigger_price': '0',
                 'disclosed_quantity': '0'
             })
             endpoint = 'placesmartorder'
         else:
-            # For regular orders, use absolute value of position_size if provided, otherwise use mapping quantity
-            quantity = abs(position_size) if position_size != 0 else mapping.quantity
-            payload.update({
-                'quantity': str(quantity)
-            })
-            endpoint = 'placeorder'
+            # For LONG/SHORT modes, keep existing logic
+            if use_smart_order:
+                payload.update({
+                    'quantity': '0',
+                    'position_size': '0',  # This will close the position
+                    'price': '0',
+                    'trigger_price': '0',
+                    'disclosed_quantity': '0'
+                })
+                endpoint = 'placesmartorder'
+            else:
+                # For regular orders, use absolute value of position_size if provided, otherwise use mapping quantity
+                quantity = abs(position_size) if position_size != 0 else mapping.quantity
+                payload.update({
+                    'quantity': str(quantity)
+                })
+                endpoint = 'placeorder'
             
         # Queue the order
         queue_order(endpoint, payload)
