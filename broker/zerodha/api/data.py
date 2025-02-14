@@ -177,11 +177,15 @@ class BrokerData:
             if not resolution:
                 raise Exception(f"Unsupported timeframe: {timeframe}")
             
+
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+
             # Get the token from database
             with db_session() as session:
                 symbol_info = session.query(SymToken).filter(
                     SymToken.exchange == exchange,
-                    SymToken.brsymbol == symbol
+                    SymToken.brsymbol == br_symbol
                 ).first()
                 
                 if not symbol_info:
