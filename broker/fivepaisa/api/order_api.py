@@ -278,8 +278,8 @@ def cancel_order(orderid,auth):
 
     headers = {
       'Authorization': f'bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json',
-        'Authorization': f'bearer {AUTH_TOKEN}'
+      'Content-Type': 'application/json'
+
     }
 
     # Prepare the payload
@@ -316,8 +316,6 @@ def modify_order(data,auth):
 
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-
-
     transformed_data = transform_modify_order_data(data)  # You need to implement this function
     # Set up the request headers
 
