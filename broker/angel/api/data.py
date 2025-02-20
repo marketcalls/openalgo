@@ -2,7 +2,7 @@ import http.client
 import json
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
 
@@ -131,51 +131,92 @@ class BrokerData:
                 supported = list(self.timeframe_map.keys())
                 raise Exception(f"Timeframe '{interval}' is not supported by Angel. Supported timeframes are: {', '.join(supported)}")
             
-            # Convert dates to required format (YYYY-MM-DD HH:mm)
-            from_date = datetime.strptime(start_date, '%Y-%m-%d')
-            to_date = datetime.strptime(end_date, '%Y-%m-%d')
+            # Convert dates to datetime objects
+            from_date = pd.to_datetime(start_date)
+            to_date = pd.to_datetime(end_date)
             
-            # Set time to market hours (9:15 AM to 3:30 PM)
-            from_date = from_date.replace(hour=9, minute=15)
-            to_date = to_date.replace(hour=15, minute=30)
+            # Set start time to 00:00 for the start date
+            from_date = from_date.replace(hour=0, minute=0)
             
-            # Prepare payload for historical data API
-            payload = {
-                "exchange": exchange,
-                "symboltoken": token,
-                "interval": self.timeframe_map[interval],
-                "fromdate": from_date.strftime('%Y-%m-%d %H:%M'),
-                "todate": to_date.strftime('%Y-%m-%d %H:%M')
-            }
-            print(f"Debug - API Payload: {payload}")
+            # If end_date is today, set the end time to current time
+            current_time = pd.Timestamp.now()
+            if to_date.date() == current_time.date():
+                to_date = current_time.replace(second=0, microsecond=0)  # Remove seconds and microseconds
+            else:
+                # For past dates, set end time to 23:59
+                to_date = to_date.replace(hour=23, minute=59)
             
-            response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
-                                      self.auth_token,
-                                      "POST",
-                                      payload)
-            print(f"Debug - API Response: {response}")
+            # Initialize empty list to store DataFrames
+            dfs = []
             
-            if not response.get('status'):
-                raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
+            # Set chunk size based on interval
+            if interval == 'D':
+                chunk_days = 2000  # 2000 days for daily data
+            else:
+                chunk_days = 30    # 30 days for intraday data
             
-            # Extract candle data and create DataFrame
-            data = response.get('data', [])
-            if not data:
+            # Process data in chunks
+            current_start = from_date
+            while current_start <= to_date:
+                # Calculate chunk end date
+                current_end = min(current_start + timedelta(days=chunk_days-1), to_date)
+                
+                # Prepare payload for historical data API
+                payload = {
+                    "exchange": exchange,
+                    "symboltoken": token,
+                    "interval": self.timeframe_map[interval],
+                    "fromdate": current_start.strftime('%Y-%m-%d %H:%M'),
+                    "todate": current_end.strftime('%Y-%m-%d %H:%M')
+                }
+                print(f"Debug - Fetching chunk from {current_start} to {current_end}")
+                print(f"Debug - API Payload: {payload}")
+                
+                response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
+                                          self.auth_token,
+                                          "POST",
+                                          payload)
+                print(f"Debug - API Response Status: {response.get('status')}")
+                
+                if not response.get('status'):
+                    raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
+                
+                # Extract candle data and create DataFrame
+                data = response.get('data', [])
+                if data:
+                    chunk_df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    dfs.append(chunk_df)
+                    print(f"Debug - Received {len(data)} candles for chunk")
+                else:
+                    print(f"Debug - No data received for chunk")
+                
+                # Move to next chunk
+                current_start = current_end + timedelta(days=1)
+                
+            # If no data was found, return empty DataFrame
+            if not dfs:
                 print("Debug - No data received from API")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            print(f"Debug - Received {len(data)} candles")
+            # Combine all chunks
+            df = pd.concat(dfs, ignore_index=True)
             
-            # Convert data to DataFrame
-            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # Convert timestamp to datetime then to Unix epoch
+            # Convert timestamp to datetime
             df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
+            if interval == 'D':
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+            
+            # Convert timestamp to Unix epoch
             df['timestamp'] = df['timestamp'].astype('int64') // 10**9  # Convert to Unix epoch
             
             # Ensure numeric columns and proper order
             numeric_columns = ['open', 'high', 'low', 'close', 'volume']
             df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
+            
+            # Sort by timestamp and remove duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
             # Reorder columns to match REST API format
             df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume']]
