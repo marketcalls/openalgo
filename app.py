@@ -90,7 +90,16 @@ def create_app():
     @app.errorhandler(404)
     def not_found_error(error):
         return render_template('404.html'), 404
-    
+
+    @app.errorhandler(500)
+    def internal_server_error(e):
+        """Custom handler for 500 Internal Server Error"""
+        # Log the error (optional)
+        app.logger.error(f"Server Error: {e}")
+
+        # Provide a logout option
+        return render_template("500.html"), 500
+        
     @app.context_processor
     def inject_version():
         return dict(version=get_version())
