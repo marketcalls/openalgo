@@ -27,15 +27,22 @@ def get_margin_data(auth_token):
 
     print(f"Margin Data {margin_data}")
 
-    # Process and return the 'data' key from margin_data if it exists and is not None
-    if margin_data.get('data') is not None:
-        for key, value in margin_data['data'].items():
-            if value is not None and isinstance(value, str):
-                try:
-                    margin_data['data'][key] = "{:.2f}".format(float(value))
-                except ValueError:
-                    pass
-        return margin_data['data']
+    if margin_data.get('data'):
+        required_keys = [
+            "availablecash", 
+            "collateral", 
+            "m2mrealized", 
+            "m2munrealized", 
+            "utiliseddebits"
+        ]
+        filtered_data = {}
+        for key in required_keys:
+            value = margin_data['data'].get(key, 0)
+            try:
+                formatted_value = "{:.2f}".format(float(value))
+            except (ValueError, TypeError):
+                formatted_value = value
+            filtered_data[key] = formatted_value
+        return filtered_data
     else:
-        # Return an empty dictionary if 'data' is None or doesn't exist
         return {}
