@@ -57,9 +57,17 @@
 {% block content %}
 <div class="w-full">
     <!-- Header Section -->
-    <div class="mb-6">
-        <h1 class="text-3xl font-bold">Trading Positions</h1>
-        <p class="text-base-content/60">Monitor and manage your active trading positions</p>
+    <div class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold">Trading Positions</h1>
+            <p class="text-base-content/60">Monitor and manage your active trading positions</p>
+        </div>
+        <a href="{{ url_for('orders_bp.export_positions') }}" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+            Export to CSV
+        </a>
     </div>
 
     <!-- Positions Table -->
@@ -151,6 +159,9 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Initialize real-time updates
+    initializeRealTimeUpdates();
+
     // Add sorting functionality to table headers
     document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
         headerCell.addEventListener('click', () => {
@@ -191,6 +202,67 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// Real-time updates functionality
+function initializeRealTimeUpdates() {
+    // Get all symbols from the positions table
+    function getSymbols() {
+        const rows = document.querySelectorAll('#positions-table-container tbody tr');
+        return Array.from(rows).map(row => {
+            const symbol = row.querySelector('td:first-child').textContent.trim();
+            const exchange = row.querySelector('td:nth-child(2) .badge').textContent.trim();
+            return `${exchange}:${symbol}`;
+        });
+    }
+
+    // Update LTP and P&L values
+    function updateValues() {
+        const symbols = getSymbols();
+        if (symbols.length === 0) return;
+
+        fetch('/positions/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ symbols: symbols })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const rows = document.querySelectorAll('#positions-table-container tbody tr');
+                rows.forEach(row => {
+                    const symbol = row.querySelector('td:first-child').textContent.trim();
+                    const exchange = row.querySelector('td:nth-child(2) .badge').textContent.trim();
+                    const symbolKey = `${exchange}:${symbol}`;
+                    
+                    if (data.data[symbolKey]) {
+                        const ltpCell = row.querySelector('td:nth-child(6)');
+                        const pnlCell = row.querySelector('td:nth-child(7)');
+                        const avgPrice = parseFloat(row.querySelector('td:nth-child(5)').textContent);
+                        const qty = parseInt(row.querySelector('td:nth-child(4)').textContent);
+                        
+                        // Update LTP
+                        const ltp = data.data[symbolKey].ltp;
+                        ltpCell.textContent = ltp.toFixed(2);
+                        
+                        // Calculate and update P&L
+                        const pnl = (ltp - avgPrice) * qty;
+                        pnlCell.textContent = pnl.toFixed(2);
+                        
+                        // Update P&L color
+                        pnlCell.className = pnl > 0 ? 'position-long' : pnl < 0 ? 'position-short' : 'position-neutral';
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('Error updating positions:', error));
+    }
+
+    // Update values immediately and then every 2 seconds
+    updateValues();
+    setInterval(updateValues, 2000);
+}
+
 // Position management functions
 function exitPosition(symbol, exchange) {
     if (confirm(`Are you sure you want to exit position for ${symbol}?`)) {
@@ -200,7 +272,6 @@ function exitPosition(symbol, exchange) {
 }
 
 function modifyPosition(symbol, exchange) {
-    // Implement position modification logic
     console.log(`Modifying position for ${symbol} on ${exchange}`);
 }
 </script>
