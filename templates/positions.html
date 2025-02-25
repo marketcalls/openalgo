@@ -159,9 +159,6 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize real-time updates
-    initializeRealTimeUpdates();
-
     // Add sorting functionality to table headers
     document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
         headerCell.addEventListener('click', () => {
@@ -201,67 +198,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
-
-// Real-time updates functionality
-function initializeRealTimeUpdates() {
-    // Get all symbols from the positions table
-    function getSymbols() {
-        const rows = document.querySelectorAll('#positions-table-container tbody tr');
-        return Array.from(rows).map(row => {
-            const symbol = row.querySelector('td:first-child').textContent.trim();
-            const exchange = row.querySelector('td:nth-child(2) .badge').textContent.trim();
-            return `${exchange}:${symbol}`;
-        });
-    }
-
-    // Update LTP and P&L values
-    function updateValues() {
-        const symbols = getSymbols();
-        if (symbols.length === 0) return;
-
-        fetch('/positions/update', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ symbols: symbols })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                const rows = document.querySelectorAll('#positions-table-container tbody tr');
-                rows.forEach(row => {
-                    const symbol = row.querySelector('td:first-child').textContent.trim();
-                    const exchange = row.querySelector('td:nth-child(2) .badge').textContent.trim();
-                    const symbolKey = `${exchange}:${symbol}`;
-                    
-                    if (data.data[symbolKey]) {
-                        const ltpCell = row.querySelector('td:nth-child(6)');
-                        const pnlCell = row.querySelector('td:nth-child(7)');
-                        const avgPrice = parseFloat(row.querySelector('td:nth-child(5)').textContent);
-                        const qty = parseInt(row.querySelector('td:nth-child(4)').textContent);
-                        
-                        // Update LTP
-                        const ltp = data.data[symbolKey].ltp;
-                        ltpCell.textContent = ltp.toFixed(2);
-                        
-                        // Calculate and update P&L
-                        const pnl = (ltp - avgPrice) * qty;
-                        pnlCell.textContent = pnl.toFixed(2);
-                        
-                        // Update P&L color
-                        pnlCell.className = pnl > 0 ? 'position-long' : pnl < 0 ? 'position-short' : 'position-neutral';
-                    }
-                });
-            }
-        })
-        .catch(error => console.error('Error updating positions:', error));
-    }
-
-    // Update values immediately and then every 2 seconds
-    updateValues();
-    setInterval(updateValues, 2000);
-}
 
 // Position management functions
 function exitPosition(symbol, exchange) {

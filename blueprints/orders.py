@@ -21,8 +21,8 @@ def dynamic_import(broker, module_name, function_names):
         return module_functions
     except (ImportError, AttributeError) as e:
         logger.error(f"Error importing functions {function_names} from {module_name} for broker {broker}: {e}")
-        return None
 
+        return None
 def generate_orderbook_csv(order_data):
     """Generate CSV file from orderbook data"""
     output = io.StringIO()
@@ -231,41 +231,6 @@ def positions():
     positions_data = transform_positions_data(positions_data)
     
     return render_template('positions.html', positions_data=positions_data)
-
-@orders_bp.route('/positions/update', methods=['POST'])
-@check_session_validity
-def update_positions():
-    broker = session.get('broker')
-    if not broker:
-        return jsonify({"status": "error", "message": "Broker not set in session"}), 400
-
-    # Dynamically import broker-specific modules for API
-    api_funcs = dynamic_import(broker, 'api.order_api', ['get_ltp'])
-    
-    if not api_funcs:
-        return jsonify({"status": "error", "message": "Error loading broker-specific modules"}), 500
-
-    login_username = session['user']
-    auth_token = get_auth_token(login_username)
-
-    if auth_token is None:
-        return jsonify({"status": "error", "message": "Auth token not found"}), 401
-
-    # Get the symbols from request
-    data = request.get_json()
-    symbols = data.get('symbols', [])
-    
-    if not symbols:
-        return jsonify({"status": "error", "message": "No symbols provided"}), 400
-
-    # Get LTP for all symbols
-    get_ltp = api_funcs['get_ltp']
-    ltp_data = get_ltp(auth_token, symbols)
-    
-    if 'status' in ltp_data and ltp_data['status'] == 'error':
-        return jsonify({"status": "error", "message": "Error fetching LTP data"}), 500
-
-    return jsonify({"status": "success", "data": ltp_data})
 
 @orders_bp.route('/holdings')
 @check_session_validity
