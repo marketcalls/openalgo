@@ -28,25 +28,25 @@ def generate_orderbook_csv(order_data):
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # Write headers
-    headers = ['Order ID', 'Symbol', 'Order Type', 'Transaction Type', 'Product', 'Quantity', 
-              'Price', 'Status', 'Order Time', 'Exchange', 'Validity']
+    # Write headers matching the terminal display
+    headers = ['Trading Symbol', 'Exchange', 'Transaction Type', 'Quantity', 'Price', 
+              'Trigger Price', 'Order Type', 'Product Type', 'Order ID', 'Status', 'Time']
     writer.writerow(headers)
     
-    # Write data
+    # Write data in the same order as the headers
     for order in order_data:
         row = [
-            order.get('order_id', ''),
             order.get('symbol', ''),
-            order.get('order_type', ''),
-            order.get('transaction_type', ''),
-            order.get('product', ''),
+            order.get('exchange', ''),
+            order.get('action', ''),
             order.get('quantity', ''),
             order.get('price', ''),
-            order.get('status', ''),
-            order.get('order_time', ''),
-            order.get('exchange', ''),
-            order.get('validity', '')
+            order.get('trigger_price', ''),
+            order.get('pricetype', ''),
+            order.get('product', ''),
+            order.get('orderid', ''),
+            order.get('order_status', ''),
+            order.get('timestamp', '')
         ]
         writer.writerow(row)
     
