@@ -58,21 +58,22 @@ def generate_tradebook_csv(trade_data):
     writer = csv.writer(output)
     
     # Write headers
-    headers = ['Trade ID', 'Order ID', 'Symbol', 'Trade Type', 'Quantity', 
-              'Trade Price', 'Trade Time', 'Exchange']
+    headers = ['Trading Symbol', 'Exchange', 'Product Type', 'Transaction Type', 'Fill Size', 
+              'Fill Price', 'Trade Value', 'Order ID', 'Fill Time']
     writer.writerow(headers)
     
     # Write data
     for trade in trade_data:
         row = [
-            trade.get('trade_id', ''),
-            trade.get('order_id', ''),
             trade.get('symbol', ''),
-            trade.get('trade_type', ''),
+            trade.get('exchange', ''),
+            trade.get('product', ''),
+            trade.get('action', ''),
             trade.get('quantity', ''),
-            trade.get('trade_price', ''),
-            trade.get('trade_time', ''),
-            trade.get('exchange', '')
+            trade.get('average_price', ''),
+            trade.get('trade_value', ''),
+            trade.get('orderid', ''),
+            trade.get('timestamp', '')
         ]
         writer.writerow(row)
     
