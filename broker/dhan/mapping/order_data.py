@@ -164,16 +164,57 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    from broker.dhan.api.data import BrokerData
+    from flask import session
+    from database.auth_db import get_auth_token
+    
     transformed_data = []
+    
+    # Get auth token from session
+    auth_token = None
+    try:
+        if 'user' in session:
+            login_username = session['user']
+            auth_token = get_auth_token(login_username)
+    except Exception as e:
+        print(f"Error getting auth token from session: {str(e)}")
+    
+    # Initialize BrokerData to get quotes
+    data_api = BrokerData(auth_token) if auth_token else None
+    
     for position in positions_data:
+        # Get position details
+        symbol = position.get('tradingSymbol', '')
+        exchange = position.get('exchangeSegment', '')
+        quantity = position.get('netQty', 0)
+        avg_price = position.get('costPrice', 0.0)
+        
+        # Get realized and unrealized profit from position data
+        realized_profit = position.get('realizedProfit', 0.0)
+        unrealized_profit = position.get('unrealizedProfit', 0.0)
+        
+        # Calculate total PNL by adding realized and unrealized profit
+        total_pnl = realized_profit + unrealized_profit
+        
+        # Get the LTP from quotes API if data_api is available
+        ltp = position.get('lastTradedPrice', 0.0)  # Default value
+        
+        if data_api and symbol and exchange:
+            try:
+                quotes = data_api.get_quotes(symbol, exchange)
+                if quotes and quotes.get('ltp', 0) > 0:
+                    ltp = quotes.get('ltp', 0.0)
+            except Exception as e:
+                print(f"Error getting quotes for {symbol}: {str(e)}")
+        
         transformed_position = {
-            "symbol": position.get('tradingSymbol', ''),
-            "exchange": position.get('exchangeSegment', ''),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": position.get('productType', ''),
-            "quantity": position.get('netQty', 0),
-            "average_price": position.get('costPrice', 0.0),
-            "ltp": position.get('lastTradedPrice', 0.0),  
-            "pnl": position.get('realizedPnl', 0.0),  
+            "quantity": quantity,
+            "average_price": avg_price,
+            "ltp": ltp,
+            "pnl": total_pnl,
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -192,7 +233,6 @@ def transform_holdings_data(holdings_data):
         transformed_data.append(transformed_position)
     return transformed_data
 
-    
 def map_portfolio_data(portfolio_data):
     """
     Processes and modifies a list of Portfolio dictionaries based on specific conditions.
