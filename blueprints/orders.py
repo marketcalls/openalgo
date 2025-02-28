@@ -84,23 +84,20 @@ def generate_positions_csv(positions_data):
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # Write headers
-    headers = ['Symbol', 'Product', 'Net Quantity', 'Buy Quantity', 'Sell Quantity', 
-              'Average Price', 'Last Price', 'P&L', 'Exchange']
+    # Write headers - updated to match terminal output exactly
+    headers = ['Symbol', 'Exchange', 'Product Type', 'Net Qty', 'Avg Price', 'LTP', 'P&L']
     writer.writerow(headers)
     
     # Write data
     for position in positions_data:
         row = [
             position.get('symbol', ''),
+            position.get('exchange', ''),
             position.get('product', ''),
-            position.get('net_quantity', ''),
-            position.get('buy_quantity', ''),
-            position.get('sell_quantity', ''),
+            position.get('quantity', ''),
             position.get('average_price', ''),
-            position.get('last_price', ''),
-            position.get('pnl', ''),
-            position.get('exchange', '')
+            position.get('ltp', ''),
+            position.get('pnl', '')
         ]
         writer.writerow(row)
     
