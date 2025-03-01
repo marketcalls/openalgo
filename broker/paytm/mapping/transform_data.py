@@ -5,21 +5,21 @@ from database.token_db import get_br_symbol
 
 def transform_data(data):
     """
-    Transforms the new API request structure to the current expected structure.
+    Transforms the OpenAlgo API request structure to Paytm v2 API structure.
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
 
     # Basic mapping
     transformed = {
-        "tradingsymbol" : symbol,
+        "security_id" : symbol,
         "exchange" : data['exchange'],
-        "transaction_type": data['action'].upper(),
+        "txn_type": data['action'].upper(),
         "order_type": data["pricetype"],
         "quantity": data["quantity"],
         "product": data["product"],
         "price": data.get("price", "0"),
         "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
+        #"disclosed_quantity": data.get("disclosed_quantity", "0"),  
         "validity":"DAY",
         "tag": "openalgo",
     }
@@ -49,10 +49,10 @@ def map_order_type(pricetype):
     Maps the new pricetype to the existing order type.
     """
     order_type_mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "SL",
-        "SL-M": "SL-M"
+        "MKT": "MARKET",
+        "LMT": "LIMIT",
+        "SL": "STOP_LOSS",
+        "SLM": "STOP_LOSS_MARKET"
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 
@@ -61,9 +61,9 @@ def map_product_type(product):
     Maps the new product type to the existing product type.
     """
     product_type_mapping = {
-        "CNC": "CNC",
-        "NRML": "NRML",
-        "MIS": "MIS",
+        "C": "CNC",
+        "M": "MARGIN",
+        "I": "MIS",
     }
     return product_type_mapping.get(product, "MIS")  # Default to INTRADAY if not found
 
@@ -73,9 +73,9 @@ def reverse_map_product_type(exchange,product):
     """
     # Exchange to OpenAlgo product type mapping for 'D'
     exchange_mapping = {
-        "CNC": "CNC",
-        "NRML": "NRML",
-        "MIS": "MIS",
+        "CNC": "C",
+        "MARGIN": "M",
+        "MIS": "I"
     }
    
     return exchange_mapping.get(product)

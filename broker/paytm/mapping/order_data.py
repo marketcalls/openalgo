@@ -27,12 +27,12 @@ def map_order_data(order_data):
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
             exchange = order['exchange']
-            symbol = order['tradingsymbol']
+            symbol = order['security_id']
        
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
                 print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -57,17 +57,17 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['transaction_type'] == 'BUY':
+            if order['txn_type'] == 'B':
                 total_buy_orders += 1
-            elif order['transaction_type'] == 'SELL':
+            elif order['txn_type'] == 'S':
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'COMPLETE':
+            if order['display_status'] == 'Successful':
                 total_completed_orders += 1
-            elif order['status'] == 'OPEN':
+            elif order['display_status'] == 'Pending':
                 total_open_orders += 1
-            elif order['status'] == 'REJECTED':
+            elif order['display_status'] == 'Rejected':
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -94,29 +94,29 @@ def transform_order_data(orders):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
-        if(order.get("status", "")=="COMPLETE"):
+        if(order.get("display_status", "")=="Successful"):
             order_status = "complete"
-        if(order.get("status", "")=="REJECTED"):
+        if(order.get("display_status", "")=="Rejected"):
             order_status = "rejected"
-        if(order.get("status", "")=="TRIGGER PENDING"):
+        if(order.get("display_status", "")=="Pending"):
             order_status = "trigger pending"
-        if(order.get("status", "")=="OPEN"):
+        if(order.get("display_status", "")=="Open"):
             order_status = "open"
-        if(order.get("status", "")=="CANCELLED"):
+        if(order.get("display_status", "")=="Cancelled"):
             order_status = "cancelled"
 
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
+            "symbol": order.get("security_id", ""),
             "exchange": order.get("exchange", ""),
-            "action": order.get("transaction_type", ""),
+            "action": order.get("txn_type", ""),
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("order_type", ""),
+            "pricetype": order.get("display_order_type", ""),
             "product": order.get("product", ""),
-            "orderid": order.get("order_id", ""),
+            "orderid": order.get("order_no", ""),
             "order_status": order_status,
-            "timestamp": order.get("order_timestamp", "")
+            "timestamp": order.get("order_date_time", "")
         }
 
         transformed_orders.append(transformed_order)
@@ -131,15 +131,15 @@ def transform_tradebook_data(tradebook_data):
     for trade in tradebook_data:
      
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol'),
+            "symbol": trade.get('security_id'),
             "exchange": trade.get('exchange', ''),
             "product": trade.get('product', ''),
-            "action": trade.get('transaction_type', ''),
+            "action": trade.get('txn_type', ''),
             "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('average_price', 0.0),
-            "trade_value": trade.get('quantity', 0) * trade.get('average_price', 0.0),
-            "orderid": trade.get('order_id', ''),
-            "timestamp": trade.get('order_timestamp', '')
+            "average_price": trade.get('avg_traded_price', 0.0),
+            "trade_value": trade.get('remaining_quantity', 0) * trade.get('avg_traded_price', 0.0),
+            "orderid": trade.get('order_no', ''),
+            "timestamp": trade.get('order_date_time', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -184,7 +184,8 @@ def map_position_data(position_data):
                 position['security_id'] = get_symbol(token=symbol,exchange=exchange)
             else:
                 print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
+        
+    print(position_data)
     return position_data
     
 
@@ -193,14 +194,24 @@ def transform_positions_data(positions_data):
 
     for position in positions_data:
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(float(position.get('average_price', 0.0)))
+        if position.get('display_pos_type') is not None:
+            if position.get('display_pos_type') == "B":
+                average_price_formatted = "{:.2f}".format(float(position.get('buy_avg', 0.0)))
+            elif position.get('display_pos_type') == "S":
+                average_price_formatted = "{:.2f}".format(float(position.get('sell_avg', 0.0)))
+            else:
+                average_price_formatted = "{:.2f}".format(float(position.get('net_avg', 0.0)))
+        else:
+            average_price_formatted = "{:.2f}".format(float(position.get('net_avg', 0.0)))
 
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
+            "symbol": position.get('security_id', ''),
             "exchange": position.get('exchange', ''),
             "product": position.get('product', ''),
-            "quantity": position.get('quantity', '0'),
+            "quantity": position.get('net_qty', '0'),
             "average_price": average_price_formatted,
+            "ltp": position.get('last_traded_price', '0.00'),
+            "pnl": position.get('net_val', '0.00'),
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -209,64 +220,15 @@ def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:
         transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
+            "symbol": holdings.get('security_id', ''),
             "exchange": holdings.get('exchange', ''),
             "quantity": holdings.get('quantity', 0),
             "product": holdings.get('product', ''),
             "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
+            "pnlpercent": round((holdings.get('last_traded_price', 0) - holdings.get('cost_price', 0.0)) / holdings.get('cost_price', 0.0) * 100, 2)  # Rounded to two decimals
         
         }
         transformed_data.append(transformed_position)
     return transformed_data
-
-    
-def map_portfolio_data(portfolio_data):
-    """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions.
-    
-    Parameters:
-    - portfolio_data: A list of dictionaries, where each dictionary represents an portfolio information.
-    
-    Returns:
-    - The modified portfolio_data with  'product' fields.
-    """
-        # Check if 'data' is None
-    if portfolio_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        portfolio_data = portfolio_data['data']
-        
-
-
-    if portfolio_data:
-        for portfolio in portfolio_data:
-            if portfolio['product'] == 'CNC':
-                portfolio['product'] = 'CNC'
-
-            else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
-                
-    return portfolio_data
-
-
-def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item['last_price'] * item['quantity'] for item in holdings_data)
-    totalinvvalue = sum(item['average_price'] * item['quantity'] for item in holdings_data)
-    totalprofitandloss = sum(item['pnl'] for item in holdings_data)
-    
-    # To avoid division by zero in the case when total_investment_value is 0
-    totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
-
-    return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
-    }
 
 

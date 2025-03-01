@@ -138,7 +138,7 @@ def reformat_symbol(row):
     # For futures
     elif instrument_type in ['FUTSTK', 'FUTIDX']:
         # Remove any spaces and standardize format
-        base_symbol = symbol.split(' ')[0].strip()
+        base_symbol = row['name'].split(' ')[0].strip()
         return f"{base_symbol}{expiry}FUT"
     
     # For options
