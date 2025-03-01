@@ -167,6 +167,11 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
             forward_url = 'kotak.html'
 
+    elif broker == 'paytm':
+         request_token = request.args.get('requestToken')
+         print(f'The request token is {request_token}')
+         auth_token, error_message = auth_function(request_token)
+
     else:
         code = request.args.get('code') or request.args.get('request_token')
         print(f'The code is {code}')
