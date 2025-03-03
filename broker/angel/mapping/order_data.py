@@ -205,6 +205,8 @@ def transform_positions_data(positions_data):
             "product": position.get('producttype', ''),
             "quantity": position.get('netqty', 0),
             "average_price": position.get('avgnetprice', 0.0),
+            "ltp": position.get('ltp', 0.0),  
+            "pnl": position.get('pnl', 0.0),  
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -286,5 +288,3 @@ def calculate_portfolio_statistics(holdings_data):
         'totalprofitandloss': totalprofitandloss,
         'totalpnlpercentage': totalpnlpercentage
     }
-
-

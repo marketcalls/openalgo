@@ -348,4 +348,3 @@ def cancel_all_orders_api(data,auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-

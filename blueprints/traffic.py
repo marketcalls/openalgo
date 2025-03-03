@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request, session, Response
 from database.traffic_db import TrafficLog, logs_session
 from utils.session import check_session_validity
 from limiter import limiter
@@ -6,6 +6,8 @@ from sqlalchemy import func
 import logging
 from datetime import datetime
 import pytz
+import csv
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,29 @@ def format_ist_time(timestamp):
     """Format timestamp in IST with 12-hour format"""
     ist_time = convert_to_ist(timestamp)
     return ist_time.strftime('%d-%m-%Y %I:%M:%S %p')
+
+def generate_csv(logs):
+    """Generate CSV file from traffic logs"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(['Timestamp', 'Client IP', 'Method', 'Path', 'Status Code', 'Duration (ms)', 'Host', 'Error'])
+    
+    # Write data
+    for log in logs:
+        writer.writerow([
+            format_ist_time(log.timestamp),
+            log.client_ip,
+            log.method,
+            log.path,
+            log.status_code,
+            round(log.duration_ms, 2),
+            log.host,
+            log.error
+        ])
+    
+    return output.getvalue()
 
 @traffic_bp.route('/', methods=['GET'])
 @check_session_validity
@@ -115,6 +140,31 @@ def get_stats():
         })
     except Exception as e:
         logger.error(f"Error fetching traffic stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@traffic_bp.route('/export', methods=['GET'])
+@check_session_validity
+@limiter.limit("10/minute")
+def export_logs():
+    """Export traffic logs to CSV"""
+    try:
+        # Get all logs for the current day
+        logs = TrafficLog.get_recent_logs(limit=None)  # None to get all logs
+        
+        # Generate CSV
+        csv_data = generate_csv(logs)
+        
+        # Create the response
+        response = Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=traffic_logs.csv'}
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error exporting traffic logs: {e}")
         return jsonify({'error': str(e)}), 500
 
 @traffic_bp.teardown_app_request
