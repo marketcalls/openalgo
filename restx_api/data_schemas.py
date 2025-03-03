@@ -29,3 +29,8 @@ class TickerSchema(Schema):
     to = fields.Str(required=True)          # YYYY-MM-DD or millisecond timestamp
     adjusted = fields.Bool(required=False, default=True)  # Adjust for splits
     sort = fields.Str(required=False, default='asc', validate=lambda x: x in ['asc', 'desc'])  # Sort direction
+
+class MultiQuotesSchema(Schema):
+    apikey = fields.Str(required=True)
+    symbols = fields.List(fields.Str(), required=True)  # List of symbols
+    exchanges = fields.List(fields.Str(), required=True)  # List of exchanges
