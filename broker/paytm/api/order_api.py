@@ -57,37 +57,21 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 def place_order_api(data,auth):
     
     AUTH_TOKEN = auth
-    
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
-    #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)  
+    conn = http.client.HTTPSConnection("developer.paytmmoney.com")
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
+        'x-jwt-token': AUTH_TOKEN,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
     }
+    
+    payload = transform_data(data)  
 
-    payload = {
-        'tradingsymbol': newdata['tradingsymbol'],
-        'exchange': newdata['exchange'],
-        'transaction_type': newdata['transaction_type'],
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'product': newdata['product'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity'],
-        'tag' : newdata['tag']
-    }
+    payload = json.dumps(payload)
 
+    #payload =  urllib.parse.urlencode(payload)
     print(payload)
 
-    payload =  urllib.parse.urlencode(payload)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("POST", "/orders/regular", payload, headers)
+    conn.request("POST", "/orders/v1/place/regular", payload, headers)
     res = conn.getresponse()
     response_data = json.loads(res.read().decode("utf-8"))
 
@@ -99,76 +83,6 @@ def place_order_api(data,auth):
     else:
         orderid = None
     return res, response_data, orderid
-
-def place_smartorder_api(data,auth):
-
-    AUTH_TOKEN = auth
-
-    #If no API call is made in this function then res will return None
-    res = None
-
-    # Extract necessary info from data
-    symbol = data.get("symbol")
-    exchange = data.get("exchange")
-    product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
-
-    
-
-    # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
-
-
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
-    
-    # Determine action based on position_size and current_position
-    action = None
-    quantity = 0
-
-
-    
-
-   
-   
-
-    if position_size == 0 and current_position>0 :
-        action = "SELL"
-        quantity = abs(current_position)
-    elif position_size == 0 and current_position<0 :
-        action = "BUY"
-        quantity = abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    else:
-        if position_size > current_position:
-            action = "BUY"
-            quantity = position_size - current_position
-            #print(f"smart buy quantity : {quantity}")
-        elif position_size < current_position:
-            action = "SELL"
-            quantity = current_position - position_size
-            #print(f"smart sell quantity : {quantity}")
-
-
-
-
-    if action:
-        # Prepare data for placing the order
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
-
-        #print(order_data)
-        # Place the order
-        res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
-        
-        return res , response, orderid
-    
-
 
 
 def close_all_positions(current_api_key,auth):

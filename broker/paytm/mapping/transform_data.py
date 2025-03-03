@@ -1,33 +1,39 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
 #Mapping Paytm Broking Parameters https://developer.paytmmoney.com/docs/api/login
 
-from database.token_db import get_br_symbol
+from database.token_db import get_token
 
 def transform_data(data):
     """
     Transforms the OpenAlgo API request structure to Paytm v2 API structure.
     """
-    symbol = get_br_symbol(data['symbol'],data['exchange'])
+    symbol = get_token(data['symbol'],data['exchange'])
+    txn_type = "B" if data['action'].upper() == "BUY" else "S"
+    # Source from which the order is placed 
+    #Website - W, mWeb - M, Android - N, iOS - I, Exe - R, OperatorWorkStation - O
+    source = "M"
+    # This describes, to which segment the transaction belongs. (E→ Equity Cash / D→ Equity Derivative)
+    segment = "E" if data['exchange'] in ['NSE', 'BSE'] else "D"
 
     # Basic mapping
     transformed = {
         "security_id" : symbol,
         "exchange" : data['exchange'],
-        "txn_type": data['action'].upper(),
-        "order_type": data["pricetype"],
+        "txn_type": txn_type,
+        "order_type": reverse_map_order_type(data["pricetype"]),
         "quantity": data["quantity"],
-        "product": data["product"],
+        "product": reverse_map_product_type(data["product"]),
         "price": data.get("price", "0"),
-        "trigger_price": data.get("trigger_price", "0"),
+        #"trigger_price": data.get("trigger_price", "0"),
         #"disclosed_quantity": data.get("disclosed_quantity", "0"),  
         "validity":"DAY",
-        "tag": "openalgo",
+        "segment": segment,
+        "source": source,
     }
 
 
     # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
+    #transformed["trigger_price"] = data.get("trigger_price", "0")
     
     return transformed
 
@@ -67,7 +73,7 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "MIS")  # Default to INTRADAY if not found
 
-def reverse_map_product_type(exchange,product):
+def reverse_map_product_type(product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
@@ -79,4 +85,16 @@ def reverse_map_product_type(exchange,product):
     }
    
     return exchange_mapping.get(product)
+
+def reverse_map_order_type(order_type):
+    """
+    Reverse maps the Paytm order type to the OpenAlgo order type.
+    """
+    reverse_order_type_mapping = {
+        "MARKET": "MKT",
+        "LIMIT": "LMT",
+        "STOP_LOSS": "SL",
+        "STOP_LOSS_MARKET": "SLM"
+    }
+    return reverse_order_type_mapping.get(order_type, "MKT")  # Default to MKT if not found
     

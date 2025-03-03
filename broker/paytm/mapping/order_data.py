@@ -1,5 +1,6 @@
 import json
-from database.token_db import get_symbol , get_oa_symbol
+from database.token_db import get_symbol
+from broker.paytm.mapping.transform_data import map_product_type
 
 def map_order_data(order_data):
     """
@@ -27,15 +28,28 @@ def map_order_data(order_data):
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
             exchange = order['exchange']
+            if exchange == "NSE" and ("OPT" in order['instrument'] or "FUT" in order['instrument']):
+                exchange = "NFO"
+            if exchange == "BSE" and ("OPT" in order['instrument'] or "FUT" in order['instrument']):
+                exchange = "BFO"
             symbol = order['security_id']
        
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['symbol'] = get_symbol(token=symbol,exchange=exchange)
+                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['product'] == 'C':
+                    order['product'] = 'CNC'
+                               
+                elif order['product'] == 'I' or order['product'] == 'M':
+                    order['product'] = 'MIS'
+                
+                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS']:
+                    order['product'] = 'NRML'
             else:
                 print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
+    print(order_data)
     return order_data
 
 
@@ -58,8 +72,10 @@ def calculate_order_statistics(order_data):
         for order in order_data:
             # Count buy and sell orders
             if order['txn_type'] == 'B':
+                order['txn_type'] = 'BUY'
                 total_buy_orders += 1
             elif order['txn_type'] == 'S':
+                order['txn_type'] = 'SELL'
                 total_sell_orders += 1
             
             # Count orders based on their status
@@ -106,7 +122,7 @@ def transform_order_data(orders):
             order_status = "cancelled"
 
         transformed_order = {
-            "symbol": order.get("security_id", ""),
+            "symbol": order.get("symbol", ""),
             "exchange": order.get("exchange", ""),
             "action": order.get("txn_type", ""),
             "quantity": order.get("quantity", 0),
@@ -207,7 +223,7 @@ def transform_positions_data(positions_data):
         transformed_position = {
             "symbol": position.get('security_id', ''),
             "exchange": position.get('exchange', ''),
-            "product": position.get('product', ''),
+            "product": map_product_type(position.get('product', '')),
             "quantity": position.get('net_qty', '0'),
             "average_price": average_price_formatted,
             "ltp": position.get('last_traded_price', '0.00'),

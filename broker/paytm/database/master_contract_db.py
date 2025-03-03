@@ -138,7 +138,8 @@ def reformat_symbol(row):
     # For futures
     elif instrument_type in ['FUTSTK', 'FUTIDX']:
         # Remove any spaces and standardize format
-        base_symbol = row['name'].split(' ')[0].strip()
+        parts = row['name'].split(' ')
+        base_symbol = parts[0].strip()
         return f"{base_symbol}{expiry}FUT"
     
     # For options
@@ -160,29 +161,30 @@ def reformat_symbol(row):
 
 # Define the function to apply conditions
 def assign_values(row):
+    #Paytm Exchange Mappings are simply NSE and BSE. No other complications
     # Handle equity segment
-    if row['exchange'] == 'NSE' and row['series'] == 'EQ':
-        return 'NSE', 'NSE_EQ', 'EQ'
-    elif row['exchange'] == 'BSE' and row['series'] == 'EQ':
-        return 'BSE', 'BSE_EQ', 'EQ'
+    if row['exchange'] == 'NSE' and (row['instrument_type'] == 'ETF' or row['instrument_type'] == 'ES'):
+        return 'NSE', 'NSE', 'EQ'
+    elif row['exchange'] == 'BSE' and (row['instrument_type'] == 'ETF' or row['instrument_type'] == 'ES'):
+        return 'BSE', 'BSE', 'EQ'
     
     # Handle indices
     elif row['exchange'] == 'NSE' and row['instrument_type'] == 'I':
-        return 'NSE_INDEX', 'IDX_I', 'INDEX'
+        return 'NSE_INDEX', 'NSE', 'INDEX'
     elif row['exchange'] == 'BSE' and row['instrument_type'] == 'I':
-        return 'BSE_INDEX', 'IDX_I', 'INDEX'
+        return 'BSE_INDEX', 'BSE', 'INDEX'
     
     # Handle futures
     elif row['exchange'] == 'NSE' and row['instrument_type'] in ['FUTIDX', 'FUTSTK']:
-        return 'NFO', 'NSE_FNO', 'FUT'
+        return 'NFO', 'NSE', 'FUT'
     elif row['exchange'] == 'BSE' and row['instrument_type'] in ['FUTIDX', 'FUTSTK']:
-        return 'BFO', 'BSE_FNO', 'FUT'
+        return 'BFO', 'BSE', 'FUT'
     
     # Handle options
     elif row['exchange'] == 'NSE' and row['instrument_type'] in ['OPTIDX', 'OPTSTK']:
-        return 'NFO', 'NSE_FNO', 'OPT'
+        return 'NFO', 'NSE', 'OPT'
     elif row['exchange'] == 'BSE' and row['instrument_type'] in ['OPTIDX', 'OPTSTK']:
-        return 'BFO', 'BSE_FNO', 'OPT'
+        return 'BFO', 'BSE', 'OPT'
     
     # Handle unknown cases
     else:
