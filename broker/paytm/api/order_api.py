@@ -180,43 +180,56 @@ def cancel_order(orderid, auth):
                     # Return an error response
                     return {"status": "error", "message": response_data.get("message", "Failed to cancel order")}, res.status
 
+# As long as an order is pending in the system, certain attributes of it can be modified.
+# Price, quantity, validity, product are some of the variables that can be modified by the user.
+# You have to pass "order_no", "serial_no" "group_id" as compulsory to modify the order.
+
 
 def modify_order(data, auth):
 
     AUTH_TOKEN = auth
+    conn = http.client.HTTPSConnection("developer.paytmmoney.com")
+    headers = {
+        'x-jwt-token': AUTH_TOKEN,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
 
     # You need to implement this function
+    orderid = data['orderid']
     newdata = transform_modify_order_data(data)
+    orders_list = get_order_book(AUTH_TOKEN)
+    for order in orders_list['data']:
+        if order['order_no'] == orderid:
+            if order['status'] == 'Pending':
+                print("Modifying order:", orderid)
+                payload = json.dumps({"order_no": orderid, "source": "N",
+                                      "txn_type": order['txn_type'],
+                                      "exchange": order['exchange'],
+                                      "segment": order['segment'],
+                                      "security_id": order['security_id'],
+                                      "order_type": order['order_type'],
+                                      "off_mkt_flag": order['off_mkt_flag'],
+                                      "mkt_type": order['mkt_type'],
+                                      "serial_no": order['serial_no'],
+                                      "group_id": order['group_id'],
+                                      "product": newdata['product'],
+                                      "quantity": newdata['quantity'],
+                                      "validity": newdata['validity'],
+                                      "price": newdata['price'],
 
-    # Set up the request headers
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    payload = {
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity']
-    }
 
-    print(payload)
-
-    payload = urllib.parse.urlencode(payload)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("PUT", f"/orders/regular/{data['orderid']}", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-
-    if data.get("status") == "success" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
-    else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+                                      })
+                conn.request("POST", "/orders/v1/modify/regular",
+                             payload, headers)
+                res = conn.getresponse()
+                response_data = json.loads(res.read().decode("utf-8"))
+                if response_data.get("status"):
+                    # Return a success response
+                    return {"status": "success", "orderid": response_data['data'][0]['order_no']}, 200
+                else:
+                    # Return an error response
+                    return {"status": "error", "message": response_data.get("message", "Failed to cancel order")}, res.status
 
 
 def cancel_all_orders_api(data, auth):
