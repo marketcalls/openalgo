@@ -79,7 +79,7 @@ def place_order_api(data,auth):
     print(response_data)
 
     if response_data['status'] == 'success':
-        orderid = response_data['data']['order_id']
+        orderid = response_data['data'][0]['order_no']
     else:
         orderid = None
     return res, response_data, orderid
