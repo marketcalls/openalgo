@@ -26,8 +26,9 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 def get_order_book(auth):
     return get_api_response("/orders/v1/user/orders",auth)
 
+#PAYTM does not provide all tradebook details. every tradebook call needs orderID
 def get_trade_book(auth):
-    return get_api_response("/orders/v1/trade-details",auth)
+    return get_api_response("/orders/v1/user/orders",auth)
 
 def get_positions(auth):
     return get_api_response("/orders/v1/position",auth)
