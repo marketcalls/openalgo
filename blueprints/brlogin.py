@@ -88,6 +88,72 @@ def broker_callback(broker,para=None):
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+    elif broker=='compositedge':
+        try:
+            # Get the raw data from the request
+            if request.method == 'POST':
+                # Handle form data
+                if request.headers.get('Content-Type') == 'application/x-www-form-urlencoded':
+                    raw_data = request.get_data().decode('utf-8')
+                    
+                    
+                    # Extract session data from form
+                    if raw_data.startswith('session='):
+                        from urllib.parse import unquote
+                        session_data = unquote(raw_data[8:])  # Remove 'session=' and URL decode
+                        
+                    else:
+                        session_data = raw_data
+                else:
+                    session_data = request.get_data().decode('utf-8')
+                
+            else:
+                session_data = request.args.get('session')
+                
+                
+            if not session_data:
+                
+                return jsonify({"error": "No session data received"}), 400
+
+            # Parse the session data
+            try:
+                             
+                # Try to clean the data if it's malformed
+                if isinstance(session_data, str):
+                    # Remove any leading/trailing whitespace
+                    session_data = session_data.strip()
+                    
+                    session_json = json.loads(session_data)
+                    
+                    # Handle double-encoded JSON
+                    if isinstance(session_json, str):
+                        session_json = json.loads(session_json)
+                        
+                else:
+                    session_json = session_data
+                    
+                    
+            except json.JSONDecodeError as e:
+                
+                return jsonify({
+                    "error": f"Invalid JSON format: {str(e)}", 
+                    "raw_data": session_data
+                }), 400
+
+            # Extract access token
+            access_token = session_json.get('accessToken')
+            print(f'Access token is {access_token}')
+            
+            if not access_token:
+                
+                return jsonify({"error": "No access token found"}), 400
+                
+            auth_token, error_message = auth_function(access_token)
+            forward_url = 'broker.html'
+        except Exception as e:
+            print(f"Error in compositedge callback: {str(e)}")
+            return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+
     elif broker=='fyers':
         code = request.args.get('auth_code')
         print(f'The code is {code}')
