@@ -85,7 +85,7 @@ def generate_positions_csv(positions_data):
     writer = csv.writer(output)
     
     # Write headers - updated to match terminal output exactly
-    headers = ['Symbol', 'Exchange', 'Product Type', 'Net Qty', 'Avg Price', 'LTP', 'P&L']
+    headers = ['Symbol', 'Exchange', 'Product Type', 'Net Qty', 'Avg Price', 'LTP', 'P&L', 'P&L %', 'Sell Avg', 'Sell Qty', 'Buy Avg', 'Buy Qty']
     writer.writerow(headers)
     
     # Write data
@@ -97,7 +97,12 @@ def generate_positions_csv(positions_data):
             position.get('quantity', ''),
             position.get('average_price', ''),
             position.get('ltp', ''),
-            position.get('pnl', '')
+            position.get('pnl', ''),
+            position.get('pnl_percent', ''),
+            position.get('sell_avg', ''),
+            position.get('sell_qty', ''),
+            position.get('buy_avg', ''),
+            position.get('buy_qty', '')
         ]
         writer.writerow(row)
     

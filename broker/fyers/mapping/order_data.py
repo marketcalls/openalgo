@@ -300,7 +300,11 @@ def transform_positions_data(positions_data):
     for position in positions_data:
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
         average_price_formatted = "{:.2f}".format(float(position.get('netAvg', 0.0)))
-
+        ltp_formatted = "{:.2f}".format(float(position.get('ltp', 0.0)))
+        pnl_formatted = "{:.2f}".format(float(position.get('pl', 0.0)))
+        pnl_percent_formatted = "{:.2f}".format(float(position.get('pl', 0.0)) / float(position.get('buyVal', 1.0)) * 100 if position.get('buyVal', 0.0) != 0 else 0.0)
+        sell_avg_formatted = "{:.2f}".format(float(position.get('sellAvg', 0.0)))
+        buy_avg_formatted = "{:.2f}".format(float(position.get('buyAvg', 0.0)))
 
         if(position.get("productType")=="CNC"):
             producttype = "CNC"
@@ -319,12 +323,16 @@ def transform_positions_data(positions_data):
             "product": producttype,
             "quantity": position.get('netQty', '0'),
             "average_price": average_price_formatted,
+            "ltp": ltp_formatted,
+            "pnl": pnl_formatted,
+            "pnl_percent": pnl_percent_formatted,
+            "sell_avg": sell_avg_formatted,
+            "sell_qty": position.get('sellQty', '0'),
+            "buy_avg": buy_avg_formatted,
+            "buy_qty": position.get('buyQty', '0'),
         }
         transformed_data.append(transformed_position)
     return transformed_data
-
-
-
     
 def map_portfolio_data(portfolio_data):
     """

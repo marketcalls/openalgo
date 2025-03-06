@@ -86,7 +86,12 @@
                     <th>Net Qty</th>
                     <th>Avg Price</th>
                     <th>LTP</th>
+                    <th>Buy Avg</th>
+                    <th>Buy Qty</th>
+                    <th>Sell Avg</th>
+                    <th>Sell Qty</th>
                     <th>P&L</th>
+                    <th>P&L %</th>
                     <th class="w-20">Actions</th>
                 </tr>
             </thead>
@@ -120,9 +125,14 @@
                     </td>
                     <td class="font-mono">{{ position.average_price }}</td>
                     <td class="font-mono">{{ position.ltp if position.ltp is defined else 'N/A' }}</td>
+                    <td class="font-mono">{{ position.buy_avg }}</td>
+                    <td class="font-mono">{{ position.buy_qty }}</td>
+                    <td class="font-mono">{{ position.sell_avg }}</td>
+                    <td class="font-mono">{{ position.sell_qty }}</td>
                     <td class="{% if position.pnl|default(0)|float > 0 %}position-long{% elif position.pnl|default(0)|float < 0 %}position-short{% else %}position-neutral{% endif %}">
                         {{ position.pnl if position.pnl is defined else '0.00' }}
                     </td>
+                    <td class="font-mono">{{ position.pnl_percent }}</td>
                     <td>
                         <div class="dropdown dropdown-end">
                             <label tabindex="0" class="btn btn-ghost btn-sm">
