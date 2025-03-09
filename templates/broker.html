@@ -66,6 +66,9 @@
                 case 'zerodha':
                     loginUrl = 'https://kite.trade/connect/login?api_key={{broker_api_key}}';
                     break;
+                case 'paytm':
+                    loginUrl = 'https://login.paytmmoney.com/merchant-login?apiKey={{broker_api_key}}&state={default}';
+                    break;
                 default:
                     alert('Please select a broker');
                     return;
@@ -105,6 +108,7 @@
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="icici" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
+                                <option value="paytm" {{ 'disabled' if broker_name != 'paytm' }}>Paytm Money {{ '(Disabled)' if broker_name != 'paytm' }}</option>
                                 <option value="shoonya" {{ 'disabled' if broker_name != 'shoonya' }}>Shoonya {{ '(Disabled)' if broker_name != 'shoonya' }}</option>
                                 <option value="upstox" {{ 'disabled' if broker_name != 'upstox' }}>Upstox {{ '(Disabled)' if broker_name != 'upstox' }}</option>
                                 <option value="zebu" {{ 'disabled' if broker_name != 'zebu' }}>Zebu {{ '(Disabled)' if broker_name != 'zebu' }}</option>
