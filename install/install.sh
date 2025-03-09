@@ -75,7 +75,7 @@ generate_hex() {
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,aliceblue,angel,dhan,fyers,icici,kotak,shoonya,upstox,zebu,zerodha"
+    local valid_brokers="fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fyers,icici,kotak,paytm,shoonya,upstox,zebu,zerodha"
     if [[ $valid_brokers == *"$broker"* ]]; then
         return 0
     else

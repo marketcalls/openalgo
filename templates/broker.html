@@ -32,6 +32,9 @@
                 case 'aliceblue':
                     loginUrl = '/aliceblue/callback';
                     break;
+                case 'compositedge':
+                    loginUrl = 'https://xts.compositedge.com/interactive/thirdparty?appKey={{broker_api_key}}&returnURL=http://127.0.0.1:5000/compositedge/callback';
+                    break;
                 case 'angel':
                     loginUrl = '/angel/callback';
                     break;
@@ -102,6 +105,7 @@
                                 <option value="fivepaisa" {{ 'disabled' if broker_name != 'fivepaisa' }}>5 Paisa {{ '(Disabled)' if broker_name != 'fivepaisa' }}</option>
                                 <option value="aliceblue" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
                                 <option value="angel" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
+                                <option value="compositedge" {{ 'disabled' if broker_name != 'compositedge' }}>CompositEdge {{ '(Disabled)' if broker_name != 'compositedge' }}</option>
                                 <option value="dhan" {{ 'disabled' if broker_name != 'dhan' }}>Dhan {{ '(Disabled)' if broker_name != 'dhan' }}</option>
                                 <option value="firstock" {{ 'disabled' if broker_name != 'firstock' }}>Firstock {{ '(Disabled)' if broker_name != 'firstock' }}</option>
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
