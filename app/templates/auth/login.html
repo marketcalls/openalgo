@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Login - OpenAlgo{% endblock %}
+{% block meta_description %}Secure login page for OpenAlgo application{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto">
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-2xl font-bold text-center mb-6">Login to OpenAlgo</h2>
+            
+            <form method="post" action="/auth/login">
+                <div class="form-control">
+                    <label class="label" for="username">
+                        <span class="label-text">Username or Email</span>
+                    </label>
+                    <input type="text" id="username" name="username" placeholder="Enter your username or email" 
+                           class="input input-bordered" required autocomplete="username" />
+                </div>
+                
+                <div class="form-control mt-4">
+                    <label class="label" for="password">
+                        <span class="label-text">Password</span>
+                    </label>
+                    <input type="password" id="password" name="password" placeholder="Enter your password" 
+                           class="input input-bordered" required autocomplete="current-password" />
+                    <label class="label">
+                        <a href="/auth/forgot-password" class="label-text-alt link link-hover">Forgot password?</a>
+                    </label>
+                </div>
+                
+                <div class="form-control mt-6">
+                    <button type="submit" class="btn btn-primary">
+                        <span id="login-spinner" class="loading loading-spinner loading-xs mr-2 hidden"></span>
+                        Login
+                    </button>
+                </div>
+                
+                {% if error %}
+                <div class="alert alert-error mt-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>{{ error }}</span>
+                </div>
+                {% endif %}
+            </form>
+            
+            <div class="divider mt-6">OR</div>
+            
+            <div class="text-center">
+                <p class="mb-4">Don't have an account?</p>
+                <a href="/auth/register" class="btn btn-outline btn-secondary">Register Now</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-6 text-center text-sm">
+        <p>By logging in, you agree to our <a href="/terms" class="link link-hover">Terms of Service</a> and <a href="/privacy" class="link link-hover">Privacy Policy</a>.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Focus the username field on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('username').focus();
+    });
+</script>
+{% endblock %}

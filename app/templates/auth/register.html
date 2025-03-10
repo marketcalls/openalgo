@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}Register - OpenAlgo{% endblock %}
+{% block meta_description %}Create a new account for OpenAlgo application{% endblock %}
+
+{% block head %}
+<style>
+    .password-strength-meter {
+        height: 8px;
+        width: 100%;
+        background-color: #ddd;
+        margin-top: 5px;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    .password-strength-meter-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.3s ease;
+        box-shadow: 0 0 3px rgba(0,0,0,0.2);
+    }
+    
+    .strength-weak { width: 25%; background-color: #FF4136; }
+    .strength-fair { width: 50%; background-color: #FF851B; }
+    .strength-good { width: 75%; background-color: #FFDC00; }
+    .strength-strong { width: 100%; background-color: #2ECC40; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto">
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-2xl font-bold text-center mb-6">Create Account</h2>
+            
+            <form method="post" action="/auth/register" hx-post="/auth/register/validate" hx-trigger="change" hx-target="#form-errors" hx-swap="innerHTML">
+                <div class="form-control">
+                    <label class="label" for="email">
+                        <span class="label-text">Email</span>
+                    </label>
+                    <input type="email" id="email" name="email" placeholder="Enter your email" 
+                           class="input input-bordered" required autocomplete="email" />
+                </div>
+                
+                <div class="form-control mt-4">
+                    <label class="label" for="username">
+                        <span class="label-text">Username</span>
+                    </label>
+                    <input type="text" id="username" name="username" placeholder="Choose a username" 
+                           class="input input-bordered" required autocomplete="username" />
+                </div>
+                
+                <div class="form-control mt-4">
+                    <label class="label" for="password">
+                        <span class="label-text">Password</span>
+                    </label>
+                    <input type="password" id="password" name="password" placeholder="Create a strong password" 
+                           class="input input-bordered" required autocomplete="new-password" 
+                           hx-post="/auth/validate-password" hx-trigger="keyup changed delay:500ms" hx-target="#password-strength-container" />
+                    
+                    <div id="password-strength-container" class="mt-2">
+                        <!-- Password feedback will be dynamically inserted here -->
+                    </div>
+                </div>
+                
+                <div class="form-control mt-4">
+                    <label class="label" for="confirm_password">
+                        <span class="label-text">Confirm Password</span>
+                    </label>
+                    <input type="password" id="confirm_password" name="confirm_password" placeholder="Confirm your password" 
+                           class="input input-bordered" required autocomplete="new-password" />
+                </div>
+                
+                <div id="form-errors" class="mt-4">
+                    <!-- Validation errors will be displayed here -->
+                </div>
+                
+                <div class="form-control mt-6">
+                    <button type="submit" class="btn btn-primary">
+                        <span id="register-spinner" class="htmx-indicator loading loading-spinner loading-xs mr-2"></span>
+                        Create Account
+                    </button>
+                </div>
+            </form>
+            
+            <div class="divider mt-6">OR</div>
+            
+            <div class="text-center">
+                <p class="mb-4">Already have an account?</p>
+                <a href="/auth/login" class="btn btn-outline">Login Now</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-6 text-center text-sm">
+        <p>By registering, you agree to our <a href="/terms" class="link link-hover">Terms of Service</a> and <a href="/privacy" class="link link-hover">Privacy Policy</a>.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Password strength meter logic
+    document.addEventListener('DOMContentLoaded', function() {
+        const passwordInput = document.getElementById('password');
+        const confirmInput = document.getElementById('confirm_password');
+        
+        // Check password match
+        confirmInput.addEventListener('input', function() {
+            if (passwordInput.value === confirmInput.value) {
+                confirmInput.classList.remove('input-error');
+                confirmInput.classList.add('input-success');
+            } else {
+                confirmInput.classList.remove('input-success');
+                confirmInput.classList.add('input-error');
+            }
+        });
+    });
+</script>
+{% endblock %}

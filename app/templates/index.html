@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}OpenAlgo - OpenSource Algo Platform for Everyone{% endblock %}
+{% block meta_description %}Connect your algo strategies seamlessly with top Indian brokers across multiple platforms including Amibroker, TradingView, Python, and more.{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+    <div class="text-center max-w-3xl mx-auto">
+        <h1 class="text-5xl font-bold mb-8">
+            Your Personal
+            <span class="text-primary">Algo Trading</span>
+            <span class="text-primary">Platform</span>
+        </h1>
+        <p class="text-xl mb-8 opacity-80">
+            Connect your algo strategies seamlessly with top Indian brokers. Run your strategies from any platform - Amibroker, TradingView, Python, ChartInk, MetaTrader, Excel, or Google Sheets.
+        </p>
+        <div class="flex flex-col sm:flex-row gap-4 justify-center">
+            {% if not user %}
+                <a href="/auth/login" class="btn btn-primary">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path>
+                    </svg>
+                    Login
+                </a>
+            {% else %}
+                <a href="/dashboard" class="btn btn-primary">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+                    </svg>
+                    Dashboard
+                </a>
+            {% endif %}
+            <a href="/download" class="btn btn-outline">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                Download
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,96 @@
+/* OpenAlgo Custom Styles */
+
+/* HTMX Loading Indicators */
+.htmx-indicator {
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+}
+.htmx-request .htmx-indicator {
+    opacity: 1;
+}
+.htmx-request.htmx-indicator {
+    opacity: 1;
+}
+
+/* Custom focus styles for improved accessibility */
+:focus {
+    outline: 2px solid rgba(59, 130, 246, 0.5);
+    outline-offset: 2px;
+}
+
+/* Password strength meter custom styles */
+.password-feedback ul {
+    margin-top: 0.5rem;
+}
+
+.password-feedback li {
+    transition: color 0.3s ease;
+}
+
+.password-feedback li.valid {
+    color: #10B981;
+}
+
+/* Toast notifications */
+.toast {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 9999;
+    animation: toast-in-right 0.7s;
+}
+
+@keyframes toast-in-right {
+    from {
+        transform: translateX(100%);
+    }
+    to {
+        transform: translateX(0);
+    }
+}
+
+/* Mobile responsiveness enhancements */
+@media (max-width: 640px) {
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+}
+
+/* Dark mode optimizations */
+[data-theme="dark"] .card {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Print styles for better document rendering */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+    
+    body {
+        background: white;
+    }
+    
+    .card, .container {
+        box-shadow: none !important;
+        border: none !important;
+    }
+}
+
+/* Accessibility improvements */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}

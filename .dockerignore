@@ -1,0 +1,66 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+**/.pytest_cache
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git
+.gitignore
+.github/
+
+# Development files
+Makefile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
+LICENSE
+README.md
+SECURITY.md
+tests/
+
+# Development logs
+logs/
+*.log
+
+# Documentation
+docs/

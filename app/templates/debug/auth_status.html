@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Auth Debug - OpenAlgo{% endblock %}
+{% block meta_description %}Authentication debugging information{% endblock %}
+
+{% block content %}
+<div class="container mx-auto py-8 px-4">
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-2xl font-bold mb-6">Authentication Debug Information</h2>
+            
+            <div class="overflow-x-auto">
+                <h3 class="text-xl font-semibold mb-4">Authentication Status</h3>
+                <table class="table table-zebra w-full">
+                    <tbody>
+                        <tr>
+                            <td class="font-semibold">Timestamp</td>
+                            <td>{{ auth_status.timestamp }}</td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold">Authenticated</td>
+                            <td>
+                                {% if auth_status.is_authenticated %}
+                                <div class="badge badge-success">Yes</div>
+                                {% else %}
+                                <div class="badge badge-error">No</div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold">Auth Cookie Present</td>
+                            <td>
+                                {% if auth_status.auth_cookie_present %}
+                                <div class="badge badge-success">Yes</div>
+                                {% else %}
+                                <div class="badge badge-error">No</div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold">Auth Header Present</td>
+                            <td>
+                                {% if auth_status.auth_header_present %}
+                                <div class="badge badge-success">Yes</div>
+                                {% else %}
+                                <div class="badge badge-error">No</div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            {% if auth_status.is_authenticated %}
+            <div class="overflow-x-auto mt-8">
+                <h3 class="text-xl font-semibold mb-4">User Information</h3>
+                <table class="table table-zebra w-full">
+                    <tbody>
+                        <tr>
+                            <td class="font-semibold">User ID</td>
+                            <td>{{ auth_status.user_id }}</td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold">Username</td>
+                            <td>{{ auth_status.username }}</td>
+                        </tr>
+                        <tr>
+                            <td class="font-semibold">Email</td>
+                            <td>{{ auth_status.email }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            
+            <div class="flex justify-center mt-8">
+                <a href="/" class="btn btn-primary">Back to Home</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
