@@ -11,7 +11,7 @@ certifi==2024.7.4
 cffi==1.17.1
 charset-normalizer==3.3.2
 click==8.1.7
-cryptography==44.0.0
+cryptography==44.0.1
 darkdetect==0.8.0
 Deprecated==1.2.14
 dnspython==2.6.1
@@ -29,7 +29,7 @@ h11==0.14.0
 idna==3.7
 importlib_resources==6.4.0
 itsdangerous==2.2.0
-Jinja2==3.1.5
+Jinja2==3.1.6
 jsonschema==4.23.0
 jsonschema-specifications==2023.12.1
 limits==3.13.0
