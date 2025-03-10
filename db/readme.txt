@@ -1,1 +1,0 @@
-This Folder Contains Sqlite DB Files
