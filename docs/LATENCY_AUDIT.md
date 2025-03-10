@@ -5,7 +5,8 @@
 This document provides an audit of the latency optimization performed on the OpenAlgo AMI application, specifically focusing on the HTTP connection management for the Angel broker API.
 
 **Date of Implementation:** March 10, 2025  
-**Developer:** Codeium Assistant  
+**Developer:** Windsurf AI
+**Module Used:** Claude Sonnet 3.7 Sonnet (Thinking Model)
 **Scope:** Angel broker API in order_api.py  
 
 ## Problem Statement
