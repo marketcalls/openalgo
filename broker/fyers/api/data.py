@@ -6,6 +6,11 @@ import pandas as pd
 from datetime import datetime
 import urllib.parse
 import time
+import logging
+
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -17,15 +22,25 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         'Content-Type': 'application/json'
     }
 
+    logger.info(f"Making request to {endpoint}")
+    # logger.info(f"Headers: {headers}")
+    logger.info(f"Payload: {payload}")
+
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
-    return json.loads(data.decode("utf-8"))
+    response = json.loads(data.decode("utf-8"))
+
+    logger.info(f"Response status: {res.status}")
+    # logger.info(f"Response: {json.dumps(response, indent=2)}")
+
+    return response
 
 class BrokerData:
     def __init__(self, auth_token):
         """Initialize Fyers data handler with authentication token"""
         self.auth_token = auth_token
+
         # Map common timeframe format to Fyers resolutions
         self.timeframe_map = {
             # Seconds - Use 'S' suffix for seconds timeframes
@@ -298,3 +313,48 @@ class BrokerData:
             
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
+    def get_oc(self, symbol: str, exchange: str) -> pd.DataFrame:
+        """
+        Get option chain data for a given symbol
+
+        Args:
+            symbol (str): Symbol to get option chain for
+            exchange (str): Exchange (e.g., NSE, BSE)
+
+        Returns:
+            pd.DataFrame: DataFrame containing option chain data
+        """
+
+        # Convert symbol to broker format
+        br_symbol = get_br_symbol(symbol, exchange)
+        
+        # URL encode the symbol to handle special characters
+        encoded_symbol = urllib.parse.quote(br_symbol)
+        endpoint = f"/data/options-chain-v3?symbol={encoded_symbol}&strikecount=20"
+        response = get_api_response(endpoint, self.auth_token)
+
+        if response.get('s') != 'ok':
+            raise Exception(f"Failed to fetch option chain: {response.get('message')}")
+
+        # Extract options chain data
+        options_data = response['data']['optionsChain']
+
+        # Convert to DataFrame
+        df = pd.DataFrame(options_data)
+
+        # Filter relevant columns
+        columns = ['symbol', 'strike_price', 'option_type', 'ltp', 'ltpch', 'ltpchp', 'oi', 'oich', 'oichp', 'volume']
+        df = df[columns]
+
+        # Clean and format data
+        df['strike_price'] = df['strike_price'].astype(float)
+        df['ltp'] = df['ltp'].astype(float)
+        df['ltpch'] = df['ltpch'].astype(float)
+        df['ltpchp'] = df['ltpchp'].astype(float)
+        df['oi'] = df['oi'].astype(int)
+        df['oich'] = df['oich'].astype(int)
+        df['oichp'] = df['oichp'].astype(float)
+        df['volume'] = df['volume'].astype(int)
+
+        return df
