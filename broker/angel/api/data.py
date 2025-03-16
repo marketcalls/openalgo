@@ -135,8 +135,19 @@ class BrokerData:
         try:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
+
+            
+            
             token = get_token(symbol, exchange)
             print(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
+
+            if exchange == 'NSE_INDEX':
+                exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                exchange = 'MCX'
+
             
             # Check for unsupported timeframes
             if interval not in self.timeframe_map:
