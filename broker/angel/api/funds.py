@@ -1,13 +1,17 @@
 # api/funds.py
 
 import os
-import http.client
+import httpx
 import json
+from utils.httpx_client import get_httpx_client
 
 def get_margin_data(auth_token):
     """Fetch margin data from the broker's API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'Authorization': f'Bearer {auth_token}',
         'Content-Type': 'application/json',
@@ -19,11 +23,16 @@ def get_margin_data(auth_token):
         'X-MACAddress': 'MAC_ADDRESS',
         'X-PrivateKey': api_key
     }
-    conn.request("GET", "/rest/secure/angelbroking/user/v1/getRMS", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
-    margin_data = json.loads(data.decode("utf-8"))
+    
+    response = client.get(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getRMS",
+        headers=headers
+    )
+    
+    # Add status attribute for compatibility with the existing codebase
+    response.status = response.status_code
+    
+    margin_data = json.loads(response.text)
 
     print(f"Margin Data {margin_data}")
 

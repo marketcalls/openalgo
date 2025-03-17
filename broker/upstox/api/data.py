@@ -243,7 +243,7 @@ class BrokerData:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             # First convert to UTC, then to naive timestamp to avoid timezone issues
             if not df.empty:
-                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+            #    df['timestamp'] = df['timestamp'].dt.tz_localize(None)
                 df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9
             
             # Drop oi column and reorder columns to match expected format

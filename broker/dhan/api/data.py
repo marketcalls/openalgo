@@ -83,11 +83,15 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        
+        print(f'exchange: {exchange}')
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
             exchange_segment = "BSE_EQ"
+        elif exchange == "NSE_INDEX":
+            exchange_segment = "IDX_I"
+        elif exchange == "BSE_INDEX":
+            exchange_segment = "IDX_I"
         else:
             raise ValueError(f"Unsupported exchange: {exchange}")
             
@@ -132,7 +136,9 @@ class BrokerData:
             'BFO': 'BSE_FNO',     # BSE F&O
             'MCX': 'MCX_COMM',    # MCX Commodity
             'CDS': 'NSE_CURRENCY',  # NSE Currency
-            'BCD': 'BSE_CURRENCY'   # BSE Currency
+            'BCD': 'BSE_CURRENCY',   # BSE Currency
+            'NSE_INDEX': 'IDX_I',  # NSE Index
+            'BSE_INDEX': 'IDX_I'   # BSE Index
         }
         return exchange_map.get(exchange)
 
@@ -140,25 +146,30 @@ class BrokerData:
         """Get instrument type based on exchange and symbol"""
         # For cash market (NSE, BSE)
         if exchange in ['NSE', 'BSE']:
-            # For indices like NIFTY, BANKNIFTY etc.
-            if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
-                return 'INDEX'
-            # For regular equity
             return 'EQUITY'
+        
+        elif exchange in ['NSE_INDEX', 'BSE_INDEX']:
+            return 'INDEX'
+
+
             
         # For F&O market (NFO, BFO)
         elif exchange in ['NFO', 'BFO']:
             # First check for options (CE/PE at the end)
             if symbol.endswith('CE') or symbol.endswith('PE'):
                 # For index options like NIFTY23JAN20200CE
-                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                if any(index in symbol for index in [
+                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
+                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
                     return 'OPTIDX'
                 # For stock options
                 return 'OPTSTK'
             # Then check for futures
             else:
                 # For index futures like NIFTY23JAN
-                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                if any(index in symbol for index in [
+                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
+                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
                     return 'FUTIDX'
                 # For stock futures
                 return 'FUTSTK'
@@ -252,12 +263,12 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            
+            print(f'exchange: {exchange}')
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-
+            print(f'exchange segment: {exchange_segment}')
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []

@@ -150,6 +150,9 @@ def process_upstox_json(path):
     df['symbol'] = df.apply(reformat_symbol, axis=1)
     df['brexchange'] = segment_copy
     
+    df['symbol'] = df['symbol'].replace({'INDIA VIX': 'INDIAVIX'})
+
+    
     return df
 
 

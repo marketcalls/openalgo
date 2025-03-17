@@ -180,6 +180,19 @@ def process_angel_json(path):
     df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:] 
     df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace('\.0', '', regex=True) + df['symbol'].str[-2:]
 
+    
+    # Common Index Symbol Formats
+
+    df['symbol'] = df['symbol'].replace({
+    'Nifty 50': 'NIFTY',
+    'Nifty Next 50': 'NIFTYNXT50',
+    'Nifty Fin Service': 'FINNIFTY',
+    'Nifty Bank': 'BANKNIFTY',
+    'NIFTY MID SELECT': 'MIDCPNIFTY',
+    'India VIX': 'INDIAVIX',
+    'SNSX50': 'SENSEX50'
+    })
+
  
     # Return the processed DataFrame
     return df

@@ -1,18 +1,18 @@
-import http.client
 import json
 import os
+import httpx
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-
+from utils.httpx_client import get_httpx_client
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
-
     AUTH_TOKEN = auth
-
     api_key = os.getenv('BROKER_API_KEY')
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
       'Authorization': f'Bearer {AUTH_TOKEN}',
       'Content-Type': 'application/json',
@@ -24,11 +24,20 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
       'X-MACAddress': 'MAC_ADDRESS',
       'X-PrivateKey': api_key
     }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
     
-    return json.loads(data.decode("utf-8"))
+    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    
+    if method == "GET":
+        response = client.get(url, headers=headers)
+    elif method == "POST":
+        response = client.post(url, headers=headers, content=payload)
+    else:
+        response = client.request(method, url, headers=headers, content=payload)
+    
+    # Add status attribute for compatibility with the existing codebase
+    response.status = response.status_code
+    
+    return json.loads(response.text)
 
 def get_order_book(auth):
     return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
@@ -93,15 +102,29 @@ def place_order_api(data,auth):
     })
 
     print(payload)
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/placeOrder", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
+    # Make the request using the shared client
+    response = client.post(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        headers=headers,
+        content=payload
+    )
+    
+    # Add status attribute to make response compatible with http.client response
+    # as the rest of the codebase expects .status instead of .status_code
+    response.status = response.status_code
+    
+    # Parse the JSON response
+    response_data = response.json()
+    
     if response_data['status'] == True:
         orderid = response_data['data']['orderid']
     else:
         orderid = None
-    return res, response_data, orderid
+    return response, response_data, orderid
 
 def place_smartorder_api(data,auth):
 
@@ -250,6 +273,9 @@ def cancel_order(orderid,auth):
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
     
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     # Set up the request headers
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
@@ -269,11 +295,17 @@ def cancel_order(orderid,auth):
         "orderid": orderid,
     })
     
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")  # Adjust the URL as necessary
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/cancelOrder", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    # Make the request using the shared client
+    response = client.post(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+        headers=headers,
+        content=payload
+    )
+    
+    # Add status attribute for compatibility with the existing codebase
+    response.status = response.status_code
+    
+    data = json.loads(response.text)
     
     # Check if the request was successful
     if data.get("status"):
@@ -281,7 +313,7 @@ def cancel_order(orderid,auth):
         return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, response.status
 
 
 def modify_order(data,auth):
@@ -289,6 +321,9 @@ def modify_order(data,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
 
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
@@ -308,16 +343,22 @@ def modify_order(data,auth):
     }
     payload = json.dumps(transformed_data)
 
-    conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
-    conn.request("POST", "/rest/secure/angelbroking/order/v1/modifyOrder", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    # Make the request using the shared client
+    response = client.post(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+        headers=headers,
+        content=payload
+    )
+    
+    # Add status attribute for compatibility with the existing codebase
+    response.status = response.status_code
+    
+    data = json.loads(response.text)
 
     if data.get("status") == "true" or data.get("message") == "SUCCESS":
         return {"status": "success", "orderid": data["data"]["orderid"]}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
-
+        return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
 
 
 def cancel_all_orders_api(data,auth):
