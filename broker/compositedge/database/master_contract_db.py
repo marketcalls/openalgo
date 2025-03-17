@@ -11,7 +11,8 @@ import json
 import pandas as pd
 import gzip
 import io
-
+import csv
+from datetime import datetime
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -78,162 +79,388 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-
-def download_csv_zerodha_data(output_path):
-    """
-    Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
-    to pandas dataframe
-    """
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-    }
-    conn.request("GET", "/instruments", '', headers)
-
-    res = conn.getresponse()
-    if res.status == 200:
-        csv_data = res.read()  # Directly reading CSV data
-        csv_string = csv_data.decode('utf-8')  # Decode bytes to string
-        df = pd.read_csv(io.StringIO(csv_string))  # Convert string to pandas DataFrame
-        df.to_csv(output_path)
-
-        return df
-    else:
-        print(f"Failed to download. Status code: {res.status}")
-
-
-def reformat_symbol(row):
-    symbol = row['symbol']
-    instrument_type = row['instrumenttype']
+def download_csv_compositedge_data(output_path):
     
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
-    else:
-        symbol = symbol  # No change for other instrument types
+    print("Downloading Master Contract CSV Files")
+    exchange_segments = ["NSECM", "NSECD", "NSEFO", "BSECM", "BSEFO", "MCXFO"]
+    headers_equity = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low, FreezeQty,TickSize,LotSize,Multiplier,DisplayName,ISIN,PriceNumerator,PriceDenominator,DetailedDescription,ExtendedSurvIndicator,CautionIndicator,GSMIndicator\n"
+    headers_fo = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low,FreezeQty,TickSize,LotSize,Multiplier,UnderlyingInstrumentId,UnderlyingIndexName,ContractExpiration,StrikePrice,OptionType,DisplayName, PriceNumerator,PriceDenominator,DetailedDescription\n"
 
-    return symbol
-
-
-
-def process_zerodha_csv(path):
-    """
-    Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
-    """
-    print("Processing Zerodha CSV Data")
-    df = pd.read_csv(path)
-
-    # Map exchange names
-    exchange_map = {
-        "NSE": "NSE",
-        "NFO": "NFO",
-        "CDS": "CDS",
-        "NSE_INDEX": "NSE_INDEX",
-        "BSE_INDEX": "BSE_INDEX",
-        "BSE": "BSE",
-        "BFO": "BFO",
-        "BCD": "BCD",
-        "MCX": "MCX"
-
-    }
-    
-    df['exchange'] = df['exchange'].map(exchange_map)
-
-    # Update exchange names based on the instrument type
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'CDS'), 'exchange'] = 'CDS_INDEX'
-
-    # Format expiry date
-    df['expiry'] = pd.to_datetime(df['expiry']).dt.strftime('%d-%b-%y').str.upper()
-
-    # Combine instrument_token and exchange_token
-    df['token'] = df['instrument_token'].astype(str) + '::::' + df['exchange_token'].astype(str)
-
-    # Select and rename columns
-    df = df[['token', 'tradingsymbol', 'name', 'expiry', 
-             'strike', 'lot_size', 'instrument_type', 'exchange', 
-             'tick_size']].rename(columns={
-        'tradingsymbol': 'symbol',
-        'name': 'name',
-        'expiry': 'expiry',
-        'strike': 'strike',
-        'lot_size': 'lotsize',
-        'instrument_type': 'instrumenttype',
-        'exchange': 'exchange',
-        'tick_size': 'tick_size'
-    })
-
-    df['brsymbol'] = df['symbol']
-    df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = df['exchange']
-
-    # Fill NaN values in the 'expiry' column with an empty string
-    df['expiry'] = df['expiry'].fillna('')
-    
-    # Futures Symbol Update 
-    df.loc[(df['instrumenttype'] == 'FUT'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    # Options Symbol Update 
-
-    def format_strike(strike):
-        # Convert the string to a float, then to an integer, and finally back to a string.
-        return str(int(float(strike)))
-
-
-    df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
-    df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
-
-    return df
-    
-
-def delete_zerodha_temp_data(output_path):
-    try:
-        # Check if the file exists
-        if os.path.exists(output_path):
-            # Delete the file
-            os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
+    downloaded_files = []
+    for segment in exchange_segments:
+        conn = http.client.HTTPSConnection("xts.compositedge.com")
+        headers = {'Content-Type': 'application/json'}
+        payload = json.dumps({"exchangeSegmentList": [segment]})
+        conn.request("POST", "/apimarketdata/instruments/master", body=payload, headers=headers)
+        res = conn.getresponse()
+        if res.status != 200:
+            raise Exception(f"Failed to download {segment}. Status: {res.status}")
+        data = json.loads(res.read().decode('utf-8'))
+        if "result" not in data:
+            raise Exception(f"Invalid response format for {segment}: Missing 'result' field")
+        if segment in ["NSECM", "BSECM"]:
+            header = headers_equity
         else:
-            print(f"The temporary file {output_path} does not exist.")
-    except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+            header = headers_fo
+        segment_output_path = f"{output_path}/{segment}.csv"
+        os.makedirs(output_path, exist_ok=True)
 
+        csv_data = data["result"].split("\n")  # Convert result string to list of rows
+        csv_data = [row.split("|") for row in csv_data if row.strip()]  # Convert each row into a list
+
+        with open(segment_output_path, 'w', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(header.strip().split(","))  # Write headers
+            writer.writerows(csv_data)
+        downloaded_files.append(segment_output_path)
+        #file_path = download_compositedge_data(output_path, segment)
+
+    
+def reformat_symbol_detail(s):
+    parts = s.split()  # Split the string into parts
+    # Reorder and format the parts to match the desired output
+    # Assuming the format is consistent and always "Name DD Mon YY FUT"
+    return f"{parts[0]}{parts[3]}{parts[2].upper()}{parts[1]}{parts[4]}"
+
+def process_compositedge_nse_csv(path):
+    """
+    Processes the compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing compositedge NSE CSV Data")
+    file_path = f'{path}/NSECM.csv'
+
+    df = pd.read_csv(file_path)
+    
+
+    df = df[df['Series'].isin(['EQ'])]
+
+    token_df = pd.DataFrame()
+    token_df['symbol'] = df['Name']
+    token_df['brsymbol'] = df['DisplayName']
+    token_df['name'] = df['Name']
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "NSECM": "NSE"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "NSECM": "NSE"})
+    token_df['token'] = df['ExchangeInstrumentID']
+    token_df['expiry'] = ''
+    token_df['strike'] = 1.0
+    token_df['lotsize'] = df['LotSize']
+    token_df['instrumenttype'] = df['Series']
+    token_df['tick_size'] = df['TickSize']
+    
+    return token_df
+
+
+def process_compositedge_bse_csv(path):
+    """
+    Processes the compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing compositedge BSE CSV Data")
+    file_path = f'{path}/BSECM.csv'
+
+    df = pd.read_csv(file_path)
+
+    #df = df[df['Series'].isin(['EQ'])]
+
+    token_df = pd.DataFrame()
+    token_df['symbol'] = df['Name']
+    token_df['brsymbol'] = df['DisplayName']
+    token_df['name'] = df['Name']
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "BSECM": "BSE"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "BSECM": "BSE"})
+    token_df['token'] = df['ExchangeInstrumentID']
+    token_df['expiry'] = ''
+    token_df['strike'] = 1.0
+    token_df['lotsize'] = df['LotSize']
+    token_df['instrumenttype'] = df['Series']
+    token_df['tick_size'] = df['TickSize']
+    
+    return token_df
+
+
+def process_compositedge_nfo_csv(path):
+    """
+    Processes the Compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Compositedge NFO CSV Data")
+    file_path = f'{path}/NSEFO.csv'
+
+    df = pd.read_csv(file_path, dtype={"StrikePrice": str, " PriceNumerator": str}, low_memory=False)
+
+
+    # Convert 'Expiry Date' column to datetime format
+    df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
+
+    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
+
+    df["symbol"] = df.apply(
+        lambda row: f"{row['Name']}"
+                f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
+                f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
+                f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
+        axis=1
+        )
+
+    # Apply the function to rows where 'Option Type' is '1'
+    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
+
+    # Apply the function to rows where 'Option Type' is '3'
+    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
+
+    # Apply the function to rows where 'Option Type' is '4'
+    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
+
+    # Create token_df with the relevant columns
+    
+    token_df = df[['symbol']].copy()
+    token_df['symbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['symbol'].values
+    token_df['name'] = df['Name'].values
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "NSEFO": "NFO"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "NSEFO": "NFO"})
+    token_df['token'] = df['ExchangeInstrumentID'].values
+
+        # Convert 'Expiry Date' to desired format
+    token_df['expiry'] = df['ContractExpiration'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['StrikePrice'].values
+    token_df['lotsize'] = df['LotSize'].values
+    token_df['instrumenttype'] = df['OptionType'].map({
+            1: 'FUT',
+            3: 'CE',
+            4: 'PE'
+        })
+    token_df['tick_size'] = df['TickSize'].values
+
+    return token_df
+
+
+def process_compositedge_cds_csv(path):
+    """
+    Processes the compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing compositedge CDS CSV Data")
+    file_path = f'{path}/NSECD.csv'
+
+    df = pd.read_csv(file_path)
+
+    df = df.dropna(subset=['OptionType'])
+
+        # Convert 'Expiry Date' column to datetime format
+    df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
+
+    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
+
+       # Apply the function to rows where 'Option Type' is 'XX'
+    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
+
+    # Apply the function to rows where 'Option Type' is '3'
+    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
+
+    # Apply the function to rows where 'Option Type' is '4'
+    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
+
+    df["symbol"] = df.apply(
+        lambda row: f"{row['Name']}"
+                f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
+                f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
+                f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
+        axis=1
+        )
+
+    # Generate symbols based on instrument type
+    #df['symbol'] = df.apply(lambda x: 
+    #    f"{x['Name']}{x['ContractExpiration'].strftime('%d%b%y').upper()}{'FUT' if x['OptionType']=='1' else str(int(float(x['StrikePrice'])))+('CE' if x['OptionType']=='3' else 'PE')}", 
+    #    axis=1
+    #)
+    # Remove any rows where symbol generation failed
+    df = df[df['symbol'].notna()]
+
+    
+    # Create token_df with the relevant columns
+    token_df = df[['symbol']].copy()
+    token_df['symbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['symbol'].values
+    token_df['name'] = df['Name'].values
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "NSECD": "CDS"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "NSECD": "CDS"})
+    token_df['token'] = df['ExchangeInstrumentID'].values
+
+    # Convert 'Expiry Date' to desired format
+    token_df['expiry'] = df['ContractExpiration'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['StrikePrice'].values
+    token_df['lotsize'] = df['LotSize'].values
+    token_df['instrumenttype'] = df['OptionType'].map({
+            1: 'FUT',
+            3: 'CE',
+            4: 'PE'
+        })
+    token_df['tick_size'] = df['TickSize'].values
+
+    return token_df
+
+
+def process_compositedge_bfo_csv(path):
+    """
+    Processes the Compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Compositedge BFO CSV Data")
+    file_path = f'{path}/BSEFO.csv'
+
+    df = pd.read_csv(file_path, dtype={"StrikePrice": str, " PriceNumerator": str}, low_memory=False)
+
+        # Convert 'Expiry Date' column to datetime format
+    df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
+
+    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
+
+    df["symbol"] = df.apply(
+        lambda row: f"{row['Name']}"
+                f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
+                f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
+                f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
+        axis=1
+        )
+
+    # Apply the function to rows where 'Option Type' is '1'
+    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
+
+    # Apply the function to rows where 'Option Type' is '3'
+    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
+
+    # Apply the function to rows where 'Option Type' is '4'
+    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
+
+    # Create token_df with the relevant columns
+    
+    token_df = df[['symbol']].copy()
+    token_df['symbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['symbol'].values
+    token_df['name'] = df['Name'].values
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "BSEFO": "BFO"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "BSEFO": "BFO"})
+    token_df['token'] = df['ExchangeInstrumentID'].values
+
+        # Convert 'Expiry Date' to desired format
+    token_df['expiry'] = df['ContractExpiration'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['StrikePrice'].values
+    token_df['lotsize'] = df['LotSize'].values
+    token_df['instrumenttype'] = df['OptionType'].map({
+            1: 'FUT',
+            3: 'CE',
+            4: 'PE'
+        })
+    token_df['tick_size'] = df['TickSize'].values
+
+    return token_df
+
+
+def process_compositedge_mcx_csv(path):
+    """
+    Processes the Compositedge CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing Compositedge MCX CSV Data")
+    file_path = f'{path}/MCXFO.csv'
+
+    df = pd.read_csv(file_path)
+
+    # Drop rows where the 'Exch Seg' column has the value 'COMTDY'
+    df = df[df['ContractExpiration'] != '1']
+
+    df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
+    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
+    
+    df["symbol"] = df.apply(
+        lambda row: f"{row['Name']}"
+                f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
+                f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
+                f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
+        axis=1
+        )
+
+    # Apply the function to rows where 'Option Type' is '1'
+    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
+
+    # Apply the function to rows where 'Option Type' is '3'
+    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
+
+    # Apply the function to rows where 'Option Type' is '4'
+    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
+
+    # Create token_df with the relevant columns
+    token_df = df[['symbol']].copy()
+    token_df['symbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['symbol'].values
+    token_df['name'] = df['Name'].values
+    token_df['exchange'] = df['ExchangeSegment'].map({
+            "MCXFO": "MCX"})
+    token_df['brexchange'] = df['ExchangeSegment'].map({
+            "MCXFO": "MCX"})
+    token_df['token'] = df['ExchangeInstrumentID'].values
+
+    # Convert 'Expiry Date' to desired format
+    token_df['expiry'] = df['ContractExpiration'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['StrikePrice'].values
+    token_df['lotsize'] = df['LotSize'].values
+    token_df['instrumenttype'] = df['OptionType'].map({
+            1: 'FUT',
+            3: 'CE',
+            4: 'PE'
+        })
+    token_df['tick_size'] = df['TickSize'].values
+
+    return token_df
+
+
+def delete_compositedge_temp_data(output_path):
+    # Check each file in the directory
+    for filename in os.listdir(output_path):
+        # Construct the full file path
+        file_path = os.path.join(output_path, filename)
+        # If the file is a CSV, delete it
+        if filename.endswith(".csv") and os.path.isfile(file_path):
+            os.remove(file_path)
+            print(f"Deleted {file_path}")
+    
 
 def master_contract_download():
     print("Downloading Master Contract")
     
 
-    output_path = 'tmp/zerodha.csv'
+    output_path = 'tmp'
     try:
-        download_csv_zerodha_data(output_path)
-        token_df = process_zerodha_csv(output_path)
-        delete_zerodha_temp_data(output_path)
-        #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-        
-        #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
+        download_csv_compositedge_data(output_path)
+        delete_symtoken_table()
+        token_df = process_compositedge_nse_csv(output_path)
         copy_from_dataframe(token_df)
-                
+        token_df = process_compositedge_bse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_compositedge_nfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_compositedge_cds_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_compositedge_mcx_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_compositedge_bfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        
+        delete_compositedge_temp_data(output_path)
+        
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
     
     except Exception as e:
         print(str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+
 
 
 def search_symbols(symbol, exchange):
