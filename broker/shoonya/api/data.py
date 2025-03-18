@@ -70,6 +70,11 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
             
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
+            
             payload = {
                 "exch": exchange,
                 "token": token
@@ -108,6 +113,12 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
+
             
             payload = {
                 "exch": exchange,
@@ -177,6 +188,11 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
             
             # Convert dates to epoch timestamps
             start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
