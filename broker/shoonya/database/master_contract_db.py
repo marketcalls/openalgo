@@ -163,6 +163,13 @@ def process_shoonya_nse_data(output_path):
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
 
+    df_filtered['symbol'] = df_filtered['symbol'].replace({
+        'NIFTY INDEX': 'NIFTY',
+        'NIFTY BANK': 'BANKNIFTY',
+        'MIDCPNIFTY': 'MIDCPNIFTY',
+        'INDIA VIX': 'INDIAVIX'
+        })
+
     # Return the processed DataFrame
     return df_filtered
 

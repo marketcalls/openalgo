@@ -206,7 +206,7 @@ def process_dhan_csv(path):
       
         
     df['symbol'] = df.apply(reformat_symbol, axis=1)
-
+    df['symbol'] = df['symbol'].replace('INDIA VIX', 'INDIAVIX')
 
     # List of columns to remove
     columns_to_remove = [
