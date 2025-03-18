@@ -33,11 +33,12 @@
                     loginUrl = '/aliceblue/callback';
                     break;
                 case 'compositedge':
-                    loginUrl = 'https://xts.compositedge.com/interactive/thirdparty?appKey={{broker_api_key}}&returnURL=http://127.0.0.1:5000/compositedge/callback';
+                    loginUrl = 'https://xts.compositedge.com/interactive/thirdparty?appKey={{broker_api_key}}&returnURL={{ redirect_url }}';
                     break;
                 case 'angel':
                     loginUrl = '/angel/callback';
                     break;
+                
                 case 'dhan':
                     loginUrl = '/dhan/callback';
                     break;

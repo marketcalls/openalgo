@@ -142,16 +142,17 @@ def broker_callback(broker,para=None):
 
             # Extract access token
             access_token = session_json.get('accessToken')
-            print(f'Access token is {access_token}')
+            #print(f'Access token is {access_token}')
             
             if not access_token:
                 
                 return jsonify({"error": "No access token found"}), 400
                 
             auth_token, error_message = auth_function(access_token)
+            #print(f'Auth token is {auth_token}')
             forward_url = 'broker.html'
         except Exception as e:
-            print(f"Error in compositedge callback: {str(e)}")
+            #print(f"Error in compositedge callback: {str(e)}")
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
     elif broker=='fyers':

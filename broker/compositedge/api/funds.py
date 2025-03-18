@@ -23,7 +23,7 @@ def get_margin_data(auth_token):
     
     margin_data = json.loads(data.decode("utf-8"))
 
-    print(f"Funds Details: {margin_data}")
+    #print(f"Funds Details: {margin_data}")
 
     if (
         margin_data.get("result") and 
@@ -33,7 +33,7 @@ def get_margin_data(auth_token):
         rms_sublimits = margin_data["result"]["BalanceList"][0]["limitObject"]["RMSSubLimits"]
         
         required_keys = [
-            "cashAvailable", 
+            "netMarginAvailable", 
             "collateral", 
             "UnrealizedMTM", 
             "RealizedMTM",
@@ -49,8 +49,17 @@ def get_margin_data(auth_token):
                 formatted_value = "0.00"
             
             filtered_data[key] = formatted_value
-            print(f"Funds Dashboard: {key} = {filtered_data[key]}")
+            #print(f"Funds Dashboard: {key} = {filtered_data[key]}")
+
+        processed_margin_data = {
+            "availablecash": filtered_data.get('netMarginAvailable'),
+            "collateral":  filtered_data.get('collateral'),
+            "m2munrealized": filtered_data.get('UnrealizedMTM'),
+            "m2mrealized": filtered_data.get('RealizedMTM'),
+            "utiliseddebits": filtered_data.get('marginUtilized'),
+        }
         
-        return filtered_data
+        #print(f"Funds = {processed_margin_data}")
+        return processed_margin_data
     else:
         return {}
