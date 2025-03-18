@@ -115,6 +115,44 @@ def download_csv_compositedge_data(output_path):
         downloaded_files.append(segment_output_path)
         #file_path = download_compositedge_data(output_path, segment)
 
+def fetch_index_list():
+    print("Fetching Index List")
+    exchange_segments = [1, 11]  # NSE and BSE indexes
+    headers = {'Content-Type': 'application/json'}
+    conn = http.client.HTTPSConnection("xts.compositedge.com")
+
+    index_data = []
+
+    for segment in exchange_segments:
+        url = f"/apimarketdata/instruments/indexlist?exchangeSegment={segment}"
+        conn.request("GET", url, headers=headers)
+        res = conn.getresponse()
+
+        if res.status != 200:
+            print(f"Failed to fetch index list for segment {segment}. Status: {res.status}")
+            continue
+        
+        data = json.loads(res.read().decode('utf-8'))
+        
+        if "result" not in data or "indexList" not in data["result"]:
+            print(f"Invalid response format for segment {segment}")
+            continue
+
+        for index_entry in data["result"]["indexList"]:
+            # Extract symbol name and token
+            symbol_name, token = index_entry.rsplit("_", 1)
+
+            index_data.append({
+                "brsymbol": index_entry,  # Full format (e.g., "NIFTY 100_26004")
+                "symbol": symbol_name,    # Raw symbol before mapping
+                "exchange": "NSE_INDEX" if segment == 1 else "BSE_INDEX",
+                "token": token
+            })
+
+        #print(f"index_data for segment {segment}: {index_data}")
+
+    conn.close()
+    return index_data
     
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
@@ -140,8 +178,7 @@ def process_compositedge_nse_csv(path):
     token_df['name'] = df['Name']
     token_df['exchange'] = df['ExchangeSegment'].map({
             "NSECM": "NSE"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "NSECM": "NSE"})
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID']
     token_df['expiry'] = ''
     token_df['strike'] = 1.0
@@ -169,8 +206,10 @@ def process_compositedge_bse_csv(path):
     token_df['name'] = df['Name']
     token_df['exchange'] = df['ExchangeSegment'].map({
             "BSECM": "BSE"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "BSECM": "BSE"})
+    token_df['exchange'] = df.apply(
+    lambda row: "BSE_INDEX" if row['Series'] == "SPOT" else "BSE", axis=1
+    )
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID']
     token_df['expiry'] = ''
     token_df['strike'] = 1.0
@@ -204,25 +243,15 @@ def process_compositedge_nfo_csv(path):
         axis=1
         )
 
-    # Apply the function to rows where 'Option Type' is '1'
-    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
-
-    # Apply the function to rows where 'Option Type' is '3'
-    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
-
-    # Apply the function to rows where 'Option Type' is '4'
-    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
-
     # Create token_df with the relevant columns
     
     token_df = df[['symbol']].copy()
     token_df['symbol'] = df['symbol'].values
-    token_df['brsymbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['Description'].values
     token_df['name'] = df['Name'].values
     token_df['exchange'] = df['ExchangeSegment'].map({
             "NSEFO": "NFO"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "NSEFO": "NFO"})
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID'].values
 
         # Convert 'Expiry Date' to desired format
@@ -255,15 +284,7 @@ def process_compositedge_cds_csv(path):
 
     df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
 
-       # Apply the function to rows where 'Option Type' is 'XX'
-    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
-
-    # Apply the function to rows where 'Option Type' is '3'
-    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
-
-    # Apply the function to rows where 'Option Type' is '4'
-    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
-
+    
     df["symbol"] = df.apply(
         lambda row: f"{row['Name']}"
                 f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
@@ -278,29 +299,32 @@ def process_compositedge_cds_csv(path):
     #    axis=1
     #)
     # Remove any rows where symbol generation failed
-    df = df[df['symbol'].notna()]
+    #df = df[df['symbol'].notna()]
 
     
     # Create token_df with the relevant columns
     token_df = df[['symbol']].copy()
     token_df['symbol'] = df['symbol'].values
-    token_df['brsymbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['Description'].values
     token_df['name'] = df['Name'].values
     token_df['exchange'] = df['ExchangeSegment'].map({
             "NSECD": "CDS"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "NSECD": "CDS"})
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID'].values
 
     # Convert 'Expiry Date' to desired format
     token_df['expiry'] = df['ContractExpiration'].dt.strftime('%d-%b-%y').str.upper()
     token_df['strike'] = df['StrikePrice'].values
     token_df['lotsize'] = df['LotSize'].values
-    token_df['instrumenttype'] = df['OptionType'].map({
-            1: 'FUT',
-            3: 'CE',
-            4: 'PE'
-        })
+    token_df['instrumenttype'] = token_df['symbol'].apply(
+       lambda x: 'FUT' if 'FUT' in x else ('PE' if 'PE' in x else 'CE'))
+    #token_df['instrumenttype'] = df['OptionType'].map({
+    #        1: 'FUT',
+    #        872604 : 'FUT',
+    #        5892 : 'FUT',
+    #        3: 'CE',
+    #        4: 'PE'
+    #    })
     token_df['tick_size'] = df['TickSize'].values
 
     return token_df
@@ -328,25 +352,14 @@ def process_compositedge_bfo_csv(path):
         axis=1
         )
 
-    # Apply the function to rows where 'Option Type' is '1'
-    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
-
-    # Apply the function to rows where 'Option Type' is '3'
-    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
-
-    # Apply the function to rows where 'Option Type' is '4'
-    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
-
-    # Create token_df with the relevant columns
-    
+        
     token_df = df[['symbol']].copy()
     token_df['symbol'] = df['symbol'].values
-    token_df['brsymbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['Description'].values
     token_df['name'] = df['Name'].values
     token_df['exchange'] = df['ExchangeSegment'].map({
             "BSEFO": "BFO"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "BSEFO": "BFO"})
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID'].values
 
         # Convert 'Expiry Date' to desired format
@@ -386,24 +399,15 @@ def process_compositedge_mcx_csv(path):
         axis=1
         )
 
-    # Apply the function to rows where 'Option Type' is '1'
-    #df.loc[df['OptionType'] == '1', 'symbol'] = df['PriceNumerator']
-
-    # Apply the function to rows where 'Option Type' is '3'
-    #df.loc[df['OptionType'] == '3', 'symbol'] = df['PriceDenominator1']
-
-    # Apply the function to rows where 'Option Type' is '4'
-    #df.loc[df['OptionType'] == '4', 'symbol'] = df['PriceDenominator1']
-
+    
     # Create token_df with the relevant columns
     token_df = df[['symbol']].copy()
     token_df['symbol'] = df['symbol'].values
-    token_df['brsymbol'] = df['symbol'].values
+    token_df['brsymbol'] = df['Description'].values
     token_df['name'] = df['Name'].values
     token_df['exchange'] = df['ExchangeSegment'].map({
             "MCXFO": "MCX"})
-    token_df['brexchange'] = df['ExchangeSegment'].map({
-            "MCXFO": "MCX"})
+    token_df['brexchange'] = df['ExchangeSegment']
     token_df['token'] = df['ExchangeInstrumentID'].values
 
     # Convert 'Expiry Date' to desired format
@@ -419,6 +423,33 @@ def process_compositedge_mcx_csv(path):
 
     return token_df
 
+def process_index_data(index_data):
+    print("Processing Index Data")
+    df = pd.DataFrame(index_data)
+
+    # Map Symbols to Standard Format
+    df['symbol'] = df['symbol'].replace({
+        'NIFTY 50': 'NIFTY',
+        'NIFTY BANK': 'BANKNIFTY',
+        'INDIA VIX': 'INDIAVIX',
+        'NIFTY FIN SERVICE': 'FINNIFTY',
+        'NIFTY MID SELECT': 'MIDCPNIFTY',
+        'NIFTY NEXT 50': 'NIFTYNXT50',
+        'SENSEX': 'SENSEX',
+        'BANKEX': 'BANKEX',
+        'SNSX50': 'SENSEX50'
+    })
+
+    df['name'] = df['symbol']
+    df['brexchange'] = df['exchange']
+    df['expiry'] = ''
+    df['strike'] = 1.0
+    df['lotsize'] = 1  # Default index lot size
+    df['instrumenttype'] = 'INDEX'
+    df['tick_size'] = 0.05 
+    #print(df)
+
+    return df
 
 def delete_compositedge_temp_data(output_path):
     # Check each file in the directory
@@ -451,6 +482,12 @@ def master_contract_download():
         copy_from_dataframe(token_df)
         token_df = process_compositedge_bfo_csv(output_path)
         copy_from_dataframe(token_df)
+
+        # Fetch and Process Index Data
+        index_data = fetch_index_list()
+        if index_data:
+            index_df = process_index_data(index_data)
+            copy_from_dataframe(index_df)
         
         delete_compositedge_temp_data(output_path)
         
