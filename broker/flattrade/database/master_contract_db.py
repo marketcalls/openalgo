@@ -218,6 +218,18 @@ def process_flattrade_nse_data(output_path):
             (df_filtered['token'] != '')
         ]
 
+        df_filtered['symbol'] = df_filtered['symbol'].replace({
+            'Nifty 50': 'NIFTY',
+            'Nifty Bank': 'BANKNIFTY',
+            'Nifty Fin': 'FINNIFTY',
+            'Nifty Next 50': 'NIFTYNXT50',
+            'NIFTY MID SELECT': 'MIDCPNIFTY',
+            'INDIAVIX': 'INDIAVIX'
+        })
+
+        # Replace 'BSE' with 'BSE_INDEX' for specific symbols
+        df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
+
         print(f"Successfully processed {len(df_filtered)} NSE records")
         return df_filtered
         
