@@ -6,7 +6,7 @@ from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.compositedge.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
 
-def get_api_response(endpoint, auth, method="GET",  payload=None):
+def get_api_response(endpoint, auth, method="GET",  payload=''):
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
 
@@ -20,9 +20,9 @@ def get_api_response(endpoint, auth, method="GET",  payload=None):
     
     url = f"https://xts.compositedge.com{endpoint}"
 
-    print("Request URL:", url)
-    print("Headers:", headers)
-    print("Payload:", json.dumps(payload, indent=2) if payload else "None")
+    #print("Request URL:", url)
+    #print("Headers:", headers)
+    #print("Payload:", json.dumps(payload, indent=2) if payload else "None")
     
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -32,8 +32,8 @@ def get_api_response(endpoint, auth, method="GET",  payload=None):
         response = client.request(method, url, headers=headers, json=payload)
     
      # Debugging: Print the raw response before returning
-    print("Response Status Code:", response.status_code)
-    print("Response Content:", response.text)
+    #print("Response Status Code:", response.status_code)
+    #print("Response Content:", response.text)
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
     
