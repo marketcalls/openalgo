@@ -1,34 +1,30 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
+#Mapping Compositedge Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol,get_token
 
 def transform_data(data):
     """
     Transforms the new API request structure to the current expected structure.
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
+    token = get_token(data['symbol'], data['exchange'])
 
     # Basic mapping
     transformed = {
-        "tradingsymbol" : symbol,
-        "exchange" : data['exchange'],
-        "transaction_type": data['action'].upper(),
-        "order_type": data["pricetype"],
-        "quantity": data["quantity"],
-        "product": data["product"],
-        "price": data.get("price", "0"),
-        "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),  
-        "validity":"DAY",
-        "tag": "openalgo",
+        "exchangeSegment": map_exchange(data['exchange']),
+        "exchangeInstrumentID": token,
+        "productType": map_product_type(data["product"]),
+        "orderType": map_order_type(data["pricetype"]),
+        "orderSide": data['action'].upper(),
+        "timeInForce": "DAY",
+        "disclosedQuantity": data.get("disclosed_quantity", "0"),
+        "orderQuantity": data["quantity"],
+        "limitPrice": data.get("price", "0"),
+        "stopPrice": data.get("trigger_price", "0"),
+        "orderUniqueIdentifier": "openalgo"
     }
-
-
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
-    
+    print(f"transformed data: {transformed}")
     return transformed
 
 
@@ -42,6 +38,21 @@ def transform_modify_order_data(data):
         "validity": "DAY"      
     }
 
+def map_exchange(exchange):
+    """
+    Maps the new exchange to the existing exchange.
+    """
+    exchange_mapping = {
+        "NSE": "NSECM",
+        "BSE": "BSECM",
+        "MCX": "MCXFO",
+        "NFO": "NSEFO",
+        "BFO": "BSEFO",
+        "CDS": "NSECD",
+        "EXCHANGE": "EXCHANGE"
+    }
+    return exchange_mapping.get(exchange, "EXCHANGE")
+
 
 
 def map_order_type(pricetype):
@@ -51,7 +62,7 @@ def map_order_type(pricetype):
     order_type_mapping = {
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "SL": "SL",
+        "SL": "SL-L",
         "SL-M": "SL-M"
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
@@ -79,4 +90,3 @@ def reverse_map_product_type(exchange,product):
     }
    
     return exchange_mapping.get(product)
-    
