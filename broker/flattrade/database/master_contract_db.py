@@ -227,9 +227,7 @@ def process_flattrade_nse_data(output_path):
             'INDIAVIX': 'INDIAVIX'
         })
 
-        # Replace 'BSE' with 'BSE_INDEX' for specific symbols
-        df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-
+      
         print(f"Successfully processed {len(df_filtered)} NSE records")
         return df_filtered
         
@@ -548,6 +546,10 @@ def process_flattrade_bse_data(output_path):
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
+
+    # Replace 'BSE' with 'BSE_INDEX' for specific symbols
+    df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
+
 
     # Return the processed DataFrame
     return df_filtered
