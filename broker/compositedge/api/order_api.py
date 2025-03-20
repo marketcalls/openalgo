@@ -43,10 +43,10 @@ def get_order_book(auth):
     return get_api_response("//interactive/orders",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/compositedgebroking/order/v1/getTradeBook",auth)
+    return get_api_response("/interactive/orders/trades",auth)
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/compositedgebroking/order/v1/getPosition",auth)
+    return get_api_response("/interactive/portfolio/positions?dayOrNet=DayWise",auth)
 
 def get_holdings(auth):
     return get_api_response("/rest/secure/compositedgebroking/portfolio/v1/getAllHolding",auth)

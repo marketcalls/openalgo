@@ -94,7 +94,8 @@ def transform_order_data(orders):
     order_status_mapping = {
         "Filled": "complete",
         "Rejected": "rejected",
-        "Open": "open",
+        "Cancelled": "cancelled",
+        "New": "open",
     }
     for order in orders:
         # Make sure each item is indeed a dictionary
@@ -144,40 +145,14 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
+    if 'result' not in trade_data or not trade_data['result']:
         print("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        trade_data = trade_data['data']
-        
+        return []  # Return an empty list if no orders are available
+    
+    trade_data = trade_data['result']
 
-
-    if trade_data:
-        for order in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order['tradingsymbol']
-            exchange = order['exchange']
-            
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
-                               
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
-                    order['producttype'] = 'NRML'
-            else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
+    print(f"trade_data: {trade_data}")
+   
     return trade_data
 
 
@@ -185,38 +160,103 @@ def map_trade_data(trade_data):
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
+
+    # Define exchange mappings
+    exchange_mapping = {
+        "NSECM": "NSE",
+        "BSECM": "BSE",
+        "NSEFO": "NFO",
+        "BSEFO": "BFO",
+        "MCXFO": "MCX",
+        "NSECD": "CDS"
+    }
+    
+   
     for trade in tradebook_data:
+
+        exchange = trade.get("ExchangeSegment", "")
+        mapped_exchange = exchange_mapping.get(exchange, exchange)
+        
+        # Ensure quantity and average price are converted to the correct types
+        quantity = int(trade.get('OrderQuantity', 0))
+        average_price = float(trade.get('OrderAverageTradedPrice', 0.0))
+
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
-            "exchange": trade.get('exchange', ''),
-            "product": trade.get('producttype', ''),
-            "action": trade.get('transactiontype', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('fillprice', 0.0),
-            "trade_value": trade.get('tradevalue', 0),
-            "orderid": trade.get('orderid', ''),
-            "timestamp": trade.get('filltime', '')
+            "symbol": trade.get('TradingSymbol', ''),
+            "exchange": mapped_exchange,
+            "product": trade.get('ProductType', ''),
+            "action": trade.get('OrderSide', ''),
+            "quantity": quantity,
+            "average_price": average_price,
+            "trade_value": quantity * average_price,
+            "orderid": trade.get('AppOrderID', ''),
+            "timestamp": trade.get('OrderGeneratedDateTime', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
 
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+
+    """
+    Processes and modifies a list of order dictionaries based on specific conditions.
+    
+    Parameters:
+    - order_data: A list of dictionaries, where each dictionary represents an order.
+    
+    Returns:
+    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+    """
+    # Check if 'data' is None
+    #print(f"order_data: {order_data}")
+    if 'result' not in position_data or not position_data['result']:
+        print("No data available.")
+        return []  # Return an empty list if no orders are available
+    
+    position_data = position_data['result']
+
+    #print(f"position_data: {position_data}")
+   
+
+    return position_data
 
 
 def transform_positions_data(positions_data):
+    #print(f"positions_data: {positions_data}")
+    positions_data = positions_data.get("positionList", [])
     transformed_data = []
+    
+    # Define exchange mappings
+    exchange_mapping = {
+        "NSECM": "NSE",
+        "BSECM": "BSE",
+        "NSEFO": "NFO",
+        "BSEFO": "BFO",
+        "MCXFO": "MCX",
+        "NSECD": "CDS"
+    }
+    if not isinstance(positions_data, list):
+        print(f"Error: positions_data is not a list. Received: {type(positions_data)} - {positions_data}")
+        return transformed_data
+
     for position in positions_data:
+
+        if not isinstance(position, dict):  # Ensure it's a dictionary
+            print(f"Skipping invalid position: {position}")
+            continue
+        exchange = position.get("ExchangeSegment", "")
+        mapped_exchange = exchange_mapping.get(exchange, exchange)
+
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
-            "product": position.get('producttype', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('avgnetprice', 0.0),
+            "symbol": position.get("TradingSymbol", ""),
+            "exchange": mapped_exchange,
+            "product": position.get('ProductType', ''),
+            "quantity": position.get('Quantity', 0),
+            "average_price": position.get('NetAmount', 0.0),
             "ltp": position.get('ltp', 0.0),  
             "pnl": position.get('pnl', 0.0),  
         }
+        #print(f"Transformed Position: {transformed_position}") 
         transformed_data.append(transformed_position)
     return transformed_data
 
