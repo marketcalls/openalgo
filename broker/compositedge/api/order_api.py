@@ -69,25 +69,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
 
-    AUTH_TOKEN = auth
-    print(f"AUTH_TOKEN: {AUTH_TOKEN}")
-    print(f"data: {data}")
-    exchange_mapping = {
-        "NFO": "NSEFO",
-        "BFO": "BSEFO",
-        "NSE": "NSECM",
-        "BSE": "BSECM",
-        "CDS": "NSECD",
-        "MCX": "MCXFO"
-    }
-    brexchange = exchange_mapping.get(data['exchange'], data['exchange'])
-    #print(f"brexchange: {brexchange}")
-    
-    #print(f"Calling get_br_symbol with: {data['symbol']} - {brexchange}")
-    #print(f"Direct call output: {get_br_symbol(data['symbol'], brexchange)}")
-    #brsymbol= get_br_symbol(data['symbol'],brexchange)
-    #print(f"Assigned brsymbol: {brsymbol}")
-    
+    AUTH_TOKEN = auth   
     token = get_token(data['symbol'], data['exchange'])
     print(f"token: {token}")
     newdata = transform_data(data, token)  
@@ -116,7 +98,7 @@ def place_order_api(data,auth):
     except json.JSONDecodeError:
         response_data = {"error": "Invalid JSON response from server", "raw_response": response.text}
 
-    print("Broker Response:", response.status_code, response_data)  # Debugging log
+    #print("Broker Response:", response.status_code, response_data)  # Debugging log
     
     orderid = response_data.get("result", {}).get("AppOrderID") if response_data.get("type") == "success" else None
     

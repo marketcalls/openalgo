@@ -1,26 +1,22 @@
-#database/master_contract_db.py
+# database/master_contract_db.py
 
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
-import pandas as pd
 import gzip
 import io
 import csv
 from datetime import datetime
 
-from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
+from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
-
-
+from utils.httpx_client import get_httpx_client
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -36,7 +32,7 @@ class SymToken(Base):
     brsymbol = Column(String, nullable=False, index=True)  # Single column index
     name = Column(String)
     exchange = Column(String, index=True)  # Include this column in a composite index
-    brexchange = Column(String, index=True)  
+    brexchange = Column(String, index=True)
     token = Column(String, index=True)  # Indexed for performance
     expiry = Column(String)
     strike = Column(Float)
@@ -80,28 +76,35 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 def download_csv_compositedge_data(output_path):
-    
     print("Downloading Master Contract CSV Files")
     exchange_segments = ["NSECM", "NSECD", "NSEFO", "BSECM", "BSEFO", "MCXFO"]
     headers_equity = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low, FreezeQty,TickSize,LotSize,Multiplier,DisplayName,ISIN,PriceNumerator,PriceDenominator,DetailedDescription,ExtendedSurvIndicator,CautionIndicator,GSMIndicator\n"
     headers_fo = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low,FreezeQty,TickSize,LotSize,Multiplier,UnderlyingInstrumentId,UnderlyingIndexName,ContractExpiration,StrikePrice,OptionType,DisplayName, PriceNumerator,PriceDenominator,DetailedDescription\n"
 
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    headers = {'Content-Type': 'application/json'}
+
     downloaded_files = []
     for segment in exchange_segments:
-        conn = http.client.HTTPSConnection("xts.compositedge.com")
-        headers = {'Content-Type': 'application/json'}
         payload = json.dumps({"exchangeSegmentList": [segment]})
-        conn.request("POST", "/apimarketdata/instruments/master", body=payload, headers=headers)
-        res = conn.getresponse()
-        if res.status != 200:
-            raise Exception(f"Failed to download {segment}. Status: {res.status}")
-        data = json.loads(res.read().decode('utf-8'))
+        response = client.post(
+            "https://xts.compositedge.com/apimarketdata/instruments/master",
+            headers=headers,
+            content=payload
+        )
+        if response.status_code != 200:
+            raise Exception(f"Failed to download {segment}. Status: {response.status_code}")
+
+        data = response.json()
         if "result" not in data:
             raise Exception(f"Invalid response format for {segment}: Missing 'result' field")
+
         if segment in ["NSECM", "BSECM"]:
             header = headers_equity
         else:
             header = headers_fo
+
         segment_output_path = f"{output_path}/{segment}.csv"
         os.makedirs(output_path, exist_ok=True)
 
@@ -113,27 +116,26 @@ def download_csv_compositedge_data(output_path):
             writer.writerow(header.strip().split(","))  # Write headers
             writer.writerows(csv_data)
         downloaded_files.append(segment_output_path)
-        #file_path = download_compositedge_data(output_path, segment)
 
 def fetch_index_list():
     print("Fetching Index List")
     exchange_segments = [1, 11]  # NSE and BSE indexes
     headers = {'Content-Type': 'application/json'}
-    conn = http.client.HTTPSConnection("xts.compositedge.com")
 
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
     index_data = []
 
     for segment in exchange_segments:
-        url = f"/apimarketdata/instruments/indexlist?exchangeSegment={segment}"
-        conn.request("GET", url, headers=headers)
-        res = conn.getresponse()
+        url = f"https://xts.compositedge.com/apimarketdata/instruments/indexlist?exchangeSegment={segment}"
+        response = client.get(url, headers=headers)
 
-        if res.status != 200:
-            print(f"Failed to fetch index list for segment {segment}. Status: {res.status}")
+        if response.status_code != 200:
+            print(f"Failed to fetch index list for segment {segment}. Status: {response.status_code}")
             continue
-        
-        data = json.loads(res.read().decode('utf-8'))
-        
+
+        data = response.json()
+
         if "result" not in data or "indexList" not in data["result"]:
             print(f"Invalid response format for segment {segment}")
             continue
@@ -149,11 +151,8 @@ def fetch_index_list():
                 "token": token
             })
 
-        #print(f"index_data for segment {segment}: {index_data}")
-
-    conn.close()
     return index_data
-    
+
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
     # Reorder and format the parts to match the desired output
@@ -168,7 +167,6 @@ def process_compositedge_nse_csv(path):
     file_path = f'{path}/NSECM.csv'
 
     df = pd.read_csv(file_path)
-    
 
     df = df[df['Series'].isin(['EQ'])]
 
@@ -185,7 +183,7 @@ def process_compositedge_nse_csv(path):
     token_df['lotsize'] = df['LotSize']
     token_df['instrumenttype'] = df['Series']
     token_df['tick_size'] = df['TickSize']
-    
+
     return token_df
 
 
@@ -198,7 +196,7 @@ def process_compositedge_bse_csv(path):
 
     df = pd.read_csv(file_path)
 
-    #df = df[df['Series'].isin(['EQ'])]
+    # df = df[df['Series'].isin(['EQ'])]
 
     token_df = pd.DataFrame()
     token_df['symbol'] = df['Name']
@@ -216,7 +214,7 @@ def process_compositedge_bse_csv(path):
     token_df['lotsize'] = df['LotSize']
     token_df['instrumenttype'] = df['Series']
     token_df['tick_size'] = df['TickSize']
-    
+
     return token_df
 
 
@@ -244,7 +242,6 @@ def process_compositedge_nfo_csv(path):
         )
 
     # Create token_df with the relevant columns
-    
     token_df = df[['symbol']].copy()
     token_df['symbol'] = df['symbol'].values
     token_df['brsymbol'] = df['Description'].values
@@ -294,12 +291,12 @@ def process_compositedge_cds_csv(path):
         )
 
     # Generate symbols based on instrument type
-    #df['symbol'] = df.apply(lambda x: 
+    # df['symbol'] = df.apply(lambda x: 
     #    f"{x['Name']}{x['ContractExpiration'].strftime('%d%b%y').upper()}{'FUT' if x['OptionType']=='1' else str(int(float(x['StrikePrice'])))+('CE' if x['OptionType']=='3' else 'PE')}", 
     #    axis=1
-    #)
+    # )
     # Remove any rows where symbol generation failed
-    #df = df[df['symbol'].notna()]
+    # df = df[df['symbol'].notna()]
 
     
     # Create token_df with the relevant columns
@@ -318,7 +315,7 @@ def process_compositedge_cds_csv(path):
     token_df['lotsize'] = df['LotSize'].values
     token_df['instrumenttype'] = token_df['symbol'].apply(
        lambda x: 'FUT' if 'FUT' in x else ('PE' if 'PE' in x else 'CE'))
-    #token_df['instrumenttype'] = df['OptionType'].map({
+    # token_df['instrumenttype'] = df['OptionType'].map({
     #        1: 'FUT',
     #        872604 : 'FUT',
     #        5892 : 'FUT',
@@ -447,7 +444,7 @@ def process_index_data(index_data):
     df['lotsize'] = 1  # Default index lot size
     df['instrumenttype'] = 'INDEX'
     df['tick_size'] = 0.05 
-    #print(df)
+    # print(df)
 
     return df
 

@@ -113,8 +113,8 @@ def transform_order_data(orders):
     order_type_mapping = {
             "Limit": "LIMIT",
             "Market": "MARKET",
-            "SL-L": "SL",
-            "SL-M": "SL-M"
+            "StopLimit": "SL",
+            "StopMarket": "SL-M"
         }
     # Define order status mappings
     order_status_mapping = {
@@ -146,7 +146,7 @@ def transform_order_data(orders):
             "action": order.get("OrderSide", ""),
             "quantity": order.get("OrderQuantity", 0),
             "price": order.get("OrderPrice", 0.0),
-            "trigger_price": order.get("triggerprice", 0.0),
+            "trigger_price": order.get("OrderStopPrice", 0.0),
             "pricetype": mapped_order_type,
             "product": order.get("ProductType", ""),
             "orderid": order.get("AppOrderID", ""),
