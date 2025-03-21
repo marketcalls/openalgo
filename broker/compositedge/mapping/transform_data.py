@@ -3,13 +3,13 @@
 
 from database.token_db import get_br_symbol,get_token
 
-def transform_data(data):
+def transform_data(data,token):
     """
     Transforms the new API request structure to the current expected structure.
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
-    token = get_token(data['symbol'], data['exchange'])
-
+    #token = get_token(data['symbol'], data['exchange'])
+    #print(f"token: {token}")
     # Basic mapping
     transformed = {
         "exchangeSegment": map_exchange(data['exchange']),

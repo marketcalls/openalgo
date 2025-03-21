@@ -1,5 +1,6 @@
 import json
 import os
+from tokenize import Token
 import httpx
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
@@ -31,12 +32,10 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     else:
         response = client.request(method, url, headers=headers, json=payload)
     
-     # Debugging: Print the raw response before returning
-    #print("Response Status Code:", response.status_code)
-    #print("Response Content:", response.text)
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    
+    #print(f"Response Status Code: {response.status_code}")
+    #print(f"Response Content: {response.text}")
     return response.json()
 
 def get_order_book(auth):
@@ -49,7 +48,7 @@ def get_positions(auth):
     return get_api_response("/interactive/portfolio/positions?dayOrNet=DayWise",auth)
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/compositedgebroking/portfolio/v1/getAllHolding",auth)
+    return get_api_response("/interactive/portfolio/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -72,8 +71,26 @@ def place_order_api(data,auth):
 
     AUTH_TOKEN = auth
     print(f"AUTH_TOKEN: {AUTH_TOKEN}")
-    #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)  
+    print(f"data: {data}")
+    exchange_mapping = {
+        "NFO": "NSEFO",
+        "BFO": "BSEFO",
+        "NSE": "NSECM",
+        "BSE": "BSECM",
+        "CDS": "NSECD",
+        "MCX": "MCXFO"
+    }
+    brexchange = exchange_mapping.get(data['exchange'], data['exchange'])
+    #print(f"brexchange: {brexchange}")
+    
+    #print(f"Calling get_br_symbol with: {data['symbol']} - {brexchange}")
+    #print(f"Direct call output: {get_br_symbol(data['symbol'], brexchange)}")
+    #brsymbol= get_br_symbol(data['symbol'],brexchange)
+    #print(f"Assigned brsymbol: {brsymbol}")
+    
+    token = get_token(data['symbol'], data['exchange'])
+    print(f"token: {token}")
+    newdata = transform_data(data, token)  
     headers = {
         'authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
@@ -99,7 +116,7 @@ def place_order_api(data,auth):
     except json.JSONDecodeError:
         response_data = {"error": "Invalid JSON response from server", "raw_response": response.text}
 
-    #print("Broker Response:", response.status_code, response_data)  # Debugging log
+    print("Broker Response:", response.status_code, response_data)  # Debugging log
     
     orderid = response_data.get("result", {}).get("AppOrderID") if response_data.get("type") == "success" else None
     

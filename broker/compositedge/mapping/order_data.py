@@ -302,13 +302,25 @@ def transform_positions_data(positions_data):
 
         if symbol_from_db:
             position['TradingSymbol'] = symbol_from_db
+        
+        netqty = float(position.get('Quantity', 0))
+        if netqty > 0 :
+            net_amount = float(position.get('BuyAveragePrice', 0))
+        elif netqty < 0:
+            net_amount = float(position.get('SellAveragePrice', 0))
+        else:
+            net_amount = 0
+        
+        average_price = net_amount    
+        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
+        average_price_formatted = "{:.2f}".format(average_price)
 
         transformed_position = {
             "symbol": position.get("TradingSymbol", ""),
             "exchange": mapped_exchange,
             "product": position.get('ProductType', ''),
             "quantity": position.get('Quantity', 0),
-            "average_price": position.get('NetAmount', 0.0),
+            "average_price": average_price_formatted,
             "ltp": position.get('ltp', 0.0),  
             "pnl": position.get('pnl', 0.0),  
         }
@@ -317,6 +329,7 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    print(f"holdings_data: {holdings_data}")
     transformed_data = []
     for holdings in holdings_data['holdings']:
         transformed_position = {
@@ -331,6 +344,7 @@ def transform_holdings_data(holdings_data):
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
+    print(f"portfolio_data: {portfolio_data}")
     """
     Processes and modifies a list of Portfolio dictionaries based on specific conditions and
     ensures both holdings and totalholding parts are transmitted in a single response.
