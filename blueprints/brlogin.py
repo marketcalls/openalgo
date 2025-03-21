@@ -39,6 +39,9 @@ def broker_callback(broker,para=None):
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
     
+    # Initialize feed_token to None by default
+    feed_token = None
+    
     if broker == 'fivepaisa':
         if request.method == 'GET':
             return render_template('5paisa.html')
@@ -50,7 +53,7 @@ def broker_callback(broker,para=None):
 
             auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = '5paisa.html'
-
+        
     elif broker == 'angel':
         if request.method == 'GET':
             return render_template('angel.html')
@@ -59,7 +62,7 @@ def broker_callback(broker,para=None):
             clientcode = request.form.get('clientid')
             broker_pin = request.form.get('pin')
             totp_code = request.form.get('totp')
-            auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
+            auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
     
     elif broker == 'aliceblue':
@@ -253,7 +256,9 @@ def broker_callback(broker,para=None):
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
             auth_token = f'{auth_token}'
-        return handle_auth_success(auth_token, session['user'], broker)
+        
+        # Pass the feed token to handle_auth_success
+        return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     

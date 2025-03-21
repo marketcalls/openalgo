@@ -12,43 +12,21 @@
         </a>
     </div>
     
-    <!-- Desktop Navigation (moved to end) -->
-    <div class="navbar-end hidden lg:flex items-center">
-        <ul class="menu menu-horizontal px-1 gap-2 mr-4">
-            <li>
-                <a href="/" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/' }}">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
-                    Home
-                </a>
-            </li>
-            <li>
-                <a href="/faq" class="text-base hover:bg-base-200 {{ 'active' if request.path == '/faq' }}">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    FAQ
-                </a>
-            </li>
-            <li>
-                <a href="https://docs.openalgo.in" class="text-base hover:bg-base-200" target="_blank" rel="noopener noreferrer">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                    </svg>
-                    Docs
-                </a>
-            </li>
-            <li>
-                <a href="/download" class="btn btn-primary text-base {{ 'btn-active' if request.path == '/download' }}">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Download
-                </a>
-            </li>
+    <!-- Desktop Navigation (center) -->
+    <div class="navbar-center hidden lg:flex">
+        <ul class="menu menu-horizontal px-1">
+            <li><a href="/" class="{{ 'active' if request.path == '/' }}">Home</a></li>
+            <li><a href="/faq" class="{{ 'active' if request.path == '/faq' }}">FAQ</a></li>
+            <li><a href="https://openalgo.in/discord" target="_blank" rel="noopener noreferrer">Community</a></li>
+            <li><a href="https://openalgo.in/roadmap" target="_blank" rel="noopener noreferrer">Roadmap</a></li>
+            <li><a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">Docs</a></li>
         </ul>
-
+    </div>
+    
+    <!-- Right side buttons -->
+    <div class="navbar-end">
+        <a href="/download" class="btn btn-primary btn-sm mr-2">Download</a>
+        
         <!-- Theme Toggle -->
         <label class="swap swap-rotate btn btn-ghost btn-circle">
             <input type="checkbox" class="theme-controller" />

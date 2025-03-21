@@ -60,41 +60,50 @@ class BrokerData:
             'D': 'D'      # Daily data
         }
 
-    def get_quotes(self, symbols_list) -> list:
+    def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbols
+        Get real-time quotes for given symbol
         Args:
-            symbols_list: List of dicts with exchange and token
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            list: List of quote data for each symbol
+            dict: Simplified quote data with required fields
         """
         try:
             quotes = []
-            for symbol_info in symbols_list:
-                payload = {
-                    "uid": os.getenv('BROKER_API_KEY').split(':::')[0],
-                    "exch": symbol_info['exchange'],
-                    "token": symbol_info['token']
-                }
+            # Convert symbol to broker format and get token
+            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, exchange)
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
+
+            payload = {
+                "uid": os.getenv('BROKER_API_KEY').split(':::')[0],
+                "exch": exchange,
+                "token": token
+            }
                 
-                response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
+            response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
                 
-                if response.get('stat') != 'Ok':
-                    print(f"Error in quote: {response.get('emsg', 'Unknown error')}")
-                    continue
-                
-                # Return simplified quote data
-                quotes.append({
-                    'bid': float(response.get('bp1', 0)),
-                    'ask': float(response.get('sp1', 0)), 
-                    'open': float(response.get('o', 0)),
-                    'high': float(response.get('h', 0)),
-                    'low': float(response.get('l', 0)),
-                    'ltp': float(response.get('lp', 0)),
-                    'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                    'volume': int(response.get('v', 0))
-                })
+            if response.get('stat') != 'Ok':
+                print(f"Error in quote: {response.get('emsg', 'Unknown error')}")
+                return []  # Return empty list instead of continue
             
+            # Return simplified quote data
+            quotes.append({
+                'bid': float(response.get('bp1', 0)),
+                'ask': float(response.get('sp1', 0)), 
+                'open': float(response.get('o', 0)),
+                'high': float(response.get('h', 0)),
+                'low': float(response.get('l', 0)),
+                'ltp': float(response.get('lp', 0)),
+                'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
+                'volume': int(response.get('v', 0))
+            })
+        
             return quotes
             
         except Exception as e:
@@ -113,6 +122,11 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
             
             payload = {
                 "uid": os.getenv('BROKER_API_KEY').split(':::')[0],
@@ -183,6 +197,11 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
             
             # Convert dates to epoch timestamps
             start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
