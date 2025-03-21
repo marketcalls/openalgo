@@ -1,4 +1,5 @@
 import json
+from turtle import position
 from database.token_db import get_symbol, get_oa_symbol 
 
 def map_order_data(order_data):
@@ -11,15 +12,40 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
+    exchange_mapping = {
+        "NSECM": "NSE",
+        "BSECM": "BSE",
+        "NSEFO": "NFO",
+        "BSEFO": "BFO",
+        "MCXFO": "MCX",
+        "NSECD": "CDS"
+    }
+    
+    
         # Check if 'data' is None
     #print(f"order_data: {order_data}")
+
     if 'result' not in order_data or not order_data['result']:
         print("No data available.")
         return []  # Return an empty list if no orders are available
     
     order_data = order_data['result']
 
-    print(f"orders: {order_data}")
+    if order_data:
+        for order in order_data:
+            # Extract the instrument_token and exchange for the current order
+            symboltoken = order['ExchangeInstrumentID']
+            exch = order.get("ExchangeSegment", "")
+            exchange = exchange_mapping.get(exch, exch)
+            
+            # Use the get_symbol function to fetch the symbol from the database
+            symbol_from_db = get_symbol(symboltoken, exchange)
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            if symbol_from_db:
+                order['TradingSymbol'] = symbol_from_db
+
+    #print(f"orders: {order_data}")
    
     return order_data
 
@@ -50,7 +76,7 @@ def calculate_order_statistics(order_data):
             # Count orders based on their status
             if order['OrderStatus'] == 'Filled':
                 total_completed_orders += 1
-            elif order['OrderStatus'] == 'open':
+            elif order['OrderStatus'] == 'New':
                 total_open_orders += 1
             elif order['OrderStatus'] == 'Rejected':
                 total_rejected_orders += 1
@@ -144,12 +170,37 @@ def map_trade_data(trade_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
+    exchange_mapping = {
+        "NSECM": "NSE",
+        "BSECM": "BSE",
+        "NSEFO": "NFO",
+        "BSEFO": "BFO",
+        "MCXFO": "MCX",
+        "NSECD": "CDS"
+    }
+    
         # Check if 'data' is None
     if 'result' not in trade_data or not trade_data['result']:
         print("No data available.")
         return []  # Return an empty list if no orders are available
     
     trade_data = trade_data['result']
+
+    if trade_data:
+
+        for trade in trade_data:
+            # Extract the instrument_token and exchange for the current order
+            symboltoken = trade['ExchangeInstrumentID']
+            exch = trade.get("ExchangeSegment", "")
+            exchange = exchange_mapping.get(exch, exch)
+            
+            # Use the get_symbol function to fetch the symbol from the database
+            symbol_from_db = get_symbol(symboltoken, exchange)
+            
+            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            if symbol_from_db:
+                trade['TradingSymbol'] = symbol_from_db
+
 
     print(f"trade_data: {trade_data}")
    
@@ -197,15 +248,14 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
-
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-    
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
-    
-    Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+     Processes and modifies a list of order dictionaries based on specific conditions.
+     
+     Parameters:
+     - order_data: A list of dictionaries, where each dictionary represents an order.
+     
+     Returns:
+     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     # Check if 'data' is None
     #print(f"order_data: {order_data}")
@@ -214,10 +264,10 @@ def map_position_data(position_data):
         return []  # Return an empty list if no orders are available
     
     position_data = position_data['result']
-
+ 
     #print(f"position_data: {position_data}")
-   
-
+    
+ 
     return position_data
 
 
@@ -244,8 +294,14 @@ def transform_positions_data(positions_data):
         if not isinstance(position, dict):  # Ensure it's a dictionary
             print(f"Skipping invalid position: {position}")
             continue
+        symboltoken = position.get('ExchangeInstrumentID')
         exchange = position.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
+
+        symbol_from_db = get_symbol(symboltoken, mapped_exchange)
+
+        if symbol_from_db:
+            position['TradingSymbol'] = symbol_from_db
 
         transformed_position = {
             "symbol": position.get("TradingSymbol", ""),

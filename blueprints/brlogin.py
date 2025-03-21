@@ -151,9 +151,13 @@ def broker_callback(broker,para=None):
                 
                 return jsonify({"error": "No access token found"}), 400
                 
-            auth_token, error_message = auth_function(access_token)
+            # Fetch both auth token and feed token
+            auth_token, feed_token, error_message = auth_function(access_token)
+
             #print(f'Auth token is {auth_token}')
+            #print(f'Feed token is {feed_token}')
             forward_url = 'broker.html'
+
         except Exception as e:
             #print(f"Error in compositedge callback: {str(e)}")
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500

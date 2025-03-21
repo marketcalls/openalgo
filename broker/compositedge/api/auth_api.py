@@ -32,8 +32,15 @@ def authenticate_broker(request_token):
             result = response.json()
             if result.get('type') == 'success':
                 token = result['result']['token']
-                print(f"Auth Token: {token}")
-                return token, None
+                #print(f"Auth Token: {token}")
+
+                # Call get_feed_token() after successful authentication
+                feed_token, feed_error = get_feed_token()
+                if feed_error:
+                    return token, None, f"Feed token error: {feed_error}"
+
+                return token, feed_token, None
+
             else:
                 # Access token not present in the response
                 return None, "Authentication succeeded but no access token was returned. Please check the response."
@@ -42,8 +49,10 @@ def authenticate_broker(request_token):
             error_detail = response.json()
             error_message = error_detail.get('message', 'Authentication failed. Please try again.')
             return None, f"API error: {error_message}"
+        
     except Exception as e:
-        return None, f"Error during authentication: {str(e)}"
+        return None, None, f"Error during authentication: {str(e)}"
+
 
 def get_feed_token():
     try:
@@ -72,7 +81,7 @@ def get_feed_token():
             feed_result = feed_response.json()
             if feed_result.get("type") == "success":
                 feed_token = feed_result["result"].get("token")
-                print(f"Feed Token: {feed_token}")
+                #print(f"Feed Token: {feed_token}")
             else:
                 return None, "Feed token request failed. Please check the response."
         else:
@@ -83,14 +92,3 @@ def get_feed_token():
         return feed_token, None
     except Exception as e:
         return None, f"An exception occurred: {str(e)}"
-
-
-def authenticate_and_get_feed_token(request_token):
-    auth_token, auth_error = authenticate_broker(request_token)
-    if auth_error:
-        return auth_token, None, auth_error
-    feed_token, feed_error = get_feed_token()
-    if feed_error:
-        return auth_token, feed_token, feed_error
-    
-    return auth_token, feed_token, None
