@@ -366,8 +366,8 @@ def process_fyers_bfo_csv(path):
     df['lotsize'] = df['Minimum lot size']
     df['tick_size'] = df['Tick size']
     df['brsymbol'] = df['Symbol ticker']
-    df['brexchange'] = 'BCD'
-    df['exchange'] = 'BCD'
+    df['brexchange'] = 'BFO'
+    df['exchange'] = 'BFO'
     df['instrumenttype'] = df['Option type'].fillna('FUT').str.replace('XX', 'FUT')
 
 
@@ -465,6 +465,8 @@ def master_contract_download():
         token_df = process_fyers_nse_csv(output_path)
         copy_from_dataframe(token_df)
         token_df = process_fyers_bse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_fyers_bfo_csv(output_path)
         copy_from_dataframe(token_df)
         token_df = process_fyers_nfo_csv(output_path)
         copy_from_dataframe(token_df)
