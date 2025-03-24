@@ -1,68 +1,95 @@
-import http.client
 import json
 import os
 import urllib.parse
-from database.token_db import get_br_symbol, get_oa_symbol
-from broker.zerodha.database.master_contract_db import SymToken, db_session
+from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
+from broker.compositedge.database.master_contract_db import SymToken, db_session
+from flask import session  
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
+from utils.httpx_client import get_httpx_client
+from database.auth_db import get_feed_token
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload='',feed_token=None):
+    
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    if feed_token:
+        FEED_TOKEN = feed_token
+    #print(f"Auth Token: {AUTH_TOKEN}")
+    #print(f"Feed Token: {FEED_TOKEN}")
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+        'authorization': FEED_TOKEN,
         'Content-Type': 'application/json'
     }
+    
+    # Add feed token to payload for market data requests
+     # If payload is a string, try to parse it into dict
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse payload as JSON")
+            raise Exception("Invalid payload format")
+
+    url = f"https://xts.compositedge.com{endpoint}"
 
     try:
-        # Log the complete request details for Postman
+        # Log request details
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://api.kite.trade{endpoint}")
+        logger.info(f"URL: {url}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
-            logger.info(f"Payload: {payload}")
+            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
 
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
+        # Perform the request
+        if method.upper() == "GET":
+            response = client.get(url, headers=headers)
+        elif method.upper() == "POST":
+            response = client.post(url, headers=headers, json=payload)
+        else:
+            response = client.request(method, url, headers=headers, json=payload)
 
-        # Log the complete response
+        #print(f"Response: {response}")
+
+        # Log response details
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.info(f"Response Body: {response.text}")
 
-        return response
+        return response.json()
+
     except Exception as e:
         logger.error(f"API request failed: {str(e)}")
         raise
 
 class BrokerData:
-    def __init__(self, auth_token):
-        """Initialize Zerodha data handler with authentication token"""
+    def __init__(self, auth_token, feed_token=None):
+        """Initialize CompositEdge data handler with authentication token"""
         self.auth_token = auth_token
+        self.feed_token = feed_token
         
-        # Map common timeframe format to Zerodha intervals
+        # Map common timeframe format to CompositEdge intervals
         self.timeframe_map = {
             # Minutes
-            '1m': 'minute',
-            '3m': '3minute',
-            '5m': '5minute',
-            '10m': '10minute',
-            '15m': '15minute',
-            '30m': '30minute',
-            '60m': '60minute',
+            '1m': '1',
+            '3m': '3',
+            '5m': '5',
+            '10m': '10',
+            '15m': '15',
+            '30m': '30',
+            '60m': '60',
             # Daily
-            'D': 'day'
+            'D': 'D'
         }
         
         # Market timing configuration for different exchanges
@@ -113,10 +140,25 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
+            # Exchange segment mapping
+            exchange_segment_map = {
+                "NSE": 1,
+                "NFO": 2,
+                "CDS": 3,
+                "BSE": 11,
+                "BFO": 12,
+                "MCX": 51
+            }
+            
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Fetching quotes for {exchange}:{br_symbol}")
             
+            #brexchange = get_brexchange(symbol, exchange)
+            #logger.info(f"Fetching quotes for {brexchange}, {br_symbol}")
+            
+            brexchange = exchange_segment_map.get(exchange)
+            if brexchange is None:
+                raise Exception(f"Unknown exchange segment: {brexchange}")
             # Get exchange_token from database
             with db_session() as session:
                 symbol_info = session.query(SymToken).filter(
@@ -127,33 +169,44 @@ class BrokerData:
                 if not symbol_info:
                     raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
                 
-                # Split token to get exchange_token for quotes
-                exchange_token = symbol_info.token.split('::::')[1]
+                # Get the token for quotes
+                token = {
+                "exchangeSegment": brexchange,  
+                "exchangeInstrumentID": symbol_info.token  # token = instrument ID
+            }
             
-            # URL encode the symbol to handle special characters
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")
+            # Prepare payload for CompositEdge quotes API
+            payload = {
+                "instruments": [token],
+                "xtsMessageCode": 1502,  # Market data request code for CompositEdge
+                "publishFormat": "JSON"
+            }
             
-            response = get_api_response(f"/quote?i={encoded_symbol}", self.auth_token)
+            response = get_api_response("/apimarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload,feed_token=self.feed_token)
             
-            if not response or response.get('status') != 'success':
-                raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
+            if not response or response.get('type') != 'success':
+                raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+            
+            # Parse stringified JSON quote
+            raw_quote_str = response.get('result', {}).get('listQuotes', [None])[0]
+            if not raw_quote_str:
+                raise Exception("No quote data found in listQuotes")
             
             # Get quote data from response
-            quote = response.get('data', {}).get(f"{exchange}:{br_symbol}", {})
-            if not quote:
-                raise Exception("No quote data found")
-            
-            # Return quote data
+            quote = json.loads(raw_quote_str)
+            #print(f"Quote: {quote}")
+            touchline = quote.get('Touchline', {})
+            #print(f"Touchline: {touchline}")
             return {
-                'ask': quote.get('depth', {}).get('sell', [{}])[0].get('price', 0),
-                'bid': quote.get('depth', {}).get('buy', [{}])[0].get('price', 0),
-                'high': quote.get('ohlc', {}).get('high', 0),
-                'low': quote.get('ohlc', {}).get('low', 0),
-                'ltp': quote.get('last_price', 0),
-                'open': quote.get('ohlc', {}).get('open', 0),
-                'prev_close': quote.get('ohlc', {}).get('close', 0),
-                'volume': quote.get('volume', 0)
-            }
+                'ask': touchline.get('AskInfo', {}).get('Price', 0),
+                'bid': touchline.get('BidInfo', {}).get('Price', 0),
+                'high': touchline.get('High', 0),
+                'low': touchline.get('Low', 0),
+                'ltp': touchline.get('LastTradedPrice', 0),
+            'open': touchline.get('Open', 0),
+            'prev_close': touchline.get('Close', 0),
+            'volume': touchline.get('TotalTradedQuantity', 0)
+        }
             
         except Exception as e:
             logger.error(f"Error fetching quotes: {str(e)}")
@@ -172,7 +225,7 @@ class BrokerData:
             pd.DataFrame: Historical data with OHLCV
         """
         try:
-            # Convert timeframe to Zerodha format
+            # Convert timeframe to CompositEdge format
             resolution = self.timeframe_map.get(timeframe)
             if not resolution:
                 raise Exception(f"Unsupported timeframe: {timeframe}")
@@ -195,8 +248,8 @@ class BrokerData:
                     logger.info(f"All matching symbols in DB: {[(s.symbol, s.brsymbol, s.exchange, s.brexchange, s.token) for s in all_symbols]}")
                     raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
                 
-                # Split token to get instrument_token for historical data
-                instrument_token = symbol_info.token.split('::::')[0]
+                # Get the token for historical data
+                token = symbol_info.token
 
             # Convert dates to datetime objects
             start_date = pd.to_datetime(from_date)
@@ -212,25 +265,31 @@ class BrokerData:
                 current_end = min(current_start + timedelta(days=59), end_date)
                 
                 # Format dates for API call
-                from_str = current_start.strftime('%Y-%m-%d+00:00:00')
-                to_str = current_end.strftime('%Y-%m-%d+23:59:59')
+                from_str = current_start.strftime('%Y-%m-%d')
+                to_str = current_end.strftime('%Y-%m-%d')
                 
                 # Log the request details
                 logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
                 
-                # Construct endpoint
-                endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}"
-                logger.info(f"Making request to endpoint: {endpoint}")
+                # Prepare payload for CompositEdge historical data API
+                payload = {
+                    "instruments": [token],
+                    "xtsMessageCode": 1101,  # Historical data request code for CompositEdge
+                    "resolution": resolution,
+                    "from": from_str,
+                    "to": to_str,
+                    "publishFormat": "JSON"
+                }
                 
                 # Use get_api_response
-                response = get_api_response(endpoint, self.auth_token)
+                response = get_api_response("/apimarketdata/historical", self.auth_token, method="POST", payload=payload)
                 
-                if not response or response.get('status') != 'success':
+                if not response or response.get('type') != 'success':
                     logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
+                    raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
                 
                 # Convert to DataFrame
-                candles = response.get('data', {}).get('candles', [])
+                candles = response.get('result', {}).get('listCandles', [])
                 if candles:
                     df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     dfs.append(df)
@@ -285,23 +344,25 @@ class BrokerData:
                 if not symbol_info:
                     raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
                 
-                # Split token to get exchange_token for quotes
-                exchange_token = symbol_info.token.split('::::')[1]
+                # Get the token for quotes
+                token = symbol_info.token
             
-            # URL encode the symbol to handle special characters
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")
+            # Prepare payload for CompositEdge market depth API
+            payload = {
+                "instruments": [token],
+                "xtsMessageCode": 1503,  # Market depth request code for CompositEdge
+                "publishFormat": "JSON"
+            }
             
-            response = get_api_response(f"/quote?i={encoded_symbol}", self.auth_token)
+            response = get_api_response("/apimarketdata/instruments/depth", self.feed_token, method="POST", payload=payload)
             
-            if not response or response.get('status') != 'success':
-                raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
+            if not response or response.get('type') != 'success':
+                raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
             
-            # Get quote data from response
-            quote = response.get('data', {}).get(f"{exchange}:{br_symbol}", {})
-            if not quote:
+            # Get market depth data from response
+            depth = response.get('result', {}).get('listDepth', [{}])[0]
+            if not depth:
                 raise Exception("No market depth data found")
-            
-            depth = quote.get('depth', {})
             
             # Format asks and bids data
             asks = []
@@ -333,16 +394,16 @@ class BrokerData:
             return {
                 'asks': asks,
                 'bids': bids,
-                'high': quote.get('ohlc', {}).get('high', 0),
-                'low': quote.get('ohlc', {}).get('low', 0),
-                'ltp': quote.get('last_price', 0),
-                'ltq': quote.get('last_quantity', 0),
-                'oi': quote.get('oi', 0),
-                'open': quote.get('ohlc', {}).get('open', 0),
-                'prev_close': quote.get('ohlc', {}).get('close', 0),
+                'high': depth.get('high', 0),
+                'low': depth.get('low', 0),
+                'ltp': depth.get('last_traded_price', 0),
+                'ltq': depth.get('last_traded_quantity', 0),
+                'oi': depth.get('open_interest', 0),
+                'open': depth.get('open', 0),
+                'prev_close': depth.get('previous_close', 0),
                 'totalbuyqty': sum(order.get('quantity', 0) for order in buy_orders),
                 'totalsellqty': sum(order.get('quantity', 0) for order in sell_orders),
-                'volume': quote.get('volume', 0)
+                'volume': depth.get('volume', 0)
             }
             
         except Exception as e:

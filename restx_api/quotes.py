@@ -39,7 +39,7 @@ class Quotes(Resource):
             quotes_data = quotes_schema.load(request.json)
 
             api_key = quotes_data['apikey']
-            AUTH_TOKEN, broker = get_auth_token_broker(api_key)
+            AUTH_TOKEN, FEED_TOKEN, broker = get_auth_token_broker(api_key)
             if AUTH_TOKEN is None:
                 return make_response(jsonify({
                     'status': 'error',
@@ -54,8 +54,12 @@ class Quotes(Resource):
                 }), 404)
 
             try:
-                # Initialize broker's data handler
-                data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                # Initialize broker's data handler - only pass feed token for compositedge
+                if broker == 'compositedge':
+                    data_handler = broker_module.BrokerData(AUTH_TOKEN, FEED_TOKEN)
+                else:
+                    data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                    
                 quotes = data_handler.get_quotes(
                     quotes_data['symbol'],
                     quotes_data['exchange']

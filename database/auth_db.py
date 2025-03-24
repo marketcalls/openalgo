@@ -227,7 +227,7 @@ def verify_api_key(provided_api_key):
         return None
 
 def get_auth_token_broker(provided_api_key):
-    """Get auth token and broker for a valid API key"""
+    """Get auth token, feed token and broker for a valid API key"""
     user_id = verify_api_key(provided_api_key)
     
     if user_id:
@@ -235,12 +235,13 @@ def get_auth_token_broker(provided_api_key):
             auth_obj = Auth.query.filter_by(name=user_id).first()
             if auth_obj and not auth_obj.is_revoked:
                 decrypted_token = decrypt_token(auth_obj.auth)
-                return decrypted_token, auth_obj.broker
+                decrypted_feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
+                return decrypted_token, decrypted_feed_token, auth_obj.broker
             else:
                 print(f"No valid auth token or broker found for user_id '{user_id}'.")
-                return None, None
+                return None, None, None
         except Exception as e:
             print("Error while querying the database for auth token and broker:", e)
-            return None, None
+            return None, None, None
     else:
-        return None, None
+        return None, None, None
