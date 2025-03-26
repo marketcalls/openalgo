@@ -9,35 +9,27 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
+from .XTSSocketIOMarketdata import CompositEdgeWebSocket
+import socketio
+import threading
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_api_response(endpoint, auth, method="GET", payload='',feed_token=None):
-    
+def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
     if feed_token:
         FEED_TOKEN = feed_token
-    #print(f"Auth Token: {AUTH_TOKEN}")
-    #print(f"Feed Token: {FEED_TOKEN}")
+    print(f"Feed Token: {FEED_TOKEN}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
     
     headers = {
-        'authorization': FEED_TOKEN,
+        'authorization': FEED_TOKEN if feed_token else AUTH_TOKEN,
         'Content-Type': 'application/json'
     }
-    
-    # Add feed token to payload for market data requests
-     # If payload is a string, try to parse it into dict
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError:
-            logger.error("Failed to parse payload as JSON")
-            raise Exception("Invalid payload format")
 
     url = f"https://xts.compositedge.com{endpoint}"
 
@@ -47,18 +39,24 @@ def get_api_response(endpoint, auth, method="GET", payload='',feed_token=None):
         logger.info(f"URL: {url}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
-        if payload:
+        if params:
+            logger.info(f"Query Params: {json.dumps(params, indent=2)}")
+        if payload and payload != '':
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse payload as JSON")
+                    raise Exception("Invalid payload format")
             logger.info(f"Payload: {json.dumps(payload, indent=2)}")
 
         # Perform the request
         if method.upper() == "GET":
-            response = client.get(url, headers=headers)
+            response = client.get(url, headers=headers, params=params)
         elif method.upper() == "POST":
             response = client.post(url, headers=headers, json=payload)
         else:
             response = client.request(method, url, headers=headers, json=payload)
-
-        #print(f"Response: {response}")
 
         # Log response details
         logger.info("=== API Response Details ===")
@@ -66,6 +64,8 @@ def get_api_response(endpoint, auth, method="GET", payload='',feed_token=None):
         logger.info(f"Response Headers: {dict(response.headers)}")
         logger.info(f"Response Body: {response.text}")
 
+        # Add status attribute for compatibility
+        response.status = response.status_code
         return response.json()
 
     except Exception as e:
@@ -77,6 +77,7 @@ class BrokerData:
         """Initialize CompositEdge data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
+        self.ws = None
         
         # Map common timeframe format to CompositEdge intervals
         self.timeframe_map = {
@@ -182,7 +183,7 @@ class BrokerData:
                 "publishFormat": "JSON"
             }
             
-            response = get_api_response("/apimarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload,feed_token=self.feed_token)
+            response = get_api_response("/apimarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
             
             if not response or response.get('type') != 'success':
                 raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
@@ -212,129 +213,37 @@ class BrokerData:
             logger.error(f"Error fetching quotes: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
-    def get_history(self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str) -> pd.DataFrame:
-        """
-        Get historical data for given symbol and timeframe
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-            timeframe: Timeframe (e.g., 1m, 5m, 15m, 60m, D)
-            from_date: Start date in format YYYY-MM-DD
-            to_date: End date in format YYYY-MM-DD
-        Returns:
-            pd.DataFrame: Historical data with OHLCV
-        """
+    def get_history(self, symbol, exchange, timeframe, from_date, to_date):
+        """Get historical data for a symbol"""
         try:
-            # Convert timeframe to CompositEdge format
-            resolution = self.timeframe_map.get(timeframe)
-            if not resolution:
+            # Map timeframe to compression value
+            compression_map = {
+                "1m": "60", "2m": "120", "3m": "180", "5m": "300",
+                "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
+                "D": "D"
+            }
+            compression_value = compression_map.get(timeframe)
+            if not compression_value:
                 raise Exception(f"Unsupported timeframe: {timeframe}")
-            
 
-            # Convert symbol to broker format
+            # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
+            #token = get_token(symbol, exchange)
+            #if not token:
+             #   raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
 
-            # Get the token from database
-            with db_session() as session:
-                symbol_info = session.query(SymToken).filter(
-                    SymToken.exchange == exchange,
-                    SymToken.brsymbol == br_symbol
-                ).first()
-                
-                if not symbol_info:
-                    all_symbols = session.query(SymToken).filter(
-                        SymToken.exchange == exchange
-                    ).all()
-                    logger.info(f"All matching symbols in DB: {[(s.symbol, s.brsymbol, s.exchange, s.brexchange, s.token) for s in all_symbols]}")
-                    raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
-                
-                # Get the token for historical data
-                token = symbol_info.token
-
-            # Convert dates to datetime objects
-            start_date = pd.to_datetime(from_date)
-            end_date = pd.to_datetime(to_date)
-            
-            # Initialize empty list to store DataFrames
-            dfs = []
-            
-            # Process data in 60-day chunks
-            current_start = start_date
-            while current_start <= end_date:
-                # Calculate chunk end date (60 days or remaining period)
-                current_end = min(current_start + timedelta(days=59), end_date)
-                
-                # Format dates for API call
-                from_str = current_start.strftime('%Y-%m-%d')
-                to_str = current_end.strftime('%Y-%m-%d')
-                
-                # Log the request details
-                logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
-                
-                # Prepare payload for CompositEdge historical data API
-                payload = {
-                    "instruments": [token],
-                    "xtsMessageCode": 1101,  # Historical data request code for CompositEdge
-                    "resolution": resolution,
-                    "from": from_str,
-                    "to": to_str,
-                    "publishFormat": "JSON"
-                }
-                
-                # Use get_api_response
-                response = get_api_response("/apimarketdata/historical", self.auth_token, method="POST", payload=payload)
-                
-                if not response or response.get('type') != 'success':
-                    logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
-                
-                # Convert to DataFrame
-                candles = response.get('result', {}).get('listCandles', [])
-                if candles:
-                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    dfs.append(df)
-                
-                # Move to next chunk
-                current_start = current_end + timedelta(days=1)
-                
-            # If no data was found, return empty DataFrame
-            if not dfs:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # Combine all chunks
-            final_df = pd.concat(dfs, ignore_index=True)
-            
-            # Convert timestamp to epoch properly using ISO format
-            final_df['timestamp'] = pd.to_datetime(final_df['timestamp'], format='ISO8601')
-            final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9  # Convert nanoseconds to seconds
-            
-            # Sort by timestamp and remove duplicates
-            final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-            
-            # Ensure volume is integer
-            final_df['volume'] = final_df['volume'].astype(int)
-            
-            return final_df
-                
-        except Exception as e:
-            logger.error(f"Error fetching historical data: {str(e)}")
-            raise Exception(f"Error fetching historical data: {str(e)}")
-
-    def get_market_depth(self, symbol: str, exchange: str) -> dict:
-        """
-        Get market depth for given symbol
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-        Returns:
-            dict: Market depth data
-        """
-        try:
-            # Convert symbol to broker format
-            br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Fetching market depth for {exchange}:{br_symbol}")
-            
-            # Get exchange_token from database
+            # Map exchange segment
+            segment_map = {
+                "NSE": "NSECM",
+                "BSE": "BSECM",
+                "NFO": "NSEFO",
+                "BFO": "BSEFO",
+                "CDS": "NSECD"
+            }
+            exchange_segment = segment_map.get(exchange)
+            if not exchange_segment:
+                raise Exception(f"Unsupported exchange: {exchange}")
+             # Get exchange_token from database
             with db_session() as session:
                 symbol_info = session.query(SymToken).filter(
                     SymToken.exchange == exchange,
@@ -345,71 +254,231 @@ class BrokerData:
                     raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
                 
                 # Get the token for quotes
-                token = symbol_info.token
+                token = symbol_info.token  # token = instrument ID
+
+            # Convert from/to dates
+            start_date = pd.to_datetime(from_date)
+            end_date = pd.to_datetime(to_date)
+
+            dfs = []
+            current_start = start_date
+
+            while current_start <= end_date:
+                current_end = min(current_start + timedelta(days=6), end_date)
+
+                # CompositEdge expects MMM DD YYYY HHMMSS
+                from_str = current_start.strftime('%b %d %Y 090000')
+                to_str = current_end.strftime('%b %d %Y 153000')
+
+                logger.info(f"Fetching {timeframe} data for {exchange}:{symbol} from {from_str} to {to_str}")
+
+                params = {
+                    "exchangeSegment": exchange_segment,
+                    "exchangeInstrumentID": token,
+                    "startTime": from_str,
+                    "endTime": to_str,
+                    "compressionValue": compression_value
+                }
+
+                response = get_api_response("/apibinarymarketdata/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
+
+                if not response or response.get('type') != 'success':
+                    logger.error(f"API Response: {response}")
+                    raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+
+                # Parse dataResponse (pipe-delimited string)
+                raw_data = response.get('result', {}).get('dataReponse', '')
+                if not raw_data:
+                    logger.warning(f"No data returned for period {from_str} to {to_str}")
+                    current_start = current_end + timedelta(days=1)
+                    continue
+
+                rows = raw_data.strip().split(',')
+                data = []
+                for row in rows:
+                    fields = row.split('|')
+                    if len(fields) < 6:
+                        continue
+                    try:
+                        data.append({
+                            "timestamp": int(fields[0]),
+                            "open": float(fields[1]),
+                            "high": float(fields[2]),
+                            "low": float(fields[3]),
+                            "close": float(fields[4]),
+                            "volume": int(fields[5])
+                        })
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"Error parsing row {row}: {e}")
+                        continue
+
+                if data:
+                    df = pd.DataFrame(data)
+                    dfs.append(df)
+
+                current_start = current_end + timedelta(days=1)
             
-            # Prepare payload for CompositEdge market depth API
-            payload = {
-                "instruments": [token],
-                "xtsMessageCode": 1503,  # Market depth request code for CompositEdge
-                "publishFormat": "JSON"
+            if not dfs:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            final_df = pd.concat(dfs, ignore_index=True)
+            final_df = final_df.sort_values('timestamp').drop_duplicates('timestamp').reset_index(drop=True)
+
+            return final_df
+
+        except Exception as e:
+            logger.error(f"Error fetching historical data: {str(e)}")
+            raise Exception(f"Error fetching historical data: {str(e)}")
+
+    def get_market_depth(self, exchange, symbol):
+        """
+        Get market depth for given symbol once and cleanup the connection
+        
+        Args:
+            exchange (str): Exchange name (e.g. NSE, BSE)
+            symbol (str): Trading symbol (e.g. RELIANCE, YESBANK)
+            
+        Returns:
+            dict: Market depth data containing bid/ask quotes
+        """
+        logger.info(f"Fetching market depth for {symbol}:{exchange}")
+        ws = None
+        try:
+            # Exchange segment mapping
+            exchange_segment_map = {
+                "NSE": 1,
+                "NFO": 2,
+                "CDS": 3,
+                "BSE": 11,
+                "BFO": 12,
+                "MCX": 51
             }
             
-            response = get_api_response("/apimarketdata/instruments/depth", self.feed_token, method="POST", payload=payload)
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
             
-            if not response or response.get('type') != 'success':
-                raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+            brexchange = exchange_segment_map.get(exchange)
+            if brexchange is None:
+                raise Exception(f"Unknown exchange segment: {exchange}")
             
-            # Get market depth data from response
-            depth = response.get('result', {}).get('listDepth', [{}])[0]
-            if not depth:
-                raise Exception("No market depth data found")
+            # Get the exchange segment and instrument ID from the database
+            with db_session() as session:
+                symbol_info = session.query(SymToken).filter(
+                    SymToken.exchange == exchange,
+                    SymToken.brsymbol == br_symbol
+                ).first()
+                
+                if not symbol_info:
+                    raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
+                
+                instrument_id = symbol_info.token
+
+            # Create new websocket instance for this request
+            ws = CompositEdgeWebSocket()
+            depth_data = {}
+            depth_received = threading.Event()
             
-            # Format asks and bids data
+            def on_connect():
+                logger.info("WebSocket connected, subscribing to market depth")
+                ws.subscribe_market_depth(brexchange, instrument_id)
+            
+            def on_market_depth(data):
+                nonlocal depth_data
+                if isinstance(data, str):
+                    data = json.loads(data)
+                depth_data = data
+                depth_received.set()
+                
+            def on_error(error):
+                logger.error(f"WebSocket error: {error}")
+                depth_received.set()
+                
+            # Set callbacks
+            ws.on('connect', on_connect)
+            ws.on('marketDepthEvent', on_market_depth)
+            ws.on('error', on_error)
+            
+            # Connect and wait for data
+            ws.connect(
+                auth_token=self.auth_token,
+                feed_token=self.feed_token,
+                user_id=None
+            )
+                
+            # Wait for depth data with timeout
+            if depth_received.wait(timeout=5.0):
+                if not depth_data:
+                    raise Exception("No market depth data received")
+                    
+                # Format the response
+                formatted_data = self._format_market_depth(depth_data)
+                return formatted_data
+            else:
+                raise Exception("Timeout waiting for market depth data")
+
+        except Exception as e:
+            logger.error(f"Error fetching market depth: {str(e)}")
+            raise Exception(f"Error fetching market depth: {str(e)}")
+            
+        finally:
+            # Always cleanup the websocket
+            if ws:
+                try:
+                    ws.cleanup()
+                except Exception as e:
+                    logger.error(f"Error during websocket cleanup: {str(e)}")
+
+    def _format_market_depth(self, depth_data):
+        """Format the raw market depth data into standard structure"""
+        try:
             asks = []
             bids = []
             
             # Process sell orders (asks)
-            sell_orders = depth.get('sell', [])
+            sell_orders = depth_data.get('Asks', [])
             for i in range(5):
                 if i < len(sell_orders):
                     asks.append({
-                        'price': sell_orders[i].get('price', 0),
-                        'quantity': sell_orders[i].get('quantity', 0)
+                        'price': float(sell_orders[i].get('Price', 0)),
+                        'quantity': int(sell_orders[i].get('Quantity', 0))
                     })
                 else:
                     asks.append({'price': 0, 'quantity': 0})
                     
             # Process buy orders (bids)
-            buy_orders = depth.get('buy', [])
+            buy_orders = depth_data.get('Bids', [])
             for i in range(5):
                 if i < len(buy_orders):
                     bids.append({
-                        'price': buy_orders[i].get('price', 0),
-                        'quantity': buy_orders[i].get('quantity', 0)
+                        'price': float(buy_orders[i].get('Price', 0)),
+                        'quantity': int(buy_orders[i].get('Quantity', 0))
                     })
                 else:
                     bids.append({'price': 0, 'quantity': 0})
             
-            # Return market depth data
             return {
                 'asks': asks,
                 'bids': bids,
-                'high': depth.get('high', 0),
-                'low': depth.get('low', 0),
-                'ltp': depth.get('last_traded_price', 0),
-                'ltq': depth.get('last_traded_quantity', 0),
-                'oi': depth.get('open_interest', 0),
-                'open': depth.get('open', 0),
-                'prev_close': depth.get('previous_close', 0),
-                'totalbuyqty': sum(order.get('quantity', 0) for order in buy_orders),
-                'totalsellqty': sum(order.get('quantity', 0) for order in sell_orders),
-                'volume': depth.get('volume', 0)
+                'high': float(depth_data.get('High', 0)),
+                'low': float(depth_data.get('Low', 0)),
+                'ltp': float(depth_data.get('LastTradedPrice', 0)),
+                'ltq': int(depth_data.get('LastTradedQuantity', 0)),
+                'oi': int(depth_data.get('OpenInterest', 0)),
+                'open': float(depth_data.get('Open', 0)),
+                'prev_close': float(depth_data.get('PreviousClose', 0)),
+                'totalbuyqty': sum(int(order.get('Quantity', 0)) for order in buy_orders),
+                'totalsellqty': sum(int(order.get('Quantity', 0)) for order in sell_orders),
+                'volume': int(depth_data.get('TotalTradedQuantity', 0))
             }
-            
         except Exception as e:
-            logger.error(f"Error fetching market depth: {str(e)}")
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            logger.error(f"Error formatting market depth data: {str(e)}")
+            return depth_data  # Return raw data if formatting fails
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""
-        return self.get_market_depth(symbol, exchange)
+        return self.get_market_depth(exchange, symbol)
+
+    def __del__(self):
+        """Cleanup websocket connection when object is destroyed"""
+        if self.ws:
+            self.ws.close()

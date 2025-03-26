@@ -39,7 +39,7 @@ class Depth(Resource):
             depth_data = depth_schema.load(request.json)
 
             api_key = depth_data['apikey']
-            AUTH_TOKEN, broker = get_auth_token_broker(api_key)
+            AUTH_TOKEN, FEED_TOKEN, broker = get_auth_token_broker(api_key, include_feed_token=True)
             if AUTH_TOKEN is None:
                 return make_response(jsonify({
                     'status': 'error',
@@ -54,8 +54,18 @@ class Depth(Resource):
                 }), 404)
 
             try:
-                # Initialize broker's data handler
-                data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                # Initialize broker's data handler based on broker's requirements
+                if hasattr(broker_module.BrokerData.__init__, '__code__'):
+                    # Check number of parameters the broker's __init__ accepts
+                    param_count = broker_module.BrokerData.__init__.__code__.co_argcount
+                    if param_count > 2:  # More than self and auth_token
+                        data_handler = broker_module.BrokerData(AUTH_TOKEN, FEED_TOKEN)
+                    else:
+                        data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                else:
+                    # Fallback to just auth token if we can't inspect
+                    data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                    
                 depth = data_handler.get_depth(
                     depth_data['symbol'],
                     depth_data['exchange']
