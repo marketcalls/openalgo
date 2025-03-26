@@ -12,6 +12,14 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class ZerodhaPermissionError(Exception):
+    """Custom exception for Zerodha API permission errors"""
+    pass
+
+class ZerodhaAPIError(Exception):
+    """Custom exception for other Zerodha API errors"""
+    pass
+
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
     conn = http.client.HTTPSConnection("api.kite.trade")
@@ -22,7 +30,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     }
 
     try:
-        # Log the complete request details for Postman
+        # Log the complete request details for debugging
         logger.info("=== API Request Details ===")
         logger.info(f"URL: https://api.kite.trade{endpoint}")
         logger.info(f"Method: {method}")
@@ -41,10 +49,24 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         logger.info(f"Response Headers: {dict(res.getheaders())}")
         logger.info(f"Response Body: {json.dumps(response, indent=2)}")
 
+        # Check for permission errors
+        if response.get('status') == 'error':
+            error_type = response.get('error_type')
+            error_message = response.get('message', 'Unknown error')
+            
+            if error_type == 'PermissionException' or 'permission' in error_message.lower():
+                raise ZerodhaPermissionError(f"API Permission denied: {error_message}.")
+            else:
+                raise ZerodhaAPIError(f"API Error: {error_message}")
+
         return response
+    except ZerodhaPermissionError:
+        raise
+    except ZerodhaAPIError:
+        raise
     except Exception as e:
         logger.error(f"API request failed: {str(e)}")
-        raise
+        raise ZerodhaAPIError(f"API request failed: {str(e)}")
 
 class BrokerData:
     def __init__(self, auth_token):
@@ -130,18 +152,20 @@ class BrokerData:
                 # Split token to get exchange_token for quotes
                 exchange_token = symbol_info.token.split('::::')[1]
             
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
+
             # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")
             
             response = get_api_response(f"/quote?i={encoded_symbol}", self.auth_token)
             
-            if not response or response.get('status') != 'success':
-                raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
-            
             # Get quote data from response
             quote = response.get('data', {}).get(f"{exchange}:{br_symbol}", {})
             if not quote:
-                raise Exception("No quote data found")
+                raise ZerodhaAPIError("No quote data found")
             
             # Return quote data
             return {
@@ -155,9 +179,12 @@ class BrokerData:
                 'volume': quote.get('volume', 0)
             }
             
-        except Exception as e:
+        except ZerodhaPermissionError as e:
+            logger.error(f"Permission error fetching quotes: {str(e)}")
+            raise
+        except (ZerodhaAPIError, Exception) as e:
             logger.error(f"Error fetching quotes: {str(e)}")
-            raise Exception(f"Error fetching quotes: {str(e)}")
+            raise ZerodhaAPIError(f"Error fetching quotes: {str(e)}")
 
     def get_history(self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str) -> pd.DataFrame:
         """
@@ -197,6 +224,11 @@ class BrokerData:
                 
                 # Split token to get instrument_token for historical data
                 instrument_token = symbol_info.token.split('::::')[0]
+
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
 
             # Convert dates to datetime objects
             start_date = pd.to_datetime(from_date)
@@ -257,9 +289,12 @@ class BrokerData:
             
             return final_df
                 
-        except Exception as e:
+        except ZerodhaPermissionError as e:
+            logger.error(f"Permission error fetching historical data: {str(e)}")
+            raise
+        except (ZerodhaAPIError, Exception) as e:
             logger.error(f"Error fetching historical data: {str(e)}")
-            raise Exception(f"Error fetching historical data: {str(e)}")
+            raise ZerodhaAPIError(f"Error fetching historical data: {str(e)}")
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -288,18 +323,20 @@ class BrokerData:
                 # Split token to get exchange_token for quotes
                 exchange_token = symbol_info.token.split('::::')[1]
             
+            if(exchange=="NSE_INDEX"):
+                exchange="NSE"  
+            elif(exchange=="BSE_INDEX"):
+                exchange="BSE"
+            
             # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")
             
             response = get_api_response(f"/quote?i={encoded_symbol}", self.auth_token)
             
-            if not response or response.get('status') != 'success':
-                raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
-            
             # Get quote data from response
             quote = response.get('data', {}).get(f"{exchange}:{br_symbol}", {})
             if not quote:
-                raise Exception("No market depth data found")
+                raise ZerodhaAPIError("No market depth data found")
             
             depth = quote.get('depth', {})
             
@@ -345,9 +382,12 @@ class BrokerData:
                 'volume': quote.get('volume', 0)
             }
             
-        except Exception as e:
+        except ZerodhaPermissionError as e:
+            logger.error(f"Permission error fetching market depth: {str(e)}")
+            raise
+        except (ZerodhaAPIError, Exception) as e:
             logger.error(f"Error fetching market depth: {str(e)}")
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            raise ZerodhaAPIError(f"Error fetching market depth: {str(e)}")
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""

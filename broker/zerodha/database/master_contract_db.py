@@ -196,6 +196,16 @@ def process_zerodha_csv(path):
     df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
     df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
 
+    df['symbol'] = df['symbol'].replace({
+    'NIFTY 50': 'NIFTY',
+    'NIFTY NEXT 50': 'NIFTYNXT50',
+    'NIFTY FIN SERVICE': 'FINNIFTY',
+    'NIFTY BANK': 'BANKNIFTY',
+    'NIFTY MID SELECT': 'MIDCPNIFTY',
+    'INDIA VIX': 'INDIAVIX',
+    'SNSX50': 'SENSEX50'
+    })
+
     return df
     
 
