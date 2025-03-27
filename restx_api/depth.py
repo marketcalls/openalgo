@@ -65,7 +65,6 @@ class Depth(Resource):
                 else:
                     # Fallback to just auth token if we can't inspect
                     data_handler = broker_module.BrokerData(AUTH_TOKEN)
-                    
                 depth = data_handler.get_depth(
                     depth_data['symbol'],
                     depth_data['exchange']

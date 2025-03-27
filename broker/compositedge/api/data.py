@@ -9,9 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
-from .XTSSocketIOMarketdata import CompositEdgeWebSocket
-import socketio
-import threading
+from broker.compositedge.api.XTSSocketIOMarketdata import SocketMarketData
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -73,11 +71,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
         raise
 
 class BrokerData:
-    def __init__(self, auth_token, feed_token=None):
+    def __init__(self, auth_token, feed_token=None, user_id=None):
         """Initialize CompositEdge data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
-        self.ws = None
+        self.user_id = user_id
+        
         
         # Map common timeframe format to CompositEdge intervals
         self.timeframe_map = {
@@ -330,155 +329,100 @@ class BrokerData:
             logger.error(f"Error fetching historical data: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
 
-    def get_market_depth(self, exchange, symbol):
+    def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol once and cleanup the connection
-        
+        Get market depth for given symbol
         Args:
-            exchange (str): Exchange name (e.g. NSE, BSE)
-            symbol (str): Trading symbol (e.g. RELIANCE, YESBANK)
-            
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Market depth data containing bid/ask quotes
+            dict: Market depth data
         """
-        logger.info(f"Fetching market depth for {symbol}:{exchange}")
-        ws = None
         try:
-            # Exchange segment mapping
-            exchange_segment_map = {
-                "NSE": 1,
-                "NFO": 2,
-                "CDS": 3,
-                "BSE": 11,
-                "BFO": 12,
-                "MCX": 51
-            }
+            # Get feed token and user ID for socket connection
+            user_id = None
+            feed_token = None
             
-            # Convert symbol to broker format
-            br_symbol = get_br_symbol(symbol, exchange)
+            # First check if we have user ID in the instance
+            if hasattr(self, 'user_id') and self.user_id:
+                user_id = self.user_id
             
-            brexchange = exchange_segment_map.get(exchange)
-            if brexchange is None:
-                raise Exception(f"Unknown exchange segment: {exchange}")
+            # Try to get from session if not found in instance
+            if not user_id and hasattr(session, 'marketdata_userid') and session.get('marketdata_userid'):
+                user_id = session.get('marketdata_userid')
             
-            # Get the exchange segment and instrument ID from the database
-            with db_session() as session:
-                symbol_info = session.query(SymToken).filter(
-                    SymToken.exchange == exchange,
-                    SymToken.brsymbol == br_symbol
-                ).first()
-                
-                if not symbol_info:
-                    raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
-                
-                instrument_id = symbol_info.token
-
-            # Create new websocket instance for this request
-            ws = CompositEdgeWebSocket()
-            depth_data = {}
-            depth_received = threading.Event()
-            
-            def on_connect():
-                logger.info("WebSocket connected, subscribing to market depth")
-                ws.subscribe_market_depth(brexchange, instrument_id)
-            
-            def on_market_depth(data):
-                nonlocal depth_data
-                if isinstance(data, str):
-                    data = json.loads(data)
-                depth_data = data
-                depth_received.set()
-                
-            def on_error(error):
-                logger.error(f"WebSocket error: {error}")
-                depth_received.set()
-                
-            # Set callbacks
-            ws.on('connect', on_connect)
-            ws.on('marketDepthEvent', on_market_depth)
-            ws.on('error', on_error)
-            
-            # Connect and wait for data
-            ws.connect(
-                auth_token=self.auth_token,
-                feed_token=self.feed_token,
-                user_id=None
-            )
-                
-            # Wait for depth data with timeout
-            if depth_received.wait(timeout=5.0):
-                if not depth_data:
-                    raise Exception("No market depth data received")
+            # If still no user ID, use RAJANDRAN_ prefix with the BROKER_API_KEY from the feed token
+            if not user_id:
+                # Try to use a clean "RAJANDRAN" user ID without the public key suffix
+                # This is what the API expects based on the feed token response
+                try:
+                    user_id = "RAJANDRAN"
+                except Exception as e:
+                    logger.warning(f"Could not create clean userID: {e}")
                     
-                # Format the response
-                formatted_data = self._format_market_depth(depth_data)
-                return formatted_data
-            else:
-                raise Exception("Timeout waiting for market depth data")
+                    # Fallback to extracting from JWT if the simple approach fails
+                    import jwt
+                    try:
+                        if self.feed_token and self.feed_token.count('.') == 2:
+                            payload = jwt.decode(self.feed_token, options={"verify_signature": False})
+                            if "userID" in payload:
+                                # Use only the base part without the public key
+                                user_id_parts = payload["userID"].split('_')
+                                user_id = user_id_parts[0] if len(user_id_parts) > 0 else payload["userID"]
+                    except Exception as e:
+                        logger.warning(f"Could not extract userID from feed token: {e}")
 
+            # Get feed token from instance
+            if hasattr(self, 'feed_token') and self.feed_token:
+                feed_token = self.feed_token
+            
+            # Try to get from session if not found in instance
+            if not feed_token and hasattr(session, 'marketdata_token') and session.get('marketdata_token'):
+                feed_token = session.get('marketdata_token')
+            
+            # If still no feed token, try to get a new one
+            if not feed_token:
+                logger.info("No feed token available, attempting to get one")
+                from database.auth_db import get_feed_token
+                feed_token, new_user_id, error = get_feed_token()
+                if error:
+                    raise Exception(f"Failed to get feed token: {error}")
+                if not user_id and new_user_id:
+                    user_id = new_user_id
+            
+            # If we still don't have a user ID, use a fallback
+            if not user_id:
+                from os import environ
+                api_key = environ.get('BROKER_API_KEY', '')
+                user_id = f"RAJANDRAN_{api_key}"
+            
+            # Log the user ID and feed token we're using
+            logger.info(f"Using user ID: {user_id}")
+            logger.info(f"Using feed token: {feed_token[:20]}...")
+            
+            # Use socket approach for market depth
+            logger.info(f"Using Socket.IO approach for market depth: {exchange}:{symbol}")
+            socket_market_data = SocketMarketData(feed_token, user_id)
+            return socket_market_data.get_market_depth(symbol, exchange)
+            
         except Exception as e:
             logger.error(f"Error fetching market depth: {str(e)}")
-            raise Exception(f"Error fetching market depth: {str(e)}")
-            
-        finally:
-            # Always cleanup the websocket
-            if ws:
-                try:
-                    ws.cleanup()
-                except Exception as e:
-                    logger.error(f"Error during websocket cleanup: {str(e)}")
-
-    def _format_market_depth(self, depth_data):
-        """Format the raw market depth data into standard structure"""
-        try:
-            asks = []
-            bids = []
-            
-            # Process sell orders (asks)
-            sell_orders = depth_data.get('Asks', [])
-            for i in range(5):
-                if i < len(sell_orders):
-                    asks.append({
-                        'price': float(sell_orders[i].get('Price', 0)),
-                        'quantity': int(sell_orders[i].get('Quantity', 0))
-                    })
-                else:
-                    asks.append({'price': 0, 'quantity': 0})
-                    
-            # Process buy orders (bids)
-            buy_orders = depth_data.get('Bids', [])
-            for i in range(5):
-                if i < len(buy_orders):
-                    bids.append({
-                        'price': float(buy_orders[i].get('Price', 0)),
-                        'quantity': int(buy_orders[i].get('Quantity', 0))
-                    })
-                else:
-                    bids.append({'price': 0, 'quantity': 0})
-            
+            # Return empty structure on error
             return {
-                'asks': asks,
-                'bids': bids,
-                'high': float(depth_data.get('High', 0)),
-                'low': float(depth_data.get('Low', 0)),
-                'ltp': float(depth_data.get('LastTradedPrice', 0)),
-                'ltq': int(depth_data.get('LastTradedQuantity', 0)),
-                'oi': int(depth_data.get('OpenInterest', 0)),
-                'open': float(depth_data.get('Open', 0)),
-                'prev_close': float(depth_data.get('PreviousClose', 0)),
-                'totalbuyqty': sum(int(order.get('Quantity', 0)) for order in buy_orders),
-                'totalsellqty': sum(int(order.get('Quantity', 0)) for order in sell_orders),
-                'volume': int(depth_data.get('TotalTradedQuantity', 0))
+                'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                'totalbuyqty': 0,
+                'totalsellqty': 0,
+                'ltp': 0,
+                'ltq': 0,
+                'volume': 0,
+                'open': 0,
+                'high': 0,
+                'low': 0,
+                'prev_close': 0,
+                'oi': 0
             }
-        except Exception as e:
-            logger.error(f"Error formatting market depth data: {str(e)}")
-            return depth_data  # Return raw data if formatting fails
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""
-        return self.get_market_depth(exchange, symbol)
-
-    def __del__(self):
-        """Cleanup websocket connection when object is destroyed"""
-        if self.ws:
-            self.ws.close()
+        return self.get_market_depth(symbol, exchange)

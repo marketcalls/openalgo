@@ -35,23 +35,23 @@ def authenticate_broker(request_token):
                 #print(f"Auth Token: {token}")
 
                 # Call get_feed_token() after successful authentication
-                feed_token, feed_error = get_feed_token()
+                feed_token, user_id, feed_error = get_feed_token()
                 if feed_error:
-                    return token, None, f"Feed token error: {feed_error}"
+                    return token, None, None, f"Feed token error: {feed_error}"
 
-                return token, feed_token, None
+                return token, feed_token, user_id, None
 
             else:
                 # Access token not present in the response
-                return None, "Authentication succeeded but no access token was returned. Please check the response."
+                return None, None, None, "Authentication succeeded but no access token was returned. Please check the response."
         else:
             # Handling errors from the API
             error_detail = response.json()
             error_message = error_detail.get('message', 'Authentication failed. Please try again.')
-            return None, f"API error: {error_message}"
+            return None, None, None, f"API error: {error_message}"
         
     except Exception as e:
-        return None, None, f"Error during authentication: {str(e)}"
+        return None, None, None, f"Error during authentication: {str(e)}"
 
 
 def get_feed_token():
@@ -77,18 +77,20 @@ def get_feed_token():
         feed_response = client.post(feed_url, json=feed_payload, headers=feed_headers)
 
         feed_token = None
+        user_id = None
         if feed_response.status_code == 200:
             feed_result = feed_response.json()
             if feed_result.get("type") == "success":
                 feed_token = feed_result["result"].get("token")
-                #print(f"Feed Token: {feed_token}")
+                user_id = feed_result["result"].get("userID")
+                print(f"Feed Token: {feed_token}")
             else:
-                return None, "Feed token request failed. Please check the response."
+                return None, None, "Feed token request failed. Please check the response."
         else:
             feed_error_detail = feed_response.json()
             feed_error_message = feed_error_detail.get('description', 'Feed token request failed. Please try again.')
-            return None, f"API Error (Feed): {feed_error_message}"
+            return None, None, f"API Error (Feed): {feed_error_message}"
         
-        return feed_token, None
+        return feed_token, user_id, None
     except Exception as e:
-        return None, f"An exception occurred: {str(e)}"
+        return None, None, f"An exception occurred: {str(e)}"

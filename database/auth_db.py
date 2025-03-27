@@ -58,6 +58,7 @@ class Auth(Base):
     auth = Column(Text, nullable=False)
     feed_token = Column(Text, nullable=True)  # Make it nullable as not all brokers will provide this
     broker = Column(String(20), nullable=False)
+    user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
 
 class ApiKeys(Base):
@@ -88,7 +89,7 @@ def decrypt_token(encrypted_token):
         print(f"Error decrypting token: {e}")
         return None
 
-def upsert_auth(name, auth_token, broker, feed_token=None, revoke=False):
+def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
     """Store encrypted auth token and feed token if provided"""
     encrypted_token = encrypt_token(auth_token)
     encrypted_feed_token = encrypt_token(feed_token) if feed_token else None
@@ -98,9 +99,10 @@ def upsert_auth(name, auth_token, broker, feed_token=None, revoke=False):
         auth_obj.auth = encrypted_token
         auth_obj.feed_token = encrypted_feed_token
         auth_obj.broker = broker
+        auth_obj.user_id = user_id
         auth_obj.is_revoked = revoke
     else:
-        auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, is_revoked=revoke)
+        auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, user_id=user_id, is_revoked=revoke)
         db_session.add(auth_obj)
     db_session.commit()
     return auth_obj.id
