@@ -17,6 +17,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
+from broker.compositedge.baseurl import MARKET_DATA_URL
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -89,7 +90,7 @@ def download_csv_compositedge_data(output_path):
     for segment in exchange_segments:
         payload = json.dumps({"exchangeSegmentList": [segment]})
         response = client.post(
-            "https://xts.compositedge.com/apimarketdata/instruments/master",
+            f"{MARKET_DATA_URL}/instruments/master",
             headers=headers,
             content=payload
         )
@@ -127,7 +128,7 @@ def fetch_index_list():
     index_data = []
 
     for segment in exchange_segments:
-        url = f"https://xts.compositedge.com/apimarketdata/instruments/indexlist?exchangeSegment={segment}"
+        url = f"{MARKET_DATA_URL}/instruments/indexlist?exchangeSegment={segment}"
         response = client.get(url, headers=headers)
 
         if response.status_code != 200:

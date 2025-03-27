@@ -6,6 +6,7 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.compositedge.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
+from broker.compositedge.baseurl import INTERACTIVE_URL
 
 def get_api_response(endpoint, auth, method="GET",  payload=''):
     AUTH_TOKEN = auth
@@ -19,7 +20,7 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
       'Content-Type': 'application/json',
     }
     
-    url = f"https://xts.compositedge.com{endpoint}"
+    url = f"{INTERACTIVE_URL}{endpoint}"
 
     #print("Request URL:", url)
     #print("Headers:", headers)
@@ -39,16 +40,16 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     return response.json()
 
 def get_order_book(auth):
-    return get_api_response("//interactive/orders",auth)
+    return get_api_response("/orders",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/interactive/orders/trades",auth)
+    return get_api_response("/orders/trades",auth)
 
 def get_positions(auth):
-    return get_api_response("/interactive/portfolio/positions?dayOrNet=DayWise",auth)
+    return get_api_response("/portfolio/positions?dayOrNet=DayWise",auth)
 
 def get_holdings(auth):
-    return get_api_response("/interactive/portfolio/holdings",auth)
+    return get_api_response("/portfolio/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -84,7 +85,7 @@ def place_order_api(data,auth):
     
     # Make the request using the shared client
     response = client.post(
-        "https://xts.compositedge.com/interactive/orders",
+        f"{INTERACTIVE_URL}/orders",
         headers=headers,
         json=newdata
     )

@@ -4,6 +4,7 @@ import os
 import http.client
 import json
 from utils.httpx_client import get_httpx_client
+from broker.compositedge.baseurl import INTERACTIVE_URL
 
 def get_margin_data(auth_token):
     """Fetch margin data from Compositedge's API using the provided auth token."""
@@ -17,9 +18,10 @@ def get_margin_data(auth_token):
     headers = {
         
         'authorization': auth_token ,
+        'Content-Type': 'application/json'
     }
 
-    response = client.get("https://xts.compositedge.com/interactive/user/balance", headers=headers)
+    response = client.get(f"{INTERACTIVE_URL}/user/balance", headers=headers)
     
     margin_data = response.json()
 

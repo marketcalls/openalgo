@@ -3,6 +3,7 @@ import os
 import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
+from broker.compositedge.baseurl import INTERACTIVE_URL
 
 def authenticate_broker(request_token):
     try:
@@ -24,8 +25,8 @@ def authenticate_broker(request_token):
             'Content-Type': 'application/json'
         }
 
-        #SESSION_URL = "https://xts.compositedge.com/interactive/user/session"
-        response = client.post("https://xts.compositedge.com/interactive/user/session", json=payload, headers=headers)
+        session_url = f"{INTERACTIVE_URL}/user/session"
+        response = client.post(session_url, json=payload, headers=headers)
 
   
         if response.status_code == 200:
@@ -72,7 +73,7 @@ def get_feed_token():
         }
 
         # Get feed token
-        feed_url = "https://xts.compositedge.com/apibinarymarketdata/auth/login"
+        feed_url = f"{BINARY_MARKET_DATA_URL}/auth/login"
         client = get_httpx_client()
         feed_response = client.post(feed_url, json=feed_payload, headers=feed_headers)
 

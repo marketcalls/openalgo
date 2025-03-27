@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
-
+from broker.compositedge.baseurl import MARKET_DATA_URL
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,14 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
         'Content-Type': 'application/json'
     }
 
-    url = f"https://xts.compositedge.com{endpoint}"
+    # Determine base URL based on endpoint
+    if endpoint.startswith('/apibinarymarketdata'):
+        base_url = MARKET_DATA_URL
+        endpoint = endpoint.replace('/apibinarymarketdata', '')
+    else:
+        base_url = MARKET_DATA_URL  # Default to market data URL
+
+    url = f"{base_url}{endpoint}"
 
     try:
         # Log request details
@@ -178,7 +185,7 @@ class BrokerData:
                 "publishFormat": "JSON"
             }
             
-            response = get_api_response("/apimarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+            response = get_api_response("/apibinarymarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
             
             if not response or response.get('type') != 'success':
                 raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
@@ -442,7 +449,7 @@ class BrokerData:
             }
             logger.info(f"REST API payload: {json.dumps(payload, indent=2)}")
             
-            response = get_api_response("/apimarketdata/instruments/quotes",
+            response = get_api_response("/apibinarymarketdata/instruments/quotes",
                                      self.auth_token, 
                                      method="POST", 
                                      payload=payload, 
