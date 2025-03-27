@@ -211,7 +211,7 @@ class BrokerData:
         try:
             # Map timeframe to compression value
             compression_map = {
-                "1m": "60", "2m": "120", "3m": "180", "5m": "300",
+                "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
                 "D": "D"
             }
@@ -231,7 +231,10 @@ class BrokerData:
                 "BSE": "BSECM",
                 "NFO": "NSEFO",
                 "BFO": "BSEFO",
-                "CDS": "NSECD"
+                "CDS": "NSECD",
+                "MCX": "MCXFO",
+                "NSE_INDEX": "NSECM",
+                "BSE_INDEX": "BSECM"
             }
             exchange_segment = segment_map.get(exchange)
             if not exchange_segment:
@@ -322,6 +325,14 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
+
+    def get_intervals(self) -> list:
+        """Get available intervals/timeframes for historical data
+        
+        Returns:
+            list: List of available intervals
+        """
+        return ["1s", "1m", "2m", "3m", "5m", "10m", "15m", "30m", "60m", "D"]
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
