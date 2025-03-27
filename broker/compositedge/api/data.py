@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
-from broker.compositedge.api.XTSSocketIOMarketdata import SocketMarketData
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,7 +76,6 @@ class BrokerData:
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
-        
         
         # Map common timeframe format to CompositEdge intervals
         self.timeframe_map = {
@@ -153,9 +152,6 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
-            #brexchange = get_brexchange(symbol, exchange)
-            #logger.info(f"Fetching quotes for {brexchange}, {br_symbol}")
-            
             brexchange = exchange_segment_map.get(exchange)
             if brexchange is None:
                 raise Exception(f"Unknown exchange segment: {brexchange}")
@@ -194,9 +190,7 @@ class BrokerData:
             
             # Get quote data from response
             quote = json.loads(raw_quote_str)
-            #print(f"Quote: {quote}")
             touchline = quote.get('Touchline', {})
-            #print(f"Touchline: {touchline}")
             return {
                 'ask': touchline.get('AskInfo', {}).get('Price', 0),
                 'bid': touchline.get('BidInfo', {}).get('Price', 0),
@@ -331,7 +325,7 @@ class BrokerData:
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth for given symbol via REST API
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
@@ -339,46 +333,41 @@ class BrokerData:
             dict: Market depth data
         """
         try:
-            # Get feed token and user ID for socket connection
+            logger.info(f"=== Starting Market Depth Request ===")
+            logger.info(f"Symbol: {symbol}, Exchange: {exchange}")
+            
+            # Get feed token and user ID for request
             user_id = None
             feed_token = None
             
             # First check if we have user ID in the instance
             if hasattr(self, 'user_id') and self.user_id:
                 user_id = self.user_id
+                logger.debug(f"Using instance user_id: {user_id}")
             
             # Try to get from session if not found in instance
             if not user_id and hasattr(session, 'marketdata_userid') and session.get('marketdata_userid'):
                 user_id = session.get('marketdata_userid')
+                logger.debug(f"Using session user_id: {user_id}")
             
-            # If still no user ID, use RAJANDRAN_ prefix with the BROKER_API_KEY from the feed token
+            # If no user ID is available, use the one from feed token authentication
+            if not user_id and self.user_id:
+                user_id = self.user_id
+                logger.debug(f"Using feed token auth user_id: {user_id}")
+            
             if not user_id:
-                # Try to use a clean "RAJANDRAN" user ID without the public key suffix
-                # This is what the API expects based on the feed token response
-                try:
-                    user_id = "RAJANDRAN"
-                except Exception as e:
-                    logger.warning(f"Could not create clean userID: {e}")
-                    
-                    # Fallback to extracting from JWT if the simple approach fails
-                    import jwt
-                    try:
-                        if self.feed_token and self.feed_token.count('.') == 2:
-                            payload = jwt.decode(self.feed_token, options={"verify_signature": False})
-                            if "userID" in payload:
-                                # Use only the base part without the public key
-                                user_id_parts = payload["userID"].split('_')
-                                user_id = user_id_parts[0] if len(user_id_parts) > 0 else payload["userID"]
-                    except Exception as e:
-                        logger.warning(f"Could not extract userID from feed token: {e}")
-
+                logger.error("No user ID available for market depth request")
+                return None
+            
             # Get feed token from instance
             if hasattr(self, 'feed_token') and self.feed_token:
                 feed_token = self.feed_token
+                logger.debug("Using instance feed_token")
             
             # Try to get from session if not found in instance
             if not feed_token and hasattr(session, 'marketdata_token') and session.get('marketdata_token'):
                 feed_token = session.get('marketdata_token')
+                logger.debug("Using session feed_token")
             
             # If still no feed token, try to get a new one
             if not feed_token:
@@ -386,29 +375,106 @@ class BrokerData:
                 from database.auth_db import get_feed_token
                 feed_token, new_user_id, error = get_feed_token()
                 if error:
+                    logger.error(f"Failed to get feed token: {error}")
                     raise Exception(f"Failed to get feed token: {error}")
                 if not user_id and new_user_id:
                     user_id = new_user_id
-            
-            # If we still don't have a user ID, use a fallback
-            if not user_id:
-                from os import environ
-                api_key = environ.get('BROKER_API_KEY', '')
-                user_id = f"RAJANDRAN_{api_key}"
+                    logger.info(f"Got new user_id from feed token: {user_id}")
             
             # Log the user ID and feed token we're using
             logger.info(f"Using user ID: {user_id}")
-            logger.info(f"Using feed token: {feed_token[:20]}...")
+            logger.info(f"Using feed token: {feed_token[:20]}..." if feed_token else "No feed token available")
             
-            # Use socket approach for market depth
-            logger.info(f"Using Socket.IO approach for market depth: {exchange}:{symbol}")
-            socket_market_data = SocketMarketData(feed_token, user_id)
-            return socket_market_data.get_market_depth(symbol, exchange)
+            # Exchange segment mapping
+            exchange_segment_map = {
+                "NSE": 1,
+                "NFO": 2,
+                "CDS": 3,
+                "BSE": 11,
+                "BFO": 12,
+                "MCX": 51
+            }
             
-        except Exception as e:
-            logger.error(f"Error fetching market depth: {str(e)}")
-            # Return empty structure on error
-            return {
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+            logger.info(f"Converted symbol {symbol} to broker format: {br_symbol}")
+            
+            brexchange = exchange_segment_map.get(exchange)
+            logger.info(f"Mapped exchange {exchange} to segment: {brexchange}")
+            
+            if brexchange is None:
+                logger.error(f"Unknown exchange segment: {exchange}")
+                raise Exception(f"Unknown exchange segment: {exchange}")
+                
+            # Get exchange_token from database
+            logger.info("Querying database for symbol token...")
+            with db_session() as session:
+                symbol_info = session.query(SymToken).filter(
+                    SymToken.exchange == exchange,
+                    SymToken.brsymbol == br_symbol
+                ).first()
+                
+                if not symbol_info:
+                    logger.error(f"Could not find exchange token for {exchange}:{br_symbol}")
+                    raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
+                logger.info(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
+
+            # Get market depth via REST API
+            logger.info("Getting market depth via REST API...")
+            payload = {
+                'instruments': [{
+                    'exchangeSegment': brexchange,  
+                    'exchangeInstrumentID': symbol_info.token
+                }],
+                'xtsMessageCode': 1502,
+                'publishFormat': 'JSON'
+            }
+            logger.info(f"REST API payload: {json.dumps(payload, indent=2)}")
+            
+            response = get_api_response("/apimarketdata/instruments/quotes",
+                                     self.auth_token, 
+                                     method="POST", 
+                                     payload=payload, 
+                                     feed_token=feed_token)
+            
+            if response and response.get('type') == 'success':
+                raw_quote = response.get('result', {}).get('listQuotes', [None])[0]
+                if raw_quote:
+                    quote = json.loads(raw_quote) if isinstance(raw_quote, str) else raw_quote
+                    touchline = quote.get("Touchline", {})
+
+                    # Extracting top 5 bids and asks
+                    bids = [
+                        {"price": b.get("Price", 0), "quantity": b.get("Size", 0)}
+                        for b in quote.get("Bids", [])[:5]
+                        ]
+                    asks = [
+                        {"price": a.get("Price", 0), "quantity": a.get("Size", 0)}
+                        for a in quote.get("Asks", [])[:5]
+                        ]
+
+                    # Return structured response
+                    return {
+                        'bids': bids,
+                        'asks': asks,
+                        'high': touchline.get('High', 0),
+                        'low': touchline.get('Low', 0),
+                        'ltp': touchline.get('LastTradedPrice', 0),
+                        'ltq': touchline.get('LastTradedQunatity', 0),
+                        'open': touchline.get('Open', 0),
+                        'prev_close': touchline.get('Close', 0),
+                        'volume': touchline.get('TotalTradedQuantity', 0),
+                        'oi': quote.get('OpenInterest', 0),  # optional: not always present
+                        'totalbuyqty': touchline.get('TotalBuyQuantity', 0),
+                        'totalsellqty': touchline.get('TotalSellQuantity', 0)
+                    }
+                else:
+                    logger.warning("No quote data in response")
+            else:
+                logger.error(f"Error in API response: {response}")
+                
+            # Return empty structure if no data
+            empty_depth = {
                 'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'totalbuyqty': 0,
@@ -422,6 +488,28 @@ class BrokerData:
                 'prev_close': 0,
                 'oi': 0
             }
+            logger.info("Returning empty market depth structure")
+            return empty_depth
+            
+        except Exception as e:
+            logger.error(f"Error in get_market_depth: {str(e)}", exc_info=True)
+            # Return empty structure on error
+            empty_depth = {
+                'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                'totalbuyqty': 0,
+                'totalsellqty': 0,
+                'ltp': 0,
+                'ltq': 0,
+                'volume': 0,
+                'open': 0,
+                'high': 0,
+                'low': 0,
+                'prev_close': 0,
+                'oi': 0
+            }
+            logger.info("Returning empty market depth structure due to error")
+            return empty_depth
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""
