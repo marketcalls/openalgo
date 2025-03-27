@@ -128,3 +128,33 @@ def get_br_symbol_dbquery(symbol, exchange):
     except Exception as e:
         print(f"Error while querying the database: {e}")
         return None
+
+def get_brexchange(symbol, exchange):
+    """
+    Retrieves the broker exchange for a given symbol and exchange, utilizing a cache to improve performance.
+    """
+    cache_key = f"brex-{symbol}-{exchange}"
+    # Attempt to retrieve from cache
+    if cache_key in token_cache:
+        return token_cache[cache_key]
+    else:
+        # Query database if not in cache
+        brexchange = get_brexchange_dbquery(symbol, exchange)
+        # Cache the result for future requests
+        if brexchange is not None:
+            token_cache[cache_key] = brexchange
+        return brexchange
+
+def get_brexchange_dbquery(symbol, exchange):
+    """
+    Queries the database for a broker exchange by symbol and exchange.
+    """
+    try:
+        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        if sym_token:
+            return sym_token.brexchange
+        else:
+            return None
+    except Exception as e:
+        print(f"Error while querying the database: {e}")
+        return None
