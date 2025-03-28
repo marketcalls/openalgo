@@ -107,9 +107,9 @@ class KotakWebSocket:
         )
 
 class BrokerData:
-    def __init__(self, auth_token, ws_url="wss://mlhsm.kotaksecurities.com"):
+    def __init__(self, auth_token):
         self.auth_token, self.sid, _, _ = auth_token.split(":::")
-        self.ws_url = ws_url
+        self.ws_url = "wss://mlhsm.kotaksecurities.com"
         # Define empty timeframe map since Kotak Neo doesn't support historical data
         self.timeframe_map = {
             # Empty mapping to maintain compatibility
