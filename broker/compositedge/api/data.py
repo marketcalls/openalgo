@@ -29,15 +29,11 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
         'Content-Type': 'application/json'
     }
 
-    # Determine base URL based on endpoint
-    if endpoint.startswith('/apibinarymarketdata'):
-        base_url = MARKET_DATA_URL
-        endpoint = endpoint.replace('/apibinarymarketdata', '')
-    else:
-        base_url = MARKET_DATA_URL  # Default to market data URL
+    
+    base_url = MARKET_DATA_URL  # Default to market data URL
 
     url = f"{base_url}{endpoint}"
-
+    
     try:
         # Log request details
         logger.info("=== API Request Details ===")
@@ -185,7 +181,7 @@ class BrokerData:
                 "publishFormat": "JSON"
             }
             
-            response = get_api_response("/apibinarymarketdata/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+            response = get_api_response("/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
             
             if not response or response.get('type') != 'success':
                 raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
@@ -283,7 +279,7 @@ class BrokerData:
                     "compressionValue": compression_value
                 }
 
-                response = get_api_response("/apibinarymarketdata/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
+                response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
 
                 if not response or response.get('type') != 'success':
                     logger.error(f"API Response: {response}")
@@ -449,7 +445,7 @@ class BrokerData:
             }
             logger.info(f"REST API payload: {json.dumps(payload, indent=2)}")
             
-            response = get_api_response("/apibinarymarketdata/instruments/quotes",
+            response = get_api_response("/instruments/quotes",
                                      self.auth_token, 
                                      method="POST", 
                                      payload=payload, 

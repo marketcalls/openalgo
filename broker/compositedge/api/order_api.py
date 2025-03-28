@@ -63,7 +63,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']:
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
-                net_qty = position.get('netqty', '0')
+                net_qty = position.get('Quantity', '0')
                 break  # Assuming you need the first match
 
     return net_qty
