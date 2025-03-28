@@ -28,14 +28,17 @@ def transform_data(data,token):
     return transformed
 
 
-def transform_modify_order_data(data):
+def transform_modify_order_data(data, token):
     return {
-        "order_type": map_order_type(data["pricetype"]),
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "validity": "DAY"      
+        "appOrderID": data["orderid"],
+        "modifiedProductType": map_product_type(data["product"]),
+        "modifiedOrderType": map_order_type(data["pricetype"]),
+        "modifiedOrderQuantity": data["quantity"],
+        "modifiedDisclosedQuantity": data.get("disclosed_quantity", "0"),
+        "modifiedLimitPrice": data["price"],
+        "modifiedStopPrice": data.get("trigger_price", "0"),
+        "modifiedTimeInForce": "DAY",
+        "orderUniqueIdentifier": "openalgo"
     }
 
 def map_exchange(exchange):

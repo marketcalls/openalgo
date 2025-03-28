@@ -199,43 +199,43 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
+    print(f"Open_positions : {positions_response}")
 
-    # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    positions_list = positions_response.get('result', {}).get('positionList', [])
+    if not positions_list:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
-        # Loop through each position to close
-        for position in positions_response['data']:
-            # Skip if net quantity is zero
-            if int(position['netqty']) == 0:
-                continue
+    # If response has positions
+    for position in positions_list:
+    # Skip if net quantity is zero
+        if int(position['Quantity']) == 0:
+            continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
-            quantity = abs(int(position['netqty']))
+        action = 'SELL' if int(position['Quantity']) > 0 else 'BUY'
+        quantity = abs(int(position['Quantity']))
 
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['symboltoken'],position['exchange'])
-            print(f'The Symbol is {symbol}')
+        symbol = get_symbol(position['ExchangeInstrumentId'], position['ExchangeSegment'])
+        print(f'The Symbol is {symbol}')
 
             # Prepare the order payload
-            place_order_payload = {
+        place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": position['ExchangeSegment'],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['producttype']),
+                "product": reverse_map_product_type(position['ProductType']),
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+        print(place_order_payload)
 
             # Place the order to close the position
-            res, response, orderid =   place_order_api(place_order_payload,auth)
+        res, response, orderid =   place_order_api(place_order_payload,auth)
 
             # print(res)
             # print(response)
@@ -251,37 +251,28 @@ def close_all_positions(current_api_key,auth):
 def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+    print(orderid)
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
     }
     
     # Prepare the payload
     payload = json.dumps({
-        "variety": "NORMAL",
-        "orderid": orderid,
+        "appOrderID": orderid,
+        "orderUniqueIdentifier": "openalgo"
     })
     
     # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
-        headers=headers,
-        content=payload
-    )
-    
+    response = client.delete(
+    f"{INTERACTIVE_URL}/orders?appOrderID={orderid}",
+    headers=headers
+)
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
     
@@ -300,7 +291,7 @@ def modify_order(data,auth):
 
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -311,28 +302,20 @@ def modify_order(data,auth):
     transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
     # Set up the request headers
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
     }
     payload = json.dumps(transformed_data)
 
     # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+    response = client.put(f"{INTERACTIVE_URL}/orders",
         headers=headers,
         content=payload
     )
     
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    
+    print(f'Response of modify order :{response.status}')
     data = json.loads(response.text)
 
     if data.get("status") == "true" or data.get("message") == "SUCCESS":
@@ -340,6 +323,50 @@ def modify_order(data,auth):
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
 
+def cancel_all_ordersxts_api(data,auth):
+
+    # Assuming you have a function to get the authentication token
+    AUTH_TOKEN = auth
+    
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
+    token = get_token(data['symbol'], data['exchange'])
+    data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
+    brexchange = map_exchange(exchange)
+
+    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    # Set up the request headers
+    headers = {
+        'authorization': AUTH_TOKEN,
+        'Content-Type': 'application/json',
+    }
+
+
+    payload = {
+            "exchangeSegment": brexchange,
+            "exchangeInstrumentID": token
+        }
+
+    # Make the request using the shared client
+    response = client.post(f"{INTERACTIVE_URL}/orders/cancelall",
+        headers=headers,
+        content=payload
+    )
+    
+    # Add status attribute for compatibility with the existing codebase
+    response.status = response.status_code
+    print(f'Response of modify order :{response.status}')
+    data = response.json()
+
+    # Check if the 'result' field is empty
+    if 'result' in data and not data['result']:
+        return {"status": "success", "message": "Canceled 0 orders"}, 200
+    elif data.get("type") == "success":
+        return {"status": "success", "result": data["result"]}, 200
+    else:
+        return {"status": "error", "message": data.get("description", "Failed to cancel orders")}, response.status
 
 def cancel_all_orders_api(data,auth):
     # Get the order book
@@ -348,14 +375,19 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
-    if order_book_response['status'] != True:
+    print(order_book_response)
+    if order_book_response.get("status") != "success":
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
-    #print(orders_to_cancel)
+    orders = order_book_response.get("data", {}).get("orders", [])
+
+     # Filter orders that are in 'open' or 'trigger_pending' state
+    
+    orders_to_cancel = [
+        order for order in orders 
+        if order["order_status"].lower() in ["New", "trigger pending"]
+    ]
+
     canceled_orders = []
     failed_cancellations = []
 
