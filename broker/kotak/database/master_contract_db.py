@@ -178,8 +178,9 @@ def process_kotak_bse_csv(path):
     # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
     
     df['instrumenttype'] = 'EQ'
-    df.loc[df['pISIN'].isna(), 'exchange'] = 'BSE_INDEX'
+    
     df['exchange'] = 'BSE'
+    df.loc[df['pISIN'].isna(), 'exchange'] = 'BSE_INDEX'
     df.loc[df['pISIN'].isna(), 'instrumenttype'] = 'INDEX'
     df.loc[df['pISIN'].isna(), 'pGroup'] = ''
 
