@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
 from broker.compositedge.baseurl import MARKET_DATA_URL
+import pytz
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -82,55 +83,11 @@ class BrokerData:
         
         # Map common timeframe format to CompositEdge intervals
         self.timeframe_map = {
-            # Minutes
-            '1m': '1',
-            '3m': '3',
-            '5m': '5',
-            '10m': '10',
-            '15m': '15',
-            '30m': '30',
-            '60m': '60',
-            # Daily
-            'D': 'D'
+            "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
+                "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
+                "D": "D"
         }
         
-        # Market timing configuration for different exchanges
-        self.market_timings = {
-            'NSE': {
-                'start': '09:15:00',
-                'end': '15:30:00'
-            },
-            'BSE': {
-                'start': '09:15:00',
-                'end': '15:30:00'
-            },
-            'NFO': {
-                'start': '09:15:00',
-                'end': '15:30:00'
-            },
-            'CDS': {
-                'start': '09:00:00',
-                'end': '17:00:00'
-            },
-            'BCD': {
-                'start': '09:00:00',
-                'end': '17:00:00'
-            },
-            'MCX': {
-                'start': '09:00:00',
-                'end': '23:30:00'
-            }
-        }
-        
-        # Default market timings if exchange not found
-        self.default_market_timings = {
-            'start': '00:00:00',
-            'end': '23:59:59'
-        }
-
-    def get_market_timings(self, exchange: str) -> dict:
-        """Get market start and end times for given exchange"""
-        return self.market_timings.get(exchange, self.default_market_timings)
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
@@ -212,6 +169,7 @@ class BrokerData:
     def get_history(self, symbol, exchange, timeframe, from_date, to_date):
         """Get historical data for a symbol"""
         try:
+            
             # Map timeframe to compression value
             compression_map = {
                 "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
@@ -222,6 +180,7 @@ class BrokerData:
             if not compression_value:
                 raise Exception(f"Unsupported timeframe: {timeframe}")
 
+            
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             #token = get_token(symbol, exchange)
@@ -255,21 +214,31 @@ class BrokerData:
                 # Get the token for quotes
                 token = symbol_info.token  # token = instrument ID
 
-            # Convert from/to dates
-            start_date = pd.to_datetime(from_date)
-            end_date = pd.to_datetime(to_date)
+    
+            # Convert dates to datetime objects with IST timezone
+            start_date = pd.to_datetime(from_date).tz_localize('Asia/Kolkata')
+            end_date = pd.to_datetime(to_date).tz_localize('Asia/Kolkata')
+            
+            # Set start time to market open (9:15 AM IST)
+            from_date = start_date.replace(hour=9, minute=15, second=0, microsecond=0)
+            
+            # Set end time to market close (3:30 PM IST)
+            to_date = end_date.replace(hour=15, minute=30, second=0, microsecond=0)
 
             dfs = []
-            current_start = start_date
+            current_start = from_date
 
-            while current_start <= end_date:
-                current_end = min(current_start + timedelta(days=6), end_date)
+            while current_start <= to_date:
+                current_end = min(current_start + timedelta(days=6), to_date)
 
-                # CompositEdge expects MMM DD YYYY HHMMSS
-                from_str = current_start.strftime('%b %d %Y 090000')
-                to_str = current_end.strftime('%b %d %Y 153000')
+                # CompositEdge expects MMM DD YYYY HHMMSS in IST
+                from_str = current_start.strftime('%b %d %Y %H%M%S')
+                to_str = current_end.strftime('%b %d %Y %H%M%S')
 
-                logger.info(f"Fetching {timeframe} data for {exchange}:{symbol} from {from_str} to {to_str}")
+                logger.info(f"Fetching {timeframe} data for {exchange}:{symbol}")
+                logger.info(f"Start Time (IST): {current_start}")
+                logger.info(f"End Time (IST): {current_end}")
+                logger.info(f"API Format - From: {from_str}, To: {to_str}")
 
                 params = {
                     "exchangeSegment": exchange_segment,
@@ -278,6 +247,8 @@ class BrokerData:
                     "endTime": to_str,
                     "compressionValue": compression_value
                 }
+                
+                logger.info(f"API Parameters: {json.dumps(params, indent=2)}")
 
                 response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
 
@@ -321,9 +292,42 @@ class BrokerData:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             final_df = pd.concat(dfs, ignore_index=True)
-            final_df = final_df.sort_values('timestamp').drop_duplicates('timestamp').reset_index(drop=True)
 
+            # Sort by timestamp and remove duplicates
+            final_df = final_df.sort_values('timestamp').drop_duplicates('timestamp').reset_index(drop=True)
+            
+            # Convert timestamps to datetime for manipulation
+            final_df['timestamp'] = pd.to_datetime(final_df['timestamp'], unit='s')
+            
+            if compression_value == 'D':
+                # For daily data, set to midnight (00:00:00)
+                final_df['timestamp'] = final_df['timestamp'].apply(
+                    lambda x: x.replace(hour=0, minute=0, second=0)
+                )
+            else:
+                # For intraday data
+                # First subtract 5:30 hours to get to IST
+                final_df['timestamp'] = final_df['timestamp'] - pd.Timedelta(hours=5, minutes=30)
+                
+                # Round to the proper interval based on market open (9:15 AM)
+                interval_minutes = int(compression_value) // 60 if compression_value != 'D' else 0
+                if interval_minutes > 0:
+                    # Shift by 15 minutes to align with market open, round, then shift back
+                    final_df['timestamp'] = (final_df['timestamp'] - pd.Timedelta(minutes=15)).dt.ceil(f'{interval_minutes}min') + pd.Timedelta(minutes=15)
+            
+            # Convert back to Unix timestamp
+            final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9
+            
+            # Ensure numeric columns are properly typed
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            final_df[numeric_columns] = final_df[numeric_columns].apply(pd.to_numeric)
+            
+            # Log sample timestamps for verification
+            sample_time = pd.to_datetime(final_df['timestamp'].iloc[0], unit='s')
+            logger.info(f"First candle: {sample_time.strftime('%Y-%m-%d') if compression_value == 'D' else sample_time}")
+            
             return final_df
+
 
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")

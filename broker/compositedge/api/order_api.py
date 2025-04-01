@@ -53,10 +53,9 @@ def get_holdings(auth):
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
-
-    print(positions_data)
 
     net_qty = '0'
 
@@ -64,8 +63,9 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
         for position in positions_data['data']:
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
                 net_qty = position.get('Quantity', '0')
+                #print(f"Net Quantity: {net_qty}")
                 break  # Assuming you need the first match
-
+        
     return net_qty
 
 def place_order_api(data,auth):
@@ -228,18 +228,18 @@ def close_all_positions(current_api_key,auth):
                 "action": action,
                 "exchange": position['ExchangeSegment'],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['ProductType']),
+                "product": reverse_map_product_type(position['ExchangeSegment'],position['ProductType']),
                 "quantity": str(quantity)
             }
 
         print(place_order_payload)
 
-            # Place the order to close the position
+        # Place the order to close the position
         res, response, orderid =   place_order_api(place_order_payload,auth)
 
-            # print(res)
-            # print(response)
-            # print(orderid)
+        # print(res)
+        # print(response)
+        # print(orderid)
 
 
             
@@ -346,7 +346,7 @@ def cancel_all_ordersxts_api(data,auth):
 
     payload = {
             "exchangeSegment": brexchange,
-            "exchangeInstrumentID": token
+            "exchangeInstrumentId": token
         }
 
     # Make the request using the shared client

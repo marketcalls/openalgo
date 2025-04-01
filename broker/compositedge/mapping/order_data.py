@@ -272,10 +272,9 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
-    #print(f"positions_data: {positions_data}")
+    print(f"positions_data: {positions_data}")
     positions_data = positions_data.get("positionList", [])
     transformed_data = []
-    
     # Define exchange mappings
     exchange_mapping = {
         "NSECM": "NSE",
@@ -294,15 +293,16 @@ def transform_positions_data(positions_data):
         if not isinstance(position, dict):  # Ensure it's a dictionary
             print(f"Skipping invalid position: {position}")
             continue
-        symboltoken = position.get('ExchangeInstrumentID')
+        symboltoken = position.get('ExchangeInstrumentId')
+        
         exchange = position.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
 
         symbol_from_db = get_symbol(symboltoken, mapped_exchange)
-
+        
         if symbol_from_db:
             position['TradingSymbol'] = symbol_from_db
-        
+
         netqty = float(position.get('Quantity', 0))
         if netqty > 0 :
             net_amount = float(position.get('BuyAveragePrice', 0))
@@ -378,7 +378,7 @@ def map_portfolio_data(portfolio_data):
             if portfolio['product'] == 'DELIVERY':
                 portfolio['product'] = 'CNC'  # Modify 'product' field
             else:
-                print("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+                print("Compositedge Portfolio - Product Value for Delivery Not Found or Changed.")
     
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.
