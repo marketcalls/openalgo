@@ -289,8 +289,54 @@ class BrokerData:
                 current_start = current_end + timedelta(days=1)
             
             if not dfs:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
+                if compression_value == 'D' and to_date.date() == datetime.now().date():
+                    # Get segment ID from exchange - use numeric values
+                    segment_id = 1 if exchange == "NSE" else 2  # 1 for NSECM, 2 for BSECM
+                    
+                    payload = {
+                        "instruments": [{
+                            "exchangeSegment": segment_id,
+                            "exchangeInstrumentID": token
+                        }],
+                        "xtsMessageCode": 1502,
+                        "publishFormat": "JSON"
+                    }
+                    
+                    response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+                    
+                    if not response or response.get('type') != 'success':
+                        raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+            
+                    # Parse quote data from response
+                    raw_quotes = response.get('result', {}).get('listQuotes', [])
+                    if not raw_quotes:
+                        raise Exception("No quote data found in listQuotes")
+            
+                    # Parse the JSON string in listQuotes
+                    quote = json.loads(raw_quotes[0])
+                    touchline = quote.get('Touchline', {})
+                    logger.info(f"Parsed Quote Data: {touchline}")
+                    
+                    if touchline:
+                        # For daily data, set timestamp to midnight IST
+                        today = datetime.now()
+                        # First set to midnight
+                        today = today.replace(hour=0, minute=0, second=0, microsecond=0)
+                        # Add 5:30 hours to compensate for IST conversion that happens later
+                        today = today + timedelta(hours=5, minutes=30)
+                        
+                        today_candle = {
+                            "timestamp": int(today.timestamp()),
+                            "open": touchline.get('Open'),
+                            "high": touchline.get('High'),
+                            "low": touchline.get('Low'),
+                            "close": touchline.get('LastTradedPrice'),  # Use LTP as current close
+                            "volume": touchline.get('TotalTradedQuantity', 0)
+                        }
+                        
+                        return pd.DataFrame([today_candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    else:
+                        raise Exception("No Touchline data in quote")
             final_df = pd.concat(dfs, ignore_index=True)
 
             # Sort by timestamp and remove duplicates
