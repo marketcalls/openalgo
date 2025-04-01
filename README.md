@@ -81,7 +81,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
   - Detailed request/response analysis
   - Comprehensive error detection
   - Dedicated garden theme for better focus
-  - See [Analyzer.md](Analyzer.md) for detailed documentation
+  - See [Analyzer.md](docs/Analyzer.md) for detailed documentation
 
 - **Comprehensive Integration**: Seamlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for smooth data and strategy transition.
 
