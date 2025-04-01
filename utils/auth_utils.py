@@ -32,7 +32,7 @@ def async_master_contract_download(broker):
     
     return master_contract_status
 
-def handle_auth_success(auth_token, user_session_key, broker, feed_token=None):
+def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
     - Sets session parameters
@@ -44,6 +44,8 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None):
     session['AUTH_TOKEN'] = auth_token
     if feed_token:
         session['FEED_TOKEN'] = feed_token  # Store feed token in session if available
+    if user_id:
+        session['USER_ID'] = user_id  # Store user ID in session if available
     session['user_session_key'] = user_session_key
     session['broker'] = broker
     
@@ -55,7 +57,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None):
     logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
 
     # Store auth token in database
-    inserted_id = upsert_auth(user_session_key, auth_token, broker, feed_token=feed_token)
+    inserted_id = upsert_auth(user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id)
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
         thread = Thread(target=async_master_contract_download, args=(broker,))

@@ -3,25 +3,27 @@
 import os
 import http.client
 import json
-
+from utils.httpx_client import get_httpx_client
+from broker.compositedge.baseurl import INTERACTIVE_URL
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Zerodha's API using the provided auth token."""
+    """Fetch margin data from Compositedge's API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
     api_secret = os.getenv('BROKER_API_SECRET')
-    conn = http.client.HTTPSConnection("xts.compositedge.com")
+
+    client = get_httpx_client()
+
+    #conn = http.client.HTTPSConnection("xts.compositedge.com")
     
     headers = {
         
         'authorization': auth_token ,
+        'Content-Type': 'application/json'
     }
 
-    conn.request("GET", "/interactive/user/balance", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
+    response = client.get(f"{INTERACTIVE_URL}/user/balance", headers=headers)
     
-    margin_data = json.loads(data.decode("utf-8"))
+    margin_data = response.json()
 
     #print(f"Funds Details: {margin_data}")
 

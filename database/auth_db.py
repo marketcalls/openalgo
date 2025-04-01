@@ -58,6 +58,7 @@ class Auth(Base):
     auth = Column(Text, nullable=False)
     feed_token = Column(Text, nullable=True)  # Make it nullable as not all brokers will provide this
     broker = Column(String(20), nullable=False)
+    user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
 
 class ApiKeys(Base):
@@ -88,7 +89,7 @@ def decrypt_token(encrypted_token):
         print(f"Error decrypting token: {e}")
         return None
 
-def upsert_auth(name, auth_token, broker, feed_token=None, revoke=False):
+def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
     """Store encrypted auth token and feed token if provided"""
     encrypted_token = encrypt_token(auth_token)
     encrypted_feed_token = encrypt_token(feed_token) if feed_token else None
@@ -98,9 +99,10 @@ def upsert_auth(name, auth_token, broker, feed_token=None, revoke=False):
         auth_obj.auth = encrypted_token
         auth_obj.feed_token = encrypted_feed_token
         auth_obj.broker = broker
+        auth_obj.user_id = user_id
         auth_obj.is_revoked = revoke
     else:
-        auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, is_revoked=revoke)
+        auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, user_id=user_id, is_revoked=revoke)
         db_session.add(auth_obj)
     db_session.commit()
     return auth_obj.id
@@ -226,8 +228,8 @@ def verify_api_key(provided_api_key):
         print(f"Error verifying API key: {e}")
         return None
 
-def get_auth_token_broker(provided_api_key):
-    """Get auth token and broker for a valid API key"""
+def get_auth_token_broker(provided_api_key, include_feed_token=False):
+    """Get auth token, feed token (optional) and broker for a valid API key"""
     user_id = verify_api_key(provided_api_key)
     
     if user_id:
@@ -235,12 +237,15 @@ def get_auth_token_broker(provided_api_key):
             auth_obj = Auth.query.filter_by(name=user_id).first()
             if auth_obj and not auth_obj.is_revoked:
                 decrypted_token = decrypt_token(auth_obj.auth)
+                if include_feed_token:
+                    decrypted_feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
+                    return decrypted_token, decrypted_feed_token, auth_obj.broker
                 return decrypted_token, auth_obj.broker
             else:
                 print(f"No valid auth token or broker found for user_id '{user_id}'.")
-                return None, None
+                return (None, None, None) if include_feed_token else (None, None)
         except Exception as e:
             print("Error while querying the database for auth token and broker:", e)
-            return None, None
+            return (None, None, None) if include_feed_token else (None, None)
     else:
-        return None, None
+        return (None, None, None) if include_feed_token else (None, None)

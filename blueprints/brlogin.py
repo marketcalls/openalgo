@@ -151,9 +151,14 @@ def broker_callback(broker,para=None):
                 
                 return jsonify({"error": "No access token found"}), 400
                 
-            auth_token, error_message = auth_function(access_token)
+            # Fetch auth token, feed token and user ID
+            auth_token, feed_token, user_id, error_message = auth_function(access_token)
+
             #print(f'Auth token is {auth_token}')
+            #print(f'Feed token is {feed_token}')
+            #print(f'User ID is {user_id}')
             forward_url = 'broker.html'
+
         except Exception as e:
             #print(f"Error in compositedge callback: {str(e)}")
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
@@ -257,8 +262,13 @@ def broker_callback(broker,para=None):
         if broker == 'dhan':
             auth_token = f'{auth_token}'
         
-        # Pass the feed token to handle_auth_success
-        return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
+        # For compositedge, we have the user_id from authenticate_broker
+        if broker == 'compositedge':
+            # Pass the feed token and user_id to handle_auth_success
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
+        else:
+            # Pass just the feed token to handle_auth_success (other brokers don't have user_id)
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     
