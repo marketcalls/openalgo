@@ -3,7 +3,7 @@ import os
 import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
-from broker.compositedge.baseurl import INTERACTIVE_URL
+from broker.compositedge.baseurl import INTERACTIVE_URL, MARKET_DATA_URL
 
 def authenticate_broker(request_token):
     try:
@@ -33,7 +33,7 @@ def authenticate_broker(request_token):
             result = response.json()
             if result.get('type') == 'success':
                 token = result['result']['token']
-                #print(f"Auth Token: {token}")
+                print(f"Auth Token: {token}")
 
                 # Call get_feed_token() after successful authentication
                 feed_token, user_id, feed_error = get_feed_token()
@@ -73,7 +73,7 @@ def get_feed_token():
         }
 
         # Get feed token
-        feed_url = f"{BINARY_MARKET_DATA_URL}/auth/login"
+        feed_url = f"{MARKET_DATA_URL}/auth/login"
         client = get_httpx_client()
         feed_response = client.post(feed_url, json=feed_payload, headers=feed_headers)
 
