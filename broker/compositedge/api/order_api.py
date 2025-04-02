@@ -382,22 +382,24 @@ def cancel_all_orders_api(data,auth):
     orders = order_book_response.get("data", {}).get("orders", [])
 
      # Filter orders that are in 'open' or 'trigger_pending' state
-    
+    print(f"Orders: {orders}")
     orders_to_cancel = [
         order for order in orders 
-        if order["order_status"].lower() in ["New", "trigger pending"]
+        if order["OrderStatus"] in ["New", "trigger pending"]
     ]
-
+    print(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['orderid']
+        orderid = order['AppOrderID']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
+            print(f"Canceled order {orderid}")
             canceled_orders.append(orderid)
         else:
+            print(f"Failed to cancel order {orderid}")
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
