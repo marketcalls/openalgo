@@ -1,7 +1,7 @@
 
 # ⚙️ How to Integrate Any XTS API-Supported Broker in OpenAlgo (5-Minute Setup)
 
-OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker using XTS (like AliceBlue, SMC Global, SSJ, etc.) can be added with **zero code duplication**—just a few config updates.
+OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker using XTS (like IIFL, Nirmal Bang, Anand Rati, Jainam, 5paisa etc.) can be added with **zero code duplication**—just a few config updates.
 
 ---
 
