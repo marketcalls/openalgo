@@ -1,7 +1,6 @@
-
 # ⚙️ How to Integrate Any XTS API-Supported Broker in OpenAlgo (5-Minute Setup)
 
-OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker using XTS (like IIFL, Nirmal Bang, Anand Rati, Jainam, 5paisa etc.) can be added with **zero code duplication**—just a few config updates.
+OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker using XTS (like IIFL, Nirmal Bang, Anand Rathi, Jainam, 5paisa, etc.) can be added with **zero code duplication**—just a few config updates.
 
 ---
 
@@ -10,9 +9,9 @@ OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker 
 | File            | What to Change                                      |
 |-----------------|-----------------------------------------------------|
 | `baseurl.py`    | Update to your broker’s base domain and API paths   |
-| `brlogin.py`    | Add your broker’s login redirect                    |
-| `broker.html`   | Add login UI card for your broker                   |
-| `.env`          | Add the new broker’s credentials                    |
+| `brlogin.py`    | Add your broker’s login redirect logic              |
+| `broker.html`   | Add broker option and JS login switch               |
+| `.sample.env`   | Add the new broker’s credentials                    |
 
 > ⚡️ *No other backend or API changes are needed if the broker supports `apibinarymarketdata`.*
 
@@ -22,159 +21,206 @@ OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker 
 
 ### 1. 🗂 Copy or Repurpose `compositedge`
 
-Either copy the existing plugin:
-
 ```bash
 cp -r broker/compositedge broker/<yourbroker>
 ```
 
-Or reuse `compositedge` folder directly, just updating the credentials and URLs dynamically.
+Or reuse the same folder and override dynamically via `.env`.
 
 ---
 
 ### 2. ✏️ Edit `baseurl.py`
 
-Replace the base URLs with your broker's:
+Update the base API endpoints:
 
 ```python
-BASE_URL = "https://xts.<yourbroker>.com"  # Replace with actual broker domain
+BASE_URL = "https://xts.<yourbroker>.com"
 
 MARKET_DATA_URL = f"{BASE_URL}/apibinarymarketdata"
 INTERACTIVE_URL = f"{BASE_URL}/interactive"
 ```
 
-> ✅ This makes the integration use your broker’s market data and trading APIs.
-
 ---
 
 ### 3. 🌐 Update `brlogin.py`
 
-Add your broker to the login logic:
+Add a new block similar to `compositedge`:
 
 ```python
-elif broker_name == "xtsbroker":
-    return redirect(get_xts_login_url("xtsbroker"))
+elif broker == 'xtsalpha':
+    # exact duplicate of compositedge logic with broker name replaced
+    # handles session parsing and accessToken extraction
 ```
 
-The `get_xts_login_url()` should be implemented or reused from `auth_api.py` to build the OAuth redirect URL.
+This ensures session redirection from XTS works correctly.
 
 ---
 
 ### 4. 🖼️ Update `broker.html`
 
-Add a clickable card for your broker:
+#### A. Add broker to the dropdown:
 
 ```html
-<a href="/login/xtsbroker">
-  <div class="broker-card">
-    <img src="/static/xtsbroker.png" alt="XTS Broker Logo" />
-    <p>XTS Broker</p>
-  </div>
-</a>
+<option value="xtsalpha" {{ 'disabled' if broker_name != 'xtsalpha' }}>XTS Alpha {{ '(Disabled)' if broker_name != 'xtsalpha' }}</option>
 ```
+
+#### B. Add to JavaScript login handler:
+
+```javascript
+case 'xtsalpha':
+    loginUrl = 'https://xts.xtsalpha.com/interactive/thirdparty?appKey={{broker_api_key}}&returnURL={{ redirect_url }}';
+    break;
+```
+
+> ✅ No need to add a broker login card section with `<a>` or `<img>`.
 
 ---
 
-### 5. 🔐 Add Environment Variables
-
-Update `.env` or `.sample.env` with:
+### 5. 🔐 Update `.env` or `.sample.env`
 
 ```env
 # Broker Configuration
 BROKER_API_KEY='YOUR_BROKER_API_KEY'
 BROKER_API_SECRET='YOUR_BROKER_API_SECRET'
 
-# Market Data Configuration (Optional and Required only for XTS API Supported Brokers)
+# Market Data Configuration (XTS only)
 BROKER_API_KEY_MARKET='YOUR_BROKER_MARKET_API_KEY'
 BROKER_API_SECRET_MARKET='YOUR_BROKER_MARKET_API_SECRET'
 
-# Redirect URL (adjust broker name as required)
-REDIRECT_URL='http://127.0.0.1:5000/<broker>/callback'
+# OAuth Redirect
+REDIRECT_URL='http://127.0.0.1:5000/xtsalpha/callback'
 
-# List of Valid Brokers
-VALID_BROKERS='fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fyers,icici,kotak,paytm,shoonya,upstox,zebu,zerodha,xtsbroker'
+# Valid Brokers (must include new one)
+VALID_BROKERS='fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fyers,icici,kotak,paytm,shoonya,upstox,zebu,zerodha,xtsalpha'
 ```
 
-> 🔐 **Important**: If your broker is not added to `VALID_BROKERS`, login attempts will be blocked.
+---
+
+### ✅ Update Required in `.env` / `.sample.env`
+
+To allow login for your new broker, you **must** add it to `VALID_BROKERS`.
+
+#### Example:
+
+**Before:**
+```env
+VALID_BROKERS='fivepaisa,aliceblue,angel,...'
+```
+
+**After:**
+```env
+VALID_BROKERS='fivepaisa,aliceblue,angel,...,xtsalpha'
+```
+
+> 🔐 This whitelist mechanism is used by `brlogin.py` or router logic to restrict unauthorized brokers.
+
+---
+
+## 🔁 Update Required in `brlogin.py` for New XTS Broker
+
+You must add a block like this:
+
+```python
+elif broker == 'xtsalpha':
+    try:
+        if request.method == 'POST':
+            if request.headers.get('Content-Type') == 'application/x-www-form-urlencoded':
+                raw_data = request.get_data().decode('utf-8')
+                if raw_data.startswith('session='):
+                    from urllib.parse import unquote
+                    session_data = unquote(raw_data[8:])
+                else:
+                    session_data = raw_data
+            else:
+                session_data = request.get_data().decode('utf-8')
+        else:
+            session_data = request.args.get('session')
+
+        if not session_data:
+            return jsonify({"error": "No session data received"}), 400
+
+        try:
+            if isinstance(session_data, str):
+                session_data = session_data.strip()
+                session_json = json.loads(session_data)
+                if isinstance(session_json, str):
+                    session_json = json.loads(session_json)
+            else:
+                session_json = session_data
+
+        except json.JSONDecodeError as e:
+            return jsonify({
+                "error": f"Invalid JSON format: {str(e)}",
+                "raw_data": session_data
+            }), 400
+
+        access_token = session_json.get('accessToken')
+        if not access_token:
+            return jsonify({"error": "No access token found"}), 400
+
+        auth_token, feed_token, user_id, error_message = auth_function(access_token)
+        forward_url = 'broker.html'
+
+    except Exception as e:
+        return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+```
+
+---
+
+## 📁 Breakdown: `broker/compositedge/` Folder Structure
+
+```
+broker/compositedge/
+├── baseurl.py                  # XTS API base URLs
+├── plugin.json                 # Metadata for plugin info
+│
+├── api/
+│   ├── auth_api.py             # OAuth login + token handling
+│   ├── data.py                 # Historical, quotes, LTP
+│   ├── order_api.py            # Order handling (place, modify, cancel)
+│   └── funds.py                # Fetch margin/funds
+│
+├── database/
+│   └── master_contract_db.py   # Download & store broker's symbol master
+│
+└── mapping/
+    ├── order_data.py           # OpenAlgo → XTS order translation
+    └── transform_data.py       # XTS → OpenAlgo data formatting
+```
+
+---
+
+### 📦 `plugin.json` Sample
+
+```json
+{
+  "Plugin Name": "compositedge",
+  "Plugin URI": "https://openalgo.in",
+  "Description": "CompositedgeOpenAlgo Plugin",
+  "Version": "1.0",
+  "Author": "Kalaivani",
+  "Author URI": "https://openalgo.in"
+}
+```
+
+> 📦 Currently used for plugin metadata. Future versions may support dynamic plugin discovery.
 
 ---
 
 ## 🧪 Final Integration Checklist
 
 - [x] Login from UI via `broker.html`
-- [x] Token stored in session and database
+- [x] Token exchange successful
 - [x] Order API: `/api/place_order`
-- [x] Historical API: `/api/history`
-- [x] Funds, positions, holdings work
+- [x] Historical: `/api/history`
+- [x] Funds and positions display
 - [x] Master contract is downloaded
-- [x] WebSocket live data via `apibinarymarketdata`
+- [x] Market feed via `apibinarymarketdata`
 
 ---
 
-# 📁 Breakdown: `broker/compositedge/` Folder
+## 🚀 Conclusion
 
-Use this plugin as a boilerplate for all future XTS broker integrations.
+Thanks to OpenAlgo’s modular and broker-agnostic design:
 
-### 🔹 `baseurl.py`
-Defines base URLs for:
-- XTS Interactive API
-- XTS Binary Market Data (WebSocket)
-
-```python
-BASE_URL = "https://xts.<broker>.com"
-MARKET_DATA_URL = f"{BASE_URL}/apibinarymarketdata"
-INTERACTIVE_URL = f"{BASE_URL}/interactive"
-```
-
----
-
-### 🔹 `plugin.json`
-Broker metadata:
-
-```json
-{
-  "broker": "compositedge",
-  "display_name": "CompositeEdge",
-  "api_class": "xts_api",
-  "auth_type": "oauth",
-  "version": "1.0"
-}
-```
-
----
-
-### 📁 `api/` – XTS API Wrappers
-
-| File             | Purpose                                      |
-|------------------|----------------------------------------------|
-| `auth_api.py`    | Handles login, token exchange, logout        |
-| `order_api.py`   | Places, modifies, cancels orders             |
-| `data.py`        | Fetches OHLC, LTP, quotes                    |
-| `funds.py`       | Fetches available margin/fund details        |
-
----
-
-### 📁 `database/` – Contract Storage
-
-| File                   | Purpose                                 |
-|------------------------|-----------------------------------------|
-| `master_contract_db.py`| Downloads and parses broker contract DB |
-
----
-
-### 📁 `mapping/` – Format Translators
-
-| File                | Role                                                  |
-|---------------------|-------------------------------------------------------|
-| `order_data.py`     | Maps OpenAlgo's order schema to XTS format            |
-| `transform_data.py` | Converts XTS API responses to OpenAlgo standard       |
-
----
-
-# 🚀 Conclusion
-
-Thanks to OpenAlgo’s modular architecture and XTS API’s standardization:
-
-> ⚡️ **You can integrate any new XTS-supported broker in under 5 minutes**—by only changing `baseurl.py`, updating `.env`, and adding a login hook.
-
-This keeps the backend logic DRY, secure, and highly extensible.
+> 💡 You can integrate **any XTS broker in under 5 minutes** by changing only `baseurl.py`, `.env`, and a few UI/backend hooks.
