@@ -104,6 +104,12 @@ def transform_order_data(orders):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
+        ordertype = order.get("ordertype", "")
+        if ordertype == 'STOPLOSS_LIMIT':
+            ordertype = 'SL'
+        if ordertype == 'STOPLOSS_MARKET':
+            ordertype = 'SL-M'
+
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
             "exchange": order.get("exchange", ""),
@@ -111,7 +117,7 @@ def transform_order_data(orders):
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
-            "pricetype": order.get("ordertype", ""),
+            "pricetype": ordertype,
             "product": order.get("producttype", ""),
             "orderid": order.get("orderid", ""),
             "order_status": order.get("status", ""),
