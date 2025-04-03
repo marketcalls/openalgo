@@ -291,8 +291,22 @@ class BrokerData:
             if not dfs:
                 if compression_value == 'D' and to_date.date() == datetime.now().date():
                     # Get segment ID from exchange - use numeric values
-                    segment_id = 1 if exchange == "NSE" else 2  # 1 for NSECM, 2 for BSECM
-                    
+                    #segment_id = 1 if exchange == "NSE" else 2  # 1 for NSECM, 2 for BSECM
+                    # Exchange segment mapping
+                    exchange_segment_map = {
+                        "NSE": 1,
+                        "NFO": 2,
+                        "CDS": 3,
+                        "BSE": 11,
+                        "BFO": 12,
+                        "MCX": 51
+                    }
+
+                    # Determine segment ID based on exchange
+                    segment_id = exchange_segment_map.get(exchange)
+                    print(f"Exchange: {exchange}, Segment ID: {segment_id}")
+                    if segment_id is None:
+                        raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {
                         "instruments": [{
                             "exchangeSegment": segment_id,
