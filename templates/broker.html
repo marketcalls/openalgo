@@ -29,6 +29,9 @@
                 case 'fivepaisa':
                     loginUrl = '/fivepaisa/callback';
                     break;
+                    case 'fivepaisaxts':
+                    loginUrl = '/fivepaisaxts/callback';
+                    break;
                 case 'aliceblue':
                     loginUrl = '/aliceblue/callback';
                     break;
@@ -104,6 +107,7 @@
                             <select id="platform-select" name="platform" class="select select-bordered w-full">
                                 <option value="" disabled selected>Select a Broker</option>
                                 <option value="fivepaisa" {{ 'disabled' if broker_name != 'fivepaisa' }}>5 Paisa {{ '(Disabled)' if broker_name != 'fivepaisa' }}</option>
+                                <option value="fivepaisaxts" {{ 'disabled' if broker_name != 'fivepaisaxts' }}>5 Paisa (XTS) {{ '(Disabled)' if broker_name != 'fivepaisaxts' }}</option>
                                 <option value="aliceblue" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
                                 <option value="angel" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
                                 <option value="compositedge" {{ 'disabled' if broker_name != 'compositedge' }}>CompositEdge {{ '(Disabled)' if broker_name != 'compositedge' }}</option>
