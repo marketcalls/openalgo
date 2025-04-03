@@ -155,7 +155,7 @@ def transform_order_data(orders):
         }
 
         transformed_orders.append(transformed_order)
-        print(transformed_order)
+        
 
     return transformed_orders
 
