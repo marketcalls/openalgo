@@ -1,4 +1,3 @@
-import http.client
 import json
 import os
 import urllib.parse
@@ -7,6 +6,7 @@ from broker.paytm.database.master_contract_db import SymToken, db_session
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
+from utils.httpx_client import get_httpx_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("developer.paytmmoney.com")
+    base_url = "https://developer.paytmmoney.com"
     headers = {
         'x-jwt-token': AUTH_TOKEN,
         'Content-Type': 'application/json',
@@ -24,24 +24,26 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     try:
         # Log the complete request details for Postman
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://developer.paytmmoney.com{endpoint}")
+        logger.info(f"URL: {base_url}{endpoint}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.info(f"Payload: {payload}")
 
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
+        client = get_httpx_client()
+        if method == "GET":
+            response = client.get(f"{base_url}{endpoint}", headers=headers)
+        else:
+            response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload)
 
         # Log the complete response
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        response_data = response.json()
+        logger.info(f"Response Body: {json.dumps(response_data, indent=2)}")
 
-        return response
+        return response_data
     except Exception as e:
         logger.error(f"API request failed: {str(e)}")
         raise

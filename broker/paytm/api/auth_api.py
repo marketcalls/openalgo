@@ -1,5 +1,5 @@
 import os
-import requests
+from utils.httpx_client import get_httpx_client
 
 def authenticate_broker(request_token):
     """
@@ -29,7 +29,8 @@ def authenticate_broker(request_token):
             'request_token': request_token
         }
         headers = {'Content-Type': 'application/json'}
-        response = requests.post(url, json=data, headers=headers)
+        client = get_httpx_client()
+        response = client.post(url, json=data, headers=headers)
 
         if response.status_code == 200:
             response_data = response.json()
