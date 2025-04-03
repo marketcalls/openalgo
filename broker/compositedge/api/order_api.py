@@ -46,7 +46,7 @@ def get_trade_book(auth):
     return get_api_response("/orders/trades",auth)
 
 def get_positions(auth):
-    return get_api_response("/portfolio/positions?dayOrNet=DayWise",auth)
+    return get_api_response("/portfolio/positions?dayOrNet=NetWise",auth)
 
 def get_holdings(auth):
     return get_api_response("/portfolio/holdings",auth)
@@ -69,16 +69,22 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     return net_qty
 
 def place_order_api(data,auth):
-
     AUTH_TOKEN = auth   
-    token = get_token(data['symbol'], data['exchange'])
-    print(f"token: {token}")
-    newdata = transform_data(data, token)  
+    print(f"Data: {data}")
+
+    # Check if this is a direct instrument ID payload or needs transformation
+    if all(key in data for key in ['exchangeSegment', 'exchangeInstrumentID', 'productType', 'orderType']):
+        newdata = data
+    else:
+        # Traditional symbol-based payload that needs transformation
+        token = get_token(data['symbol'], data['exchange'])
+        print(f"token: {token}")
+        newdata = transform_data(data, token)
+
     headers = {
         'authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
     }
-    #print("Headers being sent:", headers)
    
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -99,8 +105,6 @@ def place_order_api(data,auth):
     except json.JSONDecodeError:
         response_data = {"error": "Invalid JSON response from server", "raw_response": response.text}
 
-    #print("Broker Response:", response.status_code, response_data)  # Debugging log
-    
     orderid = response_data.get("result", {}).get("AppOrderID") if response_data.get("type") == "success" else None
     
     return response, response_data, orderid
@@ -124,9 +128,6 @@ def place_smartorder_api(data,auth):
     # Get current open position for the symbol
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
-
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -207,32 +208,34 @@ def close_all_positions(current_api_key,auth):
 
     # If response has positions
     for position in positions_list:
-    # Skip if net quantity is zero
+        # Skip if net quantity is zero
         if int(position['Quantity']) == 0:
             continue
 
-            # Determine action based on net quantity
+        # Determine action based on net quantity
         action = 'SELL' if int(position['Quantity']) > 0 else 'BUY'
         quantity = abs(int(position['Quantity']))
 
+        exchange_segment = position['ExchangeSegment']
+        instrument_id = position['ExchangeInstrumentId']
+        
+        print(f'Exchange Segment: {exchange_segment}')
+        print(f'Exchange Instrument ID: {instrument_id}')
 
-            #get openalgo symbol to send to placeorder function
-        symbol = get_symbol(position['ExchangeInstrumentId'], position['ExchangeSegment'])
-        print(f'The Symbol is {symbol}')
-
-            # Prepare the order payload
+        # Prepare the order payload
         place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": position['ExchangeSegment'],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['ExchangeSegment'],position['ProductType']),
-                "quantity": str(quantity)
-            }
-
-        print(place_order_payload)
+            "exchangeSegment": exchange_segment,
+            "exchangeInstrumentID": instrument_id,
+            "productType": position['ProductType'],
+            "orderType": "MARKET",
+            "orderSide": action,
+            "timeInForce": "DAY",
+            "disclosedQuantity": "0",
+            "orderQuantity": str(quantity),
+            "limitPrice": "0",
+            "stopPrice": "0",
+            "orderUniqueIdentifier": "openalgo"
+        }
 
         # Place the order to close the position
         res, response, orderid =   place_order_api(place_order_payload,auth)
@@ -255,7 +258,7 @@ def cancel_order(orderid,auth):
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    print(orderid)
+    #print(orderid)
     # Set up the request headers
     headers = {
         'authorization': AUTH_TOKEN,
@@ -323,50 +326,6 @@ def modify_order(data,auth):
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
 
-def cancel_all_ordersxts_api(data,auth):
-
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-    
-    
-    # Get the shared httpx client with connection pooling
-    client = get_httpx_client()
-
-    token = get_token(data['symbol'], data['exchange'])
-    data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
-    brexchange = map_exchange(exchange)
-
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
-    # Set up the request headers
-    headers = {
-        'authorization': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-    }
-
-
-    payload = {
-            "exchangeSegment": brexchange,
-            "exchangeInstrumentId": token
-        }
-
-    # Make the request using the shared client
-    response = client.post(f"{INTERACTIVE_URL}/orders/cancelall",
-        headers=headers,
-        content=payload
-    )
-    
-    # Add status attribute for compatibility with the existing codebase
-    response.status = response.status_code
-    print(f'Response of modify order :{response.status}')
-    data = response.json()
-
-    # Check if the 'result' field is empty
-    if 'result' in data and not data['result']:
-        return {"status": "success", "message": "Canceled 0 orders"}, 200
-    elif data.get("type") == "success":
-        return {"status": "success", "result": data["result"]}, 200
-    else:
-        return {"status": "error", "message": data.get("description", "Failed to cancel orders")}, response.status
 
 def cancel_all_orders_api(data,auth):
     # Get the order book
@@ -375,17 +334,17 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    print(order_book_response)
-    if order_book_response.get("status") != "success":
+    print(f"Order book response: {order_book_response}")
+    if order_book_response.get("type") != "success":
         return [], []  # Return empty lists indicating failure to retrieve the order book
-
-    orders = order_book_response.get("data", {}).get("orders", [])
+    
+    orders = order_book_response.get("result", [])
 
      # Filter orders that are in 'open' or 'trigger_pending' state
-    print(f"Orders: {orders}")
+    #print(f"Orders: {orders}")
     orders_to_cancel = [
         order for order in orders 
-        if order["OrderStatus"] in ["New", "trigger pending"]
+        if order["OrderStatus"] in ["New", "Trigger Pending"]
     ]
     print(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
