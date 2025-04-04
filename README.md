@@ -23,6 +23,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 ## Supported Brokers
 
 - **5paisa**
+- **5paisa (XTS)**
 - **AliceBlue**
 - **AngelOne**
 - **Dhan**
@@ -30,9 +31,13 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Flattrade**
 - **Fyers**
 - **ICICI Direct**
+- **Jainam (Retail)**
+- **Jainam (Dealer)**
 - **Kotak** 
+- **Paytm**
 - **Shoonya**
 - **Upstox**
+- **Wisdom Capital**
 - **Zebu**
 - **Zerodha**
 
