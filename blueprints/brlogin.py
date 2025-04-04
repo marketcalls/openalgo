@@ -202,10 +202,24 @@ def broker_callback(broker,para=None):
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='jainampro':
+        code = 'jainampro'
+        print(f'The code is {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
     elif broker=='dhan':
         code = 'dhan'
         print(f'The code is {code}')
         auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker == 'wisdom':
+        code = 'wisdom'
+        print(f'The code is {code}')
+        auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker == 'zebu':  
