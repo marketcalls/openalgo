@@ -167,7 +167,7 @@ def process_angel_json(path):
     
 
     df['lotsize'] = df['lotsize'].astype(int)
-    df['tick_size'] = df['tick_size'].astype(float)
+    df['tick_size'] = df['tick_size'].astype(float) / 100  # Divide tick_size by 100
 
     # Futures Symbol Update in CDS and MCX Exchanges
     df.loc[(df['instrumenttype'] == 'FUTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
