@@ -29,6 +29,9 @@
                 case 'fivepaisa':
                     loginUrl = '/fivepaisa/callback';
                     break;
+                    case 'fivepaisaxts':
+                    loginUrl = '/fivepaisaxts/callback';
+                    break;
                 case 'aliceblue':
                     loginUrl = '/aliceblue/callback';
                     break;
@@ -54,6 +57,12 @@
                     break;
                 case 'icici':
                     loginUrl = 'https://api.icicidirect.com/apiuser/login?api_key={{broker_api_key}}';
+                    break;
+                case 'iifl':
+                    loginUrl = '/iifl/callback';
+                    break;
+                case 'jainam':
+                    loginUrl = '/jainam/callback';
                     break;
                 case 'kotak':
                     loginUrl = '/kotak/callback';
@@ -104,6 +113,7 @@
                             <select id="platform-select" name="platform" class="select select-bordered w-full">
                                 <option value="" disabled selected>Select a Broker</option>
                                 <option value="fivepaisa" {{ 'disabled' if broker_name != 'fivepaisa' }}>5 Paisa {{ '(Disabled)' if broker_name != 'fivepaisa' }}</option>
+                                <option value="fivepaisaxts" {{ 'disabled' if broker_name != 'fivepaisaxts' }}>5 Paisa (XTS) {{ '(Disabled)' if broker_name != 'fivepaisaxts' }}</option>
                                 <option value="aliceblue" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
                                 <option value="angel" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
                                 <option value="compositedge" {{ 'disabled' if broker_name != 'compositedge' }}>CompositEdge {{ '(Disabled)' if broker_name != 'compositedge' }}</option>
@@ -112,6 +122,8 @@
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="icici" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
+                                <option value="iifl" {{ 'disabled' if broker_name != 'iifl' }}>IIFL {{ '(Disabled)' if broker_name != 'iifl' }}</option>
+                                <option value="jainam" {{ 'disabled' if broker_name != 'jainam' }}>Jainam {{ '(Disabled)' if broker_name != 'jainam' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
                                 <option value="paytm" {{ 'disabled' if broker_name != 'paytm' }}>Paytm Money {{ '(Disabled)' if broker_name != 'paytm' }}</option>
                                 <option value="shoonya" {{ 'disabled' if broker_name != 'shoonya' }}>Shoonya {{ '(Disabled)' if broker_name != 'shoonya' }}</option>

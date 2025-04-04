@@ -91,6 +91,15 @@ def broker_callback(broker,para=None):
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+    elif broker=='fivepaisaxts':
+        code = 'fivepaisaxts'
+        print(f'The code is {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+
     elif broker=='compositedge':
         try:
             # Get the raw data from the request
@@ -175,6 +184,22 @@ def broker_callback(broker,para=None):
         code = request.args.get('apisession')
         print(f'The code is {code}')
         auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker=='iifl':
+        code = 'iifl'
+        print(f'The code is {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+    
+    elif broker=='jainam':
+        code = 'jainam'
+        print(f'The code is {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker=='dhan':

@@ -72,10 +72,13 @@ generate_hex() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
 }
 
+
+
+
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fyers,icici,kotak,paytm,shoonya,upstox,zebu,zerodha"
+    local valid_brokers="fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fyers,icici,kotak,iifl,jainam,paytm,shoonya,upstox,zebu,zerodha"
     if [[ $valid_brokers == *"$broker"* ]]; then
         return 0
     else

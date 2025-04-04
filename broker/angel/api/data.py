@@ -76,6 +76,13 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if exchange == 'NSE_INDEX':
+                exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                exchange = 'MCX'
             
             # Prepare payload for Angel's quote API
             payload = {
@@ -263,6 +270,13 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+
+            if exchange == 'NSE_INDEX':
+                exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                exchange = 'MCX'
             
             # Prepare payload for market depth API
             payload = {
