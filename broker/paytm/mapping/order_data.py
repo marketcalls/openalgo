@@ -128,7 +128,7 @@ def transform_order_data(orders):
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("display_order_type", ""),
+            "pricetype": order.get("display_order_type", "").upper(),
             "product": order.get("product", ""),
             "orderid": order.get("order_no", ""),
             "order_status": order_status,
@@ -144,13 +144,17 @@ def map_trade_data(trade_data):
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
+    tnx_type_mapping = {
+        "B": "BUY",
+        "S": "SELL"
+    }
     for trade in tradebook_data:
-     
+        mapped_tnx = tnx_type_mapping.get(trade.get('txn_type', ''), trade.get('txn_type', ''))
         transformed_trade = {
-            "symbol": trade.get('security_id'),
+            "symbol": trade.get('symbol'),
             "exchange": trade.get('exchange', ''),
             "product": trade.get('product', ''),
-            "action": trade.get('txn_type', ''),
+            "action": mapped_tnx,
             "quantity": trade.get('quantity', 0),
             "average_price": trade.get('avg_traded_price', 0.0),
             "trade_value": trade.get('remaining_quantity', 0) * trade.get('avg_traded_price', 0.0),
