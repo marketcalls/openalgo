@@ -5,10 +5,17 @@ import httpx
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
-from broker.paytm.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.paytm.mapping.transform_data import (
+    transform_data,
+    map_product_type,
+    reverse_map_product_type,
+    transform_modify_order_data,
+    map_exchange,
+    reverse_map_order_type
+)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, retry_delay=2):
     base_url = "https://developer.paytmmoney.com"
     headers = {
         'x-jwt-token': auth,
@@ -17,38 +24,47 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     }
 
     client = get_httpx_client()
-    try:
-        if method == "GET":
-            response = client.get(f"{base_url}{endpoint}", headers=headers)
-        else:
-            response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload)
-
-        # Try to parse response JSON even if status code is error
+    
+    for attempt in range(max_retries):
         try:
-            response_json = response.json()
-        except Exception:
-            response_json = {}
+            if method == "GET":
+                response = client.get(f"{base_url}{endpoint}", headers=headers, timeout=30.0)
+            else:
+                response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload, timeout=30.0)
 
-        # Check if it's an error response
-        if not response.is_success:
-            error_msg = response_json.get('message', response.text)
-            print(f"API Error: Status {response.status_code} - {error_msg}")
-            return {
-                "status": "error", 
-                "message": error_msg,
-                "error_code": response.status_code,
-                "response": response_json
-            }
+            # Try to parse response JSON even if status code is error
+            try:
+                response_json = response.json()
+            except Exception:
+                response_json = {}
 
-        return response_json
+            # Check if it's an error response
+            if not response.is_success:
+                error_msg = response_json.get('message', response.text)
+                print(f"API Error: Status {response.status_code} - {error_msg}")
+                # Don't retry on 4xx errors as they are client errors
+                if response.status_code < 500:
+                    return {
+                        "status": "error", 
+                        "message": error_msg,
+                        "error_code": response.status_code,
+                        "response": response_json
+                    }
+                raise httpx.HTTPError(f"HTTP {response.status_code}")
 
-    except httpx.RequestError as e:
-        print(f"Request error: {e}")
-        return {"status": "error", "message": "Request failed", "error": str(e)}
+            return response_json
 
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        return {"status": "error", "message": "Unexpected error", "error": str(e)}
+        except (httpx.RequestError, httpx.HTTPError) as e:
+            print(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+                continue
+            return {"status": "error", "message": "Request failed after retries", "error": str(e)}
+
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            return {"status": "error", "message": "Unexpected error", "error": str(e)}
 
 def get_order_book(auth):
     return get_api_response("/orders/v1/user/orders", auth)
@@ -197,46 +213,65 @@ def close_all_positions(current_api_key, auth):
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
 
-    # print(positions_response)
+    print(f"Positions retrieved response : {positions_response}")
+    
+    # First check if the API request was successful
+    if positions_response.get('status') == 'error':
+        return {"status": "error", "message": positions_response.get('message', 'Failed to fetch positions')}, 500
+        
     # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
-        return {"message": "No Open Positions Found"}, 200
+    if not positions_response.get('data'):
+        return {"status": "success", "message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response['status'] == 'success':
         # Loop through each position to close
-        for position in positions_response['data']['net']:
+        for position in positions_response['data']:
             # Skip if net quantity is zero
-            if int(position['quantity']) == 0:
+            if int(position['net_qty']) == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
-            quantity = abs(int(position['quantity']))
+            action = 'SELL' if int(position['net_qty']) > 0 else 'BUY'
+            quantity = abs(int(position['net_qty']))
 
-            # Get OA Symbol before sending to Place Order
-            symbol = get_oa_symbol(
-                position['tradingsymbol'], position['exchange'])
-            # Prepare the order payload
-            place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
+            # Use security_id directly as it's already in Paytm's format
+            security_id = position.get('security_id')
+            if not security_id:
+                print(f"Skipping position due to missing security_id: {position}")
+                continue
+
+            # Create order payload directly in Paytm's format
+            txn_type = "S" if action == "SELL" else "B"
+            segment = "E" if position['exchange'] in ['NSE', 'BSE'] else "D"
+            
+            order_payload = {
+                "security_id": security_id,
                 "exchange": position['exchange'],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'], position['product']),
-                "quantity": str(quantity)
+                "txn_type": txn_type,
+                "order_type": "MKT",  # Market order
+                "quantity": str(quantity),
+                "product": position['product'],
+                "price": "0",
+                "validity": "DAY",
+                "segment": segment,
+                "source": "M"
             }
-
-            print(place_order_payload)
-
-            # Place the order to close the position
-            _, api_response, _ = place_order_api(
-                place_order_payload, AUTH_TOKEN)
-
-            print(api_response)
-
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+            
+            print(f"Placing Order: {order_payload}")
+            
+            # Place the order directly without transform
+            response = get_api_response(
+                endpoint="/orders/v1/place/regular",
+                auth=AUTH_TOKEN,
+                method="POST",
+                payload=json.dumps(order_payload)
+            )
+            
+            print(f"Order Response: {response}")
+            
+            if response.get('status') != 'success':
+                print(f"Failed to close position for {security_id}: {response.get('message')}")
+                continue
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
@@ -286,7 +321,6 @@ def cancel_order(orderid, auth):
 
 def modify_order(data, auth):
     orderid = data['orderid']
-    newdata = transform_modify_order_data(data)
     orders_list = get_order_book(auth)
     
     if not orders_list or 'data' not in orders_list:
@@ -300,39 +334,60 @@ def modify_order(data, auth):
                 return {"status": "error", "message": f"Order {orderid} is not in Pending status"}, 400
                 
             print("Modifying order:", orderid)
-            payload = json.dumps({
+            
+            # Prepare modification payload
+            payload = {
                 "order_no": orderid,
-                "source": "N",
-                "txn_type": order['txn_type'],
-                "exchange": map_exchange(order['exchange']),
+                "exchange": order['exchange'],
                 "segment": order['segment'],
                 "security_id": order['security_id'],
+                "quantity": data.get('quantity', order['quantity']),
+                "price": data.get('price', order['price']),
+                "trigger_price": data.get('trigger_price', order.get('trigger_price', '0')),
+                "validity": "DAY",
+                "product": reverse_map_product_type(data.get('product', order['product'])),
                 "order_type": order['order_type'],
-                "off_mkt_flag": order['off_mkt_flag'],
-                "mkt_type": order['mkt_type'],
+                "txn_type": order['txn_type'],
+                "source": "N",
+                "off_mkt_flag": order.get('off_mkt_flag', 'N'),
                 "serial_no": order['serial_no'],
-                "group_id": order['group_id'],
-                "product": newdata['product'],
-                "quantity": newdata['quantity'],
-                "validity": newdata['validity'],
-                "price": newdata['price'],
-            })
-
+                "group_id": order['group_id']
+            }
+            
+            print(f"Modification payload: {payload}")
+            
             response = get_api_response(
                 endpoint="/orders/v1/modify/regular",
                 auth=auth,
                 method="POST",
-                payload=payload
+                payload=json.dumps(payload)
+            )
+            
+            print(f"Modification response: {response}")
+            
+            response = get_api_response(
+                endpoint="/orders/v1/modify/regular",
+                auth=auth,
+                method="POST",
+                payload=json.dumps(payload)
             )
             
             print(f"Modify order response: {response}")
 
             if response.get("status") == "success":
-                return {"status": "success", "orderid": response['data'][0]['order_no']}, 200
+                return {
+                    "status": "success",
+                    "message": "Order modified successfully",
+                    "orderid": response['data'][0].get('order_no', orderid)
+                }, 200
             else:
-                return {"status": "error", "message": response.get("message", "Failed to modify order")}, 500
+                return {
+                    "status": "error",
+                    "message": response.get("message", "Failed to modify order")
+                }, 500
                 
     if not order_found:
+        return {"status": "error", "message": f"Order {orderid} not found"}, 404
         return {"status": "error", "message": f"Order {orderid} not found"}, 404
 
 
