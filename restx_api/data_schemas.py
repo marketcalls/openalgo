@@ -21,6 +21,11 @@ class DepthSchema(Schema):
 class IntervalsSchema(Schema):
     apikey = fields.Str(required=True)
 
+class SymbolSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    symbol = fields.Str(required=True)      # Symbol code (e.g., RELIANCE)
+    exchange = fields.Str(required=True)    # Exchange (e.g., NSE, BSE)
+
 class TickerSchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)      # Combined exchange:symbol format
