@@ -1,6 +1,7 @@
 import json
 import os
 import urllib.parse
+import httpx
 from database.token_db import get_br_symbol, get_token
 from broker.paytm.database.master_contract_db import SymToken, db_session
 import logging
@@ -31,10 +32,12 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
             logger.info(f"Payload: {payload}")
 
         client = get_httpx_client()
+        # Use a longer timeout for Paytm API requests
+        timeout = httpx.Timeout(60.0, connect=30.0)
         if method == "GET":
-            response = client.get(f"{base_url}{endpoint}", headers=headers)
+            response = client.get(f"{base_url}{endpoint}", headers=headers, timeout=timeout)
         else:
-            response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload)
+            response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload, timeout=timeout)
 
         # Log the complete response
         logger.info("=== API Response Details ===")
@@ -132,7 +135,14 @@ class BrokerData:
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
             # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{token}:{opt_type}")
+            # Before the encoded_symbol line, add:
+            if exchange == 'NFO' or exchange == 'NSE_INDEX':
+                request_exchange = 'NSE'
+            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
+                request_exchange = 'BSE'
+            else:
+                request_exchange = exchange
+            encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=QUOTE&pref={encoded_symbol}", self.auth_token)
             
@@ -191,7 +201,14 @@ class BrokerData:
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
             # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{token}:{opt_type}")
+            # Before the encoded_symbol line, add:
+            if exchange == 'NFO' or exchange == 'NSE_INDEX':
+                request_exchange = 'NSE'
+            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
+                request_exchange = 'BSE'
+            else:
+                request_exchange = exchange
+            encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=FULL&pref={encoded_symbol}", self.auth_token)
             

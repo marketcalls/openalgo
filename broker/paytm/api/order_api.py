@@ -4,7 +4,7 @@ import urllib.parse
 import httpx
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
-from database.token_db import get_br_symbol, get_oa_symbol
+from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from broker.paytm.mapping.transform_data import (
     transform_data,
     map_product_type,
@@ -85,20 +85,21 @@ def get_holdings(auth):
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
-
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+    security_id = get_token(tradingsymbol, exchange)
 
     positions_data = get_positions(auth)
     net_qty = '0'
-    # print(positions_data['data']['net'])
-
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']['net']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
-                net_qty = position.get('quantity', '0')
-                print(f'Net Quantity {net_qty}')
-                break  # Assuming you need the first match
+    
+    if positions_data and positions_data.get('status') == 'success' and positions_data.get('data'):
+        for position in positions_data['data']:
+            # Check if the position matches our criteria
+            if (str(position.get('security_id')) == str(security_id) and 
+                position.get('exchange') == map_exchange(exchange) and 
+                position.get('product') == reverse_map_product_type(product)):
+                net_qty = str(position.get('netQty', '0'))
+                print(f'Net Quantity {net_qty} for {tradingsymbol}')
+                break
 
     return net_qty
 
@@ -330,8 +331,10 @@ def modify_order(data, auth):
     for order in orders_list['data']:
         if order['order_no'] == orderid:
             order_found = True
-            if order['status'] != 'Pending':
-                return {"status": "error", "message": f"Order {orderid} is not in Pending status"}, 400
+            # Check if order is in a modifiable state
+            MODIFIABLE_STATUSES = ['OPEN', 'TRIGGER PENDING', 'MODIFIED']
+            if order['status'].upper() not in MODIFIABLE_STATUSES:
+                return {"status": "error", "message": f"Order {orderid} cannot be modified. Current status: {order['status']}"}, 400
                 
             print("Modifying order:", orderid)
             
@@ -342,11 +345,11 @@ def modify_order(data, auth):
                 "segment": order['segment'],
                 "security_id": order['security_id'],
                 "quantity": data.get('quantity', order['quantity']),
-                "price": data.get('price', order['price']),
+                "price": '0' if data.get('pricetype') == 'MARKET' else data.get('price', order['price']),
                 "trigger_price": data.get('trigger_price', order.get('trigger_price', '0')),
                 "validity": "DAY",
                 "product": reverse_map_product_type(data.get('product', order['product'])),
-                "order_type": order['order_type'],
+                "order_type": 'MKT' if data.get('pricetype') == 'MARKET' else order['order_type'],
                 "txn_type": order['txn_type'],
                 "source": "N",
                 "off_mkt_flag": order.get('off_mkt_flag', 'N'),
@@ -364,15 +367,6 @@ def modify_order(data, auth):
             )
             
             print(f"Modification response: {response}")
-            
-            response = get_api_response(
-                endpoint="/orders/v1/modify/regular",
-                auth=auth,
-                method="POST",
-                payload=json.dumps(payload)
-            )
-            
-            print(f"Modify order response: {response}")
 
             if response.get("status") == "success":
                 return {
@@ -387,7 +381,6 @@ def modify_order(data, auth):
                 }, 500
                 
     if not order_found:
-        return {"status": "error", "message": f"Order {orderid} not found"}, 404
         return {"status": "error", "message": f"Order {orderid} not found"}, 404
 
 

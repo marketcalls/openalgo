@@ -237,18 +237,142 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return []
+    
+    if not holdings_data or not isinstance(holdings_data, dict) or 'data' not in holdings_data:
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    holdings_list = holdings_data.get('data', [])
+    if not holdings_list:
+        print("No holdings data found")
+        return []
+        
     transformed_data = []
-    for holdings in holdings_data:
+    for holdings in holdings_list:
+        if not isinstance(holdings, dict):
+            print(f"Invalid holding format: {holdings}")
+            continue
+            
+        cost_price = holdings.get('cost_price', 0.0)
+        last_traded_price = holdings.get('last_traded_price', 0.0)
+        
         transformed_position = {
             "symbol": holdings.get('security_id', ''),
             "exchange": holdings.get('exchange', ''),
             "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_traded_price', 0) - holdings.get('cost_price', 0.0)) / holdings.get('cost_price', 0.0) * 100, 2)  # Rounded to two decimals
-        
+            "product": 'CNC',  # Paytm only supports CNC for holdings
+            "pnl": round(holdings.get('pnl', 0.0), 2),
+            "ltp": last_traded_price,
+            "avg_price": cost_price,
+            "pnlpercent": round((last_traded_price - cost_price) / cost_price * 100, 2) if cost_price > 0 else 0.0
         }
         transformed_data.append(transformed_position)
     return transformed_data
 
+def map_portfolio_data(holdings_data):
+    """Map Paytm holdings data to standardized portfolio format"""
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return []
+    
+    if not holdings_data or not isinstance(holdings_data, dict) or 'data' not in holdings_data:
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    holdings_list = holdings_data.get('data', [])
+    if not holdings_list:
+        print("No holdings data found")
+        return []
+        
+    mapped_data = []
+    for holding in holdings_list:
+        if not isinstance(holding, dict):
+            print(f"Invalid holding format: {holding}")
+            continue
+            
+        exchange = holding.get('exchange', '')
+        if exchange == "NSE" and ("OPT" in holding.get('instrument', '') or "FUT" in holding.get('instrument', '')):
+            exchange = "NFO"
+        elif exchange == "BSE" and ("OPT" in holding.get('instrument', '') or "FUT" in holding.get('instrument', '')):
+            exchange = "BFO"
+            
+        mapped_holding = {
+            'symbol': get_symbol(token=holding.get('security_id', ''), exchange=exchange),
+            'exchange': exchange,
+            'quantity': holding.get('quantity', 0),
+            'avg_price': holding.get('cost_price', 0.0),
+            'ltp': holding.get('last_traded_price', 0.0),
+            'close_price': holding.get('previous_close_price', 0.0),
+            'pnl': round(holding.get('pnl', 0.0), 2),
+            'product': 'CNC'  # Paytm only supports CNC for holdings
+        }
+        mapped_data.append(mapped_holding)
+    
+    return mapped_data
 
+def calculate_portfolio_statistics(holdings_data):
+    """Calculate portfolio statistics from holdings data"""
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return {
+                'totalholdingvalue': 0.0,
+                'totalinvvalue': 0.0,
+                'totalprofitandloss': 0.0,
+                'totalpnlpercentage': 0.0,
+                'total_holdings': 0
+            }
+    
+    if not holdings_data or not isinstance(holdings_data, list):
+        print(f"Invalid holdings data format: {holdings_data}")
+        return {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0,
+            'total_holdings': 0
+        }
+    
+    total_investment = 0.0
+    total_current_value = 0.0
+    total_pnl = 0.0
+    
+    for holding in holdings_data:
+        if not isinstance(holding, dict):
+            print(f"Invalid holding format: {holding}")
+            continue
+            
+        quantity = holding.get('quantity', 0)
+        cost_price = holding.get('avg_price', 0.0)
+        last_traded_price = holding.get('ltp', 0.0)
+        
+        position_investment = cost_price * quantity
+        position_current_value = last_traded_price * quantity
+        
+        total_investment += position_investment
+        total_current_value += position_current_value
+        total_pnl += holding.get('pnl', 0.0)
+    
+    total_pnl_percentage = (total_pnl / total_investment * 100) if total_investment > 0 else 0.0
+    
+    return {
+        'totalholdingvalue': round(total_current_value, 2),
+        'totalinvvalue': round(total_investment, 2),
+        'totalprofitandloss': round(total_pnl, 2),
+        'totalpnlpercentage': round(total_pnl_percentage, 2),
+        'total_holdings': len(holdings_data)
+    }
