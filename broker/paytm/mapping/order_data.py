@@ -224,9 +224,14 @@ def transform_positions_data(positions_data):
         else:
             average_price_formatted = "{:.2f}".format(float(position.get('net_avg', 0.0)))
 
+        # Get the exchange - we'll use the one already set by map_position_data, which maps NSE->NFO for options
+        # If 'exchange' field is NSE but this is an F&O instrument, the map_position_data function 
+        # should have already changed it to NFO, and we want to keep that mapping
+        exchange = position.get('exchange', '')
+        
         transformed_position = {
             "symbol": position.get('security_id', ''),
-            "exchange": position.get('exchange', ''),
+            "exchange": exchange,
             "product": map_product_type(position.get('product', '')),
             "quantity": position.get('net_qty', '0'),
             "average_price": average_price_formatted,
@@ -237,6 +242,7 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    print(f"holdings data : {holdings_data}")
     # Parse JSON response if it's a string
     if isinstance(holdings_data, str):
         try:
@@ -290,7 +296,7 @@ def map_portfolio_data(holdings_data):
         print(f"Invalid holdings data format: {holdings_data}")
         return []
     
-    holdings_list = holdings_data.get('data', [])
+    holdings_list = holdings_data.get('data', {}).get('results', [])
     if not holdings_list:
         print("No holdings data found")
         return []
@@ -355,17 +361,21 @@ def calculate_portfolio_statistics(holdings_data):
         if not isinstance(holding, dict):
             print(f"Invalid holding format: {holding}")
             continue
-            
-        quantity = holding.get('quantity', 0)
-        cost_price = holding.get('avg_price', 0.0)
-        last_traded_price = holding.get('ltp', 0.0)
+        try:
+            quantity = float(holding.get('quantity', 0))
+            cost_price = float(holding.get('avg_price', 0.0))
+            last_traded_price = float(holding.get('ltp', 0.0))
+            pnl = (last_traded_price - cost_price) * quantity
+        except (ValueError, TypeError):
+            print(f"Error parsing values in holding: {holding}")
+            continue
         
         position_investment = cost_price * quantity
         position_current_value = last_traded_price * quantity
         
         total_investment += position_investment
         total_current_value += position_current_value
-        total_pnl += holding.get('pnl', 0.0)
+        total_pnl += pnl
     
     total_pnl_percentage = (total_pnl / total_investment * 100) if total_investment > 0 else 0.0
     

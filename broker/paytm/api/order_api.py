@@ -2,6 +2,7 @@ import json
 import os
 import urllib.parse
 import httpx
+import logging
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -14,6 +15,15 @@ from broker.paytm.mapping.transform_data import (
     reverse_map_order_type
 )
 
+# Configure logging with more detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Create a logger for this module
+logger = logging.getLogger('paytm_api')
 
 def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, retry_delay=2):
     base_url = "https://developer.paytmmoney.com"
@@ -51,7 +61,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, re
                         "response": response_json
                     }
                 raise httpx.HTTPError(f"HTTP {response.status_code}")
-
+            print(f"Response: {response_json}")
             return response_json
 
         except (httpx.RequestError, httpx.HTTPError) as e:
@@ -84,23 +94,126 @@ def get_holdings(auth):
     return get_api_response("/holdings/v1/get-user-holdings-data", auth)
 
 
-def get_open_position(tradingsymbol, exchange, product, auth):
-    # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    security_id = get_token(tradingsymbol, exchange)
+import logging
 
+def get_open_positionss(tradingsymbol, exchange, product, auth):
+    print("##### DEBUG: ENTERING get_open_position FUNCTION #####")
+    # Convert Trading Symbol from OpenAlgo Format to Broker Format (Token ID)
+    print(f"##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: {exchange} #####")
+    target_security_id = get_token(tradingsymbol, exchange)
+    if target_security_id.isdigit():
+        target_security_id = target_security_id
+    else:
+        if exchange =='NFO':
+            exchange = 'NSE'
+        elif exchange =='BFO':
+            exchange = 'BSE'
+        target_security_id = get_token(tradingsymbol, exchange)
+        # Use original exchange
+    print(f"##### DEBUG: Initial Target Security ID (using exchange '{exchange}'): {target_security_id} #####")
+    # Check if the initial lookup failed (returned non-numeric ID)
+    # We assume valid security IDs are numeric strings
+    
+    # Get raw positions data first
     positions_data = get_positions(auth)
     net_qty = '0'
     
-    if positions_data and positions_data.get('status') == 'success' and positions_data.get('data'):
-        for position in positions_data['data']:
-            # Check if the position matches our criteria
-            if (str(position.get('security_id')) == str(security_id) and 
-                position.get('exchange') == map_exchange(exchange) and 
-                position.get('product') == reverse_map_product_type(product)):
-                net_qty = str(position.get('netQty', '0'))
-                print(f'Net Quantity {net_qty} for {tradingsymbol}')
-                break
+    print("##### DEBUG: === Position Check Details === #####")
+    print(f"##### DEBUG: Looking for position: symbol={tradingsymbol}, exchange={exchange}, product={product}, target_id={target_security_id} #####")
+    
+    logger.info("=== Position Check Details ===")
+    logger.info(f"Looking for position:")
+    logger.info(f"Symbol: {tradingsymbol}")
+    logger.info(f"Exchange: {exchange}")
+    logger.info(f"Product: {product} (Broker format: {reverse_map_product_type(product)})")
+    logger.info(f"Target Security ID: {target_security_id}")
 
+    if positions_data and positions_data.get('status') == 'success' and positions_data.get('data'):
+        logger.info(f"Found {len(positions_data['data'])} positions in account")
+        
+        for idx, position in enumerate(positions_data['data'], 1):
+            pos_security_id = position.get('security_id') # This is the token ID from Paytm API
+            pos_exchange = position.get('exchange')
+            pos_product = position.get('product')
+
+            logger.info(f"\nChecking Position #{idx}:")
+            logger.info(f"API Security ID: {pos_security_id}")
+            logger.info(f"API Exchange: {pos_exchange}")
+            logger.info(f"API Product: {pos_product}")
+            logger.info(f"API Instrument: {position.get('instrument')}")
+            logger.info(f"API Net Qty: {position.get('net_qty', position.get('netQty', '0'))}")
+            
+            # Map API exchange (NSE for both Eq/F&O) to our internal representation (NFO for F&O)
+            our_exchange = exchange # Default to the requested exchange
+            if pos_exchange == 'NSE' and (
+                'OPT' in position.get('instrument', '') or \
+                'FUT' in position.get('instrument', '')
+            ):
+                our_exchange = 'NFO'
+                logger.info(f"Mapped to Internal Exchange: {our_exchange} (based on instrument type)")
+
+            # --- Match Criteria --- 
+            # 1. Security ID (Token) match
+            # Compare the token ID from our DB (target_security_id) with the token ID from Paytm (pos_security_id)
+            security_match = str(pos_security_id) == str(target_security_id)
+            
+            # 2. Exchange Match (using our mapped internal exchange)
+            #exchange_match = our_exchange == exchange
+
+            # 3. Product Match (comparing API product with our reversed product type)
+            #product_match = pos_product == reverse_map_product_type(product)
+            
+            logger.info("\nMatching Criteria:")
+            logger.info(f"Target Security ID: {target_security_id}, API Security ID: {pos_security_id} -> Match: {security_match}")
+            logger.info(f"Target Exchange: {exchange}, API Mapped Exchange: {our_exchange} -> Match: {exchange_match}")
+            logger.info(f"Target Product: {reverse_map_product_type(product)}, API Product: {pos_product} -> Match: {product_match}")
+            
+            if security_match and exchange_match and product_match:
+                net_qty = str(position.get('net_qty', position.get('netQty', '0')))
+                logger.info(f"✓ Found matching position!")
+                logger.info(f"Net Quantity: {net_qty}")
+                break
+            else:
+                logger.info("✗ Position does not match criteria")
+    else:
+        logger.warning(f"⚠ No positions data available or error in API response: {positions_data}")
+    
+    logger.info("=== Position Check Complete ===")
+    return net_qty
+
+def get_open_position(tradingsymbol, exchange, producttype,auth):
+    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    print("##### DEBUG: ENTERING get_open_position FUNCTION #####")
+    # Convert Trading Symbol from OpenAlgo Format to Broker Format (Token ID)
+    print(f"##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: {exchange} #####")
+    target_security_id = get_token(tradingsymbol, exchange)
+    if target_security_id.isdigit():
+        exchange_db = exchange
+        target_security_id = target_security_id
+    else:
+        if exchange =='NFO':
+            exchange_db = 'NSE'
+        elif exchange =='BFO':
+            exchange_db = 'BSE'
+        target_security_id = get_token(tradingsymbol, exchange_db)
+        # Use original exchange
+    print(f"##### DEBUG: Initial Target Security ID (using exchange '{exchange}'): {target_security_id} #####")
+    # Check if the initial lookup failed (returned non-numeric ID)
+    # We assume valid security IDs are numeric strings
+    
+    #tradingsymbol = get_br_symbol(tradingsymbol,exchange)
+    positions_data = get_positions(auth)
+
+    net_qty = '0'
+
+    if positions_data and positions_data.get('status') and positions_data.get('data'):
+        for position in positions_data['data']:
+            product = reverse_map_product_type(position.get('product'))
+            if position.get('security_id') == target_security_id and position.get('exchange') == exchange and product == producttype:
+                net_qty = position.get('net_qty', '0')
+                #print(f"Net Quantity: {net_qty}")
+                break  # Assuming you need the first match
+        
     return net_qty
 
 
