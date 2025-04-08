@@ -121,9 +121,21 @@ def transform_order_data(orders):
         if(order.get("display_status", "")=="Cancelled"):
             order_status = "cancelled"
 
+        # Apply exchange mapping for F&O instruments
+        exchange = order.get("exchange", "")
+        instrument = order.get("instrument", "")
+        symbol = order.get("symbol", "")
+        
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+
         transformed_order = {
-            "symbol": order.get("symbol", ""),
-            "exchange": order.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,  # Use the mapped exchange
             "action": order.get("txn_type", ""),
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
@@ -150,9 +162,21 @@ def transform_tradebook_data(tradebook_data):
     }
     for trade in tradebook_data:
         mapped_tnx = tnx_type_mapping.get(trade.get('txn_type', ''), trade.get('txn_type', ''))
+        
+        # Apply exchange mapping for F&O instruments
+        exchange = trade.get('exchange', '')
+        instrument = trade.get('instrument', '')
+        
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+            
         transformed_trade = {
             "symbol": trade.get('symbol'),
-            "exchange": trade.get('exchange', ''),
+            "exchange": exchange,  # Use the mapped exchange
             "product": trade.get('product', ''),
             "action": mapped_tnx,
             "quantity": trade.get('quantity', 0),
@@ -224,14 +248,20 @@ def transform_positions_data(positions_data):
         else:
             average_price_formatted = "{:.2f}".format(float(position.get('net_avg', 0.0)))
 
-        # Get the exchange - we'll use the one already set by map_position_data, which maps NSE->NFO for options
-        # If 'exchange' field is NSE but this is an F&O instrument, the map_position_data function 
-        # should have already changed it to NFO, and we want to keep that mapping
+        # Apply exchange mapping for F&O instruments
         exchange = position.get('exchange', '')
+        instrument = position.get('instrument', '')
         
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+
         transformed_position = {
             "symbol": position.get('security_id', ''),
-            "exchange": exchange,
+            "exchange": exchange,  # Use the mapped exchange
             "product": map_product_type(position.get('product', '')),
             "quantity": position.get('net_qty', '0'),
             "average_price": average_price_formatted,
@@ -242,7 +272,6 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
-    print(f"holdings data : {holdings_data}")
     # Parse JSON response if it's a string
     if isinstance(holdings_data, str):
         try:
@@ -296,7 +325,7 @@ def map_portfolio_data(holdings_data):
         print(f"Invalid holdings data format: {holdings_data}")
         return []
     
-    holdings_list = holdings_data.get('data', {}).get('results', [])
+    holdings_list = holdings_data.get('data', [])
     if not holdings_list:
         print("No holdings data found")
         return []
@@ -361,21 +390,17 @@ def calculate_portfolio_statistics(holdings_data):
         if not isinstance(holding, dict):
             print(f"Invalid holding format: {holding}")
             continue
-        try:
-            quantity = float(holding.get('quantity', 0))
-            cost_price = float(holding.get('avg_price', 0.0))
-            last_traded_price = float(holding.get('ltp', 0.0))
-            pnl = (last_traded_price - cost_price) * quantity
-        except (ValueError, TypeError):
-            print(f"Error parsing values in holding: {holding}")
-            continue
+            
+        quantity = holding.get('quantity', 0)
+        cost_price = holding.get('avg_price', 0.0)
+        last_traded_price = holding.get('ltp', 0.0)
         
         position_investment = cost_price * quantity
         position_current_value = last_traded_price * quantity
         
         total_investment += position_investment
         total_current_value += position_current_value
-        total_pnl += pnl
+        total_pnl += holding.get('pnl', 0.0)
     
     total_pnl_percentage = (total_pnl / total_investment * 100) if total_investment > 0 else 0.0
     

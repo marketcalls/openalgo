@@ -61,7 +61,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, re
                         "response": response_json
                     }
                 raise httpx.HTTPError(f"HTTP {response.status_code}")
-            print(f"Response: {response_json}")
+
             return response_json
 
         except (httpx.RequestError, httpx.HTTPError) as e:
@@ -188,14 +188,14 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     print(f"##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: {exchange} #####")
     target_security_id = get_token(tradingsymbol, exchange)
     if target_security_id.isdigit():
-        exchange_db = exchange
+        exchange = exchange
         target_security_id = target_security_id
     else:
         if exchange =='NFO':
-            exchange_db = 'NSE'
+            exchange = 'NSE'
         elif exchange =='BFO':
-            exchange_db = 'BSE'
-        target_security_id = get_token(tradingsymbol, exchange_db)
+            exchange = 'BSE'
+        target_security_id = get_token(tradingsymbol, exchange)
         # Use original exchange
     print(f"##### DEBUG: Initial Target Security ID (using exchange '{exchange}'): {target_security_id} #####")
     # Check if the initial lookup failed (returned non-numeric ID)
