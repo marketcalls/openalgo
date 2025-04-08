@@ -3,7 +3,9 @@ import os
 import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
-from broker.jainampro.baseurl import INTERACTIVE_URL, MARKET_DATA_URL
+from broker.jainampro.baseurl import INTERACTIVE_URL, MARKET_DATA_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR
+
+# No longer needed as UNIQUE_KEY is imported directly from baseurl.py
 
 def authenticate_broker(request_token):
     try:
@@ -12,12 +14,16 @@ def authenticate_broker(request_token):
         # Fetching the necessary credentials from environment variables
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
-
+        
+        # Check if we have a valid UNIQUE_KEY from baseurl.py
+        if HOSTLOOKUP_ERROR:
+            return None, None, None, f"Failed to get uniqueKey: {HOSTLOOKUP_ERROR}"
         
         # Make POST request to get the final token
         payload = {
             "appKey": BROKER_API_KEY,
             "secretKey": BROKER_API_SECRET,
+            "uniqueKey": UNIQUE_KEY,
             "source": "WebAPI"
         }
         
@@ -25,7 +31,10 @@ def authenticate_broker(request_token):
             'Content-Type': 'application/json'
         }
 
+        # Based on the screenshot, the URL should be structured as connectionString + /user/session
+        # The second screenshot shows the correct URL format with port 4100
         session_url = f"{INTERACTIVE_URL}/user/session"
+        print(f"Session URL: {session_url}")
         response = client.post(session_url, json=payload, headers=headers)
 
   
