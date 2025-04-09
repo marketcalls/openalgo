@@ -57,19 +57,8 @@ class BrokerData:
         self.auth_token = auth_token
         
         # PAYTM does not support historical data API
-        # Map common timeframe format to Paytm intervals
-        self.timeframe_map = {
-            # Minutes
-            '1m': 'minute',
-            '3m': '3minute',
-            '5m': '5minute',
-            '10m': '10minute',
-            '15m': '15minute',
-            '30m': '30minute',
-            '60m': '60minute',
-            # Daily
-            'D': 'day'
-        }
+        # Empty timeframe map since historical data is not supported
+        self.timeframe_map = {}
         
         # Market timing configuration for different exchanges
         self.market_timings = {
@@ -284,5 +273,13 @@ class BrokerData:
             to_date: End date in format YYYY-MM-DD
         Returns:
             pd.DataFrame: Historical data with OHLCV
+        """
+        raise NotImplementedError("Paytm does not support historical data API")
+
+    def get_intervals(self) -> list:
+        """Get available intervals/timeframes for historical data
+        
+        Returns:
+            list: List of available intervals
         """
         raise NotImplementedError("Paytm does not support historical data API")
