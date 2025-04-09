@@ -149,11 +149,11 @@ def transform_order_data(orders):
             "trigger_price": order.get("OrderStopPrice", 0.0),
             "pricetype": mapped_order_type,
             "product": order.get("ProductType", ""),
-            "orderid": str(int(float(order.get("AppOrderID", "")))),
+            "orderid": order.get("AppOrderID", ""),
             "order_status": mapped_order_status,
             "timestamp": order.get("LastUpdateDateTime", "")
         }
-
+        print(f"Transformed order: {transformed_order}")
         transformed_orders.append(transformed_order)
         
 

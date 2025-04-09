@@ -1,12 +1,13 @@
-import http.client
 import json
 import os
 import urllib.parse
+import httpx
 from database.token_db import get_br_symbol, get_token
 from broker.paytm.database.master_contract_db import SymToken, db_session
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
+from utils.httpx_client import get_httpx_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("developer.paytmmoney.com")
+    base_url = "https://developer.paytmmoney.com"
     headers = {
         'x-jwt-token': AUTH_TOKEN,
         'Content-Type': 'application/json',
@@ -24,24 +25,28 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     try:
         # Log the complete request details for Postman
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://developer.paytmmoney.com{endpoint}")
+        logger.info(f"URL: {base_url}{endpoint}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.info(f"Payload: {payload}")
 
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
+        client = get_httpx_client()
+        # Use a longer timeout for Paytm API requests
+        timeout = httpx.Timeout(60.0, connect=30.0)
+        if method == "GET":
+            response = client.get(f"{base_url}{endpoint}", headers=headers, timeout=timeout)
+        else:
+            response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload, timeout=timeout)
 
         # Log the complete response
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        response_data = response.json()
+        logger.info(f"Response Body: {json.dumps(response_data, indent=2)}")
 
-        return response
+        return response_data
     except Exception as e:
         logger.error(f"API request failed: {str(e)}")
         raise
@@ -52,19 +57,8 @@ class BrokerData:
         self.auth_token = auth_token
         
         # PAYTM does not support historical data API
-        # Map common timeframe format to Paytm intervals
-        self.timeframe_map = {
-            # Minutes
-            '1m': 'minute',
-            '3m': '3minute',
-            '5m': '5minute',
-            '10m': '10minute',
-            '15m': '15minute',
-            '30m': '30minute',
-            '60m': '60minute',
-            # Daily
-            'D': 'day'
-        }
+        # Empty timeframe map since historical data is not supported
+        self.timeframe_map = {}
         
         # Market timing configuration for different exchanges
         self.market_timings = {
@@ -130,7 +124,14 @@ class BrokerData:
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
             # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{token}:{opt_type}")
+            # Before the encoded_symbol line, add:
+            if exchange == 'NFO' or exchange == 'NSE_INDEX':
+                request_exchange = 'NSE'
+            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
+                request_exchange = 'BSE'
+            else:
+                request_exchange = exchange
+            encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=QUOTE&pref={encoded_symbol}", self.auth_token)
             
@@ -189,7 +190,14 @@ class BrokerData:
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
             # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            encoded_symbol = urllib.parse.quote(f"{exchange}:{token}:{opt_type}")
+            # Before the encoded_symbol line, add:
+            if exchange == 'NFO' or exchange == 'NSE_INDEX':
+                request_exchange = 'NSE'
+            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
+                request_exchange = 'BSE'
+            else:
+                request_exchange = exchange
+            encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=FULL&pref={encoded_symbol}", self.auth_token)
             
@@ -265,5 +273,13 @@ class BrokerData:
             to_date: End date in format YYYY-MM-DD
         Returns:
             pd.DataFrame: Historical data with OHLCV
+        """
+        raise NotImplementedError("Paytm does not support historical data API")
+
+    def get_intervals(self) -> list:
+        """Get available intervals/timeframes for historical data
+        
+        Returns:
+            list: List of available intervals
         """
         raise NotImplementedError("Paytm does not support historical data API")

@@ -1,29 +1,24 @@
 # api/funds.py
 
 import os
-import http.client
 import json
+from utils.httpx_client import get_httpx_client
 from broker.paytm.api.order_api import get_positions
 
 def get_margin_data(auth_token):
-    print(auth_token)
     """Fetch margin data from Paytm API using the provided auth token."""
-    #api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("developer.paytmmoney.com")
+    base_url = "https://developer.paytmmoney.com"
+    request_path = "/accounts/v1/funds/summary?config=true"
     headers = {
         'x-jwt-token': auth_token,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
 
-    request_path = "/accounts/v1/funds/summary?config=true"
-    print(f"Making request to: https://{conn.host}{request_path}")
-    conn.request("GET", request_path, '', headers)
- 
-
-    res = conn.getresponse()
-    data = res.read()
-    margin_data = json.loads(data.decode("utf-8"))
+    print(f"Making request to: {base_url}{request_path}")
+    client = get_httpx_client()
+    response = client.get(f"{base_url}{request_path}", headers=headers)
+    margin_data = response.json()
 
     print(f"Funds Details: {margin_data}")
 
@@ -32,6 +27,8 @@ def get_margin_data(auth_token):
         # Log the error or return an empty dictionary to indicate failure
         print(f"Error fetching margin data: {margin_data.get('errors')}")
         return {}
+    # Extracting funds summary safely
+    funds_summary = margin_data.get('data', {}).get('funds_summary', {})
 
     try:
 
@@ -54,12 +51,13 @@ def get_margin_data(auth_token):
         total_realised, total_unrealised = sum_realised_unrealised(position_book)
         
         # Construct and return the processed margin data
+
         processed_margin_data = {
-            "availablecash": "{:.2f}".format(margin_data.get('data', {}).get('funds_summary', {}).get('available_cash', 0)),
-            "collateral": "{:.2f}".format(margin_data.get('data', {}).get('funds_summary', {}).get('collaterals', 0)),
-            "m2munrealized": "{:.2f}".format(total_unrealised),
-            "m2mrealized": "{:.2f}".format(total_realised),
-            "utiliseddebits": "{:.2f}".format(margin_data.get('data', {}).get('funds_summary', {}).get('utilised_amount', 0)),
+            "availablecash": f"{funds_summary.get('available_cash', 0):.2f}",
+            "collateral": f"{funds_summary.get('collaterals', 0):.2f}",
+            "m2munrealized": f"{total_unrealised:.2f}",
+            "m2mrealized": f"{total_realised:.2f}",
+            "utiliseddebits": f"{funds_summary.get('utilised_amount', 0):.2f}",
         }
         return processed_margin_data
     except KeyError:

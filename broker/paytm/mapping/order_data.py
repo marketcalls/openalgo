@@ -121,14 +121,26 @@ def transform_order_data(orders):
         if(order.get("display_status", "")=="Cancelled"):
             order_status = "cancelled"
 
+        # Apply exchange mapping for F&O instruments
+        exchange = order.get("exchange", "")
+        instrument = order.get("instrument", "")
+        symbol = order.get("symbol", "")
+        
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+
         transformed_order = {
-            "symbol": order.get("symbol", ""),
-            "exchange": order.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,  # Use the mapped exchange
             "action": order.get("txn_type", ""),
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("display_order_type", ""),
+            "pricetype": order.get("display_order_type", "").upper(),
             "product": order.get("product", ""),
             "orderid": order.get("order_no", ""),
             "order_status": order_status,
@@ -144,13 +156,29 @@ def map_trade_data(trade_data):
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
+    tnx_type_mapping = {
+        "B": "BUY",
+        "S": "SELL"
+    }
     for trade in tradebook_data:
-     
+        mapped_tnx = tnx_type_mapping.get(trade.get('txn_type', ''), trade.get('txn_type', ''))
+        
+        # Apply exchange mapping for F&O instruments
+        exchange = trade.get('exchange', '')
+        instrument = trade.get('instrument', '')
+        
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+            
         transformed_trade = {
-            "symbol": trade.get('security_id'),
-            "exchange": trade.get('exchange', ''),
+            "symbol": trade.get('symbol'),
+            "exchange": exchange,  # Use the mapped exchange
             "product": trade.get('product', ''),
-            "action": trade.get('txn_type', ''),
+            "action": mapped_tnx,
             "quantity": trade.get('quantity', 0),
             "average_price": trade.get('avg_traded_price', 0.0),
             "trade_value": trade.get('remaining_quantity', 0) * trade.get('avg_traded_price', 0.0),
@@ -220,9 +248,20 @@ def transform_positions_data(positions_data):
         else:
             average_price_formatted = "{:.2f}".format(float(position.get('net_avg', 0.0)))
 
+        # Apply exchange mapping for F&O instruments
+        exchange = position.get('exchange', '')
+        instrument = position.get('instrument', '')
+        
+        # Map NSE to NFO for options and futures
+        if exchange == "NSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "NFO"
+        # Map BSE to BFO for options and futures
+        elif exchange == "BSE" and ("OPT" in instrument or "FUT" in instrument):
+            exchange = "BFO"
+
         transformed_position = {
             "symbol": position.get('security_id', ''),
-            "exchange": position.get('exchange', ''),
+            "exchange": exchange,  # Use the mapped exchange
             "product": map_product_type(position.get('product', '')),
             "quantity": position.get('net_qty', '0'),
             "average_price": average_price_formatted,
@@ -233,18 +272,286 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
-    transformed_data = []
-    for holdings in holdings_data:
-        transformed_position = {
-            "symbol": holdings.get('security_id', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_traded_price', 0) - holdings.get('cost_price', 0.0)) / holdings.get('cost_price', 0.0) * 100, 2)  # Rounded to two decimals
+    # Handle two types of inputs:
+    # 1. Raw API response from Paytm (initial call)
+    # 2. Already mapped data (from map_portfolio_data)
+    
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return []
+    
+    # Handle already mapped list of holdings (output of map_portfolio_data)
+    if isinstance(holdings_data, list):
+        transformed_data = []
         
-        }
-        transformed_data.append(transformed_position)
+        # If we have an empty list, simply return it
+        if not holdings_data:
+            print("No holdings data in list form")
+            return []
+        
+        for holding in holdings_data:
+            if not isinstance(holding, dict):
+                print(f"Invalid holding format in list: {holding}")
+                continue
+                
+            # Don't filter too aggressively - only skip if we're 100% sure it's just a placeholder
+            # and not a legitimate holding with a temporary symbol issue
+            if holding.get('symbol') == 'None' and holding.get('quantity', 0) <= 0:
+                print(f"Skipping definite placeholder holding: {holding}")
+                continue
+                
+            try:
+                # Match field names exactly as they come from map_portfolio_data
+                quantity = float(holding.get('quantity', 0))
+                avg_price = float(holding.get('avg_price', 0.0))
+                ltp = float(holding.get('ltp', 0.0))
+                pnl = float(holding.get('pnl', (ltp - avg_price) * quantity))
+                
+                # Use a placeholder symbol if needed but keep the holding
+                symbol = holding.get('symbol', '')
+                if not symbol or symbol == 'None':
+                    symbol = holding.get('security_id', 'Unknown')
+                
+                transformed_position = {
+                    "symbol": symbol,
+                    "exchange": holding.get('exchange', 'NSE'),
+                    "quantity": quantity,
+                    "product": holding.get('product', 'CNC'),
+                    "pnl": round(pnl, 2),
+                    "ltp": ltp,
+                    "avg_price": avg_price,
+                    "pnlpercent": round((ltp - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0.0
+                }
+                transformed_data.append(transformed_position)
+            except (ValueError, TypeError) as e:
+                print(f"Error parsing values in holding: {holding}, Error: {e}")
+                continue
+        return transformed_data
+    
+    # Handle raw API response (dict with 'data' field)
+    if not holdings_data or not isinstance(holdings_data, dict):
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    # Paytm may return holdings in different formats, try both structures
+    if 'data' in holdings_data:
+        # First check direct data array
+        holdings_list = holdings_data.get('data', [])
+        # If data is a dict with 'results' key (older API format)
+        if isinstance(holdings_list, dict) and 'results' in holdings_list:
+            holdings_list = holdings_list.get('results', [])
+    else:
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    if not holdings_list:
+        print(f"No holdings data found: {holdings_list}")
+        return []
+        
+    transformed_data = []
+    for holding in holdings_list:
+        if not isinstance(holding, dict):
+            print(f"Invalid holding format: {holding}")
+            continue
+            
+        try:
+            quantity = float(holding.get('quantity', 0))
+            cost_price = float(holding.get('avg_price', holding.get('cost_price', 0.0)))
+            last_traded_price = float(holding.get('ltp', holding.get('last_traded_price', 0.0)))
+            pnl = (last_traded_price - cost_price) * quantity
+            
+            transformed_position = {
+                "symbol": holding.get('security_id', ''),
+                "exchange": holding.get('exchange', ''),
+                "quantity": quantity,
+                "product": 'CNC',  # Paytm only supports CNC for holdings
+                "pnl": round(holding.get('pnl', pnl), 2),
+                "ltp": last_traded_price,
+                "avg_price": cost_price,
+                "pnlpercent": round((last_traded_price - cost_price) / cost_price * 100, 2) if cost_price > 0 else 0.0
+            }
+            transformed_data.append(transformed_position)
+        except (ValueError, TypeError) as e:
+            print(f"Error parsing values in holding: {holding}, Error: {e}")
+            continue
+            
     return transformed_data
 
+def map_portfolio_data(holdings_data):
+    """Map Paytm holdings data to standardized portfolio format"""
+    print("\n==== PAYTM PORTFOLIO RAW RESPONSE ====")
+    print(json.dumps(holdings_data, indent=2))
+    print("========================================")
+    
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return []
+    
+    if not holdings_data or not isinstance(holdings_data, dict):
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    # Paytm may return holdings in different formats, try both structures
+    if 'data' in holdings_data:
+        # First check direct data array
+        holdings_list = holdings_data.get('data', [])
+        print(f"\nParsing 'data' field: {type(holdings_list)}, len: {len(holdings_list) if isinstance(holdings_list, list) else 'not list'}")
+        
+        # If data is a dict with 'results' key (older API format)
+        if isinstance(holdings_list, dict) and 'results' in holdings_list:
+            holdings_list = holdings_list.get('results', [])
+            print(f"Found 'results' subkey, extracted: {len(holdings_list) if isinstance(holdings_list, list) else 'not list'}")
+    else:
+        print(f"Invalid holdings data format: {holdings_data}")
+        return []
+    
+    if not holdings_list:
+        print(f"No holdings data found: {holdings_list}")
+        return []
+        
+    print(f"\nHoldings list contains {len(holdings_list)} items")
+    if holdings_list:
+        print(f"First holding sample: {holdings_list[0]}")
+        
+    mapped_data = []
+    for i, holding in enumerate(holdings_list):
+        if not isinstance(holding, dict):
+            print(f"Invalid holding format: {holding}")
+            continue
+            
+        print(f"\nProcessing holding #{i+1}:")
+        print(f"NSE Symbol: {holding.get('nse_symbol', 'N/A')}")
+        print(f"BSE Symbol: {holding.get('bse_symbol', 'N/A')}")
+        print(f"NSE Security ID: {holding.get('nse_security_id', 'N/A')}")
+        print(f"BSE Security ID: {holding.get('bse_security_id', 'N/A')}")
+        print(f"Exchange: {holding.get('exchange', 'N/A')}")
+        print(f"Quantity: {holding.get('quantity', 'N/A')}")
+        
+        # Paytm uses 'ALL' for holdings available on both exchanges
+        # Default to NSE for consistent behavior
+        exchange = 'NSE'
+        security_id = holding.get('nse_security_id', '')
+        
+        # Only use BSE as fallback or if explicitly specified
+        if (not security_id and holding.get('bse_security_id')) or holding.get('exchange') == 'BSE':
+            exchange = 'BSE'
+            security_id = holding.get('bse_security_id', '')
+            
+        print(f"Selected exchange: {exchange}, Security ID: {security_id}")
+            
+        # Try to get the symbol
+        symbol = None
+        if security_id:
+            symbol = get_symbol(token=security_id, exchange=exchange)
+            print(f"Mapped symbol: {symbol} (from security_id: {security_id})")
+        
+        # If symbol mapping fails, use the exchange-specific symbol directly
+        if not symbol:
+            if exchange == 'NSE':
+                symbol = holding.get('nse_symbol', '')
+            else:
+                symbol = holding.get('bse_symbol', '')
+            print(f"Using direct symbol from API: {symbol}")
+        
+        avg_price = holding.get('cost_price', holding.get('avg_price', 0.0))
+        ltp = holding.get('last_traded_price', holding.get('ltp', 0.0))
+        
+        # Calculate PNL if not provided
+        try:
+            quantity = float(holding.get('quantity', 0))
+            avg_price_float = float(avg_price)
+            ltp_float = float(ltp)
+            pnl = (ltp_float - avg_price_float) * quantity
+        except (ValueError, TypeError):
+            pnl = 0.0
+            print(f"Error calculating PNL, using 0.0")
+        
+        # Use previous close price (pc) if available
+        close_price = holding.get('pc', holding.get('previous_close_price', holding.get('close_price', 0.0)))
+        
+        mapped_holding = {
+            'symbol': symbol or 'Unknown',
+            'exchange': exchange,
+            'quantity': holding.get('quantity', 0),
+            'avg_price': avg_price,
+            'ltp': ltp,
+            'close_price': close_price,
+            'pnl': round(pnl, 2),
+            'product': 'CNC'  # Paytm only supports CNC for holdings
+        }
+        print(f"Final mapped holding: {mapped_holding}")
+        mapped_data.append(mapped_holding)
+    
+    print(f"\n==== FINAL MAPPED PORTFOLIO DATA ({len(mapped_data)} items) ====")
+    print(json.dumps(mapped_data, indent=2, default=str))
+    print("========================================")
+    return mapped_data
 
+def calculate_portfolio_statistics(holdings_data):
+    """Calculate portfolio statistics from holdings data"""
+    # Parse JSON response if it's a string
+    if isinstance(holdings_data, str):
+        try:
+            holdings_data = json.loads(holdings_data)
+        except json.JSONDecodeError:
+            print("Error decoding holdings JSON response")
+            return {
+                'totalholdingvalue': 0.0,
+                'totalinvvalue': 0.0,
+                'totalprofitandloss': 0.0,
+                'totalpnlpercentage': 0.0,
+                'total_holdings': 0
+            }
+    
+    if not holdings_data or not isinstance(holdings_data, list):
+        print(f"Invalid holdings data format: {holdings_data}")
+        return {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0,
+            'total_holdings': 0
+        }
+    
+    total_investment = 0.0
+    total_current_value = 0.0
+    total_pnl = 0.0
+    
+    for holding in holdings_data:
+        if not isinstance(holding, dict):
+            print(f"Invalid holding format: {holding}")
+            continue
+        
+        try:    
+            # Ensure numeric type conversion for calculations
+            quantity = float(holding.get('quantity', 0))
+            cost_price = float(holding.get('avg_price', 0.0))
+            last_traded_price = float(holding.get('ltp', 0.0))
+            
+            position_investment = cost_price * quantity
+            position_current_value = last_traded_price * quantity
+            
+            total_investment += position_investment
+            total_current_value += position_current_value
+            total_pnl += float(holding.get('pnl', 0.0))
+        except (ValueError, TypeError) as e:
+            print(f"Error converting values in holding: {holding}, Error: {e}")
+            continue
+    
+    total_pnl_percentage = (total_pnl / total_investment * 100) if total_investment > 0 else 0.0
+    
+    return {
+        'totalholdingvalue': round(total_current_value, 2),
+        'totalinvvalue': round(total_investment, 2),
+        'totalprofitandloss': round(total_pnl, 2),
+        'totalpnlpercentage': round(total_pnl_percentage, 2),
+        'total_holdings': len(holdings_data)
+    }

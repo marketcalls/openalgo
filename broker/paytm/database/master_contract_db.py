@@ -3,8 +3,7 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
-import pandas as pd
+from utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -66,14 +65,18 @@ def copy_from_dataframe(df):
             valid_records = []
             
             for record in filtered_data_dict:
-                # Check if symbol exists and is not empty/null
-                symbol = record.get('symbol')
-                if not symbol or pd.isna(symbol) or str(symbol).strip() == '':
-                    invalid_records.append(record)
-                    print(f"Schema validation failed for record: {record}")
-                    print(f"Symbol is missing, empty, or null")
-                else:
+                # Allow indices ("I") even if symbol is missing
+                if record.get('instrumenttype') == 'I':
                     valid_records.append(record)
+                else:
+                    # Check if symbol exists and is not empty/null
+                    symbol = record.get('symbol')
+                    if not symbol or pd.isna(symbol) or str(symbol).strip() == '':
+                        invalid_records.append(record)
+                        print(f"Schema validation failed for record: {record}")
+                        print(f"Symbol is missing, empty, or null")
+                    else:
+                        valid_records.append(record)
             
             if valid_records:
                 db_session.bulk_insert_mappings(SymToken, valid_records)
@@ -111,8 +114,9 @@ def download_csv_paytm_data(output_path):
 
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
-        # Send GET request
-        response = requests.get(url,timeout=10)
+        # Send GET request using httpx client
+        client = get_httpx_client()
+        response = client.get(url)
         # Check if the request was successful
         if response.status_code == 200:
             # Construct the full output path for the file
@@ -129,10 +133,16 @@ def reformat_symbol(row):
     # Use trading symbol as base instead of name
     symbol = row['symbol']
     instrument_type = row['instrument_type']
-    expiry = row['expiry_date'].replace('-', '')
+    expiry = row['expiry_date'].replace('-', '').upper()
     
-    # For equity and index instruments, use the symbol as is
-    if instrument_type in ['ES', 'I']:
+    # For equity instruments, use the symbol as is
+    if instrument_type in ['ES']:
+        return symbol
+
+    # For index instruments, use name without spaces and set it as both symbol and brsymbol
+    elif instrument_type in ['I']:
+        symbol = "".join(row['name'].split())
+        row['symbol'] = symbol  # Set the symbol in the row
         return symbol
     
     # For futures
@@ -215,6 +225,10 @@ def process_paytm_csv(path):
     df['lotsize'] = df['lot_size']
     df['tick_size'] = df['tick_size']
     df['brsymbol'] = df['symbol']
+    
+    # For indices, set brsymbol to be the same as the formatted symbol
+    indices_mask = df['instrument_type'] == 'I'
+    df.loc[indices_mask, 'brsymbol'] = df.loc[indices_mask, 'name'].apply(lambda x: "".join(x.split()))
 
     # Apply the function to get exchange mappings
     df[['exchange', 'brexchange', 'instrumenttype']] = df.apply(assign_values, axis=1, result_type='expand')
@@ -236,11 +250,16 @@ def process_paytm_csv(path):
     # Removing the specified columns
     token_df = df.drop(columns=columns_to_remove)
 
+    # Common Index Symbol Formats
+
+    token_df['symbol'] = token_df['symbol'].replace({
+    'NIFTYNEXT50': 'NIFTYNXT50',
+    'NIFTYMIDCAP150': 'MIDCPNIFTY',
+    'SNSX50': 'SENSEX50'
+    })
+
     return token_df
-
-
     
-
 def delete_paytm_temp_data(output_path):
     # Check each file in the directory
     for filename in os.listdir(output_path):

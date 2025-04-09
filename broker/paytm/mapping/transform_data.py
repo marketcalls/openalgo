@@ -19,7 +19,7 @@ def transform_data(data):
     # Basic mapping
     transformed = {
         "security_id": symbol,
-        "exchange": data['exchange'],
+        "exchange": map_exchange(data['exchange']),
         "txn_type": txn_type,
         "order_type": reverse_map_order_type(data["pricetype"]),
         "quantity": data["quantity"],
@@ -44,7 +44,7 @@ def transform_data(data):
 
 def transform_modify_order_data(data):
     return {
-        "product": map_product_type(data["product"]),
+        "product": reverse_map_product_type(data["product"]),
         "quantity": data["quantity"],
         "price": data["price"],
         "validity": "DAY"
@@ -104,3 +104,16 @@ def reverse_map_order_type(order_type):
     }
     # Default to MKT if not found
     return reverse_order_type_mapping.get(order_type, "MKT")
+
+def map_exchange(exchange):
+    """
+    Maps the new exchange to the existing exchange.
+    """
+    exchange_mapping = {
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NFO": "NSE",
+        "BFO": "BSE",
+        "EXCHANGE": "EXCHANGE"
+    }
+    return exchange_mapping.get(exchange, "EXCHANGE")
