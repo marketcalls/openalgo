@@ -187,19 +187,24 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format (Token ID)
     print(f"##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: {exchange} #####")
     target_security_id = get_token(tradingsymbol, exchange)
-    if target_security_id.isdigit():
-        exchange = exchange
-        target_security_id = target_security_id
-    else:
-        if exchange =='NFO':
-            exchange = 'NSE'
-        elif exchange =='BFO':
-            exchange = 'BSE'
+    
+    # Save original exchange for matching later
+    original_exchange = exchange
+    
+    # Handle exchange mapping for token lookup
+    if exchange =='NFO':
+        exchange = 'NSE'
+    elif exchange =='BFO':
+        exchange = 'BSE'
+    
+    # Get the token again with the mapped exchange if needed
+    if not target_security_id.isdigit():
         target_security_id = get_token(tradingsymbol, exchange)
-        # Use original exchange
-    print(f"##### DEBUG: Initial Target Security ID (using exchange '{exchange}'): {target_security_id} #####")
-    # Check if the initial lookup failed (returned non-numeric ID)
-    # We assume valid security IDs are numeric strings
+        
+    print(f"##### DEBUG: Target Security ID: {target_security_id}, Original Exchange: {original_exchange}, Mapped Exchange: {exchange} #####")
+    
+    # Also save the original symbol for direct symbol matching
+    target_symbol = tradingsymbol
     
     #tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
@@ -207,11 +212,51 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
+        print(f"##### DEBUG: Checking positions data for security_id={target_security_id}, exchange={exchange}, symbol={target_symbol} #####")
+        print(f"##### DEBUG: Found {len(positions_data['data'])} positions #####")
+        
         for position in positions_data['data']:
-            product = reverse_map_product_type(position.get('product'))
-            if position.get('security_id') == target_security_id and position.get('exchange') == exchange and product == producttype:
-                net_qty = position.get('net_qty', '0')
-                #print(f"Net Quantity: {net_qty}")
+            pos_security_id = position.get('security_id')
+            pos_exchange = position.get('exchange')
+            pos_product = position.get('product')
+            pos_qty = position.get('net_qty', position.get('netQty', '0'))
+            pos_display_name = position.get('display_name', '')
+            pos_instrument = position.get('instrument', '')
+            
+            print(f"##### DEBUG: Position: security_id={pos_security_id}, exchange={pos_exchange}, product={pos_product}, "
+                  f"qty={pos_qty}, instrument={pos_instrument}, display_name={pos_display_name} #####")
+            
+            # Map Paytm's exchange to our internal exchange (NFO for derivatives)
+            internal_exchange = pos_exchange
+            if pos_exchange == 'NSE' and ('OPT' in pos_instrument or 'FUT' in pos_instrument or pos_instrument == 'OPTIDX'):
+                internal_exchange = 'NFO'
+            elif pos_exchange == 'BSE' and ('OPT' in pos_instrument or 'FUT' in pos_instrument):
+                internal_exchange = 'BFO'
+                
+            product = reverse_map_product_type(pos_product)
+            
+            print(f"##### DEBUG: Mapped to: internal_exchange={internal_exchange}, product={product} #####")
+            print(f"##### DEBUG: Comparing with target exchange: {internal_exchange}=={original_exchange} #####")
+            
+            # Multiple ways to match a position:
+            # 1. Direct security_id match
+            security_id_match = str(pos_security_id) == str(target_security_id)
+            
+            # 2. Symbol-based match for derivatives (using target_symbol)
+            # Clean up display name for comparison (remove spaces)
+            clean_display_name = ''.join(pos_display_name.split())
+            symbol_match = (target_symbol.upper() in clean_display_name.upper() or 
+                           target_symbol.upper() in str(pos_security_id).upper())
+            
+            # 3. Exchange match
+            exchange_match = internal_exchange == original_exchange
+            
+            print(f"##### DEBUG: Match criteria: security_id={security_id_match}, symbol={symbol_match}, exchange={exchange_match} #####")
+            
+            # If either security_id matches or symbol matches with the correct exchange, we've found our position
+            if (security_id_match or symbol_match) and exchange_match:
+                print(f"##### DEBUG: Match found! Quantity: {pos_qty} #####")
+                net_qty = pos_qty
                 break  # Assuming you need the first match
         
     return net_qty
@@ -337,30 +382,65 @@ def close_all_positions(current_api_key, auth):
     if not positions_response.get('data'):
         return {"status": "success", "message": "No Open Positions Found"}, 200
 
+    successful_closes = 0
+    failed_closes = 0
+    
     if positions_response['status'] == 'success':
+        total_positions = len(positions_response['data'])
+        print(f"Found {total_positions} positions")
+        
         # Loop through each position to close
         for position in positions_response['data']:
+            # Get quantity - handle different field names
+            net_qty = position.get('net_qty', position.get('netQty', '0'))
             # Skip if net quantity is zero
-            if int(position['net_qty']) == 0:
+            if int(net_qty) == 0:
+                print(f"Skipping position with zero quantity: {position.get('security_id')}")
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['net_qty']) > 0 else 'BUY'
-            quantity = abs(int(position['net_qty']))
+            action = 'SELL' if int(net_qty) > 0 else 'BUY'
+            quantity = abs(int(net_qty))
+            
+            # Get all the position details
+            pos_security_id = position.get('security_id')
+            pos_exchange = position.get('exchange')
+            pos_instrument = position.get('instrument', '')
+            pos_display_name = position.get('display_name', '')
+            
+            # For Paytm, we'll ALWAYS use the security_id directly from the position data
+            # rather than trying to look it up in our database
+            
+            # Print detailed position info
+            print(f"Processing position: security_id={pos_security_id}, exchange={pos_exchange}, "
+                  f"instrument={pos_instrument}, display_name={pos_display_name}, "
+                  f"qty={net_qty}, action={action}")
 
-            # Use security_id directly as it's already in Paytm's format
-            security_id = position.get('security_id')
-            if not security_id:
+            # Skip if no security ID
+            if not pos_security_id:
                 print(f"Skipping position due to missing security_id: {position}")
+                failed_closes += 1
                 continue
 
             # Create order payload directly in Paytm's format
             txn_type = "S" if action == "SELL" else "B"
-            segment = "E" if position['exchange'] in ['NSE', 'BSE'] else "D"
+            
+            # Use original exchange from Paytm (no need to map back to NFO)
+            exchange = pos_exchange
+            
+            # Properly determine segment based on instrument type
+            is_derivative = (pos_instrument == 'OPTIDX' or
+                           pos_instrument == 'OPTSTK' or
+                           pos_instrument == 'FUTIDX' or
+                           pos_instrument == 'FUTSTK' or
+                           'OPT' in pos_instrument or
+                           'FUT' in pos_instrument)
+                           
+            segment = "D" if is_derivative else "E"
             
             order_payload = {
-                "security_id": security_id,
-                "exchange": position['exchange'],
+                "security_id": pos_security_id,  # Use pos_security_id variable
+                "exchange": exchange,  # Use the exchange variable we set above
                 "txn_type": txn_type,
                 "order_type": "MKT",  # Market order
                 "quantity": str(quantity),
@@ -383,11 +463,22 @@ def close_all_positions(current_api_key, auth):
             
             print(f"Order Response: {response}")
             
-            if response.get('status') != 'success':
-                print(f"Failed to close position for {security_id}: {response.get('message')}")
-                continue
+            if response.get('status') == 'success':
+                print(f"Successfully closed position for {pos_security_id} ({pos_display_name})")
+                successful_closes += 1
+            else:
+                print(f"Failed to close position for {pos_security_id} ({pos_display_name}): {response.get('message')}")
+                failed_closes += 1
 
-    return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
+    # Report on success/failures
+    if successful_closes > 0 and failed_closes == 0:
+        return {'status': 'success', "message": f"Successfully closed all {successful_closes} open positions"}, 200
+    elif successful_closes > 0 and failed_closes > 0:
+        return {'status': 'partial', "message": f"Closed {successful_closes} positions, failed to close {failed_closes} positions"}, 200
+    elif successful_closes == 0 and failed_closes > 0:
+        return {'status': 'error', "message": f"Failed to close all {failed_closes} positions"}, 500
+    else:
+        return {'status': 'success', "message": "No positions to close"}, 200
 
 
 def cancel_order(orderid, auth):
@@ -445,7 +536,7 @@ def modify_order(data, auth):
         if order['order_no'] == orderid:
             order_found = True
             # Check if order is in a modifiable state
-            MODIFIABLE_STATUSES = ['OPEN', 'TRIGGER PENDING', 'MODIFIED']
+            MODIFIABLE_STATUSES = ['OPEN', 'TRIGGER PENDING', 'MODIFIED', 'PENDING']
             if order['status'].upper() not in MODIFIABLE_STATUSES:
                 return {"status": "error", "message": f"Order {orderid} cannot be modified. Current status: {order['status']}"}, 400
                 
