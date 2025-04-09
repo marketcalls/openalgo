@@ -3,12 +3,15 @@ import os
 import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
-from broker.jainampro.baseurl import INTERACTIVE_URL, MARKET_DATA_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR
+from broker.jainampro.baseurl import INTERACTIVE_URL, MARKET_DATA_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR, initialize_urls
 
 # No longer needed as UNIQUE_KEY is imported directly from baseurl.py
 
 def authenticate_broker(request_token):
     try:
+        # Initialize URLs and get uniqueKey when authentication is actually needed
+        initialize_urls()
+        
         # Get the shared httpx client
         client = get_httpx_client()
         # Fetching the necessary credentials from environment variables

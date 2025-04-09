@@ -35,13 +35,21 @@ def get_hostlookup_response():
         print(f"Error in hostlookup: {str(e)}")
         return "http://ctrade.jainam.in:4100", None, f"Error: {str(e)}"
 
-# Get connection string and unique key from hostlookup
-BASE_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR = get_hostlookup_response()
+# Initialize global variables
+BASE_URL = "http://ctrade.jainam.in:4100"  # Default fallback URL
+UNIQUE_KEY = None
+HOSTLOOKUP_ERROR = None
+MARKET_DATA_URL = BASE_URL
+INTERACTIVE_URL = BASE_URL
 
-# Print for debugging
-print(f"Base URL set to: {BASE_URL}")
-print(f"Unique Key available: {UNIQUE_KEY is not None}")
-
-# Define URLs for different API endpoints
-MARKET_DATA_URL = BASE_URL  # Used for market data endpoints
-INTERACTIVE_URL = BASE_URL   # Used for interactive endpoints like user/session
+def initialize_urls():
+    """Initialize the URLs only when needed by the Jainam Pro broker."""
+    global BASE_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR, MARKET_DATA_URL, INTERACTIVE_URL
+    
+    BASE_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR = get_hostlookup_response()
+    MARKET_DATA_URL = BASE_URL
+    INTERACTIVE_URL = BASE_URL
+    
+    if UNIQUE_KEY is not None:
+        print(f"Base URL set to: {BASE_URL}")
+        print(f"Unique Key available: True")
