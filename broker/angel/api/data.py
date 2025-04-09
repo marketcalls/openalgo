@@ -30,19 +30,29 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     if isinstance(payload, dict):
         payload = json.dumps(payload)
 
-    url = f"https://apiconnect.angelone.in{endpoint}"
+    url = f"https://apiconnect.angelbroking.com{endpoint}"
     
-    if method == "GET":
-        response = client.get(url, headers=headers)
-    elif method == "POST":
-        response = client.post(url, headers=headers, content=payload)
-    else:
-        response = client.request(method, url, headers=headers, content=payload)
-    
-    # Add status attribute for compatibility with the existing codebase
-    response.status = response.status_code
-    
-    return json.loads(response.text)
+    try:
+        if method == "GET":
+            response = client.get(url, headers=headers)
+        elif method == "POST":
+            response = client.post(url, headers=headers, content=payload)
+        else:
+            response = client.request(method, url, headers=headers, content=payload)
+        
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
+        
+        if response.status_code == 403:
+            print(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            print(f"Debug - Response text: {response.text}")
+            raise Exception("Authentication failed. Please check your API key and auth token.")
+            
+        return json.loads(response.text)
+    except json.JSONDecodeError:
+        print(f"Debug - Failed to parse response. Status code: {response.status_code}")
+        print(f"Debug - Response text: {response.text}")
+        raise Exception(f"Failed to parse API response (status {response.status_code})")
 
 class BrokerData:  
     def __init__(self, auth_token):
@@ -179,11 +189,22 @@ class BrokerData:
             # Initialize empty list to store DataFrames
             dfs = []
             
-            # Set chunk size based on interval
-            if interval == 'D':
-                chunk_days = 2000  # 2000 days for daily data
-            else:
-                chunk_days = 30    # 30 days for intraday data
+            # Set chunk size based on interval as per Angel API documentation
+            interval_limits = {
+                '1m': 30,    # ONE_MINUTE
+                '3m': 60,    # THREE_MINUTE
+                '5m': 100,   # FIVE_MINUTE
+                '10m': 100,  # TEN_MINUTE
+                '15m': 200,  # FIFTEEN_MINUTE
+                '30m': 200,  # THIRTY_MINUTE
+                '1h': 400,   # ONE_HOUR
+                'D': 2000    # ONE_DAY
+            }
+            
+            chunk_days = interval_limits.get(interval)
+            if not chunk_days:
+                supported = list(interval_limits.keys())
+                raise Exception(f"Interval '{interval}' not supported. Supported intervals: {', '.join(supported)}")
             
             # Process data in chunks
             current_start = from_date
@@ -202,11 +223,28 @@ class BrokerData:
                 print(f"Debug - Fetching chunk from {current_start} to {current_end}")
                 print(f"Debug - API Payload: {payload}")
                 
-                response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
-                                          self.auth_token,
-                                          "POST",
-                                          payload)
-                print(f"Debug - API Response Status: {response.get('status')}")
+                try:
+                    response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
+                                              self.auth_token,
+                                              "POST",
+                                              payload)
+                    print(f"Debug - API Response Status: {response.get('status')}")
+                    
+                    # Check if response is empty or invalid
+                    if not response:
+                        print(f"Debug - Empty response for chunk {current_start} to {current_end}")
+                        current_start = current_end + timedelta(days=1)
+                        continue
+                    
+                    if not response.get('status'):
+                        print(f"Debug - Error response: {response.get('message', 'Unknown error')}")
+                        current_start = current_end + timedelta(days=1)
+                        continue
+                        
+                except Exception as chunk_error:
+                    print(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
+                    current_start = current_end + timedelta(days=1)
+                    continue
                 
                 if not response.get('status'):
                     raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
