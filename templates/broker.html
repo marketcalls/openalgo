@@ -88,6 +88,9 @@
                 case 'paytm':
                     loginUrl = 'https://login.paytmmoney.com/merchant-login?apiKey={{broker_api_key}}&state={default}';
                     break;
+                case 'pocketful':
+                    loginUrl = '/pocketful/callback';
+                    break;
                 default:
                     alert('Please select a broker');
                     return;
@@ -133,6 +136,7 @@
                                 <option value="jainampro" {{ 'disabled' if broker_name != 'jainampro' }}>Jainam (Dealer) {{ '(Disabled)' if broker_name != 'jainampro' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
                                 <option value="paytm" {{ 'disabled' if broker_name != 'paytm' }}>Paytm Money {{ '(Disabled)' if broker_name != 'paytm' }}</option>
+                                <option value="pocketful" {{ 'disabled' if broker_name != 'pocketful' }}>Pocketful {{ '(Disabled)' if broker_name != 'pocketful' }}</option>
                                 <option value="shoonya" {{ 'disabled' if broker_name != 'shoonya' }}>Shoonya {{ '(Disabled)' if broker_name != 'shoonya' }}</option>
                                 <option value="upstox" {{ 'disabled' if broker_name != 'upstox' }}>Upstox {{ '(Disabled)' if broker_name != 'upstox' }}</option>
                                 <option value="wisdom" {{ 'disabled' if broker_name != 'wisdom' }}>Wisdom Capital{{ '(Disabled)' if broker_name != 'wisdom' }}</option>
