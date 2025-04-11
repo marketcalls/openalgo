@@ -330,8 +330,23 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    """
+    Transforms holdings data into a standardized format for the frontend.
+    
+    Parameters:
+    - holdings_data: A dictionary with 'holdings' key containing a list of holdings.
+    
+    Returns:
+    - A list of transformed holdings in a standardized format.
+    """
     print(f"holdings_data: {holdings_data}")
     transformed_data = []
+    
+    # Check if holdings_data has the expected structure
+    if not holdings_data or 'holdings' not in holdings_data:
+        return transformed_data
+    
+    # Process each holding
     for holdings in holdings_data['holdings']:
         transformed_position = {
             "symbol": holdings.get('tradingsymbol', ''),
@@ -342,65 +357,110 @@ def transform_holdings_data(holdings_data):
             "pnlpercent": holdings.get('pnlpercentage', 0.0)
         }
         transformed_data.append(transformed_position)
+    
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
     print(f"portfolio_data: {portfolio_data}")
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
+    Processes and modifies portfolio data from FivePaisaXTS API.
     
     Parameters:
-    - portfolio_data: A dictionary, where keys are 'holdings' and 'totalholding',
-                      and values are lists/dictionaries representing the portfolio information.
+    - portfolio_data: A dictionary containing the portfolio/holdings information from FivePaisaXTS API.
     
     Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+    - A dictionary with 'holdings' and 'totalholding' keys structured for the OpenAlgoXTS system.
     """
-    # Check if 'data' is None or doesn't contain 'holdings'
-    if portfolio_data.get('data') is None or 'holdings' not in portfolio_data['data']:
+    # Check if response is valid and contains result data
+    if not portfolio_data or portfolio_data.get('type') != 'success' or 'result' not in portfolio_data:
         print("No data available.")
-        # Return an empty structure or handle this scenario as needed
-        return {}
-
-    # Directly work with 'data' for clarity and simplicity
-    data = portfolio_data['data']
-
-    # Modify 'product' field for each holding if applicable
-    if data.get('holdings'):
-        for portfolio in data['holdings']:
-            symbol = portfolio['tradingsymbol']
-            exchange = portfolio['exchange']
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                portfolio['tradingsymbol'] = symbol_from_db
-            if portfolio['product'] == 'DELIVERY':
-                portfolio['product'] = 'CNC'  # Modify 'product' field
-            else:
-                print("Compositedge Portfolio - Product Value for Delivery Not Found or Changed.")
+        return {'holdings': [], 'totalholding': None}
     
-    # The function already works with 'data', which includes 'holdings' and 'totalholding',
-    # so we can return 'data' directly without additional modifications.
-    return data
+    # Extract the holdings data from the response
+    result = portfolio_data['result']
+    rms_holdings = result.get('RMSHoldings', {})
+    holdings_data = rms_holdings.get('Holdings', {})
+    
+    # Create a list to store the transformed holdings
+    holdings_list = []
+    total_holding_value = 0
+    total_inv_value = 0
+    total_pnl = 0
+    
+    # Process each holding
+    for isin, holding in holdings_data.items():
+        # Extract NSE instrument ID for symbol lookup
+        nse_instrument_id = holding.get('ExchangeNSEInstrumentId')
+        exchange = 'NSE'  # Default to NSE for equity holdings
+        
+        # Get trading symbol from database using instrument ID and exchange
+        trading_symbol = get_symbol(nse_instrument_id, exchange) or isin
+        
+        # Get quantity and buy price
+        quantity = holding.get('HoldingQuantity', 0)
+        buy_avg_price = holding.get('BuyAvgPrice', 0)
+        
+        # Calculate investment value
+        inv_value = quantity * buy_avg_price
+        
+        # Create holding entry
+        holding_entry = {
+            'tradingsymbol': trading_symbol,  # Use actual trading symbol instead of ISIN
+            'exchange': exchange,
+            'quantity': quantity,
+            'product': 'CNC',  # Assuming all holdings are delivery/CNC
+            'buy_price': buy_avg_price,
+            'investment_value': inv_value,
+            'current_value': inv_value,  # Placeholder, ideally should be current market value
+            'profitandloss': 0,  # Placeholder, should be calculated with current market price
+            'pnlpercentage': 0  # Placeholder
+        }
+        
+        holdings_list.append(holding_entry)
+        
+        # Update totals
+        total_inv_value += inv_value
+        total_holding_value += inv_value  # Placeholder, should be current market value
+    
+    # Create totalholding summary
+    totalholding = {
+        'totalholdingvalue': total_holding_value,
+        'totalinvvalue': total_inv_value,
+        'totalprofitandloss': total_pnl,
+        'totalpnlpercentage': 0 if total_inv_value == 0 else (total_pnl / total_inv_value) * 100
+    }
+    
+    # Return the structured data
+    return {
+        'holdings': holdings_list,
+        'totalholding': totalholding
+    }
 
 
 def calculate_portfolio_statistics(holdings_data):
-
-    if holdings_data['totalholding'] is None:
+    """
+    Calculates portfolio statistics from holdings data.
+    
+    Parameters:
+    - holdings_data: A dictionary with 'holdings' and 'totalholding' keys.
+    
+    Returns:
+    - A dictionary with portfolio statistics.
+    """
+    print(f"holdings_data: {holdings_data}")
+    
+    # Check if totalholding exists and is not None
+    if 'totalholding' not in holdings_data or holdings_data['totalholding'] is None:
         totalholdingvalue = 0
         totalinvvalue = 0
         totalprofitandloss = 0
         totalpnlpercentage = 0
     else:
-
-        totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
-        totalinvvalue = holdings_data['totalholding']['totalinvvalue']
-        totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
-        
-        # To avoid division by zero in the case when total_investment_value is 0
-        totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
+        # Extract values from totalholding
+        totalholdingvalue = holdings_data['totalholding'].get('totalholdingvalue', 0)
+        totalinvvalue = holdings_data['totalholding'].get('totalinvvalue', 0)
+        totalprofitandloss = holdings_data['totalholding'].get('totalprofitandloss', 0)
+        totalpnlpercentage = holdings_data['totalholding'].get('totalpnlpercentage', 0)
 
     return {
         'totalholdingvalue': totalholdingvalue,
@@ -408,3 +468,4 @@ def calculate_portfolio_statistics(holdings_data):
         'totalprofitandloss': totalprofitandloss,
         'totalpnlpercentage': totalpnlpercentage
     }
+

@@ -286,6 +286,15 @@ def broker_callback(broker,para=None):
          print(f'The request token is {request_token}')
          auth_token, error_message = auth_function(request_token)
 
+    elif broker == 'pocketful':
+        code = 'pocketful'
+        print(f'The code is {code}')
+        # Pocketful tokens expire at 12:00 AM daily
+        # Use environment variable for the access token
+        # This should be updated daily before token expiration
+        auth_token, feed_token, user_id, error_message = auth_function(None)  # Will use BROKER_ACCESS_TOKEN env var
+        forward_url = 'broker.html'
+
     else:
         code = request.args.get('code') or request.args.get('request_token')
         print(f'The code is {code}')
@@ -301,8 +310,8 @@ def broker_callback(broker,para=None):
         if broker == 'dhan':
             auth_token = f'{auth_token}'
         
-        # For compositedge, we have the user_id from authenticate_broker
-        if broker == 'compositedge':
+        # For compositedge and pocketful, we have the user_id from authenticate_broker
+        if broker == 'compositedge' or broker == 'pocketful':
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
         else:
