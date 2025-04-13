@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Set default values and generate JSON
     if (symbolInput && exchangeSelect && productSelect) {
-        symbolInput.value = 'ZOMATO';
+        symbolInput.value = 'ETERNAL';
         exchangeSelect.value = 'NSE';
         productSelect.value = 'MIS';
         
