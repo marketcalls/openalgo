@@ -1,5 +1,6 @@
 import os
-import requests
+import httpx
+from utils.httpx_client import get_httpx_client
 
 def authenticate_broker(access_token=None):
     try:
@@ -23,8 +24,11 @@ def authenticate_broker(access_token=None):
             'Authorization': f'Bearer {access_token}'
         }
         
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
         # Performing a GET request to validate the token
-        response = requests.get(validate_url, headers=headers)
+        response = client.get(validate_url, headers=headers)
         
         if response.status_code != 200:
             # Token validation failed
@@ -41,7 +45,7 @@ def authenticate_broker(access_token=None):
         
         # Make request to trading_info endpoint
         try:
-            info_response = requests.get(trading_info_url, headers=headers)
+            info_response = client.get(trading_info_url, headers=headers)
             info_response.raise_for_status()  # Raise exception for non-200 status codes
             
             # Parse the response JSON
@@ -59,7 +63,7 @@ def authenticate_broker(access_token=None):
             # Return token, None for feed_token (not used by Pocketful), and client_id
             return access_token, None, client_id, None
             
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             return access_token, None, None, f"Error fetching client ID: {str(e)}"
             
     except Exception as e:
