@@ -1,9 +1,10 @@
 # api/funds.py
 
 import os
-import requests
+import httpx
 import json
 from flask import session
+from utils.httpx_client import get_httpx_client
 
 
 def get_margin_data(auth_token):
@@ -27,9 +28,13 @@ def get_margin_data(auth_token):
     # If no client_id is provided, we need to get it first
     if not client_id:
         try:
+            # Get the shared httpx client
+            client = get_httpx_client()
+            
             # Make a request to the trading_info endpoint to get client_id
             trading_info_url = f"{base_url}/api/v1/user/trading_info"
-            info_response = requests.get(trading_info_url, headers=headers)
+            info_response = client.get(trading_info_url, headers=headers)
+            info_response.status = info_response.status_code  # Add status attribute for compatibility
             info_response.raise_for_status()  # Raise exception for non-200 status codes
             
             # Parse the response JSON
@@ -55,8 +60,12 @@ def get_margin_data(auth_token):
         # Construct the full URL
         url = f"{base_url}{endpoint}"
         
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
         # Make the API request with query parameters
-        response = requests.get(url, headers=headers, params=params)
+        response = client.get(url, headers=headers, params=params)
+        response.status = response.status_code  # Add status attribute for compatibility
         response.raise_for_status()  # Raise exception for non-200 status codes
         
         # Parse the response JSON
@@ -120,7 +129,7 @@ def get_margin_data(auth_token):
         }
         return processed_margin_data
         
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         print(f"API request error: {str(e)}")
         return {}
     except (ValueError, KeyError, TypeError) as e:
