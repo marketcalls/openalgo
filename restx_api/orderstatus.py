@@ -80,12 +80,12 @@ class OrderStatus(Resource):
                     'data': {
                         'action': 'BUY',
                         'exchange': 'NSE',
-                        'order_status': 'PENDING',
+                        'order_status': 'COMPLETE',
                         'orderid': status_data['orderid'],
-                        'price': 0,
+                        'price': 100.0,
                         'pricetype': 'MARKET',
                         'product': 'MIS',
-                        'quantity': 1,
+                        'quantity': 10,
                         'symbol': 'SBIN',
                         'timestamp': '09-Dec-2024 10:00:00',
                         'trigger_price': 0
