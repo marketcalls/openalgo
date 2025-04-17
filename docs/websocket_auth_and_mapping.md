@@ -1,6 +1,6 @@
 # WebSocket Authentication and Symbol Mapping
 
-This document covers the authentication service and symbol mapping components of the WebSocket proxy system. For the main architecture overview, see [websocket.md](websocket.md). For the WebSocket adapter and proxy implementation, see [websocket_implementation.md](websocket_implementation.md).
+This document covers the authentication service, symbol mapping, and broker capability registry components for the WebSocket streaming system. For the main architecture overview, see [websocket.md](websocket.md). For implementation details on the broker-agnostic WebSocket adapters, see [websocket_implementation.md](websocket_implementation.md) and [broker_factory.md](broker_factory.md). For the WebSocket adapter and proxy implementation, see [websocket_implementation.md](websocket_implementation.md).
 
 ## 1. Authentication Service
 
@@ -18,7 +18,7 @@ The authentication service is responsible for:
 
 ```python
 # Authentication Service
-from openalgo.database.auth_db import get_auth_token, get_feed_token, verify_api_key
+from openalgo.database.auth_db import get_user_tokens, verify_api_key, get_user_profile
 
 class AuthService:
     def validate_api_key(self, api_key):
@@ -31,16 +31,13 @@ class AuthService:
         user_id = result.get('user_id')
         
         # Get tokens for the user
-        auth_token = get_auth_token(user_id)
-        feed_token = get_feed_token(user_id)
-        
-        if not auth_token or not feed_token:
+        auth_token = get_user_tokens(user_id)
+        if not auth_token:
             return None
             
         return {
             'user_id': user_id,
             'auth_token': auth_token,
-            'feed_token': feed_token
         }
         
     def check_subscription_permissions(self, user_id, symbol, exchange, mode, depth_level=None):
@@ -72,165 +69,122 @@ This component uses the SymToken model from `openalgo.database.symbol` to:
 
 ```python
 # Symbol/Token Mapper
-from openalgo.database.symbol import SymToken, db_session
 from sqlalchemy import and_
+from openalgo.database.symbol import SymToken, db_session
 
 class SymbolMapper:
-    def __init__(self):
-        # Optional: Implement caching for frequently used symbols
-        self.symbol_cache = {}
-        self.token_cache = {}
-    
-    def get_token_from_symbol(self, symbol, exchange):
-        """Convert symbol and exchange to broker-specific token"""
-        # Check cache first
-        cache_key = f"{symbol}:{exchange}"
-        if cache_key in self.symbol_cache:
-            return self.symbol_cache[cache_key]
-            
-        # Query the symbol database
-        sym_token = SymToken.query.filter(
-            and_(SymToken.symbol == symbol, SymToken.exchange == exchange)
-        ).first()
+    @staticmethod
+    def get_token_from_symbol(symbol, exchange):
+        """Convert user-friendly symbol to broker-specific token
         
-        if not sym_token:
+        Args:
+            symbol (str): Trading symbol (e.g., 'RELIANCE')
+            exchange (str): Exchange code (e.g., 'NSE', 'BSE')
+            
+        Returns:
+            dict: Token data with 'token' and 'brexchange' or None if not found
+            
+        Notes:
+            This method uses the SymToken model from the database schema
+            defined in openalgo.database.symbol.
+        """
+        try:
+            sym_token = SymToken.query.filter(
+                and_(SymToken.symbol == symbol, SymToken.exchange == exchange)
+            ).first()
+            
+            if not sym_token:
+                return None
+                
+            return {
+                'token': sym_token.token,
+                'brexchange': sym_token.broker_exchange,
+                'tradingsymbol': sym_token.trading_symbol  # Broker-specific trading symbol
+            }
+        except Exception as e:
+            import logging
+            logging.getLogger("symbol_mapper").error(f"Error retrieving symbol: {e}")
             return None
             
-        result = {
-            'token': sym_token.token,
-            'brsymbol': sym_token.brsymbol,
-            'brexchange': sym_token.brexchange,
-            'tick_size': sym_token.tick_size,
-            'lotsize': sym_token.lotsize,
-            'instrumenttype': sym_token.instrumenttype
-        }
+    @staticmethod
+    def get_symbol_from_token(token, broker_exchange):
+        """Convert broker-specific token to user-friendly symbol
         
-        # Cache the result
-        self.symbol_cache[cache_key] = result
-        
-        return result
-        
-    def get_symbol_from_token(self, token, brexchange):
-        """Convert broker-specific token back to symbol/exchange"""
-        # Check cache first
-        cache_key = f"{token}:{brexchange}"
-        if cache_key in self.token_cache:
-            return self.token_cache[cache_key]
+        Args:
+            token (str): Broker-specific token
+            broker_exchange (str): Broker-specific exchange code
             
-        # Query the database
-        sym_token = SymToken.query.filter(
-            and_(SymToken.token == token, SymToken.brexchange == brexchange)
-        ).first()
-        
-        if not sym_token:
+        Returns:
+            dict: Symbol data with 'symbol' and 'exchange' or None if not found
+        """
+        try:
+            sym_token = SymToken.query.filter(
+                and_(SymToken.token == token, SymToken.broker_exchange == broker_exchange)
+            ).first()
+            
+            if not sym_token:
+                return None
+                
+            return {
+                'symbol': sym_token.symbol,
+                'exchange': sym_token.exchange
+            }
+        except Exception as e:
+            import logging
+            logging.getLogger("symbol_mapper").error(f"Error retrieving token: {e}")
             return None
-            
-        result = {
-            'symbol': sym_token.symbol,
-            'exchange': sym_token.exchange,
-            'name': sym_token.name,
-            'expiry': sym_token.expiry,
-            'strike': sym_token.strike,
-            'instrumenttype': sym_token.instrumenttype
-        }
-        
-        # Cache the result
-        self.token_cache[cache_key] = result
-        
-        return result
-        
-    def search_symbols(self, query, exchange=None):
-        """Search for symbols using the enhanced_search_symbols function"""
-        from openalgo.database.symbol import enhanced_search_symbols
-        return enhanced_search_symbols(query, exchange)
 ```
 
-### 2.3 Exchange Type Mapping
+## 3. Broker Capability Registry
+
+The Broker Capability Registry keeps track of the features supported by each broker, including exchange support, subscription modes, and market depth levels.
 
 ```python
-class ExchangeMapper:
-    # Angel-specific exchange type mapping
-    EXCHANGE_TYPE_MAP = {
-        'NSE': 1,
-        'BSE': 3,
-        'NFO': 2,
-        'MCX': 5,
-        'CDS': 13,
-        'BCD': 4,
-        'BFO': 4
-    }
-    
-    # Reverse mapping
-    EXCHANGE_NAME_MAP = {
-        1: 'NSE',
-        2: 'NFO',
-        3: 'BSE',
-        4: 'BFO',
-        5: 'MCX',
-        7: 'NCX',
-        13: 'CDS'
-    }
-    
-    @classmethod
-    def get_exchange_type(cls, exchange):
-        """Convert exchange name to Angel-specific exchange type"""
-        return cls.EXCHANGE_TYPE_MAP.get(exchange.upper(), 1)  # Default to NSE
-        
-    @classmethod
-    def get_exchange_name(cls, exchange_type):
-        """Convert Angel-specific exchange type to exchange name"""
-        return cls.EXCHANGE_NAME_MAP.get(exchange_type, 'NSE')  # Default to NSE
-```
-
-## 3. Broker Capability Mapping
-
-This component tracks which features and depth levels are supported by each broker.
-
-### 3.1 Capability Registry
-
-```python
+# Broker capability registry
 class BrokerCapabilityRegistry:
-    # Supported depth levels by broker and exchange
-    DEPTH_SUPPORT = {
+    # Static registry of broker capabilities
+    _capabilities = {
         'angel': {
-            'NSE': [5, 20],
-            'BSE': [5],
-            'NFO': [5, 20],
-            'MCX': [5]
+            'exchanges': ['NSE', 'BSE', 'NFO', 'MCX', 'CDS'],
+            'subscription_modes': [1, 2, 4],  # 1: LTP, 2: Quote, 4: Depth
+            'depth_support': {
+                'NSE': [5, 20, 30],   # NSE supports up to 30 levels (limited)
+                'BSE': [5],           # BSE supports only 5 levels
+                'NFO': [5, 20],       # NFO supports up to 20 levels
+                'MCX': [5],           # MCX supports only 5 levels
+                'CDS': [5]            # CDS supports only 5 levels
+            }
         },
         'zerodha': {
-            'NSE': [5],
-            'BSE': [5],
-            'NFO': [5],
-            'MCX': [5]
+            'exchanges': ['NSE', 'BSE', 'NFO', 'MCX', 'CDS'],
+            'subscription_modes': [1, 2, 4],  # LTP, Quote, Depth
+            'depth_support': {
+                'NSE': [5, 20],       # NSE supports up to 20 levels in Zerodha
+                'BSE': [5],           # BSE supports only 5 levels
+                'NFO': [5],           # NFO supports only 5 levels
+                'MCX': [5],           # MCX supports only 5 levels
+                'CDS': [5]            # CDS supports only 5 levels
+            }
         },
-        'fyers': {
-            'NSE': [5, 20],
-            'BSE': [5],
-            'NFO': [5, 20],
-            'MCX': [5]
-        },
-        'upstox': {
-            'NSE': [5, 20, 30, 50],  # Upstox supports deep market depth
-            'BSE': [5],
-            'NFO': [5, 20],
-            'MCX': [5]
-        }
+        # Add more brokers as they are integrated
     }
     
     @classmethod
     def get_supported_depth_levels(cls, broker, exchange):
-        """Get supported depth levels for a broker and exchange"""
-        broker = broker.lower()
-        if broker not in cls.DEPTH_SUPPORT:
-            return [5]  # Default to basic depth
-            
-        exchange_support = cls.DEPTH_SUPPORT[broker]
-        return exchange_support.get(exchange.upper(), [5])
+        """Get supported depth levels for a broker and exchange
         
-    @classmethod
-    def is_depth_level_supported(cls, broker, exchange, depth_level):
-        """Check if a specific depth level is supported"""
+        Args:
+            broker (str): Broker name (e.g., 'angel', 'zerodha')
+            exchange (str): Exchange code (e.g., 'NSE', 'BSE')
+            
+        Returns:
+            list: List of supported depth levels (e.g., [5, 20, 30])
+        """
+        try:
+            return cls._capabilities[broker]['depth_support'].get(exchange, [5])
+        except KeyError:
+            return [5]  # Default to 5 levels if broker or exchange not found
+            
         supported_depths = cls.get_supported_depth_levels(broker, exchange)
         return depth_level in supported_depths
         
