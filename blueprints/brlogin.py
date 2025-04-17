@@ -287,13 +287,29 @@ def broker_callback(broker,para=None):
          auth_token, error_message = auth_function(request_token)
 
     elif broker == 'pocketful':
-        code = 'pocketful'
-        print(f'The code is {code}')
-        # Pocketful tokens expire at 12:00 AM daily
-        # Use environment variable for the access token
-        # This should be updated daily before token expiration
-        auth_token, feed_token, user_id, error_message = auth_function(None)  # Will use BROKER_ACCESS_TOKEN env var
+        # Handle the OAuth2 authorization code from the callback
+        auth_code = request.args.get('code')
+        state = request.args.get('state')
+        error = request.args.get('error')
+        error_description = request.args.get('error_description')
+        
+        # Check if there was an error in the OAuth process
+        if error:
+            error_msg = f"OAuth error: {error}. {error_description if error_description else ''}"
+            print(error_msg)
+            return handle_auth_failure(error_msg, forward_url='broker.html')
+        
+        # Check if authorization code was provided
+        if not auth_code:
+            error_msg = "Authorization code not provided"
+            print(error_msg)
+            return handle_auth_failure(error_msg, forward_url='broker.html')
+            
+        print(f'Received authorization code: {auth_code}')
+        # Exchange auth code for access token and fetch client_id
+        auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = 'broker.html'
+        
 
     else:
         code = request.args.get('code') or request.args.get('request_token')

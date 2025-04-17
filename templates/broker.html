@@ -89,7 +89,23 @@
                     loginUrl = 'https://login.paytmmoney.com/merchant-login?apiKey={{broker_api_key}}&state={default}';
                     break;
                 case 'pocketful':
-                    loginUrl = '/pocketful/callback';
+                    // Generate a random state for security
+                    function generateRandomState() {
+                        const length = 16;
+                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                        let result = '';
+                        for (let i = 0; i < length; i++) {
+                            result += chars.charAt(Math.floor(Math.random() * chars.length));
+                        }
+                        return result;
+                    }
+                    const state = generateRandomState();
+                    // Store state for verification when callback returns
+                    localStorage.setItem('pocketful_oauth_state', state);
+                    // Define the scope for permissions
+                    const scope = "orders holdings";
+                    // Use OAuth2 authorization URL directly
+                    loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id={{broker_api_key}}&redirect_uri={{redirect_url}}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`;
                     break;
                 default:
                     alert('Please select a broker');

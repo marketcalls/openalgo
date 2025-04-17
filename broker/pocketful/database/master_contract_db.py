@@ -11,7 +11,7 @@ import json
 import pandas as pd
 import gzip
 import io
-
+import zipfile
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -20,6 +20,40 @@ from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
 
 
+
+# Define the headers as provided
+headers = [
+    "Fytoken", "Symbol Details", "Exchange Instrument type", "Minimum lot size",
+    "Tick size", "ISIN", "Trading Session", "Last update date", "Expiry date",
+    "Symbol ticker", "Exchange", "Segment", "Scrip code", "Underlying symbol",
+    "Underlying scrip code", "Strike price", "Option type", "Underlying FyToken",
+    "Reserved column1", "Reserved column2", "Reserved column3"
+]
+
+# Data types for each header
+data_types = {
+    "Fytoken": str,
+    "Symbol Details": str,
+    "Exchange Instrument type": int,
+    "Minimum lot size": int,
+    "Tick size": float,
+    "ISIN": str,
+    "Trading Session": str,
+    "Last update date": str,
+    "Expiry date": str,
+    "Symbol ticker": str,
+    "Exchange": int,
+    "Segment": int,
+    "Scrip code": int,
+    "Underlying symbol": str,
+    "Underlying scrip code": pd.Int64Dtype(),
+    "Strike price": float,
+    "Option type": str,
+    "Underlying FyToken": str,
+    "Reserved column1": str,  
+    "Reserved column2": str, 
+    "Reserved column3": str, 
+}
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -79,171 +113,405 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_csv_zerodha_data(output_path):
-    """
-    Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
-    to pandas dataframe
-    """
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-    }
-    conn.request("GET", "/instruments", '', headers)
-
-    res = conn.getresponse()
-    if res.status == 200:
-        csv_data = res.read()  # Directly reading CSV data
-        csv_string = csv_data.decode('utf-8')  # Decode bytes to string
-        df = pd.read_csv(io.StringIO(csv_string))  # Convert string to pandas DataFrame
-        df.to_csv(output_path)
-
-        return df
-    else:
-        print(f"Failed to download. Status code: {res.status}")
 
 
-def reformat_symbol(row):
-    symbol = row['symbol']
-    instrument_type = row['instrumenttype']
+def download_csv_pocketful_data(output_path):
+
+    # output_path = 'tmp'
+    # os.makedirs(output_path, exist_ok=True)
+    zip_url = "https://trade.pocketful.in/api/v1/contract/Compact?info=download&exchanges=NSE,NFO,BSE,BFO,MCX"
+    downloaded_files = []
+
+    try: 
+        response = requests.get(zip_url, timeout=10)
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+            zip_file.extractall(output_path)
+            extracted_files = zip_file.namelist()
+            downloaded_files.extend([os.path.join(output_path, name) for name in extracted_files])
+            print("Extraction successful!")
+    except requests.RequestException as e:
+        print(f"Failed to download ZIP archive. Error: {e}")
+    except zipfile.BadZipFile as e:
+        print(f"Failed to extract ZIP archive. Error: {e}")
+
+    return downloaded_files
     
-    if instrument_type == 'FUT':
-        # For FUT, remove the spaces and append 'FUT' at the end
-        parts = symbol.split(' ')
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[2] + parts[3] + parts[4] + parts[1]
-    elif instrument_type in ['CE', 'PE']:
-        # For CE/PE, rearrange the parts and remove spaces
-        parts = symbol.split(' ')
-        if len(parts) == 6:  # Make sure the symbol has the correct format
-            symbol = parts[0] + parts[3] + parts[4] + parts[5] + parts[1] + parts[2]
-    else:
-        symbol = symbol  # No change for other instrument types
+def reformat_symbol_detail(s):
+    parts = s.split()  # Split the string into parts
+    # Reorder and format the parts to match the desired output
+    # Assuming the format is consistent and always "Name DD Mon YY FUT"
+    return f"{parts[0]}{parts[3]}{parts[2].upper()}{parts[1]}{parts[4]}"
 
-    return symbol
-
-
-
-def process_zerodha_csv(path):
+def process_pocketful_nse_csv(path):
     """
-    Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Zerodha CSV Data")
-    df = pd.read_csv(path)
+    print("Processing pocketful NSE CSV Data")
+    file_path = f'{path}/NSECompactScrip.csv'
 
-    # Map exchange names
-    exchange_map = {
-        "NSE": "NSE",
-        "NFO": "NFO",
-        "CDS": "CDS",
-        "NSE_INDEX": "NSE_INDEX",
-        "BSE_INDEX": "BSE_INDEX",
-        "BSE": "BSE",
-        "BFO": "BFO",
-        "BCD": "BCD",
-        "MCX": "MCX"
+    df = pd.read_csv(file_path)
 
-    }
+    # Normalize column names to avoid key errors
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Check expected column exists
+    required_cols = ['instrument_name', 'trading_symbol', 'company_name', 'exchange',
+                     'exchange_token', 'lot_size', 'tick_size']
+    for col in required_cols:
+        if col not in df.columns:
+            raise KeyError(f"Missing expected column: {col}")
+
+    filter_df = df[df['instrument_name'].isin(['EQ'])]
+
+    token_df = pd.DataFrame()
+    token_df['symbol'] = filter_df['trading_symbol'].str.replace('-EQ', '', regex=True)
+    token_df['brsymbol'] = filter_df['trading_symbol']
+    token_df['name'] = filter_df['company_name']
+    token_df['exchange'] = filter_df['exchange']
+    token_df['brexchange'] = filter_df['exchange']
+    token_df['token'] = filter_df['exchange_token']
+    token_df['expiry'] = ''
+    token_df['strike'] = 0.0
+    token_df['lotsize'] = filter_df['lot_size']
+    token_df['instrumenttype'] = 'EQ'
+    token_df['tick_size'] = filter_df['tick_size']
     
-    df['exchange'] = df['exchange'].map(exchange_map)
+    return token_df
 
-    # Update exchange names based on the instrument type
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'NSE'), 'exchange'] = 'NSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'MCX'), 'exchange'] = 'MCX_INDEX'
-    df.loc[(df['segment'] == 'INDICES') & (df['exchange'] == 'CDS'), 'exchange'] = 'CDS_INDEX'
 
-    # Format expiry date
-    df['expiry'] = pd.to_datetime(df['expiry']).dt.strftime('%d-%b-%y').str.upper()
+def process_pocketful_bse_csv(path):
+    """
+    Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing pocketful BSE CSV Data")
+    file_path = f'{path}/BSECompactScrip.csv'
 
-    # Combine instrument_token and exchange_token
-    df['token'] = df['instrument_token'].astype(str) + '::::' + df['exchange_token'].astype(str)
+    df = pd.read_csv(file_path)
 
-    # Select and rename columns
-    df = df[['token', 'tradingsymbol', 'name', 'expiry', 
-             'strike', 'lot_size', 'instrument_type', 'exchange', 
-             'tick_size']].rename(columns={
-        'tradingsymbol': 'symbol',
-        'name': 'name',
-        'expiry': 'expiry',
-        'strike': 'strike',
-        'lot_size': 'lotsize',
-        'instrument_type': 'instrumenttype',
-        'exchange': 'exchange',
-        'tick_size': 'tick_size'
+    # # Map 'IDX' segment to 'BSE_INDEX' exchange
+    # df['mapped_exchange'] = df.apply(
+    #     lambda row: 'BSE_INDEX' if row['segment'] == 'IDX' else row['exchange'],
+    #     axis=1
+    # )
+
+    token_df = pd.DataFrame()
+    token_df['symbol'] = df['trading_symbol'].str.replace(r'-.*$', '', regex=True)
+    token_df['brsymbol'] = df['trading_symbol']
+    token_df['name'] = df['company_name']
+    token_df['exchange'] = df['exchange']
+    token_df['brexchange'] = df['exchange']
+    token_df['token'] = df['exchange_token']
+    token_df['expiry'] = ''
+    token_df['strike'] = 0.0
+    token_df['lotsize'] = df['lot_size']
+    token_df['instrumenttype'] = df['instrument_name']
+    token_df['tick_size'] = df['tick_size']
+    
+    token_df['exchange'] = df['segment'].map({
+        'IDX': 'BSE_INDEX'
+    }).fillna(df['exchange'])
+
+    token_df['symbol'] = token_df['symbol'].replace({'SNSX50': 'SENSEX50'})
+
+    return token_df
+
+def process_pocketful_nfo_csv(path):
+    """
+    Processes the pocketful CSV file to fit the existing database schema and formats the symbol properly
+    using the actual expiry date instead of what's embedded in the trading_symbol.
+    """
+    print("Processing pocketful NFO CSV Data")
+    file_path = f'{path}/NFOCompactScrip.csv'
+
+    df = pd.read_csv(file_path)
+
+    # Convert 'expiry' column to datetime format
+    df['Expiry Date'] = pd.to_datetime(df['expiry'], errors='coerce')
+
+    # Helper to format expiry as DDMMMYY (e.g., 26JUN25)
+    def format_expiry(expiry):
+        return expiry.strftime('%d%b%y').upper() if pd.notnull(expiry) else ''
+
+    def build_symbol(row):
+        try:
+            expiry_str = format_expiry(row['Expiry Date'])
+            if row['option_type'] == 'XX':
+                return f"{row['company_name']}{expiry_str}FUT"
+            elif row['option_type'] in ['CE', 'PE']:
+                strike = float(row['strike'])
+                strike_str = str(int(strike)) if strike.is_integer() else str(strike)
+                return f"{row['company_name']}{expiry_str}{strike_str}{row['option_type']}"
+            else:
+                return row['trading_symbol']
+        except Exception as e:
+            print(f"Error building symbol: {row}, Error: {e}")
+            return row['trading_symbol']
+
+    # Build the symbol column
+    df['symbol'] = df.apply(build_symbol, axis=1)
+
+    # Create token_df with relevant columns
+    token_df = df[['symbol']].copy()
+    token_df['brsymbol'] = df['trading_symbol'].values
+    token_df['name'] = df['company_name'].values
+    token_df['exchange'] = df['exchange'].values
+    token_df['brexchange'] = df['exchange'].values
+    token_df['token'] = df['exchange_token'].values
+    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['strike'].values
+    token_df['lotsize'] = df['lot_size'].values
+    token_df['instrumenttype'] = df['option_type'].map({
+        'XX': 'FUT',
+        'CE': 'CE',
+        'PE': 'PE'
     })
+    token_df['tick_size'] = df['tick_size'].values
 
-    df['brsymbol'] = df['symbol']
-    df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = df['exchange']
+    return token_df
 
-    # Fill NaN values in the 'expiry' column with an empty string
-    df['expiry'] = df['expiry'].fillna('')
-    
-    # Futures Symbol Update 
-    df.loc[(df['instrumenttype'] == 'FUT'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    # Options Symbol Update 
+def process_pocketful_bfo_csv(path):
+    """
+    Processes the Pocketful BFO CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing pocketful BFO CSV Data")
+    file_path = f'{path}/BFOCompactScrip.csv'
 
-    def format_strike(strike):
-        # Convert the string to a float, then to an integer, and finally back to a string.
-        return str(int(float(strike)))
+    df = pd.read_csv(file_path)
 
+    # Convert 'expiry' column to datetime format
+    df['Expiry Date'] = pd.to_datetime(df['expiry'], errors='coerce')
 
-    df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
-    df.loc[(df['instrumenttype'] == 'PE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']
+    # Normalize Instrument Type to Option Type
+    df.loc[df['instrument_name'].isin(['SF', 'IF']), 'option_type'] = 'XX'
 
-    df['symbol'] = df['symbol'].replace({
-    'NIFTY 50': 'NIFTY',
-    'NIFTY NEXT 50': 'NIFTYNXT50',
-    'NIFTY FIN SERVICE': 'FINNIFTY',
-    'NIFTY BANK': 'BANKNIFTY',
-    'NIFTY MID SELECT': 'MIDCPNIFTY',
-    'INDIA VIX': 'INDIAVIX',
-    'SNSX50': 'SENSEX50'
+    # Helper to format expiry as DDMMMYY (e.g., 26JUN25)
+    def format_expiry(expiry):
+        return expiry.strftime('%d%b%y').upper() if pd.notnull(expiry) else ''
+
+    # Function to build symbol using known fields
+    def build_symbol(row):
+        try:
+            expiry_str = format_expiry(row['Expiry Date'])
+            company = row['company_name']
+            strike = str(row['strike']).replace('.', '')
+            option_type = row['option_type']
+
+            if option_type == 'XX':
+                return f"{company}{expiry_str}FUT"
+            elif option_type in ['CE', 'PE']:
+                strike_str = str(int(float(strike))) if float(strike).is_integer() else strike
+                return f"{company}{expiry_str}{strike_str}{option_type}"
+            else:
+                return row['trading_symbol']
+        except Exception as e:
+            print(f"Error processing row: {row}, Error: {e}")
+            return row['trading_symbol']
+
+    # Apply symbol formatting to all types
+    df['symbol'] = df.apply(lambda row: build_symbol(row), axis=1)
+
+    # Create token_df with required columns
+    token_df = df[['symbol']].copy()
+    token_df['brsymbol'] = df['trading_symbol'].values
+    token_df['name'] = df['company_name'].values
+    token_df['exchange'] = df['exchange'].values
+    token_df['brexchange'] = df['exchange'].values
+    token_df['token'] = df['exchange_token'].values
+    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['strike'].values
+    token_df['lotsize'] = df['lot_size'].values
+    token_df['instrumenttype'] = df['option_type'].map({
+        'XX': 'FUT',
+        'CE': 'CE',
+        'PE': 'PE'
     })
+    token_df['tick_size'] = df['tick_size'].values
 
-    return df
+    # Drop rows where 'symbol' is NaN
+    token_df_cleaned = token_df.dropna(subset=['symbol'])
+
+    return token_df_cleaned
+
+
+
+def process_pocketful_mcx_csv(path):
+    """
+    Processes the pocketful MCX CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing pocketful MCX CSV Data")
+    file_path = f'{path}/MCXCompactScrip.csv'
+
+    df = pd.read_csv(file_path)
+
+    # Remove unwanted instruments
+    df = df[df['instrument_name'] != 'COM']
+
+    # Convert 'expiry' column to datetime and store as 'Expiry Date'
+    df['Expiry Date'] = pd.to_datetime(df['expiry'], errors='coerce')
+
+    # Normalize Instrument Type to Option Type
+    df.loc[df['instrument_name'].isin(['FUTCOM', 'FUTIDX']), 'option_type'] = 'XX'
+
+    # Helper to format expiry as DDMMMYY (e.g., 26JUN25)
+    def format_expiry(expiry):
+        return expiry.strftime('%d%b%y').upper() if pd.notnull(expiry) else ''
+
+    # Define the function to reformat symbol details
+    def reformat_symbol_detail(row):
+        try:
+            expiry_str = format_expiry(row['Expiry Date'])
+            strike = float(row['strike'])
+            strike_str = str(int(strike)) if strike.is_integer() else str(strike)
+            if row['option_type'] == 'XX':
+                return f"{row['trading_symbol']}{expiry_str}FUT"
+            elif row['option_type'] in ['CE', 'PE']:
+                return f"{row['trading_symbol']}{expiry_str}{strike_str}{row['option_type']}"
+            else:
+                return row['trading_symbol']
+        except Exception as e:
+            print(f"Error processing row: {row}, Error: {e}")
+            return row['trading_symbol']  # fallback to just the symbol
+
+    # Apply the symbol formatting for all rows based on option_type
+    df['symbol'] = df.apply(reformat_symbol_detail, axis=1)
+
+    # Create token_df with required columns
+    token_df = df[['symbol']].copy()
+    token_df['brsymbol'] = df['trading_symbol'].values
+    token_df['name'] = df['trading_symbol'].values
+    token_df['exchange'] = df['exchange'].values
+    token_df['brexchange'] = df['exchange'].values
+    token_df['token'] = df['exchange_token'].values
+    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    token_df['strike'] = df['strike'].values
+    token_df['lotsize'] = df['lot_size'].values
+    token_df['instrumenttype'] = df['option_type'].map({
+        'XX': 'FUT',
+        'CE': 'CE',
+        'PE': 'PE'
+    })
+    token_df['tick_size'] = df['tick_size'].values
+
+    return token_df
+
+
+def process_pocketful_indices_csv(path):
+    """
+    Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    print("Processing pocketful INDICES CSV Data")
+    file_path = f'{path}/NSECompactScrip.csv'
+
+    df = pd.read_csv(file_path)
+
+    # Create an explicit copy to avoid SettingWithCopyWarning
+    filter_df = df[df['segment'].isin(['INDICES'])].copy()
+
+    # Use standard assignment instead of .loc to improve readability
+    filter_df['symbol'] = filter_df['trading_symbol'].map({
+        'Nifty 50': 'NIFTY',
+        'Nifty Bank': 'BANKNIFTY',
+        'India VIX': 'INDIAVIX',
+        'Nifty Fin Service': 'FINNIFTY',
+        'NIFTY MID SELECT': 'MIDCPNIFTY',
+        'Nifty Next 50': 'NIFTYNXT50'
+    }).fillna(filter_df['trading_symbol'])
+
+    # Create token_df with the relevant columns
+    token_df = filter_df[['symbol']].copy()
+    token_df['brsymbol'] = filter_df['trading_symbol'].values
+    token_df['name'] = filter_df['trading_symbol'].values
+    token_df['exchange'] = filter_df['segment'].map({
+        'INDICES': 'NSE_INDEX',
+        'IDX': 'BSE_INDEX'
+    }).fillna(filter_df['exchange'])
+    token_df['brexchange'] = filter_df['exchange'].values
+    token_df['token'] = filter_df['exchange_token'].values
+    token_df['expiry'] = ''
+    token_df['strike'] = 0.0
+    token_df['lotsize'] = filter_df['lot_size'].values
+    token_df['instrumenttype'] = filter_df['instrument_name'].map({
+        'FUT': 'FUT',
+        'CE': 'CE',
+        'PE': 'PE'
+    }).fillna(filter_df['instrument_name'])
+    token_df['tick_size'] = filter_df['tick_size'].values
+    return token_df
+    token_df['brsymbol'] = filter_df['trading_symbol'].values
+    token_df['name'] = filter_df['trading_symbol'].values
+    token_df['exchange'] = filter_df['segment'].map({
+        'INDICES': 'NSE_INDEX',
+        'IDX': 'BSE_INDEX'
+    }).fillna(filter_df['exchange'])
+    token_df['brexchange'] = filter_df['exchange'].values
+    token_df['token'] = filter_df['exchange_token'].values
+
+    # Convert 'Expiry Date' to desired format
+    token_df['expiry'] = ''
+    token_df['strike'] = 0.0
+    token_df['lotsize'] = filter_df['lot_size'].values
+    token_df['instrumenttype'] = filter_df['segment'].map({
+        'INDICES': 'NSE_INDEX',
+        'IDX': 'BSE_INDEX'
+    }).fillna(filter_df['exchange'])
+    token_df['tick_size'] = 0.01
+
+    # print("Unique trading_symbols before replacement:")
+    # print(filter_df['trading_symbol'].unique())
+
+    # print("Symbols after replacement:")
+    # print(filter_df['symbol'].unique())
+
+    return token_df
+
     
 
-def delete_zerodha_temp_data(output_path):
-    try:
-        # Check if the file exists
-        if os.path.exists(output_path):
-            # Delete the file
-            os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
-        else:
-            print(f"The temporary file {output_path} does not exist.")
-    except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
 
+def delete_pocketful_temp_data(output_path):
+    # Check each file in the directory
+    for filename in os.listdir(output_path):
+        # Construct the full file path
+        file_path = os.path.join(output_path, filename)
+        # If the file is a CSV, delete it
+        if filename.endswith(".csv") and os.path.isfile(file_path):
+            os.remove(file_path)
+            print(f"Deleted {file_path}")
+    
 
 def master_contract_download():
     print("Downloading Master Contract")
     
 
-    output_path = 'tmp/zerodha.csv'
+    output_path = 'tmp'
     try:
-        download_csv_zerodha_data(output_path)
-        token_df = process_zerodha_csv(output_path)
-        delete_zerodha_temp_data(output_path)
-        #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-        
-        #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
+        download_csv_pocketful_data(output_path)
+        delete_symtoken_table()
+        token_df = process_pocketful_nse_csv(output_path)
         copy_from_dataframe(token_df)
-                
+        token_df = process_pocketful_bse_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_pocketful_nfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        
+        token_df = process_pocketful_mcx_csv(output_path)
+        copy_from_dataframe(token_df)
+        token_df = process_pocketful_bfo_csv(output_path)
+        copy_from_dataframe(token_df)
+        
+        token_df = process_pocketful_indices_csv(output_path)
+        copy_from_dataframe(token_df)
+        delete_pocketful_temp_data(output_path)
+        
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
     
     except Exception as e:
         print(str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        print(str(e))
+        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+
 
 
 def search_symbols(symbol, exchange):
