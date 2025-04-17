@@ -2,10 +2,12 @@
 
 import os
 import pandas as pd
-import requests
 import gzip
 import shutil
 from datetime import datetime
+
+# Import httpx and shared client
+from openalgo.broker.utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -72,19 +74,28 @@ def copy_from_dataframe(df):
 
 def download_csv_5paisa_data(url, output_path):
     """
-    Downloads a CSV file from the specified URL and saves it to the specified path.
+    Downloads a CSV file from the specified URL and saves it to the specified path using shared httpx client.
+    
+    Args:
+        url (str): URL to download the CSV from
+        output_path (str): Path where the downloaded file should be saved
     """
-
-    print("Downloading CSV data")
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        with open(output_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=1024):
-                if chunk:
+    try:
+        print("Downloading CSV data")
+        client = get_httpx_client()
+        
+        with client.stream('GET', url) as response:
+            response.raise_for_status()
+            
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_bytes(chunk_size=8192):
                     f.write(chunk)
+                    
         print("Download complete")
-    else:
-        print(f"Failed to download data. Status code: {response.status_code}")
+        
+    except Exception as e:
+        print(f"Failed to download data: {str(e)}")
+        raise
 
 
 def process_5paisa_csv(path):

@@ -1,7 +1,9 @@
-import http.client
 import json
 from datetime import datetime
 import os
+from typing import Dict, Any, Optional
+import httpx
+from utils.httpx_client import get_httpx_client
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
 from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type
 import traceback
@@ -11,18 +13,55 @@ import pandas as pd
 broker_api_key = os.getenv('BROKER_API_KEY')
 api_key, user_id, client_id = broker_api_key.split(':::')
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
-    """Generic function to make API calls to 5Paisa"""
-    AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
-    headers = {
-        'Authorization': f'bearer {AUTH_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+# Base URL for 5Paisa API
+BASE_URL = "https://Openapi.5paisa.com"
+
+def get_api_response(endpoint: str, auth: str, method: str = "GET", payload: str = '') -> dict:
+    """Generic function to make API calls to 5Paisa using shared httpx client
+    
+    Args:
+        endpoint (str): API endpoint path
+        auth (str): Authentication token
+        method (str, optional): HTTP method. Defaults to "GET".
+        payload (str, optional): Request payload. Defaults to ''.
+        
+    Returns:
+        dict: JSON response from the API
+    """
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        headers = {
+            'Authorization': f'bearer {auth}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Make request based on method
+        if method.upper() == "GET":
+            response = client.get(
+                f"{BASE_URL}{endpoint}",
+                headers=headers
+            )
+        else:  # POST
+            response = client.post(
+                f"{BASE_URL}{endpoint}",
+                content=payload,  # Use content since payload is already JSON string
+                headers=headers
+            )
+            
+        response.raise_for_status()
+        return response.json()
+        
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        raise
+    except httpx.RequestError as e:
+        print(f"Request error occurred: {str(e)}")
+        raise
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        raise
 
 class BrokerData:
     def __init__(self, auth_token):
@@ -39,7 +78,7 @@ class BrokerData:
             'D': '1D'
         }
 
-    def get_market_depth(self, symbol: str, exchange: str) -> dict:
+    def get_market_depth(self, symbol: str, exchange: str) -> Optional[Dict[str, float]]:
         """
         Get market depth for a given symbol
         Args:
@@ -67,13 +106,21 @@ class BrokerData:
                 }
             }
 
+            # Get the shared httpx client
+            client = get_httpx_client()
+
             # Make API request
-            response = get_api_response(
-                "/VendorsAPI/Service1.svc/V2/MarketDepth",
-                self.auth_token,
-                method="POST",
-                payload=json.dumps(json_data)
+            headers = {
+                'Authorization': f'bearer {self.auth_token}',
+                'Content-Type': 'application/json'
+            }
+            response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/V2/MarketDepth",
+                json=json_data,
+                headers=headers
             )
+            response.raise_for_status()
+            response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
                 print(f"Market Depth Error: {response['head']['statusDescription']}")
@@ -141,12 +188,21 @@ class BrokerData:
                 }
             }
 
-            snapshot_response = get_api_response(
-                "/VendorsAPI/Service1.svc/MarketSnapshot",
-                self.auth_token,
-                method="POST",
-                payload=json.dumps(snapshot_data)
+            # Get the shared httpx client
+            client = get_httpx_client()
+
+            # Make API request
+            headers = {
+                'Authorization': f'bearer {self.auth_token}',
+                'Content-Type': 'application/json'
+            }
+            snapshot_response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/MarketSnapshot",
+                json=snapshot_data,
+                headers=headers
             )
+            snapshot_response.raise_for_status()
+            snapshot_response = snapshot_response.json()
 
             if snapshot_response['head']['statusDescription'] != 'Success':
                 raise Exception(f"Error from 5Paisa API: {snapshot_response['head']['statusDescription']}")
@@ -167,12 +223,13 @@ class BrokerData:
                 }
             }
 
-            depth_response = get_api_response(
-                "/VendorsAPI/Service1.svc/V2/MarketDepth",
-                self.auth_token,
-                method="POST",
-                payload=json.dumps(depth_data)
+            depth_response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/V2/MarketDepth",
+                json=depth_data,
+                headers=headers
             )
+            depth_response.raise_for_status()
+            depth_response = depth_response.json()
 
             if depth_response['head']['statusDescription'] != 'Success':
                 raise Exception(f"Error from 5Paisa API: {depth_response['head']['statusDescription']}")
@@ -266,13 +323,21 @@ class BrokerData:
                 }
             }
 
+            # Get the shared httpx client
+            client = get_httpx_client()
+
             # Make API request for market snapshot
-            response = get_api_response(
-                "/VendorsAPI/Service1.svc/MarketSnapshot",
-                self.auth_token,
-                method="POST",
-                payload=json.dumps(json_data)
+            headers = {
+                'Authorization': f'bearer {self.auth_token}',
+                'Content-Type': 'application/json'
+            }
+            response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/MarketSnapshot",
+                json=json_data,
+                headers=headers
             )
+            response.raise_for_status()
+            response = response.json()
 
             # Check for successful response
             if response['head']['statusDescription'] != 'Success':
@@ -347,12 +412,20 @@ class BrokerData:
 
             print(f"Historical URL: {url}")  # Debug log
 
+            # Get the shared httpx client
+            client = get_httpx_client()
+
             # Make API request
-            response = get_api_response(
-                url,
-                self.auth_token,
-                method="GET"
+            headers = {
+                'Authorization': f'bearer {self.auth_token}',
+                'Content-Type': 'application/json'
+            }
+            response = client.get(
+                f"{BASE_URL}{url}",
+                headers=headers
             )
+            response.raise_for_status()
+            response = response.json()
 
             print(f"Historical Response: {json.dumps(response, indent=2)}")  # Debug log
 

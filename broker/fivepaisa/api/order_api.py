@@ -1,59 +1,142 @@
-import http.client
 import json
 import os
+from typing import Dict, Any, Optional
+import httpx
+from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
-from database.token_db import get_token , get_br_symbol, get_symbol, get_oa_symbol
-from broker.fivepaisa.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from database.token_db import get_token, get_br_symbol, get_symbol, get_oa_symbol
+from broker.fivepaisa.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type, reverse_map_exchange
+
+# Base URL for 5Paisa API
+BASE_URL = "https://Openapi.5paisa.com"
 
 # Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
 broker_api_key = os.getenv('BROKER_API_KEY')
 api_secret = os.getenv('BROKER_API_SECRET')
-api_key, user_id, client_id  = broker_api_key.split(':::')
+api_key, user_id, client_id = broker_api_key.split(':::')
 
 json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-            "ClientCode": client_id
-        }
+    "head": {
+        "key": api_key
+    },
+    "body": {
+        "ClientCode": client_id
     }
+}
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
-
-    AUTH_TOKEN = auth
-
-
- 
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
-    headers = {
-      'Authorization': f'bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-    }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
+def get_api_response(endpoint: str, auth: str, method: str = "GET", payload: str = '') -> Dict[str, Any]:
+    """Generic function to make API calls to 5Paisa using shared httpx client
     
-    return json.loads(data.decode("utf-8"))
+    Args:
+        endpoint (str): API endpoint path
+        auth (str): Authentication token
+        method (str, optional): HTTP method. Defaults to "GET".
+        payload (str, optional): Request payload. Defaults to ''.
+        
+    Returns:
+        Dict[str, Any]: JSON response from the API
+    """
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        headers = {
+            'Authorization': f'bearer {auth}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Make request based on method
+        if method.upper() == "GET":
+            response = client.get(
+                f"{BASE_URL}{endpoint}",
+                headers=headers
+            )
+        else:  # POST
+            response = client.post(
+                f"{BASE_URL}{endpoint}",
+                content=payload,  # Use content since payload is already JSON string
+                headers=headers
+            )
+            
+        response.raise_for_status()
+        return response.json()
+        
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        raise
+    except httpx.RequestError as e:
+        print(f"Request error occurred: {str(e)}")
+        raise
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        raise
 
-def get_order_book(auth):
-    payload = json.dumps(json_data)
-    return get_api_response("/VendorsAPI/Service1.svc/V3/OrderBook",auth,method="POST",payload=payload)
+def get_order_book(auth: str) -> Dict[str, Any]:
+    """Get order book for the client
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Order book data
+    """
+    try:
+        payload = json.dumps(json_data)
+        return get_api_response("/VendorsAPI/Service1.svc/V3/OrderBook", auth, method="POST", payload=payload)
+    except Exception as e:
+        print(f"Error getting order book: {str(e)}")
+        raise
 
-def get_trade_book(auth):
-    payload = json.dumps(json_data)
-    return get_api_response("/VendorsAPI/Service1.svc/V1/TradeBook",auth,method="POST",payload=payload)
+def get_trade_book(auth: str) -> Dict[str, Any]:
+    """Get trade book for the client
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Trade book data
+    """
+    try:
+        payload = json.dumps(json_data)
+        return get_api_response("/VendorsAPI/Service1.svc/V1/TradeBook", auth, method="POST", payload=payload)
+    except Exception as e:
+        print(f"Error getting trade book: {str(e)}")
+        raise
 
-def get_positions(auth):
-    payload = json.dumps(json_data)
-    return get_api_response("/VendorsAPI/Service1.svc/V2/NetPositionNetWise",auth,method="POST",payload=payload)
+def get_positions(auth: str) -> Dict[str, Any]:
+    """Get net positions for the client
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Net positions data
+    """
+    try:
+        payload = json.dumps(json_data)
+        return get_api_response("/VendorsAPI/Service1.svc/V2/NetPositionNetWise", auth, method="POST", payload=payload)
+    except Exception as e:
+        print(f"Error getting positions: {str(e)}")
+        raise
 
-def get_holdings(auth):
-    payload = json.dumps(json_data)
-    return get_api_response("/VendorsAPI/Service1.svc/V3/Holding",auth,method="POST",payload=payload)
+def get_holdings(auth: str) -> Dict[str, Any]:
+    """Get holdings for the client
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Holdings data
+    """
+    try:
+        payload = json.dumps(json_data)
+        return get_api_response("/VendorsAPI/Service1.svc/V3/Holding", auth, method="POST", payload=payload)
+    except Exception as e:
+        print(f"Error getting holdings: {str(e)}")
+        raise
 
-def get_open_position(tradingsymbol, exchange, Exch,ExchType , producttype,auth):
+def get_open_position(tradingsymbol: str, exchange: str, Exch: str, ExchType: str, producttype: str, auth: str) -> Optional[Dict[str, Any]]:
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     token = int(get_token(tradingsymbol, exchange))  # Convert token to integer
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
@@ -75,7 +158,7 @@ def get_open_position(tradingsymbol, exchange, Exch,ExchType , producttype,auth)
 
     return net_qty
 
-def place_order_api(data,auth):
+def place_order_api(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
     AUTH_TOKEN = auth
     
 
@@ -98,20 +181,33 @@ def place_order_api(data,auth):
 
 
 
-    print(payload)
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
-    conn.request("POST", "/VendorsAPI/Service1.svc/V1/PlaceOrderRequest", payload, headers)
-    res = conn.getresponse()
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Make API request
+        response = client.post(
+            f"{BASE_URL}/VendorsAPI/Service1.svc/V1/PlaceOrderRequest",
+            content=payload,
+            headers=headers
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        
+        print(f"Order Response: {response_data}")
+        
+        if response_data['head']['statusDescription'] == "Success":
+            orderid = response_data['body']['BrokerOrderID']
+        else:
+            orderid = None
+            
+        return response, response_data, orderid
+        
+    except Exception as e:
+        print(f"Error placing order: {str(e)}")
+        raise
 
-    response_data = json.loads(res.read().decode("utf-8"))
-    print(response_data)
-    if response_data['head']['statusDescription'] == "Success":
-        orderid = response_data['body']['BrokerOrderID']
-    else:
-        orderid = None
-    return res, response_data, orderid
-
-def place_smartorder_api(data,auth):
+def place_smartorder_api(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
 
     AUTH_TOKEN = auth
 
@@ -203,7 +299,7 @@ def place_smartorder_api(data,auth):
 
 
 
-def close_all_positions(current_api_key,auth):
+def close_all_positions(current_api_key: str, auth: str) -> Dict[str, Any]:
     # Fetch the current open positions
     AUTH_TOKEN = auth
 
@@ -257,122 +353,176 @@ def close_all_positions(current_api_key,auth):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid,auth):
-    AUTH_TOKEN = auth
-
-    # First get the order details from orderbook
-    orderbook_data = get_order_book(AUTH_TOKEN)
+def cancel_order(orderid: str, auth: str) -> Dict[str, Any]:
+    """Cancel an order using its order ID
     
-    # Find the order with matching BrokerOrderId and get its ExchOrderID
-    exch_order_id = None
-    order_data = None
-    if orderbook_data and orderbook_data.get('body') and orderbook_data['body'].get('OrderBookDetail'):
+    Args:
+        orderid (str): Order ID to cancel
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Response with status and message
+    """
+    try:
+        AUTH_TOKEN = auth
+
+        # First get the order details from orderbook
+        orderbook_data = get_order_book(AUTH_TOKEN)
+        order_details = None
+        
+        # Find the order in orderbook
         for order in orderbook_data['body']['OrderBookDetail']:
-            if str(order.get('BrokerOrderId')) == str(orderid):
-                exch_order_id = order.get('ExchOrderID')
-                order_data = order
+            if order['ExchOrderID'] == orderid:
+                order_details = order
                 break
-    
-    if not exch_order_id:
-        return {"status": "error", "message": f"Order {orderid} not found in orderbook"}
+        
+        if not order_details:
+            return {"status": "error", "message": "Order not found"}, 404
 
-    headers = {
-      'Authorization': f'bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json'
-
-    }
-
-    # Prepare the payload
-    json_data = {
-        "head": {
-            "key": api_key
-        },
-        "body": {
-                "ExchOrderID": exch_order_id,
+        # Prepare the cancel order request
+        cancel_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": {
+                "ClientCode": client_id,
+                "OrdStatusReqList": [
+                    {
+                        "Exch": order_details['Exch'],
+                        "ExchType": order_details['ExchType'],
+                        "ScripCode": order_details['ScripCode'],
+                        "RemoteOrderID": order_details['ExchOrderID']
+                    }
+                ]
+            }
         }
-    }
 
-    payload = json.dumps(json_data)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Make API request
+        headers = {
+            'Authorization': f'bearer {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = client.post(
+            f"{BASE_URL}/VendorsAPI/Service1.svc/V1/CancelOrderRequest",
+            json=cancel_data,
+            headers=headers
+        )
+        response.raise_for_status()
+        data = response.json()
 
-    print(payload)
+        # Check the response
+        if data['head']['statusDescription'] == "Success":
+            return {"status": "success", "message": "Order cancelled successfully"}, response.status_code
+        else:
+            return {"status": "error", "message": data.get('body', {}).get('Message', 'Failed to cancel order')}, response.status_code
+            
+    except Exception as e:
+        print(f"Error cancelling order: {str(e)}")
+        raise
+
+
+def modify_order(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
+    """Modify an existing order
     
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")  # Adjust the URL as necessary
-    conn.request("POST", "/VendorsAPI/Service1.svc/V1/CancelOrderRequest", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-    
-    # Check if the request was successful
-    if  data["head"]["status"]=='0' and data["body"]["Status"]==0 :
-        # Return a success response
-        return {"status": "success", "orderid": orderid}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": data.get('body', {}).get('Message', 'Failed to cancel order')}, res.status
-
-
-def modify_order(data,auth):
-
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-    transformed_data = transform_modify_order_data(data)  # You need to implement this function
-    # Set up the request headers
-
-    headers = {
-      'Authorization': f'bearer {AUTH_TOKEN}',
-      'Content-Type': 'application/json',
-    }
-
-    # Prepare the payload
-    json_data = {
+    Args:
+        data (Dict[str, Any]): Order modification data
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Response with status and order ID
+    """
+    try:
+        AUTH_TOKEN = auth
+        transformed_data = transform_modify_order_data(data)
+        
+        # Prepare request data
+        json_data = {
             "head": {
                 "key": api_key
             },
             "body": transformed_data
         }
 
-    payload = json.dumps(json_data)
-    print(payload)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Make API request
+        headers = {
+            'Authorization': f'bearer {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = client.post(
+            f"{BASE_URL}/VendorsAPI/Service1.svc/V1/ModifyOrderRequest",
+            json=json_data,
+            headers=headers
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        print(f"Modify Order Response: {data}")
 
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
-    conn.request("POST", "/VendorsAPI/Service1.svc/V1/ModifyOrderRequest", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    response = print(f'The response is {data}')
-
-    if data['body']['Message'] == "Success" or data['body']['Message'] == "SUCCESS":
-        return {"status": "success", "orderid": data["body"]["BrokerOrderID"]}, 200
-    else:
-        return {"status": "error", "message":  data.get('body', {}).get('Message', 'Failed to Modify order')}, res.status
-
-
-
-def cancel_all_orders_api(data,auth):
-    # Get the order book
-
-    AUTH_TOKEN = auth
-    
-
-    order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
-    if order_book_response['body']['OrderBookDetail'] is None:
-        return [], []  # Return empty lists indicating failure to retrieve the order book
-
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response['body']['OrderBookDetail']
-                        if order['OrderStatus'] in ['Pending','Modified']]
-    #print(orders_to_cancel)
-    canceled_orders = []
-    failed_cancellations = []
-
-    # Cancel the filtered orders
-    for order in orders_to_cancel:
-        orderid = order['BrokerOrderId']
-        cancel_response, status_code = cancel_order(orderid,auth)
-        if status_code == 200:
-            canceled_orders.append(orderid)
+        if data['body']['Message'] == "Success" or data['body']['Message'] == "SUCCESS":
+            return {"status": "success", "orderid": data["body"]["BrokerOrderID"]}, response.status_code
         else:
-            failed_cancellations.append(orderid)
+            return {"status": "error", "message": data.get('body', {}).get('Message', 'Failed to Modify order')}, response.status_code
+            
+    except Exception as e:
+        print(f"Error modifying order: {str(e)}")
+        raise
+
+
+
+def cancel_all_orders_api(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
+    """Cancel all open orders
     
-    return canceled_orders, failed_cancellations
+    Args:
+        data (Dict[str, Any]): Additional data for cancellation
+        auth (str): Authentication token
+        
+    Returns:
+        Dict[str, Any]: Lists of successfully canceled and failed order IDs
+    """
+    try:
+        AUTH_TOKEN = auth
+        
+        # Get the order book using shared client
+        order_book_response = get_order_book(AUTH_TOKEN)
+        
+        if order_book_response['body']['OrderBookDetail'] is None:
+            return [], []  # Return empty lists if no orders found
+
+        # Filter orders that are in 'open' or 'trigger_pending' state
+        orders_to_cancel = [
+            order for order in order_book_response['body']['OrderBookDetail']
+            if order['OrderStatus'] in ['Pending', 'Modified']
+        ]
+        
+        canceled_orders = []
+        failed_cancellations = []
+
+        # Cancel each filtered order using shared client
+        for order in orders_to_cancel:
+            try:
+                orderid = order['BrokerOrderId']
+                cancel_response, status_code = cancel_order(orderid, auth)
+                
+                if status_code == 200:
+                    canceled_orders.append(orderid)
+                else:
+                    failed_cancellations.append(orderid)
+                    print(f"Failed to cancel order {orderid}: {cancel_response.get('message')}")
+                    
+            except Exception as e:
+                print(f"Error cancelling order {order['BrokerOrderId']}: {str(e)}")
+                failed_cancellations.append(order['BrokerOrderId'])
+        
+        return canceled_orders, failed_cancellations
+        
+    except Exception as e:
+        print(f"Error in cancel_all_orders: {str(e)}")
+        raise
