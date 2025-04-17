@@ -4,6 +4,7 @@ This document provides a high-level overview of the WebSocket proxy system for O
 - [websocket_auth_and_mapping.md](websocket_auth_and_mapping.md) - Authentication and symbol mapping implementation
 - [websocket_implementation.md](websocket_implementation.md) - WebSocket adapter and proxy implementation
 - [broker_factory.md](broker_factory.md) - Broker-agnostic factory design for supporting 20+ brokers
+- [websocket_usage_example.md](websocket_usage_example.md) - Working example of subscribing to market data
 
 ## 1. System Overview
 
@@ -427,6 +428,7 @@ The system implements a bidirectional heartbeat mechanism:
 For detailed implementation code and examples, see:
 - [websocket_auth_and_mapping.md](websocket_auth_and_mapping.md) - Authentication and symbol mapping implementation
 - [websocket_implementation.md](websocket_implementation.md) - WebSocket adapter and proxy implementation
+- [websocket_usage_example.md](websocket_usage_example.md) - Working example of subscribing to market data
 
 ## 9. Security Considerations
 
