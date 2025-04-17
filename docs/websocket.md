@@ -3,6 +3,7 @@
 This document provides a high-level overview of the WebSocket proxy system for OpenAlgo. For detailed implementation code and examples, see:
 - [websocket_auth_and_mapping.md](websocket_auth_and_mapping.md) - Authentication and symbol mapping implementation
 - [websocket_implementation.md](websocket_implementation.md) - WebSocket adapter and proxy implementation
+- [broker_factory.md](broker_factory.md) - Broker-agnostic factory design for supporting 20+ brokers
 
 ## 1. System Overview
 

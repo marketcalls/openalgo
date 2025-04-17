@@ -2,23 +2,24 @@
 
 This document covers the WebSocket adapter and proxy implementation for the WebSocket streaming system. For the main architecture overview, see [websocket.md](websocket.md). For authentication and symbol mapping details, see [websocket_auth_and_mapping.md](websocket_auth_and_mapping.md).
 
-## 1. Angel WebSocket Adapter
+## 1. Broker WebSocket Adapter
 
-The Angel WebSocket adapter connects to Angel's WebSocket API and handles data normalization and broadcasting.
+The Broker WebSocket adapter provides a consistent interface to connect to any broker's WebSocket API. It handles data normalization and broadcasting in a broker-agnostic way, with broker-specific implementations.
 
 ### 1.1 Core Implementation
 
 ```python
-# Angel WebSocket Adapter
+# Broker WebSocket Adapter Base Class
 import json
 import threading
 import zmq
 import os
 import logging
-from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+import importlib
+from abc import ABC, abstractmethod
 from websocket_auth_and_mapping import SymbolMapper, ExchangeMapper, BrokerCapabilityRegistry
 
-class AngelWebSocketAdapter:
+class BaseBrokerWebSocketAdapter(ABC):
     def __init__(self):
         # ZeroMQ publisher setup
         self.context = zmq.Context()
@@ -33,27 +34,36 @@ class AngelWebSocketAdapter:
         self.connected = False
         self.logger = logging.getLogger("angel_adapter")
         
-    def initialize(self, user_id, auth_token, feed_token):
-        """Initialize connection with Angel WebSocket API"""
-        self.user_id = user_id
+    @abstractmethod
+    def initialize(self, broker_name, user_id, auth_data):
+        """Initialize connection with broker WebSocket API
         
-        # Create SmartWebSocketV2 instance
-        self.sws = SmartWebSocketV2(
-            auth_token, 
-            os.getenv('BROKER_API_KEY'), 
-            user_id,  # client_code is the user_id
-            feed_token,
-            max_retry_attempt=5
-        )
+        Args:
+            broker_name: The name of the broker (e.g., 'angel', 'zerodha')
+            user_id: The user's ID or client code
+            auth_data: Dict containing all required authentication data
+        """
+        pass
         
-        # Set callbacks
-        self.sws.on_open = self.on_open
-        self.sws.on_data = self.on_data
-        self.sws.on_error = self.on_error
-        self.sws.on_close = self.on_close
+    @abstractmethod
+    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
+        """Subscribe to market data with the specified mode and depth level"""
+        pass
         
-        # Start connection in a thread
-        threading.Thread(target=self.sws.connect).start()
+    @abstractmethod
+    def unsubscribe(self, symbol, exchange, mode=2):
+        """Unsubscribe from market data"""
+        pass
+        
+    @abstractmethod
+    def connect(self):
+        """Establish connection to the broker's WebSocket"""
+        pass
+        
+    @abstractmethod
+    def disconnect(self):
+        """Disconnect from the broker's WebSocket"""
+        pass
         
     def on_open(self, wsapp):
         """Callback when connection is established"""
@@ -659,9 +669,9 @@ When working with various depth levels (5/20/30/50), the system needs to:
 
 ```python
 # In the AngelWebSocketAdapter class:
-def handle_depth_subscription(self, symbol, exchange, depth_level=5):
+def handle_depth_subscription(self, broker, symbol, exchange, depth_level=5):
     """Handle subscription with proper depth level support"""
-    broker = "angel"  # Current broker
+    # Get current broker name
     
     # Check supported depths
     supported_depths = BrokerCapabilityRegistry.get_supported_depth_levels(broker, exchange)
@@ -724,9 +734,9 @@ def create_broker_limitation_response(broker, exchange, feature, supported_value
 # main.py
 import asyncio
 import logging
-from angel_websocket_adapter import AngelWebSocketAdapter
+from broker_factory import create_broker_adapter
 from websocket_proxy import WebSocketProxy
-from websocket_auth_and_mapping import initialize_services
+from websocket_auth_and_mapping import initialize_services, get_user_broker
 
 async def main():
     # Setup logging
@@ -738,8 +748,24 @@ async def main():
     # Initialize services
     auth_service, symbol_mapper = initialize_services()
     
-    # Create adapter instance
-    adapter = AngelWebSocketAdapter()
+    # Get the user's active broker from the database
+    user_data = auth_service.get_current_user()
+    active_broker = user_data.get('active_broker')
+    
+    # Create the appropriate broker adapter
+    adapter = create_broker_adapter(active_broker)
+    
+    # Initialize the adapter with user's authentication data
+    adapter.initialize(
+        broker_name=active_broker,
+        user_id=user_data.get('user_id'),
+        auth_data={
+            'auth_token': user_data.get('auth_token'),
+            'feed_token': user_data.get('feed_token'),
+            'api_key': os.getenv('BROKER_API_KEY'),
+            # Other broker-specific auth data
+        }
+    )
     
     # Create proxy instance
     proxy = WebSocketProxy(host="0.0.0.0", port=8765)
