@@ -10,8 +10,9 @@ The authentication service retrieves tokens and client ID from the database and 
 
 The authentication service is responsible for:
 - Validating OpenAlgo API keys
-- Retrieving AUTH_TOKEN and FEED_TOKEN from the database
-- Getting the client ID (user_id) for Angel WebSocket authentication
+- Retrieving broker-specific authentication tokens from the database
+- Getting the client ID (user_id) for broker WebSocket authentication
+- Determining the user's active broker
 - Securing WebSocket connections
 
 ### 1.2 Implementation
