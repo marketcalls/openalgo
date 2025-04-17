@@ -7,7 +7,7 @@ This document provides a high-level overview of the WebSocket proxy system for O
 
 ## 1. System Overview
 
-The OpenAlgo WebSocket Proxy is a scalable system that connects to broker WebSocket APIs (primarily Angel Broking) and provides a unified interface for clients to access real-time market data. The system uses a publish-subscribe pattern with ZeroMQ as the message broker to efficiently distribute data to multiple consumers.
+The OpenAlgo WebSocket Proxy is a scalable, broker-agnostic system that connects to various broker WebSocket APIs and provides a unified interface for clients to access real-time market data. Angel Broking is used as the pilot implementation, with the architecture designed to support 20+ brokers through a factory pattern. The system uses a publish-subscribe pattern with ZeroMQ as the message broker to efficiently distribute data to multiple consumers.
 
 ```
 ┌─────────────┐     ┌───────────────┐     ┌─────────────┐     ┌─────────────────┐
@@ -17,17 +17,17 @@ The OpenAlgo WebSocket Proxy is a scalable system that connects to broker WebSoc
        │                                                               │
        ▼                                                               ▼
 ┌─────────────┐     ┌───────────────┐     ┌─────────────┐     ┌─────────────────┐
-│ Angel       │     │ Angel         │     │ ZeroMQ      │     │ Common          │
+│ Broker      │     │ Broker        │     │ ZeroMQ      │     │ Common          │
 │ WebSocket   │◀───▶│ WebSocket     │───▶│ Pub/Sub     │────▶│ WebSocket      │
 │ API         │     │ Adapter       │     │ Layer       │     │ Proxy           │
 └─────────────┘     └───────────────┘     └─────────────┘     └─────────────────┘
-                                                                      │
-                                                                      ▼
-                                                              ┌─────────────────┐
-                                                              │ Client          │
-                                                              │ Applications    │
-                                                              │ (UI, Strategies)│
-                                                              └─────────────────┘
+                          ▲                                            │
+                          │                                            ▼
+                    ┌─────────────┐                           ┌─────────────────┐
+                    │ Broker      │                           │ Client          │
+                    │ Factory     │                           │ Applications    │
+                    │             │                           │ (UI, Strategies)│
+                    └─────────────┘                           └─────────────────┘
 ```
 
 ## 2. Key Components
@@ -42,15 +42,16 @@ This component retrieves authentication tokens and client ID from the OpenAlgo d
 - Validates API keys for client authentication
 - Maintains connection between user accounts and broker sessions
 
-### 2.2 Angel WebSocket Adapter
+### 2.2 Broker WebSocket Adapter
 
-This component connects to Angel's WebSocket API using authentication tokens from the database.
+This component connects to a broker's WebSocket API using authentication tokens from the database. It's implemented as a base class with broker-specific adapters (currently Angel as the pilot implementation).
 
 **Key Features:**
-- Authenticates using AUTH_TOKEN, FEED_TOKEN, and client ID
-- Handles binary message parsing specific to Angel's format
+- Authenticates using broker-specific tokens (AUTH_TOKEN, FEED_TOKEN) and client ID
+- Abstract interface that handles differences in message formats between brokers
 - Implements robust reconnection with exponential backoff
 - Manages subscriptions to all market data types (LTP, quote, depth)
+- Factory pattern allows dynamic selection of the appropriate broker adapter
 
 ### 2.3 ZeroMQ Message Broker
 
@@ -75,13 +76,13 @@ A unified WebSocket server that clients connect to for receiving market data.
 
 ## 3. Market Data Subscription Levels
 
-The system supports the following subscription modes:
+The system supports the following subscription modes, with the BrokerCapabilityRegistry handling the differences in support across various brokers:
 
 ### 3.1 LTP Mode (Mode 1)
-Basic last traded price updates with minimal data.
+Basic last traded price updates with minimal data. Generally supported by all brokers.
 
 ### 3.2 Quote Mode (Mode 2)
-Comprehensive quote information including LTP, volume, OHLC, etc.
+Comprehensive quote information including LTP, volume, OHLC, etc. Supported by most brokers.
 
 ### 3.3 Market Depth Levels
 
@@ -89,13 +90,26 @@ Comprehensive quote information including LTP, volume, OHLC, etc.
 Standard market depth with 5 levels of buy/sell orders. Supported by all brokers.
 
 #### 3.3.2 Depth (20 Level) - Mode 4 with extended parameter
-Extended market depth with 20 levels. Currently supported only on NSE & NFO exchanges.
+Extended market depth with 20 levels. Support varies by broker and exchange:
+- Angel: Supported on NSE & NFO exchanges
+- Other brokers: Support determined via BrokerCapabilityRegistry
 
 #### 3.3.3 Depth (30 Level) - Mode 4 with extended parameter
-Full market depth with 30 levels. Limited broker support.
+Full market depth with 30 levels. Limited broker support:
+- Angel: Limited support on select exchanges (primarily NSE)
+- Most other brokers: Not supported
 
 #### 3.3.4 Depth (50 Level) - Mode 4 with extended parameter
 Comprehensive market depth with 50 levels. Very limited broker support, primarily for institutional clients.
+
+### 3.4 Broker Capability Registry
+
+The system includes a capability registry that tracks which features and depth levels are supported by each broker and exchange combination. When a client requests a feature not supported by their broker, the system will:
+
+1. Check if the requested feature is supported
+2. If supported, process the request normally
+3. If not supported but a fallback is available, use the fallback and notify the client
+4. If no fallback is available, return an informative error message
 
 ## 4. Data Flow
 
@@ -103,68 +117,91 @@ Comprehensive market depth with 50 levels. Very limited broker support, primaril
 
 1. Client connects to WebSocket Proxy with OpenAlgo API key
 2. API key is validated against the database
-3. System retrieves associated AUTH_TOKEN, FEED_TOKEN, and client ID
-4. Angel WebSocket connection is established using these credentials
+3. System retrieves the user's active broker and associated tokens
+4. Broker factory creates the appropriate adapter for the active broker
+5. Broker WebSocket connection is established using broker-specific credentials
 
 ```
-Client                WebSocket Proxy           Auth Service           Broker DB
-  │                        │                         │                      │
-  │   connect(API_KEY)     │                         │                      │
-  │───────────────────────▶│                         │                      │
-  │                        │   validate(API_KEY)     │                      │
-  │                        │────────────────────────▶│                      │
-  │                        │                         │  get_tokens(user_id) │
-  │                        │                         │─────────────────────▶│
-  │                        │                         │   tokens, client_id  │
-  │                        │                         │◀─────────────────────│
-  │     connection_ok      │                         │                      │
-  │◀───────────────────────│                         │                      │
-  │                        │                         │                      │
+Client           WebSocket Proxy      Auth Service      Broker DB       Broker Factory
+  │                    │                    │                │                 │
+  │ connect(API_KEY)   │                    │                │                 │
+  │───────────────────▶│                    │                │                 │
+  │                    │ validate(API_KEY)  │                │                 │
+  │                    │───────────────────▶│                │                 │
+  │                    │                    │ get_tokens()   │                 │
+  │                    │                    │───────────────▶│                 │
+  │                    │                    │ tokens, user   │                 │
+  │                    │                    │◀───────────────│                 │
+  │                    │                    │                │                 │
+  │                    │                    │ get_active_    │                 │
+  │                    │                    │ broker(user)   │                 │
+  │                    │                    │───────────────▶│                 │
+  │                    │                    │ active_broker  │                 │
+  │                    │                    │◀───────────────│                 │
+  │                    │                    │                │                 │
+  │                    │ create_adapter(broker_name)         │                 │
+  │                    │────────────────────────────────────▶│                 │
+  │                    │                    │                │ adapter         │
+  │                    │◀───────────────────────────────────│                 │
+  │  connection_ok     │                    │                │                 │
+  │◀───────────────────│                    │                │                 │
+  │                    │                    │                │                 │
 ```
 
 ### 4.2 Subscription Flow
 
 1. Client sends subscription request with symbol, exchange, and mode
-2. WebSocket Proxy maps symbol to broker-specific token
-3. Angel Adapter subscribes to the token via Angel WebSocket API
-4. Subscription confirmation is sent back to the client
+2. WebSocket Proxy maps symbol to broker-specific token using the mapping database
+3. The appropriate broker adapter subscribes to the token via the broker's WebSocket API
+4. Subscription confirmation is sent back to the client with capability support information
 
 ```
-Client                WebSocket Proxy           Angel Adapter           Angel API
+Client                WebSocket Proxy           Broker Adapter          Broker API
   │                        │                         │                      │
   │ subscribe(RELIANCE,    │                         │                      │
-  │  NSE, MODE=4)          │                         │                      │
+  │  NSE, MODE=4,          │                         │                      │
+  │  DEPTH=20)             │                         │                      │
   │───────────────────────▶│                         │                      │
-  │                        │   map_to_token(RELIANCE)│                      │
+  │                        │ check_broker_capabilities(broker, exchange, depth)│
   │                        │────────────────────────▶│                      │
-  │                        │                         │  subscribe(token,    │
-  │                        │                         │   mode=4)            │
+  │                        │ capabilities_response   │                      │
+  │                        │◀────────────────────────│                      │
+  │                        │                         │                      │
+  │                        │ map_to_token(RELIANCE)  │                      │
+  │                        │────────────────────────▶│                      │
+  │                        │                         │ subscribe(token,     │
+  │                        │                         │  mode=4, depth=20)   │
   │                        │                         │─────────────────────▶│
   │                        │                         │     success          │
   │                        │                         │◀─────────────────────│
-  │     subscription_ok    │                         │                      │
+  │  subscription_ok       │                         │                      │
+  │  (with capability info)│                         │                      │
   │◀───────────────────────│                         │                      │
   │                        │                         │                      │
 ```
 
 ### 4.3 Market Data Flow
 
-1. Angel API sends market data to Angel Adapter
-2. Angel Adapter parses and normalizes the data based on mode
-3. Data is published to ZeroMQ with appropriate topic and mode
-4. WebSocket Proxy receives data from ZeroMQ
-5. WebSocket Proxy forwards data to subscribed clients
+1. Broker API sends market data to the broker-specific WebSocket Adapter
+2. Adapter normalizes data into a common format and publishes it to ZeroMQ
+3. WebSocket Proxy subscribes to the ZeroMQ topics
+4. Proxy forwards the data to interested clients
 
 ```
-Angel API           Angel Adapter           ZeroMQ           WebSocket Proxy           Client
+Broker API          Broker Adapter           ZeroMQ           WebSocket Proxy           Client
   │                     │                      │                   │                      │
   │  market_data        │                      │                   │                      │
   │────────────────────▶│                      │                   │                      │
+  │                     │  normalize_data()    │                   │                      │
+  │                     │  (broker-specific)   │                   │                      │
+  │                     │                      │                   │                      │
   │                     │  publish(topic, data)│                   │                      │
   │                     │─────────────────────▶│                   │                      │
-  │                     │                      │  data_for(topic)  │                      │
+  │                     │                      │  subscribe(topic) │                      │
+  │                     │                      │◀──────────────────│                      │
+  │                     │                      │    data           │                      │
   │                     │                      │──────────────────▶│                      │
-  │                     │                      │                   │  send_to_subscribers │
+  │                     │                      │                   │   send(data)         │
   │                     │                      │                   │─────────────────────▶│
   │                     │                      │                   │                      │
 ```

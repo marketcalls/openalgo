@@ -248,17 +248,23 @@ def unsubscribe(self, symbol, exchange, mode=2):
 
 ```python
 def on_data(self, wsapp, message):
-    """Process market data from Angel WebSocket"""
+    """Process market data from broker WebSocket
+    
+    This method handles broker-specific message formats and normalizes them
+    into a common format. Each broker adapter implements its own parsing logic.
+    """
     try:
-        # Extract token and exchange type
+        # Extract token and exchange type (example using Angel's format as reference)
+        # Note: Each broker adapter will implement its own message parsing
         token = message.get('token')
         exchange_type = message.get('exchange_type')
         
         if not token or not exchange_type:
             return
             
-        # Map broker exchange type to exchange
-        brexchange = ExchangeMapper.get_exchange_name(exchange_type)
+        # Map broker-specific exchange type to standardized exchange code
+        # This will be implemented differently for each broker
+        brexchange = self.exchange_mapper.get_exchange_name(exchange_type, self.broker_name)
         
         # Convert token back to symbol
         symbol_info = self.symbol_mapper.get_symbol_from_token(token, brexchange)
