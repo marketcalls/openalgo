@@ -219,10 +219,79 @@ def fetch_orders(auth, client_id, order_type):
 
 
 def get_trade_book(auth):
-    # Use explicit full URL to avoid path resolution issues
+    """
+    Get the trade book from Pocketful API.
+    
+    Args:
+        auth: Authentication token for Pocketful API
+        
+    Returns:
+        Dictionary with trade book data in standard format
+    """
+    print(f"DEBUG - Fetching Pocketful trade book")
+    
+    # Get client_id needed for API requests
+    client_id = get_client_id(auth)
+    if not client_id:
+        return {"status": "error", "message": "Client ID not found"}
+    
+    print(f"DEBUG - Using client_id: {client_id}")
+    
+    # API endpoint for tradebook
     endpoint = f"{BASE_URL}/api/v1/trades"
-    print(f"DEBUG - get_trade_book using explicit endpoint: {endpoint}")
-    return get_api_response(endpoint, auth)
+    
+    # Setup parameters with client_id
+    params = {
+        "client_id": client_id
+    }
+    
+    try:
+        print(f"DEBUG - Making GET request to {endpoint} with params: {params}")
+        client = get_httpx_client()
+        
+        # Set up headers with authorization token
+        headers = {
+            'Authorization': f'Bearer {auth}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Make the request
+        response = client.get(endpoint, headers=headers, params=params)
+        response.status = response.status_code
+        print(f"DEBUG - Response status code: {response.status_code}")
+        
+        # Check if request was successful
+        if response.status_code == 200:
+            try:
+                trade_data = response.json()
+                print(f"DEBUG - Trade data received: {json.dumps(trade_data, indent=2)}")
+                
+                # Extract trades directly from the nested structure to make processing easier
+                trades = []
+                if trade_data.get('status') == 'success' and 'data' in trade_data:
+                    if isinstance(trade_data['data'], dict) and 'trades' in trade_data['data']:
+                        trades = trade_data['data']['trades']
+                
+                # Create a response in the expected format
+                response_data = {
+                    "status": "success",
+                    "data": trades,  # Provide trades array directly
+                    "message": ""
+                }
+                
+                return response_data
+            except ValueError:
+                error_msg = "Invalid JSON response from Pocketful API"
+                print(f"DEBUG - {error_msg}")
+                return {"status": "error", "message": error_msg}
+        else:
+            error_msg = f"Error fetching tradebook: {response.text}"
+            print(f"DEBUG - {error_msg}")
+            return {"status": "error", "message": error_msg}
+    except Exception as e:
+        error_msg = f"Exception fetching tradebook: {str(e)}"
+        print(f"DEBUG - {error_msg}")
+        return {"status": "error", "message": error_msg}
 
 def get_positions(auth):
     return get_api_response("/portfolio/positions",auth)

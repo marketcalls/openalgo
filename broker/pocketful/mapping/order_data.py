@@ -134,6 +134,7 @@ def calculate_order_statistics(order_data):
         'total_rejected_orders': total_rejected_orders
     }
 
+
 def transform_order_data(orders):
     """
     Transform order data from Pocketful API format to OpenAlgo standard format.
@@ -223,24 +224,122 @@ def transform_order_data(orders):
     return transformed_orders
 
 def map_trade_data(trade_data):
-    return map_order_data(trade_data)
+    """
+    Process Pocketful's trade data to map any broker-specific fields.
+    
+    Args:
+        trade_data: Trade data response from Pocketful API
+        
+    Returns:
+        Processed trade data with standardized fields
+    """
+    # Check if we have any data - now handling direct trades array
+    if not trade_data:
+        print("No trade data available.")
+        return []
+    
+    # Handle different possible structures:
+    trades = []
+    
+    # Case 1: data is already the trades array (when coming from get_trade_book)
+    if isinstance(trade_data, dict) and 'data' in trade_data and isinstance(trade_data['data'], list):
+        trades = trade_data['data']
+    # Case 2: nested structure (when directly handling API response)
+    elif isinstance(trade_data, dict) and 'data' in trade_data and isinstance(trade_data['data'], dict) and 'trades' in trade_data['data']:
+        trades = trade_data['data']['trades']
+    # Case 3: direct array of trades
+    elif isinstance(trade_data, list):
+        trades = trade_data
+    else:
+        print(f"Unexpected trade data format: {type(trade_data)}")
+        return []
+    
+    if not trades:
+        print("No trades found in data.")
+        return []
+    
+    print(f"Processing {len(trades)} trades")
+    
+    # Process each trade
+    processed_trades = []
+    for trade in trades:
+        # Create a copy to avoid modifying the original data
+        processed_trade = dict(trade)
+        
+        # Safely extract exchange
+        exchange = processed_trade.get('exchange', '')
+            
+        # Safely extract symbol
+        symbol = processed_trade.get('trading_symbol', '')
+        if symbol:
+            # Add 'tradingsymbol' field for consistency with rest of the system
+            processed_trade['tradingsymbol'] = symbol
+            
+            # Convert to OpenAlgo symbol format if exchange is available
+            if exchange:
+                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                processed_trade['tradingsymbol'] = oa_symbol
+        
+        # Map transaction_type/order_side to a standard format
+        if 'order_side' in processed_trade and not processed_trade.get('transaction_type'):
+            processed_trade['transaction_type'] = processed_trade['order_side']
+            
+        # Map trade-specific fields to standard names expected by transform function
+        if 'trade_quantity' in processed_trade and not processed_trade.get('fill_quantity'):
+            processed_trade['fill_quantity'] = processed_trade['trade_quantity']
+            
+        if 'trade_price' in processed_trade and not processed_trade.get('avg_price'):
+            processed_trade['avg_price'] = processed_trade['trade_price']
+            
+        if 'trade_time' in processed_trade and not processed_trade.get('fill_timestamp'):
+            processed_trade['fill_timestamp'] = processed_trade['trade_time']
+            
+        if 'oms_order_id' in processed_trade and not processed_trade.get('order_id'):
+            processed_trade['order_id'] = processed_trade['oms_order_id']
+            
+        if 'trade_number' in processed_trade and not processed_trade.get('trade_id'):
+            processed_trade['trade_id'] = processed_trade['trade_number']
+        
+        processed_trades.append(processed_trade)
+    
+    # Return processed trades
+    return processed_trades
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transform tradebook data from Pocketful API format to OpenAlgo standard format.
+    
+    Args:
+        tradebook_data: Response from Pocketful's trade book API
+        
+    Returns:
+        List of transformed trades in standard format
+    """
+    # First map the trade data to standardize fields
+    trades = map_trade_data(tradebook_data)
+    
     transformed_data = []
-    for trade in tradebook_data:
-     
+    for trade in trades:
+        # Map fields from Pocketful's format to our standard format
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol'),
+            "symbol": trade.get('tradingsymbol', ''),
             "exchange": trade.get('exchange', ''),
-            "product": trade.get('product', ''),
-            "action": trade.get('transaction_type', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('average_price', 0.0),
-            "trade_value": trade.get('quantity', 0) * trade.get('average_price', 0.0),
-            "orderid": trade.get('order_id', ''),
-            "timestamp": trade.get('order_timestamp', '')
+            "product": trade.get('product', ''),  # Pocketful uses 'product' as is
+            "action": trade.get('transaction_type', '').upper(),  # BUY/SELL
+            "quantity": int(trade.get('fill_quantity', 0)),  # Executed quantity
+            "average_price": float(trade.get('avg_price', 0.0)), # Trade price
+            "trade_id": trade.get('trade_id', ''),  # Unique trade identifier
+            "orderid": trade.get('order_id', ''),    # Parent order identifier
+            "timestamp": trade.get('fill_timestamp', ''),  # Trade execution time
+            "trade_value": 0.0  # Will calculate below
         }
+        
+        # Calculate trade value
+        if transformed_trade["quantity"] > 0 and transformed_trade["average_price"] > 0:
+            transformed_trade["trade_value"] = transformed_trade["quantity"] * transformed_trade["average_price"]
+        
         transformed_data.append(transformed_trade)
+    
     return transformed_data
 
 def map_position_data(position_data):
@@ -342,7 +441,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Pocketful Portfolio - Product Value for Delivery Not Found or Changed.")
+                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 
