@@ -344,41 +344,126 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
     """
-    Processes and modifies a list of OpenPosition dictionaries based on specific conditions.
+    Processes and modifies a list of position dictionaries based on specific conditions.
+    Handles Pocketful's position API response format.
     
     Parameters:
-    - position_data: A list of dictionaries, where each dictionary represents an Open Position.
+    - position_data: Response from Pocketful's position API
     
     Returns:
-    - The modified order_data with updated 'tradingsymbol'
+    - The modified position data with updated 'tradingsymbol' field
     """
-        # Check if 'data' is None
-    if position_data['data']['net'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        position_data = position_data['data']['net']
-        
-    #print(order_data)
-
-    if position_data:
-        for position in position_data:
-            # Extract the instrument_token and exchange for the current order
-            exchange = position['exchange']
-            symbol = position['tradingsymbol']
-       
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
-            else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
-    return position_data
+    # Check if we have any data - now handling direct positions array
+    if not position_data:
+        print("No position data available.")
+        return []
     
+    # Handle different possible structures:
+    positions = []
+    print(f"DEBUG - Position data type: {type(position_data)}")
+    
+    # Case 1: data is already the positions array (when coming from get_positions)
+    if isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], list):
+        print(f"DEBUG - Using Case 1: data is a list with {len(position_data['data'])} positions")
+        positions = position_data['data']
+    # Case 2: nested structure (when directly handling API response)
+    elif isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], dict) and 'positions' in position_data['data']:
+        print(f"DEBUG - Using Case 2: data.positions structure")
+        positions = position_data['data']['positions']
+    # Case 3: direct array of positions
+    elif isinstance(position_data, list):
+        print(f"DEBUG - Using Case 3: direct array with {len(position_data)} positions")
+        positions = position_data
+    # Case 4: Legacy structure with 'net' key
+    elif isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], dict) and 'net' in position_data['data']:
+        print(f"DEBUG - Using Case 4: data.net structure")
+        positions = position_data['data']['net'] if position_data['data']['net'] is not None else []
+    else:
+        print(f"DEBUG - Unexpected position data format: {type(position_data)}")
+        # For debugging, try to print more details about the structure
+        if isinstance(position_data, dict):
+            print(f"DEBUG - Dict keys: {position_data.keys()}")
+            if 'data' in position_data:
+                print(f"DEBUG - Data type: {type(position_data['data'])}")
+                if isinstance(position_data['data'], dict):
+                    print(f"DEBUG - Data dict keys: {position_data['data'].keys()}")
+        return []
+    
+    if not positions:
+        print("No positions found in data.")
+        return []
+    
+    print(f"Processing {len(positions)} positions")
+    
+    # Process each position
+    processed_positions = []
+    for position in positions:
+        # Create a copy to avoid modifying the original data
+        processed_position = dict(position)
+        
+        # Safely extract exchange
+        exchange = processed_position.get('exchange', '')
+            
+        # Safely extract symbol (handle both trading_symbol and tradingsymbol fields)
+        symbol = processed_position.get('trading_symbol', processed_position.get('tradingsymbol', ''))
+        if symbol:
+            # Add 'tradingsymbol' field for consistency with rest of the system
+            processed_position['tradingsymbol'] = symbol
+            
+            # Convert to OpenAlgo symbol format if exchange is available
+            if exchange:
+                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                if oa_symbol:
+                    processed_position['tradingsymbol'] = oa_symbol
+                else:
+                    print(f"Symbol {symbol} not found in database for exchange {exchange}. Keeping original symbol.")
+        
+        # Map Pocketful-specific fields to standard format
+        
+        # Ensure quantity field exists - prioritize net_quantity since that's what we need
+        if 'net_quantity' in processed_position:
+            processed_position['quantity'] = processed_position['net_quantity']
+        
+        # Handle average price
+        if 'average_buy_price' in processed_position and float(processed_position.get('average_buy_price', 0)) > 0:
+            processed_position['average_price'] = processed_position['average_buy_price']
+        elif 'average_sell_price' in processed_position and float(processed_position.get('average_sell_price', 0)) > 0:
+            processed_position['average_price'] = processed_position['average_sell_price']
+        
+        # Handle last price
+        if 'ltp' in processed_position:
+            processed_position['last_price'] = processed_position['ltp']
+        
+        # Handle buy/sell quantity
+        if 'buy_quantity' in processed_position:
+            processed_position['buy_quantity'] = processed_position['buy_quantity']
+        if 'sell_quantity' in processed_position:
+            processed_position['sell_quantity'] = processed_position['sell_quantity']
+            
+        # Handle pnl calculation
+        if ('ltp' in processed_position and 
+            'net_quantity' in processed_position and 
+            'average_buy_price' in processed_position and 
+            processed_position.get('net_quantity', 0) > 0):
+            # Calculate PnL for long positions
+            qty = float(processed_position['net_quantity'])
+            avg = float(processed_position['average_buy_price'])
+            ltp = float(processed_position['ltp'])
+            processed_position['pnl'] = (ltp - avg) * qty
+        elif ('ltp' in processed_position and 
+              'net_quantity' in processed_position and 
+              'average_sell_price' in processed_position and 
+              processed_position.get('net_quantity', 0) < 0):
+            # Calculate PnL for short positions
+            qty = abs(float(processed_position['net_quantity']))
+            avg = float(processed_position['average_sell_price'])
+            ltp = float(processed_position['ltp'])
+            processed_position['pnl'] = (avg - ltp) * qty
+            
+        processed_positions.append(processed_position)
+    
+    # Return processed positions
+    return processed_positions
 
 def transform_positions_data(positions_data):
     transformed_data = [] 
