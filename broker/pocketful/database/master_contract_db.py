@@ -3,15 +3,15 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
-import pandas as pd
 import gzip
 import io
 import zipfile
+# Use httpx client for connection pooling
+import httpx
+from utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -116,24 +116,34 @@ def copy_from_dataframe(df):
 
 
 def download_csv_pocketful_data(output_path):
-
-    # output_path = 'tmp'
-    # os.makedirs(output_path, exist_ok=True)
+    """
+    Downloads contract files from Pocketful API using httpx client with connection pooling
+    and extracts the contents to the specified output path.
+    """
+    # Get the shared httpx client
+    client = get_httpx_client()
+    
+    # API endpoint for contract download
     zip_url = "https://trade.pocketful.in/api/v1/contract/Compact?info=download&exchanges=NSE,NFO,BSE,BFO,MCX"
     downloaded_files = []
 
     try: 
-        response = requests.get(zip_url, timeout=10)
+        # Use the httpx client to make the request
+        response = client.get(zip_url)
         response.raise_for_status()
+        
+        # Extract the ZIP file contents
         with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
             zip_file.extractall(output_path)
             extracted_files = zip_file.namelist()
             downloaded_files.extend([os.path.join(output_path, name) for name in extracted_files])
             print("Extraction successful!")
-    except requests.RequestException as e:
-        print(f"Failed to download ZIP archive. Error: {e}")
+    except httpx.HTTPError as e:
+        print(f"Failed to download ZIP archive. HTTP Error: {e}")
     except zipfile.BadZipFile as e:
         print(f"Failed to extract ZIP archive. Error: {e}")
+    except Exception as e:
+        print(f"Unexpected error during contract download: {e}")
 
     return downloaded_files
     

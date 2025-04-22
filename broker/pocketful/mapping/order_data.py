@@ -4,6 +4,7 @@ from database.token_db import get_symbol , get_oa_symbol
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
+    Handles different field names in Pocketful API response.
     
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
@@ -11,38 +12,62 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if order_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data['data']
+    # Check if we have any data
+    if not order_data or 'data' not in order_data:
+        print("No data available or invalid format.")
+        return {}
         
-    #print(order_data)
-
-    if order_data:
-        for order in order_data:
-            # Extract the instrument_token and exchange for the current order
+    # Handle Pocketful's response format which might have nested orders
+    if isinstance(order_data['data'], dict) and 'orders' in order_data['data']:
+        orders = order_data['data']['orders']
+    else:
+        orders = order_data['data']
+    
+    if not orders:
+        print("No orders found in data.")
+        return orders
+    
+    # Process each order
+    for order in orders:
+        # Safely extract exchange
+        if 'exchange' in order:
             exchange = order['exchange']
-            symbol = order['tradingsymbol']
-       
+        else:
+            print(f"Warning: Order missing 'exchange' field: {order}")
+            continue
             
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
-            else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
-    return order_data
+        # Safely extract symbol (handle both possible field names)
+        symbol = None
+        if 'trading_symbol' in order:
+            symbol = order['trading_symbol']
+            # Add 'tradingsymbol' field for consistency with rest of the system
+            order['tradingsymbol'] = symbol
+        elif 'tradingsymbol' in order:
+            symbol = order['tradingsymbol']
+        else:
+            print(f"Warning: Order missing symbol fields (tried 'trading_symbol' and 'tradingsymbol'): {order}")
+            continue
+        
+        # Check if symbol was found; if so, update with OpenAlgo format
+        if symbol:
+            # Convert to OpenAlgo symbol format
+            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            order['tradingsymbol'] = oa_symbol
+            # Also update trading_symbol if it exists to maintain consistency
+            if 'trading_symbol' in order:
+                order['trading_symbol'] = oa_symbol
+        else:
+            print(f"Symbol is empty for exchange {exchange}. Keeping original symbol.")
+    
+    # Return processed orders
+    return orders
 
 
 def calculate_order_statistics(order_data):
     """
     Calculates statistics from order data, including totals for buy orders, sell orders,
     completed orders, open orders, and rejected orders.
+    Handles different field names in Pocketful API response.
 
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
@@ -56,19 +81,49 @@ def calculate_order_statistics(order_data):
 
     if order_data:
         for order in order_data:
+            # Get transaction type - check different possible field names
+            transaction_type = None
+            if 'transaction_type' in order:
+                transaction_type = order['transaction_type']
+            elif 'order_side' in order:
+                transaction_type = order['order_side']
+                
             # Count buy and sell orders
-            if order['transaction_type'] == 'BUY':
-                total_buy_orders += 1
-            elif order['transaction_type'] == 'SELL':
-                total_sell_orders += 1
+            if transaction_type:
+                if transaction_type.upper() == 'BUY':
+                    total_buy_orders += 1
+                elif transaction_type.upper() == 'SELL':
+                    total_sell_orders += 1
             
-            # Count orders based on their status
-            if order['status'] == 'COMPLETE':
-                total_completed_orders += 1
-            elif order['status'] == 'OPEN':
+            # Get status and mode for classification
+            status = None
+            if 'status' in order:
+                status = order['status'].upper() if order['status'] else ''
+            elif 'order_status' in order:
+                status = order['order_status'].upper() if order['order_status'] else ''
+            
+            mode = order.get('mode', '').upper()
+            
+            # Flag to track if order has been counted
+            counted = False
+            
+            # Classify order based on status
+            if status:
+                if 'COMPLETE' in status:
+                    total_completed_orders += 1
+                    counted = True
+                elif 'REJECTED' in status:
+                    total_rejected_orders += 1
+                    counted = True
+            
+            # Count as open if either status or mode indicates it's open and hasn't been counted yet
+            if not counted and (('OPEN' in (status or '') or 
+                              'NEW' in (status or '') or 
+                              'PENDING' in (status or '') or 
+                              'SUBMIT' in (status or '') or 
+                              'MODIFY' in (status or '') or 
+                              mode == 'NEW')):
                 total_open_orders += 1
-            elif order['status'] == 'REJECTED':
-                total_rejected_orders += 1
 
     # Compile and return the statistics
     return {
@@ -79,48 +134,92 @@ def calculate_order_statistics(order_data):
         'total_rejected_orders': total_rejected_orders
     }
 
-
 def transform_order_data(orders):
-    # Directly handling a dictionary assuming it's the structure we expect
+    """
+    Transform order data from Pocketful API format to OpenAlgo standard format.
+    Handles both completed and pending orders from the combined order book.
+    
+    Args:
+        orders: Order data from Pocketful API. Can be a single order dict, a list of orders,
+               or a response dict containing orders in data field.
+    
+    Returns:
+        List of transformed orders in standard format
+    """
+    # Extract orders from data if it's a response object
+    if isinstance(orders, dict) and 'data' in orders:
+        # Handle both possible formats from our API functions
+        if isinstance(orders['data'], list):
+            orders = orders['data']
+        elif isinstance(orders['data'], dict) and 'orders' in orders['data']:
+            orders = orders['data']['orders']
+        else:
+            print(f"Warning: Unexpected data structure. Expected orders in data field.")
+            orders = []
+    
+    # If we have a single order dict, convert it to a list
     if isinstance(orders, dict):
-        # Convert the single dictionary into a list of one dictionary
         orders = [orders]
-
+    
+    # Initialize result list
     transformed_orders = []
     
     for order in orders:
-        # Make sure each item is indeed a dictionary
+        # Skip non-dict items
         if not isinstance(order, dict):
             print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
-
-        if(order.get("status", "")=="COMPLETE"):
+        
+        # Map order status
+        order_status = "unknown"
+        status = order.get("order_status", "").upper()
+        mode = order.get("mode", "").upper()
+        
+        # Handle different status mappings
+        if "COMPLETE" in status:
             order_status = "complete"
-        if(order.get("status", "")=="REJECTED"):
+        elif "REJECTED" in status:
             order_status = "rejected"
-        if(order.get("status", "")=="TRIGGER PENDING"):
+        elif "TRIGGER PENDING" in status:
             order_status = "trigger pending"
-        if(order.get("status", "")=="OPEN"):
+        elif "OPEN" in status or "PENDING" in status or "AMO_SUBMIT" in status or "MODIFY" in status or mode == "NEW":
             order_status = "open"
-        if(order.get("status", "")=="CANCELLED"):
+        elif "CANCEL" in status:
             order_status = "cancelled"
-
+        
+        # Get symbol from trading_symbol or tradingsymbol (handling different formats)
+        symbol = order.get("trading_symbol", order.get("tradingsymbol", ""))
+        
+        # Get transaction type from order_side or transaction_type
+        action = order.get("order_side", order.get("transaction_type", ""))
+        if action.upper() == "BUY":
+            action = "BUY"
+        elif action.upper() == "SELL":
+            action = "SELL"
+        
+        # Get order type
+        price_type = order.get("order_type", "")
+        
+        # Create transformed order
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
+            "symbol": symbol,
             "exchange": order.get("exchange", ""),
-            "action": order.get("transaction_type", ""),
+            "action": action,
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("order_type", ""),
+            "pricetype": price_type,
             "product": order.get("product", ""),
-            "orderid": order.get("order_id", ""),
+            "orderid": order.get("oms_order_id", order.get("order_id", "")),
             "order_status": order_status,
-            "timestamp": order.get("order_timestamp", "")
+            "timestamp": order.get("order_entry_time", order.get("order_timestamp", "")),
+            "filled_quantity": order.get("filled_quantity", 0),
+            "pending_quantity": order.get("remaining_quantity", 0),
+            "average_price": order.get("average_price", 0.0) or order.get("average_trade_price", 0.0)
         }
-
+        
         transformed_orders.append(transformed_order)
-
+    
     return transformed_orders
 
 def map_trade_data(trade_data):
@@ -243,7 +342,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
+                print(f"Pocketful Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 

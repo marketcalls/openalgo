@@ -1,9 +1,8 @@
-import http.client
 import json
-import os
 import urllib.parse
-from database.token_db import get_br_symbol, get_oa_symbol
-from broker.zerodha.database.master_contract_db import SymToken, db_session
+import requests
+from database.token_db import get_br_symbol
+from broker.pocketful.database.master_contract_db import SymToken, db_session
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
@@ -22,44 +21,57 @@ class ZerodhaAPIError(Exception):
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    base_url = "https://trade.pocketful.in"
+    url = f"{base_url}{endpoint}"
+    
     headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+        'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json'
     }
 
     try:
         # Log the complete request details for debugging
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://api.kite.trade{endpoint}")
+        logger.info(f"URL: {url}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.info(f"Payload: {payload}")
 
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
+        # Make the request using requests library
+        if method == "GET":
+            response = requests.get(url, headers=headers, timeout=30)
+        elif method == "POST":
+            response = requests.post(url, headers=headers, data=payload, timeout=30)
+        elif method == "PUT":
+            response = requests.put(url, headers=headers, data=payload, timeout=30)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=30)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+            
+        # Parse the response
+        try:
+            response_data = response.json()
+        except ValueError:
+            logger.error(f"Invalid JSON response: {response.text}")
+            raise ZerodhaAPIError(f"Invalid JSON response")
 
         # Log the complete response
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.info(f"Response Body: {json.dumps(response_data, indent=2)}")
 
-        # Check for permission errors
-        if response.get('status') == 'error':
-            error_type = response.get('error_type')
-            error_message = response.get('message', 'Unknown error')
-            
-            if error_type == 'PermissionException' or 'permission' in error_message.lower():
+        # Check for errors
+        if response_data.get('status') == 'error':
+            error_message = response_data.get('message', 'Unknown error')
+            if 'permission' in error_message.lower():
                 raise ZerodhaPermissionError(f"API Permission denied: {error_message}.")
             else:
                 raise ZerodhaAPIError(f"API Error: {error_message}")
 
-        return response
+        return response_data
     except ZerodhaPermissionError:
         raise
     except ZerodhaAPIError:
