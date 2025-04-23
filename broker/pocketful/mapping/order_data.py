@@ -77,7 +77,7 @@ def calculate_order_statistics(order_data):
     """
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
-    total_completed_orders = total_open_orders = total_rejected_orders = 0
+    total_completed_orders = total_open_orders = total_rejected_orders = total_cancelled_orders = 0
 
     if order_data:
         for order in order_data:
@@ -109,7 +109,10 @@ def calculate_order_statistics(order_data):
             
             # Classify order based on status
             if status:
-                if 'COMPLETE' in status:
+                if 'CANCEL_CONFIRMED' in status:  # Check for cancelled status first
+                    total_cancelled_orders += 1
+                    counted = True
+                elif 'COMPLETE' in status:
                     total_completed_orders += 1
                     counted = True
                 elif 'REJECTED' in status:
@@ -131,9 +134,9 @@ def calculate_order_statistics(order_data):
         'total_sell_orders': total_sell_orders,
         'total_completed_orders': total_completed_orders,
         'total_open_orders': total_open_orders,
-        'total_rejected_orders': total_rejected_orders
+        'total_rejected_orders': total_rejected_orders,
+        'total_cancelled_orders': total_cancelled_orders,
     }
-
 
 def transform_order_data(orders):
     """
@@ -177,7 +180,9 @@ def transform_order_data(orders):
         mode = order.get("mode", "").upper()
         
         # Handle different status mappings
-        if "COMPLETE" in status:
+        if "CANCEL_CONFIRMED" in status:
+            order_status = "cancelled"
+        elif "COMPLETE" in status:
             order_status = "complete"
         elif "REJECTED" in status:
             order_status = "rejected"
