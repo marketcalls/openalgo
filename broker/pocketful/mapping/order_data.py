@@ -488,18 +488,195 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
-    transformed_data = []
-    for holdings in holdings_data:
-        transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
+    """
+    Transform holdings data from Pocketful API format to OpenAlgo standard format.
+    Handles responses from both /api/v1/holdings and /api/v1/portfolio/demat-holdings endpoints.
+    Can be called twice in the pipeline, so it detects if data is already transformed.
+    
+    Args:
+        holdings_data: Response from Pocketful's holdings API or previously transformed data
         
+    Returns:
+        List of transformed holdings in standard format
+    """
+    if not holdings_data:
+        print("No holdings data available")
+        return []
+        
+    print(f"DEBUG - Transforming {len(holdings_data)} holdings entries")
+    if holdings_data and len(holdings_data) > 0:
+        print(f"DEBUG - Sample holding data: {holdings_data[0]}")
+    
+    # Check if this data has already been transformed (called twice in the pipeline)
+    # If the first item has 'symbol' and 'product' fields, it's likely already been transformed
+    is_already_transformed = False
+    if holdings_data and isinstance(holdings_data, list) and len(holdings_data) > 0:
+        first_item = holdings_data[0]
+        if isinstance(first_item, dict) and 'symbol' in first_item and 'product' in first_item:
+            print("DEBUG - Data appears to be already transformed, preserving existing transformation")
+            is_already_transformed = True
+            # Keep existing transformed data if it has valid symbols
+            if first_item.get('symbol'):
+                return holdings_data
+    
+    transformed_data = []
+    for holding in holdings_data:
+        # Extract tradingsymbol and exchange with fallbacks for different field names
+        tradingsymbol = None
+        
+        # Check all possible field names for trading symbol
+        for field in ['tradingsymbol', 'trading_symbol', 'symbol']:
+            if field in holding and holding[field]:
+                tradingsymbol = holding[field]
+                print(f"DEBUG - Found symbol in '{field}' field: {tradingsymbol}")
+                break
+                
+        # If still not found, check in instrument_details if available
+        if not tradingsymbol and 'instrument_details' in holding and isinstance(holding['instrument_details'], dict):
+            if 'trading_symbol' in holding['instrument_details']:
+                tradingsymbol = holding['instrument_details']['trading_symbol']
+                print(f"DEBUG - Found symbol in instrument_details.trading_symbol: {tradingsymbol}")
+            elif 'symbol' in holding['instrument_details']:
+                tradingsymbol = holding['instrument_details']['symbol']
+                print(f"DEBUG - Found symbol in instrument_details.symbol: {tradingsymbol}")
+                
+        # Last fallback - check the 'symbol' field directly
+        if not tradingsymbol and 'symbol' in holding:
+            tradingsymbol = holding['symbol']
+            print(f"DEBUG - Using 'symbol' field directly: {tradingsymbol}")
+            
+        if not tradingsymbol:
+            print(f"WARNING: Could not find trading symbol in holding: {holding}")
+            continue
+            
+        # Get exchange with fallbacks
+        exchange = holding.get('exchange', 'NSE')  # Default to NSE if not specified
+        
+        # Convert to OpenAlgo symbol format if needed
+        if tradingsymbol and exchange:
+            # Clean up the symbol if it has -EQ suffix
+            if tradingsymbol.endswith('-EQ'):
+                tradingsymbol = tradingsymbol.replace('-EQ', '')
+                print(f"DEBUG - Removed -EQ suffix, symbol is now: {tradingsymbol}")
+            
+            # Try to convert to OpenAlgo symbol format
+            try:
+                print(f"DEBUG - Converting symbol '{tradingsymbol}' for exchange '{exchange}' to OpenAlgo format")
+                oa_symbol = get_oa_symbol(symbol=tradingsymbol, exchange=exchange)
+                if oa_symbol:
+                    tradingsymbol = oa_symbol
+                    print(f"DEBUG - Converted to OpenAlgo symbol: {tradingsymbol}")
+                else:
+                    print(f"DEBUG - Could not convert to OpenAlgo symbol, using original: {tradingsymbol}")
+            except Exception as e:
+                print(f"DEBUG - Error converting symbol to OpenAlgo format: {str(e)}")
+                # If conversion fails, still use the cleaned symbol
+                print(f"DEBUG - Using original symbol: {tradingsymbol}")
+        
+        # Get quantity with fallbacks for different field names
+        quantity = 0
+        for field in ['quantity', 'free_quantity', 'qty']:
+            if field in holding and holding[field] is not None:
+                try:
+                    quantity = int(float(holding[field]))
+                    print(f"DEBUG - Found quantity in '{field}' field: {quantity}")
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        # Get average price with fallbacks
+        average_price = 0.0
+        for field in ['average_price', 'buy_avg', 'avg_price', 'buy_price']:
+            if field in holding and holding[field] is not None:
+                try:
+                    average_price = float(holding[field])
+                    print(f"DEBUG - Found average price in '{field}' field: {average_price}")
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        # Get last price (LTP) with fallbacks
+        last_price = 0.0
+        for field in ['last_price', 'ltp', 'current_price', 'market_price']:
+            if field in holding and holding[field] is not None:
+                try:
+                    last_price = float(holding[field])
+                    print(f"DEBUG - Found last price in '{field}' field: {last_price}")
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        # Calculate P&L if not directly provided
+        pnl = 0.0
+        if 'pnl' in holding and holding['pnl'] is not None:
+            try:
+                pnl = float(holding['pnl'])
+            except (ValueError, TypeError):
+                # Calculate if conversion fails
+                pnl = (last_price - average_price) * quantity if quantity > 0 and average_price > 0 else 0.0
+        else:
+            # Calculate if not provided
+            pnl = (last_price - average_price) * quantity if quantity > 0 and average_price > 0 else 0.0
+        
+        # Calculate P&L percentage
+        pnl_percent = 0.0
+        if 'pnl_percent' in holding or 'pnl_percentage' in holding:
+            try:
+                pnl_percent = float(holding.get('pnl_percent') or holding.get('pnl_percentage', 0.0))
+            except (ValueError, TypeError):
+                # Calculate if conversion fails
+                pnl_percent = ((last_price - average_price) / average_price * 100) if average_price > 0 else 0.0
+        else:
+            # Calculate if not provided
+            pnl_percent = ((last_price - average_price) / average_price * 100) if average_price > 0 else 0.0
+        
+        print(f"DEBUG - Final transformed symbol: {tradingsymbol}")
+        print(f"DEBUG - P&L calculated: {pnl}")
+        
+        # Create transformed holding with all available fields
+        transformed_holding = {
+            "symbol": tradingsymbol,  # This must never be None
+            "exchange": exchange,
+            "quantity": quantity,
+            "average_price": round(average_price, 2),
+            "last_price": round(last_price, 2),
+            "product": "CNC",  # Holdings are always CNC (Cash and Carry)
+            "pnl": round(pnl, 2),
+            "pnlpercent": round(pnl_percent, 2),
+            # Additional fields with fallbacks
+            "close_price": float(holding.get('close_price') or holding.get('previous_close', 0.0)),
+            "isin": holding.get('isin', ''),
+            "day_change": float(holding.get('day_change', 0.0)),
+            "day_change_percentage": float(holding.get('day_change_percentage', 0.0)),
         }
-        transformed_data.append(transformed_position)
+        
+        # Ensure symbol is never None in the final output
+        if transformed_holding["symbol"] is None:
+            print(f"WARNING: Symbol is still None after transformation. Using fallback.")
+            # Try using the 'symbol' field directly, which should be available in the Pocketful API response
+            if 'symbol' in holding and holding['symbol']:
+                transformed_holding["symbol"] = holding['symbol']
+                print(f"DEBUG - Using symbol from input directly: {transformed_holding['symbol']}")
+            # If still no symbol, use trading_symbol
+            elif 'trading_symbol' in holding and holding['trading_symbol']:
+                transformed_holding["symbol"] = holding['trading_symbol']
+                print(f"DEBUG - Using trading_symbol as fallback: {transformed_holding['symbol']}")
+            # Next try ISIN as a fallback
+            elif transformed_holding["isin"]:
+                transformed_holding["symbol"] = f"ISIN_{transformed_holding['isin']}"
+                print(f"DEBUG - Using ISIN as symbol placeholder: {transformed_holding['symbol']}")
+            # Last resort - use a placeholder with a unique identifier
+            else:
+                unique_id = hash(str(holding)) % 10000  # Create a deterministic ID from the holding data
+                transformed_holding["symbol"] = f"UNKNOWN_{unique_id}"
+                print(f"WARNING: Created placeholder symbol: {transformed_holding['symbol']}")
+        
+        transformed_data.append(transformed_holding)
+    
+    print(f"DEBUG - Transformed {len(transformed_data)} holdings entries")
+    if transformed_data and len(transformed_data) > 0:
+        print(f"DEBUG - Sample transformed holding: {transformed_data[0]}")
+    
     return transformed_data
 
     
@@ -508,47 +685,116 @@ def map_portfolio_data(portfolio_data):
     Processes and modifies a list of Portfolio dictionaries based on specific conditions.
     
     Parameters:
-    - portfolio_data: A list of dictionaries, where each dictionary represents an portfolio information.
+    - portfolio_data: Data from the holdings API, could be a list of dictionaries or a dict with data inside.
     
     Returns:
-    - The modified portfolio_data with  'product' fields.
+    - The processed portfolio data with standardized 'product' fields.
     """
-        # Check if 'data' is None
-    if portfolio_data['data'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        portfolio_data = portfolio_data['data']
+    print(f"DEBUG - map_portfolio_data input type: {type(portfolio_data)}")
+    
+    # Handle different input formats safely
+    processed_data = []
+    
+    # Case 1: portfolio_data is a dict with 'data' key
+    if isinstance(portfolio_data, dict) and 'data' in portfolio_data:
+        if portfolio_data['data'] is None:
+            print("DEBUG - No data available in portfolio_data['data'].")
+            return []
+        processed_data = portfolio_data['data']
+    
+    # Case 2: portfolio_data is already a list
+    elif isinstance(portfolio_data, list):
+        processed_data = portfolio_data
+    
+    # Case 3: portfolio_data is a dict but doesn't have 'data' key
+    elif isinstance(portfolio_data, dict):
+        print(f"DEBUG - Portfolio data keys: {portfolio_data.keys()}")
+        # Try to find list data in other common keys
+        for key in ['holdings', 'holdingsData', 'portfolio']:
+            if key in portfolio_data and isinstance(portfolio_data[key], list):
+                processed_data = portfolio_data[key]
+                break
+        # If still no data found but there are dict values, check if any value is a list
+        if not processed_data:
+            for key, value in portfolio_data.items():
+                if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+                    processed_data = value
+                    break
+    
+    # Final check and processing
+    if not processed_data:
+        print("DEBUG - No portfolio data found after processing.")
+        return []
         
-
-
-    if portfolio_data:
-        for portfolio in portfolio_data:
-            if portfolio['product'] == 'CNC':
-                portfolio['product'] = 'CNC'
-
+    print(f"DEBUG - Processing {len(processed_data)} portfolio entries")
+    
+    # Process each portfolio item
+    for item in processed_data:
+        if 'product' in item:
+            # Ensure CNC is correctly mapped (it already is for Pocketful)
+            if item['product'] == 'CNC':
+                pass  # Already correct
             else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
-                
-    return portfolio_data
+                print(f"DEBUG - Non-CNC product found: {item['product']}")
+        else:
+            # If product is missing, default to CNC for holdings
+            item['product'] = 'CNC'
+    
+    return processed_data
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item['last_price'] * item['quantity'] for item in holdings_data)
-    totalinvvalue = sum(item['average_price'] * item['quantity'] for item in holdings_data)
-    totalprofitandloss = sum(item['pnl'] for item in holdings_data)
+    """
+    Calculate portfolio statistics from holdings data.
     
-    # To avoid division by zero in the case when total_investment_value is 0
-    totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
-
-    return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
-    }
+    Args:
+        holdings_data: List of transformed holdings data entries
+        
+    Returns:
+        Dictionary with portfolio statistics
+    """
+    if not holdings_data:
+        print("No holdings data available for calculating statistics")
+        return {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0
+        }
+        
+    print(f"DEBUG - Calculating portfolio statistics for {len(holdings_data)} holdings entries")
+    
+    try:
+        # Calculate total holding value (current market value)
+        totalholdingvalue = sum(float(item.get('last_price', 0)) * float(item.get('quantity', 0)) for item in holdings_data)
+        
+        # Calculate total investment value (cost basis)
+        totalinvvalue = sum(float(item.get('average_price', 0)) * float(item.get('quantity', 0)) for item in holdings_data)
+        
+        # Get the sum of all individual P&Ls
+        totalprofitandloss = sum(float(item.get('pnl', 0)) for item in holdings_data)
+        
+        # Calculate overall P&L percentage (avoiding division by zero)
+        totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue > 0 else 0.0
+        
+        # Round values for better display
+        result = {
+            'totalholdingvalue': round(totalholdingvalue, 2),
+            'totalinvvalue': round(totalinvvalue, 2),
+            'totalprofitandloss': round(totalprofitandloss, 2),
+            'totalpnlpercentage': round(totalpnlpercentage, 2)
+        }
+        
+        print(f"DEBUG - Portfolio statistics: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"ERROR - Failed to calculate portfolio statistics: {str(e)}")
+        return {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0
+        }
 
 

@@ -385,7 +385,103 @@ def get_holdings(auth):
     Returns:
         Dictionary with holdings data in standard format
     """
-    return get_api_response("/portfolio/holdings", auth)
+    print(f"DEBUG - Fetching Pocketful holdings")
+    
+    # Get client_id needed for API requests
+    client_id = get_client_id(auth)
+    if not client_id:
+        return {"status": "error", "message": "Client ID not found"}
+    
+    print(f"DEBUG - Using client_id: {client_id}")
+    
+    # The Pocketful holdings endpoint with client_id parameter
+    endpoint = f"{BASE_URL}/api/v1/holdings?client_id={client_id}"
+    
+    print(f"DEBUG - Using holdings endpoint: {endpoint}")
+    
+    # Make the API request
+    holdings_response = get_api_response(endpoint, auth)
+    
+    # Check if response is HTML (likely a login page)
+    if isinstance(holdings_response, dict) and holdings_response.get("message") and "<!doctype html>" in holdings_response.get("message", ""):
+        print(f"DEBUG - Received HTML response instead of JSON. Likely not authenticated or wrong endpoint.")
+        return {"status": "error", "message": "Received HTML response instead of JSON. Please check authentication.", "data": []}
+    
+    # Check if there was an error in the API response
+    if holdings_response.get("status") == "error":
+        print(f"DEBUG - Error fetching holdings: {holdings_response.get('message')}")
+        return holdings_response
+    
+    # Transform the holdings data into the standard format
+    from broker.pocketful.mapping.order_data import transform_holdings_data
+    
+    # Print debug information about the response
+    print(f"DEBUG - Holdings response type: {type(holdings_response)}")
+    print(f"DEBUG - Holdings response keys: {holdings_response.keys() if isinstance(holdings_response, dict) else 'Not a dictionary'}")
+    
+    # Handle different possible response structures
+    holdings_data = []
+    
+    # From the logs, we can see the structure is {"data":{"holdings":[...]}}
+    try:
+        if isinstance(holdings_response, dict):
+            # Case 1: data -> holdings -> array (this is the actual structure from the API)
+            if ("data" in holdings_response and 
+                isinstance(holdings_response["data"], dict) and 
+                "holdings" in holdings_response["data"] and
+                isinstance(holdings_response["data"]["holdings"], list)):
+                
+                holdings_data = holdings_response["data"]["holdings"]
+                print(f"DEBUG - Found {len(holdings_data)} holdings in data.holdings path")
+                
+            # Case 2: data -> array
+            elif "data" in holdings_response and isinstance(holdings_response["data"], list):
+                holdings_data = holdings_response["data"]
+                print(f"DEBUG - Found {len(holdings_data)} holdings in data path (list)")
+                
+            # Case 3: holdings -> array
+            elif "holdings" in holdings_response and isinstance(holdings_response["holdings"], list):
+                holdings_data = holdings_response["holdings"]
+                print(f"DEBUG - Found {len(holdings_data)} holdings in holdings path")
+                
+            # Case 4: data -> other field containing holdings
+            elif "data" in holdings_response and isinstance(holdings_response["data"], dict):
+                data_obj = holdings_response["data"]
+                found = False
+                for key, value in data_obj.items():
+                    if isinstance(value, list):
+                        holdings_data = value
+                        print(f"DEBUG - Found {len(holdings_data)} holdings in data.{key} path")
+                        found = True
+                        break
+                        
+                if not found:
+                    print(f"DEBUG - No list data found in data object. Keys: {data_obj.keys()}")
+        
+        # Handle direct list response
+        if not holdings_data and isinstance(holdings_response, list):
+            holdings_data = holdings_response
+            print(f"DEBUG - Using direct list response for holdings")
+    
+    except Exception as e:
+        print(f"DEBUG - Error extracting holdings data: {str(e)}")
+        print(f"DEBUG - Response structure: {type(holdings_response)}")
+        if isinstance(holdings_response, dict):
+            print(f"DEBUG - Response keys: {holdings_response.keys()}")
+        return {"status": "error", "message": f"Failed to extract holdings data: {str(e)}", "data": []}
+    
+    # Direct list response is already handled in the try block above
+    
+    print(f"DEBUG - Extracted {len(holdings_data)} holdings entries")
+    if holdings_data and len(holdings_data) > 0:
+        print(f"DEBUG - Sample holding: {holdings_data[0]}")
+    else:
+        print("DEBUG - No holdings data found or empty array")
+        # Return empty data to avoid errors in the UI
+        return {"status": "success", "data": []}
+    
+    transformed_holdings = transform_holdings_data(holdings_data)
+    return {"status": "success", "data": transformed_holdings}
 
 def get_open_position(tradingsymbol, exchange, product, auth):
     """
