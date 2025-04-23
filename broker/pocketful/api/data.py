@@ -210,103 +210,14 @@ class BrokerData:
         Returns:
             pd.DataFrame: Historical data with OHLCV
         """
-        try:
-            # Convert timeframe to Zerodha format
-            resolution = self.timeframe_map.get(timeframe)
-            if not resolution:
-                raise Exception(f"Unsupported timeframe: {timeframe}")
-            
-
-            # Convert symbol to broker format
-            br_symbol = get_br_symbol(symbol, exchange)
-
-            # Get the token from database
-            with db_session() as session:
-                symbol_info = session.query(SymToken).filter(
-                    SymToken.exchange == exchange,
-                    SymToken.brsymbol == br_symbol
-                ).first()
-                
-                if not symbol_info:
-                    all_symbols = session.query(SymToken).filter(
-                        SymToken.exchange == exchange
-                    ).all()
-                    logger.info(f"All matching symbols in DB: {[(s.symbol, s.brsymbol, s.exchange, s.brexchange, s.token) for s in all_symbols]}")
-                    raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
-                
-                # Split token to get instrument_token for historical data
-                instrument_token = symbol_info.token.split('::::')[0]
-
-            if(exchange=="NSE_INDEX"):
-                exchange="NSE"  
-            elif(exchange=="BSE_INDEX"):
-                exchange="BSE"
-
-            # Convert dates to datetime objects
-            start_date = pd.to_datetime(from_date)
-            end_date = pd.to_datetime(to_date)
-            
-            # Initialize empty list to store DataFrames
-            dfs = []
-            
-            # Process data in 60-day chunks
-            current_start = start_date
-            while current_start <= end_date:
-                # Calculate chunk end date (60 days or remaining period)
-                current_end = min(current_start + timedelta(days=59), end_date)
-                
-                # Format dates for API call
-                from_str = current_start.strftime('%Y-%m-%d+00:00:00')
-                to_str = current_end.strftime('%Y-%m-%d+23:59:59')
-                
-                # Log the request details
-                logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
-                
-                # Construct endpoint
-                endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}"
-                logger.info(f"Making request to endpoint: {endpoint}")
-                
-                # Use get_api_response
-                response = get_api_response(endpoint, self.auth_token)
-                
-                if not response or response.get('status') != 'success':
-                    logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from Zerodha API: {response.get('message', 'Unknown error')}")
-                
-                # Convert to DataFrame
-                candles = response.get('data', {}).get('candles', [])
-                if candles:
-                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    dfs.append(df)
-                
-                # Move to next chunk
-                current_start = current_end + timedelta(days=1)
-                
-            # If no data was found, return empty DataFrame
-            if not dfs:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # Combine all chunks
-            final_df = pd.concat(dfs, ignore_index=True)
-            
-            # Convert timestamp to epoch properly using ISO format
-            final_df['timestamp'] = pd.to_datetime(final_df['timestamp'], format='ISO8601')
-            final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9  # Convert nanoseconds to seconds
-            
-            # Sort by timestamp and remove duplicates
-            final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-            
-            # Ensure volume is integer
-            final_df['volume'] = final_df['volume'].astype(int)
-            
-            return final_df
-                
-        except ZerodhaPermissionError as e:
-            logger.error(f"Permission error fetching historical data: {str(e)}")
-            raise
-        except (ZerodhaAPIError, Exception) as e:
-            logger.error(f"Error fetching historical data: {str(e)}")
-            raise ZerodhaAPIError(f"Error fetching historical data: {str(e)}")
+        # Return an empty DataFrame with a success status
+        logger.info("Historical data not supported by Pocketful")
+        # Create empty DataFrame with expected columns
+        empty_df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        # Add custom status and message attributes to the DataFrame
+        empty_df.attrs['status'] = 'success'
+        empty_df.attrs['message'] = 'Pocketful does not support historical data API'
+        return empty_df
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
