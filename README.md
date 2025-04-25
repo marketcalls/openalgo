@@ -35,6 +35,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Jainam (Dealer)**
 - **Kotak** 
 - **Paytm**
+- **Pocketful**
 - **Shoonya**
 - **Upstox**
 - **Wisdom Capital**
