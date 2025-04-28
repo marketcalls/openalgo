@@ -200,7 +200,7 @@ class PlaceOrder(Resource):
                 executor.submit(async_log_order, 'placeorder', data, error_response)
                 return make_response(jsonify(error_response), 500)
 
-            if res.status_code == 200:
+            if res.status == 200:
                 socketio.emit('order_event', {
                     'symbol': order_data['symbol'],
                     'action': order_data['action'],

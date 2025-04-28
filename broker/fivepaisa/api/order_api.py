@@ -201,6 +201,9 @@ def place_order_api(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
         else:
             orderid = None
             
+        # Add status attribute to make it compatible with place_order.py
+        response.status = response.status_code
+            
         return response, response_data, orderid
         
     except Exception as e:
