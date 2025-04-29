@@ -60,6 +60,7 @@ def get_api_response(endpoint: str, auth: str, method: str = "GET", payload: str
             )
             
         response.raise_for_status()
+        print(f"Response: {response.json()}")
         return response.json()
         
     except httpx.HTTPStatusError as e:
@@ -111,14 +112,44 @@ def get_positions(auth: str) -> Dict[str, Any]:
         auth (str): Authentication token
         
     Returns:
-        Dict[str, Any]: Net positions data
+        Dict[str, Any]: Net positions data or empty dict on failure
     """
-    try:
-        payload = json.dumps(json_data)
-        return get_api_response("/VendorsAPI/Service1.svc/V2/NetPositionNetWise", auth, method="POST", payload=payload)
-    except Exception as e:
-        print(f"Error getting positions: {str(e)}")
-        raise
+    # Positions API often needs longer timeout
+    max_retries = 3
+    current_retry = 0
+    
+    while current_retry < max_retries:
+        try:
+            # Get the shared httpx client
+            client = get_httpx_client()
+            payload = json.dumps(json_data)
+            
+            # Use a longer timeout specifically for positions endpoint
+            headers = {
+                'Authorization': f'bearer {auth}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Make the request with extended timeout
+            response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/V2/NetPositionNetWise",
+                content=payload,
+                headers=headers,
+                timeout=60.0  # Extended timeout for this specific endpoint
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.TimeoutException as e:
+            current_retry += 1
+            print(f"Timeout getting positions (attempt {current_retry}/{max_retries}): {str(e)}")
+            if current_retry >= max_retries:
+                print("Maximum retries reached for positions data. Returning empty result.")
+                return {"body": {"NetPositionDetail": []}}  # Return empty position structure
+        except Exception as e:
+            print(f"Error getting positions: {str(e)}")
+            return {"body": {"NetPositionDetail": []}}  # Return empty position structure on any error
 
 def get_holdings(auth: str) -> Dict[str, Any]:
     """Get holdings for the client
@@ -136,27 +167,56 @@ def get_holdings(auth: str) -> Dict[str, Any]:
         print(f"Error getting holdings: {str(e)}")
         raise
 
-def get_open_position(tradingsymbol: str, exchange: str, Exch: str, ExchType: str, producttype: str, auth: str) -> Optional[Dict[str, Any]]:
-    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    token = int(get_token(tradingsymbol, exchange))  # Convert token to integer
-    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    positions_data = get_positions(auth)
-    print("Token : ",token)
-    print("Product Type : ",producttype)
-    print(positions_data)
-
-
-
-    net_qty = '0'
-
-    if positions_data and positions_data.get('body'):
-        for position in positions_data['body']['NetPositionDetail']:
-
-            if position.get('ScripCode') == token and position.get('Exch') == Exch and position.get('ExchType') == ExchType and position.get('OrderFor') == producttype:
-                net_qty = position.get('NetQty', '0')
-                break  # Assuming you need the first match
-
-    return net_qty
+def get_open_position(tradingsymbol: str, exchange: str, Exch: str, ExchType: str, producttype: str, auth: str) -> str:
+    """Get open position for a specific trading symbol
+    
+    Args:
+        tradingsymbol (str): Trading symbol in OpenAlgo format
+        exchange (str): Exchange in OpenAlgo format
+        Exch (str): Exchange in 5Paisa format
+        ExchType (str): Exchange type in 5Paisa format
+        producttype (str): Product type (MIS, NRML, etc.)
+        auth (str): Authentication token
+        
+    Returns:
+        str: Net quantity as string, '0' if no position found
+    """
+    try:
+        # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+        token = int(get_token(tradingsymbol, exchange))  # Convert token to integer
+        tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+        positions_data = get_positions(auth)
+        
+        print("Token : ", token)
+        print("Product Type : ", producttype)
+        
+        # Only print positions if we have data
+        if positions_data and positions_data.get('body') and positions_data['body'].get('NetPositionDetail'):
+            print(f"Found {len(positions_data['body']['NetPositionDetail'])} positions")
+        else:
+            print("No position data available")
+        
+        net_qty = '0'
+        
+        if positions_data and positions_data.get('body') and positions_data['body'].get('NetPositionDetail'):
+            for position in positions_data['body']['NetPositionDetail']:
+                position_token = position.get('ScripCode')
+                position_exch = position.get('Exch')
+                position_exch_type = position.get('ExchType')
+                position_product = position.get('OrderFor')
+                
+                # Detailed logging for position matching
+                print(f"Checking position - Token: {position_token}, Exch: {position_exch}, ExchType: {position_exch_type}, Product: {position_product}")
+                
+                if position_token == token and position_exch == Exch and position_exch_type == ExchType and position_product == producttype:
+                    net_qty = position.get('NetQty', '0')
+                    print(f"Found matching position with quantity: {net_qty}")
+                    break  # Found the match we need
+        
+        return net_qty
+    except Exception as e:
+        print(f"Error in get_open_position: {str(e)}")
+        return '0'  # Return default quantity on error
 
 def place_order_api(data: Dict[str, Any], auth: str) -> Dict[str, Any]:
     AUTH_TOKEN = auth
