@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 
 # Import httpx and shared client
-from openalgo.broker.utils.httpx_client import get_httpx_client
+from utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
