@@ -32,18 +32,26 @@ def transform_data(data,token):
 
 
 def transform_modify_order_data(data):
-    IsStopLossOrder = 'Y' if float(data.get("trigger_price")) > 0 else 'N'
-    IsIntraday = 'Y' if data.get("product") == 'MIS' else 'N'
-    return {
-        "ExchOrderID": data["orderid"],
-        "Price": data["price"],
-        "Qty": data["quantity"],
-        "StopLossPrice": float(data.get("trigger_price", "0")), 
-        "DisQty": int(data.get("disclosed_quantity", "0")),
-        "IsIntraday": True if data.get("product") == "MIS" else False,
-        "AHPlaced": "N",  # AMO Order by default NO
-       
+    # Handle empty trigger_price by providing a default of "0" and checking if it's empty
+    trigger_price = data.get("trigger_price", "0")
+    trigger_price = "0" if trigger_price == "" else trigger_price
+    
+    # Handle empty price
+    price = data.get("price", "0")
+    price = "0" if price == "" else price
+    
+    # FivePaisa requires a minimal set of fields for order modification per their documentation
+    # Only include fields that are explicitly needed
+    transformed = {
+        "ExchOrderID": data.get("exchange_order_id", ""),  # The actual exchange order ID
+        "Price": price,
+        "Qty": data.get("quantity", "0"),
+        "StopLossPrice": trigger_price,
+        "DisQty": data.get("disclosed_quantity", "0")
     }
+    
+    # Remove empty fields to keep the payload clean
+    return {k: v for k, v in transformed.items() if v is not None and v != ""}
 
 def map_action(action):
     """

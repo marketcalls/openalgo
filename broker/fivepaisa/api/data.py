@@ -855,4 +855,4 @@ class BrokerData:
             
     def get_supported_intervals(self) -> list:
         """Get list of supported intervals"""
-        return ["1m", "5m", "10m", "15m", "30m", "1h", "1d"]
+        return ["1m", "5m", "10m", "15m", "30m", "1h", "D"]
