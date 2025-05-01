@@ -1,0 +1,39 @@
+[project]
+name = "openalgo"
+version = "1.0.0.24"
+description = "Broker-agnostic open-source trading automation"
+dependencies = [
+  "flask",
+  "requests",
+  "websocket-client",
+  "python-dotenv",
+  "pandas",
+  "pydantic",
+  "schedule",
+  "flask-socketio",
+  "flask-restx",
+  "flask-login",
+  "flask-cors",
+  "flask-sqlalchemy",
+  "flask-wtf",
+  "sqlalchemy",
+  "apscheduler",
+  "httpx",
+  "pyotp",
+  "bcrypt",
+  "flask-bcrypt",
+  "qrcode",
+  "pandas-ta",
+  "openalgo==1.0.11",
+  "email-validator",
+  "cryptography",
+  "pyjwt",
+  "pyngrok",
+  "rich",
+  "ipykernel",
+  "ipython"
+]
+
+[build-system]
+requires = ["uv"]
+build-backend = "uv.buildapi"
