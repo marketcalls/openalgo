@@ -1,4 +1,5 @@
 venopenalgo
+.venv/
 .env
 openalgo.db
 .env
