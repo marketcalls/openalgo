@@ -400,7 +400,12 @@ The system implements a bidirectional heartbeat mechanism:
    - Clients should implement reconnection logic
    - WebSocket proxy maintains subscription state for quick recovery
 
-### 7.3 Error Handling
+### 7.3 Angel Broker Implementation Notes
+
+- **Price Format**: Angel broker sends prices in paise (1/100th of a rupee). The adapter automatically normalizes these values by dividing by 100 to get the actual price in rupees.
+- **WebSocket Callback Compatibility**: The Angel adapter is designed to handle WebSocket callback parameters flexibly, ensuring compatibility with different versions of WebSocket libraries.
+
+### 7.4 Error Handling
 
 1. **Message Processing Errors**:
    - Graceful handling of malformed messages

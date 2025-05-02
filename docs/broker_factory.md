@@ -76,7 +76,9 @@ register_adapter("angel", AngelWebSocketAdapter)
 
 ## 3. Broker-Specific Adapter Example: Angel
 
-Angel is our pilot implementation for the broker-agnostic WebSocket system. Here's a detailed implementation for the Angel WebSocket adapter that shows how to retrieve tokens from the database, support different market depth levels, and provide appropriate error messages:
+Here's the Angel WebSocket adapter implementation that handles Angel Broking's specific WebSocket format and price scaling:
+
+> **Important Note**: Angel broker sends prices in paise (1/100th of a rupee), and the adapter automatically normalizes these values by dividing by 100 to get the actual price in rupees. This conversion is handled in the `_normalize_market_data` method.
 
 ```python
 # websocket_adapters/angel_adapter.py

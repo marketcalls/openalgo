@@ -76,6 +76,27 @@ class BaseBrokerWebSocketAdapter(ABC):
         Disconnect from the broker's WebSocket
         """
         pass
+        
+    def cleanup_zmq(self):
+        """
+        Properly clean up ZeroMQ resources
+        """
+        try:
+            if hasattr(self, 'socket') and self.socket:
+                self.socket.close(linger=0)  # Don't linger on close
+                self.logger.info("ZeroMQ socket closed")
+                
+            if hasattr(self, 'context') and self.context:
+                self.context.term()
+                self.logger.info("ZeroMQ context terminated")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up ZeroMQ resources: {e}")
+            
+    def __del__(self):
+        """
+        Destructor to ensure ZeroMQ resources are properly cleaned up
+        """
+        self.cleanup_zmq()
     
     def publish_market_data(self, topic, data):
         """

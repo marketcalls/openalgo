@@ -2,6 +2,8 @@
 
 This document provides a simple example of how to use the OpenAlgo WebSocket API to subscribe and unsubscribe to Reliance LTP (Last Traded Price) data. The example shows both the server setup and client implementation.
 
+> **Note about price format**: Different brokers use different price formats. For example, Angel broker sends prices in paise (1/100th of a rupee), which the OpenAlgo WebSocket adapter automatically converts to rupees by dividing by 100. All prices received from the OpenAlgo WebSocket API are normalized to standard formats, regardless of the underlying broker.
+
 ## 1. Server Setup
 
 Before running the example, make sure you have the WebSocket server running:
