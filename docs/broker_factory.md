@@ -83,12 +83,12 @@ Angel is our pilot implementation for the broker-agnostic WebSocket system. Here
 import threading
 import json
 import logging
-from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+from broker.angel.streaming.smartWebSocketV2 import SmartWebSocketV2
 
 from websocket_adapters.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_auth_and_mapping import ExchangeMapper, SymbolMapper, BrokerCapabilityRegistry
-from openalgo.database.symbol import SymToken
-from openalgo.database.auth_db import get_user_tokens
+from database.symbol import SymToken
+from database.auth_db import get_user_tokens
 
 class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Angel-specific implementation of the WebSocket adapter"""
@@ -514,7 +514,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 ```python
 # In the main application:
 from broker_factory import create_broker_adapter
-from openalgo.database.auth_db import get_user_profile
+from database.auth_db import get_user_profile
 from websocket_auth_and_mapping import BrokerCapabilityRegistry
 
 def initialize_websocket_system(user_id):
