@@ -16,15 +16,15 @@ WS_URL = "ws://localhost:8765"  # Update if your server is on a different host/p
 API_KEY = "7c943a439ef0da4f3b8301730c84c7a84d5427c108db39378ca9415ee8db33bf"  # Your OpenAlgo API key
 
 # Test symbols
-RELIANCE_NSE = {"exchange": "NSE", "symbol": "RELIANCE"}
-NIFTY_INDEX = {"exchange": "NSE", "symbol": "IDEA"}
-BANKNIFTY_INDEX = {"exchange": "NSE", "symbol": "NHPC"}
+RELIANCE_NSE = {"exchange": "MCX", "symbol": "CRUDEOIL18JUN25FUT"}
+NIFTY_INDEX = {"exchange": "MCX", "symbol": "GOLD05JUN25FUT"}
+BANKNIFTY_INDEX = {"exchange": "MCX", "symbol": "SILVER04JUL25FUT"}
 
 # Subscription mode
 SUBSCRIPTION_MODES = {
     "LTP": 1,      # Last Traded Price (mode 1)
     "Quote": 2,    # Bid/Ask quote (mode 2)
-    "Depth": 4     # Full market depth (mode 4)
+    "Depth": 3     # Full market depth (mode 3 - Snap Quote with Best Five data)
 }
 
 async def connect_and_authenticate(url, api_key):
@@ -108,7 +108,7 @@ async def receive_and_print_data(websocket, duration=30):
                         print(f"Quote {symbol_info}: Open: {market_data.get('open', 'N/A')} | High: {market_data.get('high', 'N/A')} | "
                               f"Low: {market_data.get('low', 'N/A')} | Close: {market_data.get('close', 'N/A')} | "
                               f"LTP: {market_data.get('ltp', 'N/A')}")
-                    elif mode == 4:  # Depth
+                    elif mode == 3:  # Depth (Snap Quote)
                         depth = market_data.get('depth', {'buy': [], 'sell': []})
                         buy_depth = depth.get('buy', [])
                         sell_depth = depth.get('sell', [])

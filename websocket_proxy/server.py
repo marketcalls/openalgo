@@ -585,7 +585,7 @@ class WebSocketProxy:
                 mode_str = parts[2]
                 
                 # Map mode string to mode number
-                mode_map = {"LTP": 1, "QUOTE": 2, "DEPTH": 4}
+                mode_map = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}  # Mode 3 is Snap Quote (includes depth data)
                 mode = mode_map.get(mode_str)
                 
                 if not mode:
