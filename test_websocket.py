@@ -22,9 +22,9 @@ BANKNIFTY_INDEX = {"exchange": "NSE", "symbol": "NHPC"}
 
 # Subscription mode
 SUBSCRIPTION_MODES = {
-    "LTP": "LTP",   # Last Traded Price
-    "Quote": "Quote",  # Bid/Ask quote
-    "Depth": "Depth"   # Full market depth
+    "LTP": 1,      # Last Traded Price (mode 1)
+    "Quote": 2,    # Bid/Ask quote (mode 2)
+    "Depth": 4     # Full market depth (mode 4)
 }
 
 async def connect_and_authenticate(url, api_key):
@@ -34,7 +34,7 @@ async def connect_and_authenticate(url, api_key):
         
         # Authenticate with API key
         auth_message = {
-            "type": "auth",
+            "action": "authenticate",
             "api_key": api_key
         }
         
@@ -60,17 +60,23 @@ async def subscribe_to_data(websocket, symbols, mode="LTP"):
         return
         
     try:
-        subscribe_message = {
-            "type": "subscribe",
-            "symbols": symbols,
-            "mode": mode
-        }
+        # Send individual subscription for each symbol
+        for symbol_info in symbols:
+            subscribe_message = {
+                "action": "subscribe",
+                "symbol": symbol_info["symbol"],
+                "exchange": symbol_info["exchange"],
+                "mode": mode,
+                "depth": 5  # Default depth level
+            }
+            
+            await websocket.send(json.dumps(subscribe_message))
+            response = await websocket.recv()
+            subscribe_response = json.loads(response)
+            
+            print(f"Subscription response for {symbol_info['symbol']} {mode}: {subscribe_response}")
         
-        await websocket.send(json.dumps(subscribe_message))
-        response = await websocket.recv()
-        subscribe_response = json.loads(response)
-        
-        print(f"Subscription response for {mode}: {subscribe_response}")
+        # Return after processing all symbols
         return True
     except Exception as e:
         print(f"Subscription error: {e}")
@@ -94,13 +100,23 @@ async def receive_and_print_data(websocket, duration=30):
                 if "type" in data and data["type"] == "market_data":
                     symbol_info = f"{data.get('exchange', '')}:{data.get('symbol', '')}"
                     mode = data.get("mode", "")
+                    market_data = data.get("data", {})
                     
-                    if mode == "LTP":
-                        print(f"LTP {symbol_info}: {data.get('ltp', 'N/A')} | LTQ: {data.get('ltq', 'N/A')} | Time: {data.get('timestamp', 'N/A')}")
-                    elif mode == "Quote":
-                        print(f"Quote {symbol_info}: Bid: {data.get('bid', 'N/A')} | Ask: {data.get('ask', 'N/A')} | BidQty: {data.get('bid_qty', 'N/A')} | AskQty: {data.get('ask_qty', 'N/A')}")
-                    elif mode == "Depth":
-                        print(f"Depth {symbol_info}: Top 5 Levels Received | Bid0: {data.get('bid', [])[0] if data.get('bid') and len(data.get('bid')) > 0 else 'N/A'} | Ask0: {data.get('ask', [])[0] if data.get('ask') and len(data.get('ask')) > 0 else 'N/A'}")
+                    if mode == 1:  # LTP
+                        print(f"LTP {symbol_info}: {market_data.get('ltp', 'N/A')} | Time: {market_data.get('timestamp', 'N/A')}")
+                    elif mode == 2:  # Quote
+                        print(f"Quote {symbol_info}: Open: {market_data.get('open', 'N/A')} | High: {market_data.get('high', 'N/A')} | "
+                              f"Low: {market_data.get('low', 'N/A')} | Close: {market_data.get('close', 'N/A')} | "
+                              f"LTP: {market_data.get('ltp', 'N/A')}")
+                    elif mode == 4:  # Depth
+                        depth = market_data.get('depth', {'buy': [], 'sell': []})
+                        buy_depth = depth.get('buy', [])
+                        sell_depth = depth.get('sell', [])
+                        
+                        buy_info = f"Buy[0]: Price={buy_depth[0].get('price', 'N/A')}, Qty={buy_depth[0].get('quantity', 'N/A')}" if buy_depth else "No buy depth"
+                        sell_info = f"Sell[0]: Price={sell_depth[0].get('price', 'N/A')}, Qty={sell_depth[0].get('quantity', 'N/A')}" if sell_depth else "No sell depth"
+                        
+                        print(f"Depth {symbol_info}: {buy_info} | {sell_info}")
                     else:
                         print(f"Market Data: {data}")
                 else:

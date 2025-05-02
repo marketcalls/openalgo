@@ -120,6 +120,9 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         if hasattr(self, 'ws_client') and self.ws_client:
             self.ws_client.close_connection()
+            
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -425,7 +428,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def _extract_depth_data(self, message, is_buy: bool) -> List[Dict[str, Any]]:
         """
-        Extract depth data from Angel's binary format
+        Extract depth data from Angel's message format
         
         Args:
             message: The raw message containing depth data
@@ -434,37 +437,64 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             List: List of depth levels with price, quantity, and orders
         """
-        # This is a simplified example that should be implemented based on Angel's format
         depth = []
         
-        # In a real implementation, you'd extract depth data from the binary message
-        # Angel typically provides best 5 or best 20 depth levels
+        # Check for different possible depth data formats that Angel might send
+        # Angel can send depth data in different formats depending on the request:
+        # - depth_20_buy_data and depth_20_sell_data for 20 level depth
+        # - best_5_buy_data and best_5_sell_data for 5 level depth
         
-        # For now, extract depth data from the message
-        if is_buy:
-            price_key = 'best_buy_price'
-            qty_key = 'best_buy_quantity'
-            order_key = 'best_buy_orders'
-            prefix = 'buy'
-        else:
-            price_key = 'best_sell_price'
-            qty_key = 'best_sell_quantity'
-            order_key = 'best_sell_orders'
-            prefix = 'sell'
-            
-        # In real implementation, we would loop over the number of depth levels
-        for i in range(5):  # Assuming 5 depth levels
-            level_price_key = f"{prefix}_price_{i+1}" if i > 0 else price_key
-            level_qty_key = f"{prefix}_qty_{i+1}" if i > 0 else qty_key
-            level_order_key = f"{prefix}_orders_{i+1}" if i > 0 else order_key
-            
-            # Get price and divide by 100 for correct value
-            price = message.get(level_price_key, 0) / 100
-            
-            depth.append({
-                'price': price,
-                'quantity': message.get(level_qty_key, 0),
-                'orders': message.get(level_order_key, 0)
-            })
+        if is_buy and 'depth_20_buy_data' in message:
+            # Handle 20 level depth format for buy side
+            depth_data = message.get('depth_20_buy_data', [])
+            for level in depth_data:
+                depth.append({
+                    'price': level.get('price', 0) / 100,  # Divide by 100 for correct price
+                    'quantity': level.get('quantity', 0),
+                    'orders': level.get('num_of_orders', 0)
+                })
+                
+        elif not is_buy and 'depth_20_sell_data' in message:
+            # Handle 20 level depth format for sell side
+            depth_data = message.get('depth_20_sell_data', [])
+            for level in depth_data:
+                depth.append({
+                    'price': level.get('price', 0) / 100,  # Divide by 100 for correct price
+                    'quantity': level.get('quantity', 0),
+                    'orders': level.get('num_of_orders', 0)
+                })
+                
+        elif is_buy and 'best_5_buy_data' in message:
+            # Handle 5 level depth format for buy side
+            depth_data = message.get('best_5_buy_data', [])
+            for level in depth_data:
+                depth.append({
+                    'price': level.get('price', 0) / 100,  # Divide by 100 for correct price
+                    'quantity': level.get('quantity', 0),
+                    'orders': level.get('num_of_orders', 0)
+                })
+                
+        elif not is_buy and 'best_5_sell_data' in message:
+            # Handle 5 level depth format for sell side
+            depth_data = message.get('best_5_sell_data', [])
+            for level in depth_data:
+                depth.append({
+                    'price': level.get('price', 0) / 100,  # Divide by 100 for correct price
+                    'quantity': level.get('quantity', 0),
+                    'orders': level.get('num_of_orders', 0)
+                })
+        
+        # If no depth data found, return empty levels as fallback
+        if not depth:
+            for i in range(5):  # Default to 5 empty levels
+                depth.append({
+                    'price': 0.0,
+                    'quantity': 0,
+                    'orders': 0
+                })
+                
+        # Log the depth data being returned for debugging
+        if depth and depth[0]['price'] > 0:
+            self.logger.info(f"{'Buy' if is_buy else 'Sell'} depth data: {depth[0:2]}...")
             
         return depth

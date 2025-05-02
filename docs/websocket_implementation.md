@@ -251,7 +251,11 @@ def on_data(self, wsapp, message):
     """Process market data from broker WebSocket
     
     This method handles broker-specific message formats and normalizes them
-    into a common format. Each broker adapter implements its own parsing logic.
+into a common format. Each broker adapter implements its own parsing logic.
+    
+    Note: Different brokers have different message formats and price scales.
+    For example, Angel broker sends prices in paise (1/100th of a rupee),
+    so we need to divide by 100 to get the actual price in rupees.
     """
     try:
         # Extract token and exchange type (example using Angel's format as reference)
