@@ -2,6 +2,8 @@
 
 This document covers the WebSocket adapter and proxy implementation for the WebSocket streaming system. For the main architecture overview, see [websocket.md](websocket.md). For authentication and symbol mapping details, see [websocket_auth_and_mapping.md](websocket_auth_and_mapping.md).
 
+> **Note**: The implementation includes cross-platform compatibility features with specific optimizations for Windows environments.
+
 ## 1. Broker WebSocket Adapter
 
 The Broker WebSocket adapter provides a consistent interface to connect to any broker's WebSocket API. It handles data normalization and broadcasting in a broker-agnostic way, with broker-specific implementations.
@@ -16,8 +18,10 @@ import zmq
 import os
 import logging
 import importlib
+import time
 from abc import ABC, abstractmethod
-from websocket_auth_and_mapping import SymbolMapper, ExchangeMapper, BrokerCapabilityRegistry
+from .mapping import SymbolMapper
+from typing import Dict, Any, Optional, List
 
 class BaseBrokerWebSocketAdapter(ABC):
     def __init__(self):
@@ -26,13 +30,18 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.socket = self.context.socket(zmq.PUB)
         self.socket.bind("tcp://*:5555")
         
-        # Symbol mapper
-        self.symbol_mapper = SymbolMapper()
-        
         # Subscription tracking
         self.subscriptions = {}
         self.connected = False
-        self.logger = logging.getLogger("angel_adapter")
+        self.logger = logging.getLogger("broker_adapter")
+        
+        # Connection management
+        self.reconnect_delay = 5  # Initial delay in seconds
+        self.max_reconnect_delay = 60  # Maximum delay in seconds
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 10
+        self.running = False
+        self.lock = threading.Lock()
         
     @abstractmethod
     def initialize(self, broker_name, user_id, auth_data):
@@ -389,7 +398,7 @@ into a common format. Each broker adapter implements its own parsing logic.
 
 ## 2. WebSocket Proxy Server
 
-The WebSocket proxy server handles client connections, API key validation, and manages subscriptions with support for all depth levels.
+The WebSocket proxy server handles client connections, API key validation, and manages subscriptions with support for all depth levels. The implementation includes cross-platform compatibility and Windows-specific optimizations.
 
 ### 2.1 Core Implementation
 
@@ -405,16 +414,34 @@ from websocket_auth_and_mapping import AuthService
 class WebSocketProxy:
     def __init__(self, host="localhost", port=8765):
         self.host = host
-        self.port = port
-        self.clients = {}  # {client_id: {auth: {}, subscriptions: set(), websocket: obj}}
-        self.client_counter = 0
-        self.auth_service = AuthService()
-        self.logger = logging.getLogger("websocket_proxy")
         
-        # Setup ZeroMQ subscriber
+        # Check if the port is already in use and find an available one if needed
+        if is_port_in_use(host, port):
+            # Debug mode starts two instances, so original port may be taken
+            available_port = find_available_port(port + 1)
+            if available_port:
+                logger.info(f"Port {port} is in use, using port {available_port} instead")
+                self.port = available_port
+            else:
+                # If no port is available, we'll try the original port anyway
+                logger.warning(f"Could not find an available port, using {port} anyway")
+                self.port = port
+        else:
+            self.port = port
+            
+        self.clients = {}  # Maps client_id to websocket connection
+        self.subscriptions = {}  # Maps client_id to set of subscriptions
+        self.broker_adapters = {}  # Maps user_id to broker adapter
+        self.user_mapping = {}  # Maps client_id to user_id
+        self.running = False
+        
+        # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
-        self.socket.connect("tcp://localhost:5555")
+        self.socket.connect("tcp://localhost:5555")  # Connect to broker adapter publisher
+        
+        # Set up ZeroMQ subscriber to receive all messages
+        self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
         
     async def start(self):
         # Start ZeroMQ listener
@@ -754,6 +781,24 @@ async def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    
+    # Set platform-specific event loop policy for Windows
+    if platform.system() == 'Windows':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        logger.info("Set Windows-specific event loop policy")
+    
+    # Initialize server with port checking
+    host = "localhost"
+    port = 8765
+    
+    # Check if port is in use and find alternative if needed
+    if is_port_in_use(host, port):
+        available_port = find_available_port(port + 1)
+        if available_port:
+            logger.info(f"Port {port} is in use, using port {available_port} instead")
+            port = available_port
+        else:
+            logger.warning(f"Could not find an available port, using {port} anyway")
     
     # Initialize services
     auth_service, symbol_mapper = initialize_services()

@@ -27,6 +27,7 @@ This document provides a final validation assessment of the WebSocket proxy syst
 | **Error Handling** | ✅ Implemented | Checks for invalid modes, depth levels, and symbols. Standardized error responses with appropriate logging. | [broker_factory.md](broker_factory.md)<br>[websocket_auth_and_mapping.md](websocket_auth_and_mapping.md) |
 | **Scalability** | ✅ Implemented | ZeroMQ pub/sub for decoupling the WebSocket adapter from the proxy/clients. Asynchronous client connection handling. | [websocket.md](websocket.md) (Sections 1, 3)<br>[websocket_implementation.md](websocket_implementation.md) (Sections 1.1, 2) |
 | **Security** | ✅ Implemented | API key authentication required. Environment variables for sensitive keys. TLS recommended for production. | [websocket.md](websocket.md) (Section 9)<br>[websocket_auth_and_mapping.md](websocket_auth_and_mapping.md) (Section 1) |
+| **Cross-Platform**   | ✅ Implemented | System runs reliably on Linux and Windows, with platform-specific optimizations (event loop policy, signal handling, port management) for Windows compatibility. Port conflict handling during debug reloads addressed. | [websocket_implementation.md](websocket_implementation.md) (Section 5)<br>[websocket.md](websocket.md) (Section 7) |
 | **Documentation** | ✅ Good | Logical organization in separate documents. Code examples provided. Cross-references between documents. | All `.md` files |
 
 
@@ -45,6 +46,8 @@ The WebSocket proxy system design for OpenAlgo demonstrates a well-structured, f
 - **Consistent error handling**: Comprehensive error checking and standardized error responses ensure clients receive helpful information when broker limitations are encountered or features are unsupported.
 
 - **Scalability**: The use of ZeroMQ for message distribution provides an efficient pub/sub mechanism that can handle multiple concurrent users with minimal resource usage.
+
+- **Robust cross-platform support**: The system has been enhanced and tested to ensure reliable operation on both Linux and Windows environments, incorporating necessary platform-specific adjustments.
 
 - **Documentation consistency**: All documentation files now consistently describe a broker-agnostic approach with Angel as the pilot implementation, with no misleading broker-specific terminology.
 

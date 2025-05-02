@@ -8,7 +8,7 @@ This document provides a high-level overview of the WebSocket proxy system for O
 
 ## 1. System Overview
 
-The OpenAlgo WebSocket Proxy is a scalable, broker-agnostic system that connects to various broker WebSocket APIs and provides a unified interface for clients to access real-time market data. Angel Broking is used as the pilot implementation, with the architecture designed to support 20+ brokers through a factory pattern. The system uses a publish-subscribe pattern with ZeroMQ as the message broker to efficiently distribute data to multiple consumers.
+The OpenAlgo WebSocket Proxy is a scalable, broker-agnostic system that connects to various broker WebSocket APIs and provides a unified interface for clients to access real-time market data. Angel Broking is used as the pilot implementation, with the architecture designed to support 20+ brokers through a factory pattern. The system uses a publish-subscribe pattern with ZeroMQ as the message broker to efficiently distribute data to multiple consumers. The implementation is cross-platform compatible, with specific optimizations for Windows environments.
 
 ```
 ┌─────────────┐     ┌───────────────┐     ┌─────────────┐     ┌─────────────────┐
@@ -74,6 +74,9 @@ A unified WebSocket server that clients connect to for receiving market data.
 - Heartbeat mechanism for connection health monitoring
 - Efficient message forwarding to interested clients
 - Error handling and graceful degradation
+- Cross-platform compatibility (Windows/Linux/Mac)
+- Port availability checking and automatic port selection
+- Resilient against crashes and unexpected shutdowns
 
 ## 3. Market Data Subscription Levels
 
@@ -407,15 +410,14 @@ The system implements a bidirectional heartbeat mechanism:
 
 ### 7.4 Error Handling
 
-1. **Message Processing Errors**:
-   - Graceful handling of malformed messages
-   - Continued operation despite individual message failures
-   - Comprehensive logging for troubleshooting
+The WebSocket proxy system implements robust error handling at multiple levels:
 
-2. **Connection Errors**:
-   - Automatic recovery from network issues
+1. **Connection Errors**:
+   - Automatic recovery from network issues with exponential backoff
    - Notification to clients about connection status
    - Fallback mechanisms for temporary outages
+   - Port conflict resolution and automatic port reassignment
+   - Platform-specific handling for Windows and Unix-based systems
 
 ## 8. Implementation Plan
 

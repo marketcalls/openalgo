@@ -19,7 +19,7 @@ The authentication service is responsible for:
 
 ```python
 # Authentication Service
-from database.auth_db import get_user_tokens, verify_api_key, get_user_profile
+from database.auth_db import verify_api_key, get_auth_token, get_feed_token
 
 class AuthService:
     def validate_api_key(self, api_key):
@@ -32,13 +32,16 @@ class AuthService:
         user_id = result.get('user_id')
         
         # Get tokens for the user
-        auth_token = get_user_tokens(user_id)
-        if not auth_token:
+        auth_token = get_auth_token(user_id)
+        feed_token = get_feed_token(user_id)
+        
+        if not auth_token or not feed_token:
             return None
             
         return {
             'user_id': user_id,
             'auth_token': auth_token,
+            'feed_token': feed_token
         }
         
     def check_subscription_permissions(self, user_id, symbol, exchange, mode, depth_level=None):
@@ -50,7 +53,7 @@ class AuthService:
         # Example implementation
         return {
             'allowed': True,  # Whether subscription is allowed
-            'max_depth_level': 50,  # Maximum depth level for this user
+            'max_depth_level': 30,  # Maximum depth level for this user (Angel supports up to 30)
             'allowed_modes': [1, 2, 4]  # Allowed subscription modes
         }
 ```
@@ -200,9 +203,64 @@ class BrokerCapabilityRegistry:
         return 5  # Default to basic depth
 ```
 
-## 4. Configuration and Initialization
+## 4. Cross-Platform and Windows Compatibility
 
-### 4.1 Component Initialization
+The WebSocket implementation includes specific optimizations for Windows platforms:
+
+### 4.1 Windows Event Loop Policy
+
+```python
+import asyncio
+import platform
+
+# Set Windows-specific event loop policy if on Windows
+def set_platform_event_loop_policy():
+    """Set the appropriate event loop policy based on platform"""
+    if platform.system() == 'Windows':
+        # Windows requires specific policy for handling signals correctly
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        print("Set Windows-specific event loop policy")
+```
+
+### 4.2 Signal Handling Fallback
+
+```python
+async def start_server():
+    # Start WebSocket server
+    stop = asyncio.Future()  # Used to stop the server
+    
+    # Handle graceful shutdown with platform-specific approach
+    loop = asyncio.get_event_loop()
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop.set_result, None)
+    except NotImplementedError:
+        # On Windows, fallback to simpler approach
+        logger.info("Signal handlers not supported on this platform. Using fallback mechanism.")
+    
+    # Start the server
+    async with websockets.serve(handle_client, host, port):
+        await stop  # Wait until stopped
+```
+
+### 4.3 Port Conflict Resolution
+
+```python
+from .port_check import is_port_in_use, find_available_port
+
+def initialize_server(host="localhost", port=8765):
+    # Check if port is already in use (common in debug mode flask reloads)
+    if is_port_in_use(host, port):
+        available_port = find_available_port(port + 1)
+        if available_port:
+            logger.info(f"Port {port} is in use, using port {available_port} instead")
+            return host, available_port
+        else:
+            logger.warning(f"Could not find an available port, using {port} anyway")
+    return host, port
+```
+
+## 5. Component Initialization
 
 ```python
 def initialize_services():
