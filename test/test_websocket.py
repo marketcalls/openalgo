@@ -113,10 +113,33 @@ async def receive_and_print_data(websocket, duration=30):
                         buy_depth = depth.get('buy', [])
                         sell_depth = depth.get('sell', [])
                         
-                        buy_info = f"Buy[0]: Price={buy_depth[0].get('price', 'N/A')}, Qty={buy_depth[0].get('quantity', 'N/A')}" if buy_depth else "No buy depth"
-                        sell_info = f"Sell[0]: Price={sell_depth[0].get('price', 'N/A')}, Qty={sell_depth[0].get('quantity', 'N/A')}" if sell_depth else "No sell depth"
+                        print(f"\nDepth {symbol_info} - LTP: {market_data.get('ltp', 'N/A')}")
                         
-                        print(f"Depth {symbol_info}: {buy_info} | {sell_info}")
+                        # Print all buy depth levels
+                        print("\nBUY DEPTH:")
+                        print("-" * 40)
+                        print(f"{'Level':<6} {'Price':<10} {'Quantity':<10} {'Orders':<10}")
+                        print("-" * 40)
+                        
+                        if buy_depth:
+                            for i, level in enumerate(buy_depth):
+                                print(f"{i+1:<6} {level.get('price', 'N/A'):<10} {level.get('quantity', 'N/A'):<10} {level.get('orders', 'N/A'):<10}")
+                        else:
+                            print("No buy depth data available")
+                            
+                        # Print all sell depth levels
+                        print("\nSELL DEPTH:")
+                        print("-" * 40)
+                        print(f"{'Level':<6} {'Price':<10} {'Quantity':<10} {'Orders':<10}")
+                        print("-" * 40)
+                        
+                        if sell_depth:
+                            for i, level in enumerate(sell_depth):
+                                print(f"{i+1:<6} {level.get('price', 'N/A'):<10} {level.get('quantity', 'N/A'):<10} {level.get('orders', 'N/A'):<10}")
+                        else:
+                            print("No sell depth data available")
+                            
+                        print("-" * 40)
                     else:
                         print(f"Market Data: {data}")
                 else:
