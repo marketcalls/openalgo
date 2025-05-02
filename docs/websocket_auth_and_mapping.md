@@ -19,7 +19,7 @@ The authentication service is responsible for:
 
 ```python
 # Authentication Service
-from openalgo.database.auth_db import get_user_tokens, verify_api_key, get_user_profile
+from database.auth_db import get_user_tokens, verify_api_key, get_user_profile
 
 class AuthService:
     def validate_api_key(self, api_key):
@@ -71,7 +71,7 @@ This component uses the SymToken model from `openalgo.database.symbol` to:
 ```python
 # Symbol/Token Mapper
 from sqlalchemy import and_
-from openalgo.database.symbol import SymToken, db_session
+from database.symbol import SymToken, db_session
 
 class SymbolMapper:
     @staticmethod
