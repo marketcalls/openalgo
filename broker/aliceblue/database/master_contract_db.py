@@ -3,14 +3,13 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
 import pandas as pd
 import gzip
 import io
+from utils.httpx_client import get_httpx_client
 
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
@@ -116,6 +115,7 @@ def copy_from_dataframe(df):
 
 
 def download_csv_aliceblue_data(output_path):
+    """Download AliceBlue master contract CSV files using shared connection pooling."""
 
     print("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
@@ -130,23 +130,32 @@ def download_csv_aliceblue_data(output_path):
         "INDICES": "https://v2api.aliceblueonline.com/restpy/static/contract_master/INDICES.csv"
     }
     
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     # Create a list to hold the paths of the downloaded files
     downloaded_files = []
 
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
-        # Send GET request
-        response = requests.get(url,timeout=10)
-        # Check if the request was successful
-        if response.status_code == 200:
+        try:
+            # Send GET request using the shared httpx client
+            response = client.get(url, timeout=10)
+            response.raise_for_status()  # Raise exception for error status codes
+            
             # Construct the full output path for the file
             file_path = f"{output_path}/{key}.csv"
-            # Write the content to the file
+            
+            # Write the content to the file with a larger chunk size for better performance
             with open(file_path, 'wb') as file:
                 file.write(response.content)
+                
             downloaded_files.append(file_path)
-        else:
-            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+            print(f"Successfully downloaded {key} master contract")
+            
+        except Exception as e:
+            print(f"Failed to download {key} from {url}. Error: {str(e)}")
+
     
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts

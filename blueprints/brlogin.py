@@ -72,25 +72,44 @@ def broker_callback(broker,para=None):
         elif request.method == 'POST':
             print('Aliceblue Login Flow')
             userid = request.form.get('userid')
-            conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-            payload = json.dumps({
+            # Step 1: Get encryption key
+            # Use the shared httpx client with connection pooling
+            from utils.httpx_client import get_httpx_client
+            client = get_httpx_client()
+            
+            # AliceBlue API expects only userId in the encryption key request
+            # Do not include API key in this initial request
+            payload = {
                 "userId": userid
-            })
+            }
             headers = {
                 'Content-Type': 'application/json'
             }
             try:
-                conn.request("POST", "/rest/AliceBlueAPIService/api/customer/getAPIEncpkey", payload, headers)
-                res = conn.getresponse()
-                data = res.read().decode("utf-8")
-                data_dict = json.loads(data)
+                # Get encryption key
+                url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/customer/getAPIEncpkey"
+                response = client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data_dict = response.json()
                 print(data_dict)
-                auth_token, error_message = auth_function(userid, data_dict['encKey'])
-                forward_url = 'aliceblue.html'
-            
+                
+                # Check if we successfully got the encryption key
+                if data_dict.get('stat') == 'Ok' and data_dict.get('encKey'):
+                    enc_key = data_dict['encKey']
+                    # Step 2: Authenticate with encryption key
+                    auth_token, error_message = auth_function(userid, enc_key)
+                    
+                    if auth_token:
+                        return handle_auth_success(auth_token, session['user'], broker)
+                    else:
+                        return handle_auth_failure(error_message, forward_url='aliceblue.html')
+                else:
+                    # Failed to get encryption key
+                    error_msg = data_dict.get('emsg', 'Failed to get encryption key')
+                    return handle_auth_failure(f"Failed to get encryption key: {error_msg}", forward_url='aliceblue.html')
             except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
+                return jsonify({"error": f"Authentication error: {str(e)}"}), 500     
+                
     elif broker=='fivepaisaxts':
         code = 'fivepaisaxts'
         print(f'The code is {code}')  
