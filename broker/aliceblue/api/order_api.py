@@ -1,27 +1,60 @@
-import http.client
 import json
 import os
 import urllib.parse
+import logging
+import httpx
+from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.aliceblue.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.config import get_broker_api_key , get_broker_api_secret
 
+# Set up logger
+logger = logging.getLogger(__name__)
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
-    
-    AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-    headers = {
-    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
-    'Content-Type': 'application/json'
-    }
-    
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    print(data)
-    return json.loads(data.decode("utf-8"))
+
+def get_api_response(endpoint, auth, method="GET", payload=None):
+    """Make API requests to AliceBlue API using shared connection pooling."""
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        url = f"https://ant.aliceblueonline.com{endpoint}"
+        
+        headers = {
+            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.debug(f"Making {method} request to AliceBlue API: {url}")
+        
+        if method.upper() == "GET":
+            response = client.get(url, headers=headers)
+        elif method.upper() == "POST":
+            response = client.post(url, json=json.loads(payload) if isinstance(payload, str) and payload else payload, headers=headers)
+        elif method.upper() == "PUT":
+            response = client.put(url, json=json.loads(payload) if isinstance(payload, str) and payload else payload, headers=headers)
+        elif method.upper() == "DELETE":
+            response = client.delete(url, headers=headers)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+        
+        response.raise_for_status()
+        response_data = response.json()
+        logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
+        return response_data
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during API request: {str(e)}")
+        return {"stat": "Not_Ok", "emsg": f"HTTP error: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return {"stat": "Not_Ok", "emsg": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Error during API request: {str(e)}")
+        return {"stat": "Not_Ok", "emsg": f"General error: {str(e)}"}
+
 
 def get_order_book(auth):
 
@@ -71,36 +104,57 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     return net_qty
 
-def place_order_api(data,auth):
-    
-    AUTH_TOKEN = auth
-
-    #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)
-    headers = {
-    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
-    'Content-Type': 'application/json'
-    }
-
-    payload = json.dumps([newdata])
-
-    print(payload)
-
-    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-    conn.request("POST", "/rest/AliceBlueAPIService/api/placeOrder/executePlaceOrder", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-
-
-    print(response_data)
-    
-    response_data = response_data[0]
-
-    if response_data['stat'] == 'Ok':
-        orderid = response_data['NOrdNo']
-    else:
-        orderid = None
-    return res, response_data, orderid
+def place_order_api(data, auth):
+    """Place an order using the AliceBlue API with shared connection pooling."""
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        newdata = transform_data(data)
+        
+        # Prepare headers and payload
+        headers = {
+            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = [newdata]
+        logger.debug(f"Place order payload: {json.dumps(payload, indent=2)}")
+        
+        # Make the API request
+        url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/placeOrder/executePlaceOrder"
+        response = client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        
+        response_data = response.json()
+        logger.debug(f"Place order response: {json.dumps(response_data, indent=2)}")
+        
+        # Process the response
+        response_data = response_data[0]
+        
+        if response_data['stat'] == 'Ok':
+            orderid = response_data['NOrdNo']
+        else:
+            orderid = None
+        
+        # Add status attribute to response object to match what PlaceOrder endpoint expects
+        response.status = response.status_code
+            
+        return response, response_data, orderid
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during place order: {str(e)}")
+        response_data = {"stat": "Not_Ok", "emsg": f"HTTP error: {str(e)}"}
+        # Create a simple object with status attribute set to 500
+        response = type('', (), {'status': 500, 'status_code': 500})()
+        return response, response_data, None
+    except Exception as e:
+        logger.error(f"Error during place order: {str(e)}")
+        response_data = {"stat": "Not_Ok", "emsg": f"General error: {str(e)}"}
+        # Create a simple object with status attribute set to 500
+        response = type('', (), {'status': 500, 'status_code': 500})()
+        return response, response_data, None
 
 def place_smartorder_api(data,auth):
 
@@ -252,70 +306,99 @@ def close_all_positions(current_api_key,auth):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid,auth):
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-    order_book_response = get_order_book(AUTH_TOKEN)
-    # Set up the request headers
-    headers = {
-    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
-    'Content-Type': 'application/json'
-    }      
-    Trading_symbol = ""
-    Exchange = ""
-    orders = (order_book_response)
-    for order in orders:
-        if order.get("Nstordno") == orderid:
-            Trading_symbol = order.get("Trsym")
-            Exchange = order.get("Exchange")
+def cancel_order(orderid, auth):
+    """Cancel an order using the AliceBlue API with shared connection pooling."""
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        order_book_response = get_order_book(AUTH_TOKEN)
+        
+        # Find the order details
+        Trading_symbol = ""
+        Exchange = ""
+        orders = order_book_response
+        for order in orders:
+            if order.get("Nstordno") == orderid:
+                Trading_symbol = order.get("Trsym")
+                Exchange = order.get("Exchange")
+        
+        # Prepare headers and payload
+        headers = {
+            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            "exch": Exchange,
+            "nestOrderNumber": orderid,
+            "trading_symbol": Trading_symbol
+        }
+        
+        logger.debug(f"Cancel order payload: {json.dumps(payload, indent=2)}")
+        
+        # Make the API request
+        url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/placeOrder/cancelOrder"
+        response = client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        
+        response_data = response.json()
+        logger.debug(f"Cancel order response: {json.dumps(response_data, indent=2)}")
+        
+        # Check if the request was successful
+        if response_data.get("stat") == "Ok":
+            # Return a success response
+            return {"status": "success", "orderid": response_data["nestOrderNumber"]}, 200
+        else:
+            # Return an error response
+            return {"status": "error", "message": response_data.get("emsg", "Failed to cancel order")}, response.status_code
+            
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during cancel order: {str(e)}")
+        return {"status": "error", "message": f"HTTP error: {str(e)}"}, 500
+    except Exception as e:
+        logger.error(f"Error during cancel order: {str(e)}")
+        return {"status": "error", "message": f"General error: {str(e)}"}, 500
 
-    # Prepare the payload
-    payload = json.dumps({
-        "exch": Exchange,
-        "nestOrderNumber": orderid,
-        "trading_symbol": Trading_symbol
-    })
-    
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-    conn.request("POST", "/rest/AliceBlueAPIService/api/placeOrder/cancelOrder", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-    print(response_data)
 
-    # Check if the request was successful
-    if response_data.get("stat") == "Ok":
-        # Return a success response
-        return {"status": "success", "orderid": response_data["nestOrderNumber"]}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": response_data.get("emsg", "Failed to cancel order")}, res.status
-
-
-def modify_order(data,auth):
-
-    AUTH_TOKEN = auth
-    newdata = transform_modify_order_data(data)  # You need to implement this function
-    
-    # Set up the request headers
-    headers = {
-    'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
-    'Content-Type': 'application/json'
-    }    
-    payload = json.dumps(newdata)
-
-    print(payload)
-
-    conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-    conn.request("POST", "/rest/AliceBlueAPIService/api/placeOrder/modifyOrder", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-    print(response_data)
-
-    if response_data.get("stat") == "Ok":
-        return {"status": "success", "orderid": response_data["nestOrderNumber"]}, 200
-    else:
-        return {"status": "error", "message": response_data.get("emsg", "Failed to modify order")}, res.status
+def modify_order(data, auth):
+    """Modify an order using the AliceBlue API with shared connection pooling."""
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        newdata = transform_modify_order_data(data)
+        
+        # Prepare headers
+        headers = {
+            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.debug(f"Modify order payload: {json.dumps(newdata, indent=2)}")
+        
+        # Make the API request
+        url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/placeOrder/modifyOrder"
+        response = client.post(url, json=newdata, headers=headers)
+        response.raise_for_status()
+        
+        response_data = response.json()
+        logger.debug(f"Modify order response: {json.dumps(response_data, indent=2)}")
+        
+        # Process the response
+        if response_data.get("stat") == "Ok":
+            return {"status": "success", "orderid": response_data["nestOrderNumber"]}, 200
+        else:
+            return {"status": "error", "message": response_data.get("emsg", "Failed to modify order")}, response.status_code
+            
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during modify order: {str(e)}")
+        return {"status": "error", "message": f"HTTP error: {str(e)}"}, 500
+    except Exception as e:
+        logger.error(f"Error during modify order: {str(e)}")
+        return {"status": "error", "message": f"General error: {str(e)}"}, 500
     
 
 def cancel_all_orders_api(data,auth):
@@ -345,4 +428,3 @@ def cancel_all_orders_api(data,auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-
