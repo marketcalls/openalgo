@@ -234,6 +234,13 @@ def broker_callback(broker,para=None):
         print(f'The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
+        
+
+    elif broker == 'groww':
+        code = 'groww'
+        print(f'The code is {code}')
+        auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
 
     elif broker == 'wisdom':
         code = 'wisdom'
