@@ -1,643 +1,518 @@
-import http.client
 import json
 import os
 from datetime import datetime, timedelta
 import pandas as pd
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
-from broker.dhan.mapping.transform_data import map_exchange_type
-import urllib.parse
 import logging
-import jwt
 import requests
+from typing import Dict, List, Any, Union, Optional
+import importlib
+import time
+
+from database.token_db import get_br_symbol, get_oa_symbol, get_token
 
 # Configure logging
 logger = logging.getLogger(__name__)
+# API endpoints are handled by the Groww SDK
+
+# Exchange constants for Groww API
+EXCHANGE_NSE = "NSE"  # Stock exchange code for NSE
+EXCHANGE_BSE = "BSE"  # Stock exchange code for BSE
+
+# Segment constants for Groww API
+SEGMENT_CASH = "CASH"  # Segment code for Cash market
+SEGMENT_FNO = "FNO"    # Segment code for F&O market
 
 
-def get_api_response(endpoint, auth, method="POST", payload=''):
-    AUTH_TOKEN = auth
-    client_id = os.getenv('BROKER_API_KEY')
+def get_api_response(endpoint, auth_token, method="GET", params=None, data=None, debug=False):
+    """Use Groww SDK to make API requests
     
-    if not client_id:
-        raise Exception("Could not extract client ID from auth token")
+    This function initializes the Groww SDK and uses it to make API requests
+    instead of directly using requests. The SDK handles the endpoints and authentication.
     
-    conn = http.client.HTTPSConnection("api.dhan.co")
-    headers = {
-        'access-token': AUTH_TOKEN,
-        'client-id': client_id,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    
-    logger.info(f"Making request to {endpoint}")
-    logger.info(f"Headers: {headers}")
-    logger.info(f"Payload: {payload}")
-    
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    response = json.loads(data.decode("utf-8"))
-    
-    logger.info(f"Response status: {res.status}")
-    logger.info(f"Response: {json.dumps(response, indent=2)}")
-    
-    # Handle Dhan API error codes
-    if response.get('status') == 'failed':
-        error_data = response.get('data', {})  
-        error_code = list(error_data.keys())[0] if error_data else 'unknown'
-        error_message = error_data.get(error_code, 'Unknown error')
+    Args:
+        endpoint (str): API endpoint (not used with SDK but kept for compatibility)
+        auth_token (str): Authentication token
+        method (str): HTTP method (GET, POST, etc., not used with SDK but kept for compatibility)
+        params (dict): Parameters for the API call
+        data (dict): Request body data (not used with SDK but kept for compatibility)
+        debug (bool): Enable additional debugging
         
-        error_mapping = {
-            '806': "Data APIs not subscribed. Please subscribe to Dhan's market data service.",
-            '810': "Authentication failed: Invalid client ID",
-            '401': "Invalid or expired access token",
-            '820': "Market data subscription required",
-            '821': "Market data subscription required"
-        }
-        
-        error_msg = error_mapping.get(error_code, f"Dhan API Error {error_code}: {error_message}")
-        logger.error(f"API Error: {error_msg}")
-        raise Exception(error_msg)
+    Returns:
+        dict: Response data from the Groww SDK
+    """
+    logger.info(f"Using Groww SDK for API request to endpoint: {endpoint}")
     
-    return response
+    try:
+        # Import the SDK
+        growwapi = importlib.import_module('growwapi')
+        GrowwAPI = getattr(growwapi, 'GrowwAPI')
+        
+        # Initialize the SDK with auth token
+        api = GrowwAPI(auth_token)
+        
+        # Log request details
+        logger.info(f"SDK request params: {params}")
+        
+        # Use the SDK's generic request method if available
+        # Or simulate based on endpoint and method
+        if hasattr(api, 'request'):
+            # If the SDK has a generic request method, use it
+            result = api.request(endpoint, params=params, data=data, method=method)
+        else:
+            # Handle specific endpoints that we know about
+            if 'quote' in endpoint.lower():
+                # Extract parameters for quote
+                exchange = params.get('exchange')
+                segment = params.get('segment')
+                trading_symbol = params.get('trading_symbol') or params.get('symbol')
+                
+                if not all([exchange, segment, trading_symbol]):
+                    raise ValueError(f"Missing required parameters for quote: {params}")
+                
+                logger.info(f"Getting quote for {trading_symbol} on {exchange} ({segment})")
+                result = api.get_quote(exchange=exchange, segment=segment, trading_symbol=trading_symbol)
+            else:
+                # For other endpoints, we would need to map them to SDK functions
+                raise ValueError(f"Unmapped SDK endpoint: {endpoint}")
+        
+        # Log the response structure
+        if isinstance(result, dict):
+            logger.info(f"SDK response keys: {list(result.keys())[:10]}")
+            for key in list(result.keys())[:3]:  # Only show first 3 keys for brevity
+                try:
+                    if isinstance(result[key], dict):
+                        logger.info(f"Subkeys for {key}: {list(result[key].keys())[:10]}")
+                except Exception:
+                    pass
+        
+        return result
+    
+    except ImportError:
+        logger.error("Failed to import Groww SDK. Please install with: pip install growwapi")
+        raise ImportError("Groww SDK not installed. Please install with: pip install growwapi")
+    
+    except Exception as e:
+        logger.error(f"Groww SDK error: {str(e)}")
+        if debug:
+            logger.error(f"Endpoint: {endpoint}, Params: {params}")
+        raise Exception(f"Groww SDK Error: {str(e)}")
+
+
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize Dhan data handler with authentication token"""
+        """Initialize Groww data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Dhan resolutions
+        # Map common timeframe format to Groww resolutions (if applicable)
         self.timeframe_map = {
             # Minutes
             '1m': '1',    # 1 minute
             '5m': '5',    # 5 minutes
             '15m': '15',  # 15 minutes
-            '25m': '25',  # 25 minutes
+            '30m': '30',  # 30 minutes
             '1h': '60',   # 1 hour (60 minutes)
             # Daily
             'D': 'D'      # Daily data
         }
 
-    def _convert_to_dhan_request(self, symbol, exchange):
-        """Convert symbol and exchange to Dhan format"""
+    def _convert_to_groww_params(self, symbol, exchange):
+        """Convert symbol and exchange to Groww API parameters
+        
+        Args:
+            symbol (str): Trading symbol
+            exchange (str): Exchange code (NSE, BSE, etc.)
+            
+        Returns:
+            tuple: (exchange, segment, trading_symbol)
+        """
+        # Get broker-specific symbol if needed
         br_symbol = get_br_symbol(symbol, exchange)
-        # Extract security ID and determine exchange segment
-        # This needs to be implemented based on your symbol mapping logic
-        security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        print(f'exchange: {exchange}')
-        if exchange == "NSE":
-            exchange_segment = "NSE_EQ"
-        elif exchange == "BSE":
-            exchange_segment = "BSE_EQ"
-        elif exchange == "NSE_INDEX":
-            exchange_segment = "IDX_I"
-        elif exchange == "BSE_INDEX":
-            exchange_segment = "IDX_I"
+        trading_symbol = br_symbol or symbol
+        
+        # Determine segment based on exchange
+        if exchange in ["NSE", "BSE"]:
+            segment = SEGMENT_CASH
+        elif exchange in ["NFO", "BFO"]:
+            segment = SEGMENT_FNO
         else:
             raise ValueError(f"Unsupported exchange: {exchange}")
             
-        return security_id, exchange_segment
+        # Map exchange to Groww's format
+        if exchange == "NFO":
+            groww_exchange = EXCHANGE_NSE
+        elif exchange == "BFO":
+            groww_exchange = EXCHANGE_BSE
+        else:
+            groww_exchange = exchange
+            
+        return groww_exchange, segment, trading_symbol
 
     def _convert_date_to_utc(self, date_str: str) -> str:
         """Convert IST date to UTC date for API request"""
         # Simply return the date string as the API expects YYYY-MM-DD format
         return date_str
 
-    def _convert_timestamp_to_ist(self, timestamp: int) -> int:
-        """Convert UTC timestamp to IST timestamp"""
-        # Convert to datetime in UTC
-        utc_dt = datetime.utcfromtimestamp(timestamp)
-        # Add IST offset (+5:30)
-        ist_dt = utc_dt + timedelta(hours=5, minutes=30)
-        # Return new timestamp
-        return int(ist_dt.timestamp())
-
-    def _get_intraday_chunks(self, start_date: str, end_date: str) -> list:
-        """Split date range into 5-day chunks for intraday data"""
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-        chunks = []
-        
-        while start < end:
-            chunk_end = min(start + timedelta(days=5), end)
-            chunks.append((
-                start.strftime("%Y-%m-%d"),
-                chunk_end.strftime("%Y-%m-%d")
-            ))
-            start = chunk_end
-            
-        return chunks
-
-    def _get_exchange_segment(self, exchange: str) -> str:
-        """Get exchange segment based on exchange"""
-        exchange_map = {
-            'NSE': 'NSE_EQ',      # NSE Cash
-            'BSE': 'BSE_EQ',      # BSE Cash
-            'NFO': 'NSE_FNO',     # NSE F&O
-            'BFO': 'BSE_FNO',     # BSE F&O
-            'MCX': 'MCX_COMM',    # MCX Commodity
-            'CDS': 'NSE_CURRENCY',  # NSE Currency
-            'BCD': 'BSE_CURRENCY',   # BSE Currency
-            'NSE_INDEX': 'IDX_I',  # NSE Index
-            'BSE_INDEX': 'IDX_I'   # BSE Index
-        }
-        return exchange_map.get(exchange)
-
-    def _get_instrument_type(self, exchange: str, symbol: str) -> str:
-        """Get instrument type based on exchange and symbol"""
-        # For cash market (NSE, BSE)
-        if exchange in ['NSE', 'BSE']:
-            return 'EQUITY'
-        
-        elif exchange in ['NSE_INDEX', 'BSE_INDEX']:
-            return 'INDEX'
-
-
-            
-        # For F&O market (NFO, BFO)
-        elif exchange in ['NFO', 'BFO']:
-            # First check for options (CE/PE at the end)
-            if symbol.endswith('CE') or symbol.endswith('PE'):
-                # For index options like NIFTY23JAN20200CE
-                if any(index in symbol for index in [
-                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
-                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
-                    return 'OPTIDX'
-                # For stock options
-                return 'OPTSTK'
-            # Then check for futures
-            else:
-                # For index futures like NIFTY23JAN
-                if any(index in symbol for index in [
-                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
-                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
-                    return 'FUTIDX'
-                # For stock futures
-                return 'FUTSTK'
-        
-        # For commodity market (MCX)
-        elif exchange == 'MCX':
-            # For commodity options on futures
-            if symbol.endswith('CE') or symbol.endswith('PE'):
-                return 'OPTFUT'
-            # For commodity futures
-            return 'FUTCOM'
-        
-        # For currency market (CDS, BCD)
-        elif exchange in ['CDS', 'BCD']:
-            # For currency options
-            if symbol.endswith('CE') or symbol.endswith('PE'):
-                return 'OPTCUR'
-            # For currency futures
-            return 'FUTCUR'
-        
-        raise Exception(f"Unsupported exchange: {exchange}")
-
-    def _is_trading_day(self, date_str: str) -> bool:
-        """Check if the given date is a trading day (not weekend)"""
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        return date.weekday() < 5  # 0-4 are Monday to Friday
-
-    def _adjust_dates(self, start_date: str, end_date: str) -> tuple:
-        """Adjust dates to nearest trading days"""
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-        
-        # If start date is weekend, move to next Monday
-        while start.weekday() >= 5:
-            start += timedelta(days=1)
-            
-        # If end date is weekend, move to previous Friday
-        while end.weekday() >= 5:
-            end -= timedelta(days=1)
-            
-        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-
-    def _get_intraday_time_range(self, date_str: str) -> tuple:
+    def get_history(self, exchange: str, token: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
         """
-        Get intraday time range in IST for a given date
+        Get historical candle data for a symbol.
+        
         Args:
-            date_str: Date string in YYYY-MM-DD format
+            exchange (str): Exchange code (NSE, BSE, NFO, etc.)
+            token (str): Instrument token
+            timeframe (str): Timeframe such as '1m', '5m', etc.
+            start_time (int): Start time in Unix timestamp (seconds)
+            end_time (int): End time in Unix timestamp (seconds)
+            
         Returns:
-            tuple: (start_date, end_date) in YYYY-MM-DD format
+            pd.DataFrame: DataFrame with historical candle data
         """
-        # Simply return the same date for both start and end
-        # The API will handle the full day's data automatically
-        return date_str, date_str
+        # Implement when Groww provides historical data API
+        raise NotImplementedError("Groww historical data API not implemented yet")
 
-    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_intervals(self) -> List[str]:
         """
-        Get historical data for given symbol
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-            interval: Candle interval in common format:
-                     Minutes: 1m, 5m, 15m, 25m
-                     Hours: 1h
-                     Days: D
-            start_date: Start date (YYYY-MM-DD) in IST
-            end_date: End date (YYYY-MM-DD) in IST
+        Get list of supported timeframes.
+        
         Returns:
-            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
+            List[str]: List of supported timeframe strings
         """
+        return list(self.timeframe_map.keys())
+
+    def get_quotes(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+        """
+        Get real-time quotes for a list of symbols using Groww SDK.
+        
+        This implementation uses the official Groww SDK to fetch market data.
+        
+        Args:
+            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
+            timeout (int): Timeout in seconds
+            
+        Returns:
+            Dict[str, Any]: Quote data in OpenAlgo format
+        """
+        logger.info(f"Getting quotes using Groww SDK for: {symbol_list}")
+        
+        # Try to import the Groww SDK
         try:
-            # Check if interval is supported
-            if interval not in self.timeframe_map:
-                supported = list(self.timeframe_map.keys())
-                raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
-
-            # Adjust dates for trading days
-            start_date, end_date = self._adjust_dates(start_date, end_date)
-            
-            # If both dates are weekends, return empty DataFrame
-            if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
-                logger.info("Both start and end dates are non-trading days")
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
-            # If start and end dates are same, increase end date by one day
-            if start_date == end_date:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                end_date = end_dt.strftime("%Y-%m-%d")
-                logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
-
-            # Convert symbol to broker format and get securityId
-            security_id = get_token(symbol, exchange)
-            if not security_id:
-                raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            print(f'exchange: {exchange}')
-            # Get exchange segment and instrument type
-            exchange_segment = self._get_exchange_segment(exchange)
-            if not exchange_segment:
-                raise Exception(f"Unsupported exchange: {exchange}")
-            print(f'exchange segment: {exchange_segment}')
-            instrument_type = self._get_instrument_type(exchange, symbol)
-            
-            all_candles = []
-
-            # Choose endpoint and prepare request data
-            if interval == 'D':
-                # For daily data, use historical endpoint
-                endpoint = "/v2/charts/historical"
-                
-                # Convert dates to UTC for API request
-                utc_start_date = self._convert_date_to_utc(start_date)
-                # For end date, add one day to include the end date in results
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                utc_end_date = self._convert_date_to_utc(end_dt.strftime("%Y-%m-%d"))
-                
-                request_data = {
-                    "securityId": str(security_id),
-                    "exchangeSegment": exchange_segment,
-                    "instrument": instrument_type,
-                    "fromDate": utc_start_date,
-                    "toDate": utc_end_date
-                }
-                
-                # Add expiryCode only for EQUITY
-                if instrument_type == 'EQUITY':
-                    request_data["expiryCode"] = 0
-                
-                logger.info(f"Making daily history request to {endpoint}")
-                logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
-                
-                response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
-                
-                # Process response
-                timestamps = response.get('timestamp', [])
-                opens = response.get('open', [])
-                highs = response.get('high', [])
-                lows = response.get('low', [])
-                closes = response.get('close', [])
-                volumes = response.get('volume', [])
-
-                for i in range(len(timestamps)):
-                    # Convert UTC timestamp to IST
-                    ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
-                    all_candles.append({
-                        'timestamp': ist_timestamp,
-                        'open': float(opens[i]) if opens[i] else 0,
-                        'high': float(highs[i]) if highs[i] else 0,
-                        'low': float(lows[i]) if lows[i] else 0,
-                        'close': float(closes[i]) if closes[i] else 0,
-                        'volume': int(float(volumes[i])) if volumes[i] else 0
-                    })
-            else:
-                # For intraday data
-                endpoint = "/v2/charts/intraday"
-                
-                if start_date == (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"):
-                    # For same day intraday data, use exact time range in IST
-                    from_time = start_date
-                    to_time = end_date  # This will be the next day as adjusted above
-                    
-                    request_data = {
-                        "securityId": str(security_id),
-                        "exchangeSegment": exchange_segment,
-                        "instrument": instrument_type,
-                        "interval": self.timeframe_map[interval],
-                        "fromDate": from_time,
-                        "toDate": to_time
-                    }
-                    
-                    logger.info(f"Making intraday history request to {endpoint}")
-                    logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
-                    
-                    try:
-                        response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
-                        
-                        # Process response
-                        timestamps = response.get('timestamp', [])
-                        opens = response.get('open', [])
-                        highs = response.get('high', [])
-                        lows = response.get('low', [])
-                        closes = response.get('close', [])
-                        volumes = response.get('volume', [])
-
-                        for i in range(len(timestamps)):
-                            # Convert UTC timestamp to IST
-                            ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
-                            all_candles.append({
-                                'timestamp': ist_timestamp,
-                                'open': float(opens[i]) if opens[i] else 0,
-                                'high': float(highs[i]) if highs[i] else 0,
-                                'low': float(lows[i]) if lows[i] else 0,
-                                'close': float(closes[i]) if closes[i] else 0,
-                                'volume': int(float(volumes[i])) if volumes[i] else 0
-                            })
-                    except Exception as e:
-                        logger.error(f"Error fetching intraday data: {str(e)}")
-                else:
-                    # For multiple days, split into chunks
-                    date_chunks = self._get_intraday_chunks(start_date, end_date)
-                    
-                    for chunk_start, chunk_end in date_chunks:
-                        # Skip if both dates are non-trading days
-                        if not self._is_trading_day(chunk_start) and not self._is_trading_day(chunk_end):
-                            continue
-
-                        # Get time range for each day
-                        from_time, _ = self._get_intraday_time_range(chunk_start)
-                        _, to_time = self._get_intraday_time_range(chunk_end)
-
-                        request_data = {
-                            "securityId": str(security_id),
-                            "exchangeSegment": exchange_segment,
-                            "instrument": instrument_type,
-                            "interval": self.timeframe_map[interval],
-                            "fromDate": from_time,
-                            "toDate": to_time
-                        }
-                        
-                        logger.info(f"Making intraday history request to {endpoint}")
-                        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
-                        
-                        try:
-                            response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
-                            
-                            # Process response
-                            timestamps = response.get('timestamp', [])
-                            opens = response.get('open', [])
-                            highs = response.get('high', [])
-                            lows = response.get('low', [])
-                            closes = response.get('close', [])
-                            volumes = response.get('volume', [])
-
-                            for i in range(len(timestamps)):
-                                # Convert UTC timestamp to IST
-                                ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
-                                all_candles.append({
-                                    'timestamp': ist_timestamp,
-                                    'open': float(opens[i]) if opens[i] else 0,
-                                    'high': float(highs[i]) if highs[i] else 0,
-                                    'low': float(lows[i]) if lows[i] else 0,
-                                    'close': float(closes[i]) if closes[i] else 0,
-                                    'volume': int(float(volumes[i])) if volumes[i] else 0
-                                })
-                        except Exception as e:
-                            logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
-                            continue
-
-            # For daily timeframe, check if today's date is within the range
-            if interval == 'D':
-                today = datetime.now().strftime("%Y-%m-%d")
-                if start_date <= today <= end_date:
-                    logger.info("Today's date is within range for daily timeframe, fetching current day data from quotes API")
-                    try:
-                        # Get today's data from quotes API
-                        quotes = self.get_quotes(symbol, exchange)
-                        if quotes and quotes.get('ltp', 0) > 0:  # Only add if we got valid data
-                            today_candle = {
-                                'timestamp': int(datetime.strptime(today + " 15:30:00", "%Y-%m-%d %H:%M:%S").timestamp()),
-                                'open': float(quotes.get('open', 0)),
-                                'high': float(quotes.get('high', 0)),
-                                'low': float(quotes.get('low', 0)),
-                                'close': float(quotes.get('ltp', 0)),  # Use LTP as current close
-                                'volume': int(quotes.get('volume', 0))
-                            }
-                            all_candles.append(today_candle)
-                    except Exception as e:
-                        logger.error(f"Error fetching today's data from quotes: {str(e)}")
-
-            # Create DataFrame from all candles
-            df = pd.DataFrame(all_candles)
-            if df.empty:
-                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            else:
-                # Sort by timestamp and remove duplicates
-                df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-
-            return df
-
+            growwapi = importlib.import_module('growwapi')
+            GrowwAPI = getattr(growwapi, 'GrowwAPI')
+            logger.info("Successfully imported Groww SDK")
+        except ImportError:
+            logger.error("Failed to import growwapi. Please install it with: pip install growwapi")
+            raise ImportError("Groww SDK not installed. Please install it with: pip install growwapi")
         except Exception as e:
-            logger.error(f"Error fetching historical data: {str(e)}")
-            raise Exception(f"Error fetching historical data: {str(e)}")
-
-    def get_quotes(self, symbol: str, exchange: str) -> dict:
-        """
-        Get real-time quotes for given symbol
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-        Returns:
-            dict: Quote data with required fields
-        """
-        try:
-            security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
-            
-            logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
-            
-            payload = {
-                exchange_type: [int(security_id)]
-            }
-            
+            logger.error(f"Error importing Groww SDK: {str(e)}")
+            raise
+        
+        # Initialize the GrowwAPI with the auth token
+        groww_api = GrowwAPI(self.auth_token)
+        
+        # Get the exchange and segment constants from the SDK
+        EXCHANGE_NSE = getattr(groww_api, 'EXCHANGE_NSE', 'NSE')
+        EXCHANGE_BSE = getattr(groww_api, 'EXCHANGE_BSE', 'BSE')
+        SEGMENT_CASH = getattr(groww_api, 'SEGMENT_CASH', 'CASH')
+        SEGMENT_FNO = getattr(groww_api, 'SEGMENT_FNO', 'FNO')
+        
+        # Standardize input to a list of dictionaries with exchange and symbol
+        if isinstance(symbol_list, dict):
             try:
-                response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
-                quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
+                # Extract symbol and exchange
+                symbol = symbol_list.get('symbol') or symbol_list.get('SYMBOL')
+                exchange = symbol_list.get('exchange') or symbol_list.get('EXCHANGE')
                 
-                if not quote_data:
+                if symbol and exchange:
+                    logger.info(f"Processing single symbol request: {symbol} on {exchange}")
+                    # Convert to a list with a single item
+                    symbol_list = [{'symbol': symbol, 'exchange': exchange}]
+                else:
+                    logger.error("Missing symbol or exchange in request")
                     return {
-                        'ltp': 0,
-                        'open': 0,
-                        'high': 0,
-                        'low': 0,
-                        'volume': 0,
-                        'bid': 0,
-                        'ask': 0,
-                        'prev_close': 0
+                        "status": "error",
+                        "data": [],
+                        "message": "Missing symbol or exchange in request"
                     }
+            except Exception as e:
+                logger.error(f"Error processing single symbol request: {str(e)}")
+                return {
+                    "status": "error",
+                    "data": [],
+                    "message": f"Error processing request: {str(e)}"
+                }
+        
+        # Handle plain string (like just "RELIANCE")
+        elif isinstance(symbol_list, str):
+            symbol = symbol_list.strip()
+            exchange = 'NSE'  # Default to NSE for Indian stocks
+            logger.info(f"Processing string symbol: {symbol} on {exchange}")
+            symbol_list = [{'symbol': symbol, 'exchange': exchange}]
+        
+        # Process all symbols using the Groww SDK
+        quote_data = []
+        
+        for sym in symbol_list:
+            try:
+                # Extract symbol and exchange
+                if isinstance(sym, dict) and 'symbol' in sym and 'exchange' in sym:
+                    symbol = sym['symbol']
+                    exchange = sym['exchange']
+                elif isinstance(sym, str):
+                    symbol = sym
+                    exchange = 'NSE'  # Default to NSE
+                else:
+                    logger.warning(f"Invalid symbol format: {sym}")
+                    continue
                 
-                # Transform to expected format
-                result = {
-                    'ltp': float(quote_data.get('last_price', 0)),
-                    'open': float(quote_data.get('ohlc', {}).get('open', 0)),
-                    'high': float(quote_data.get('ohlc', {}).get('high', 0)),
-                    'low': float(quote_data.get('ohlc', {}).get('low', 0)),
-                    'volume': int(quote_data.get('volume', 0)),
-                    'bid': 0,  # Will be updated from depth
-                    'ask': 0,  # Will be updated from depth
-                    'prev_close': float(quote_data.get('ohlc', {}).get('close', 0))
+                # Get token for this symbol
+                token = get_token(symbol, exchange)
+                
+                # Map OpenAlgo exchange to Groww exchange format
+                if exchange == 'NSE':
+                    groww_exchange = EXCHANGE_NSE
+                    segment = SEGMENT_CASH
+                elif exchange == 'BSE':
+                    groww_exchange = EXCHANGE_BSE
+                    segment = SEGMENT_CASH
+                elif exchange == 'NFO':
+                    groww_exchange = EXCHANGE_NSE
+                    segment = SEGMENT_FNO
+                elif exchange == 'BFO':
+                    groww_exchange = EXCHANGE_BSE
+                    segment = SEGMENT_FNO
+                else:
+                    logger.warning(f"Unsupported exchange: {exchange}, defaulting to NSE")
+                    groww_exchange = EXCHANGE_NSE
+                    segment = SEGMENT_CASH
+                
+                # Get broker-specific symbol if needed
+                trading_symbol = get_br_symbol(symbol, exchange) or symbol
+                
+                logger.info(f"Requesting quote for {trading_symbol} on {groww_exchange} (segment: {segment})")
+                
+                # Make API call using Groww SDK
+                start_time = time.time()
+                try:
+                    response = groww_api.get_quote(
+                        exchange=groww_exchange,
+                        segment=segment,
+                        trading_symbol=trading_symbol
+                    )
+                    print(f"Groww API response: {response}")
+                    elapsed = time.time() - start_time
+                    logger.info(f"Got response from Groww API in {elapsed:.2f}s")
+                    
+                    if response:
+                        logger.info(f"Successfully retrieved quote for {symbol} on {exchange}")
+                        # Log a sample of the data structure
+                        if isinstance(response, dict):
+                            logger.info(f"Response keys: {list(response.keys())[:10]}")
+                    else:
+                        logger.warning(f"Empty response for {symbol} on {exchange}")
+                        response = {}
+                except Exception as api_error:
+                    logger.error(f"Groww API error: {str(api_error)}")
+                    error_msg = str(api_error)
+                    # Add to quote data with error
+                    quote_data.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'token': token,
+                        'error': error_msg,
+                        'ltp': 0
+                    })
+                    continue
+                
+                # Safely convert values to float/int, handling None values
+                def safe_float(value, default=0.0):
+                    if value is None:
+                        return default
+                    try:
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return default
+                        
+                def safe_int(value, default=0):
+                    if value is None:
+                        return default
+                    try:
+                        return int(value)
+                    except (ValueError, TypeError):
+                        return default
+                
+                # Extract OHLC data from the nested structure for easier access
+                ohlc = response.get('ohlc', {})
+                
+                # Create quote_item in OpenAlgo format from Groww response
+                quote_item = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'token': token,
+                    'ltp': safe_float(response.get('last_price')),
+                    'open': safe_float(ohlc.get('open')),
+                    'high': safe_float(ohlc.get('high')),
+                    'low': safe_float(ohlc.get('low')),
+                    'close': safe_float(ohlc.get('close')),
+                    'prev_close': safe_float(ohlc.get('close')),  # Using previous day's close
+                    'change': safe_float(response.get('day_change')),
+                    'change_percent': safe_float(response.get('day_change_perc')),
+                    'volume': safe_int(response.get('volume')),
+                    'bid_price': safe_float(response.get('bid_price')),
+                    'bid_qty': safe_int(response.get('bid_quantity')),
+                    'ask_price': safe_float(response.get('offer_price')),
+                    'ask_qty': safe_int(response.get('offer_quantity')),
+                    'total_buy_qty': safe_float(response.get('total_buy_quantity')),
+                    'total_sell_qty': safe_float(response.get('total_sell_quantity')),
+                    'timestamp': response.get('last_trade_time', int(datetime.now().timestamp() * 1000))
                 }
                 
-                # Update bid/ask from depth if available
-                depth = quote_data.get('depth', {})
-                if depth:
-                    buy_orders = depth.get('buy', [])
-                    sell_orders = depth.get('sell', [])
-                    
-                    if buy_orders:
-                        result['bid'] = float(buy_orders[0].get('price', 0))
-                    if sell_orders:
-                        result['ask'] = float(sell_orders[0].get('price', 0))
+                # Actually add the quote_item to the quote_data list
+                quote_data.append(quote_item)
                 
-                return result
+                # Add circuit limits if available
+                if 'upper_circuit_limit' in response:
+                    quote_item['upper_circuit'] = safe_float(response.get('upper_circuit_limit'))
+                if 'lower_circuit_limit' in response:
+                    quote_item['lower_circuit'] = safe_float(response.get('lower_circuit_limit'))
+                
+                # Add market depth if available
+                if 'depth' in response:
+                    depth_data = response['depth']
+                    buy_depth = depth_data.get('buy', [])
+                    sell_depth = depth_data.get('sell', [])
+                    
+                    depth = {
+                        'buy': [],
+                        'sell': []
+                    }
+                    
+                    # Process buy side
+                    for level in buy_depth:
+                        depth['buy'].append({
+                            'price': safe_float(level.get('price')),
+                            'quantity': safe_int(level.get('quantity')),
+                            'orders': 0  # Groww API doesn't provide order count
+                        })
+                    
+                    # Process sell side
+                    for level in sell_depth:
+                        depth['sell'].append({
+                            'price': safe_float(level.get('price')),
+                            'quantity': safe_int(level.get('quantity')),
+                            'orders': 0  # Groww API doesn't provide order count
+                        })
+                    
+                    quote_item['depth'] = depth
                 
             except Exception as e:
-                if "not subscribed" in str(e).lower():
-                    logger.error("Market data subscription error", exc_info=True)
-                    return {
-                        'ltp': 0,
-                        'open': 0,
-                        'high': 0,
-                        'low': 0,
-                        'volume': 0,
-                        'bid': 0,
-                        'ask': 0,
-                        'prev_close': 0,
-                        'error': str(e)
-                    }
-                raise
-            
-        except Exception as e:
-            logger.error(f"Error in get_quotes: {str(e)}", exc_info=True)
-            raise Exception(f"Error fetching quotes: {str(e)}")
-
-    def get_depth(self, symbol: str, exchange: str) -> dict:
-        """
-        Get market depth for given symbol
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-        Returns:
-            dict: Market depth data with bids and asks
-        """
-        try:
-            security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
-            
-            logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
-            
-            payload = {
-                exchange_type: [int(security_id)]
+                logger.error(f"Error processing Groww API data for {sym}: {str(e)}")
+                # Add empty quote data with error message
+                quote_data.append({
+                    'symbol': symbol if 'symbol' in locals() else str(sym),
+                    'exchange': exchange if 'exchange' in locals() else 'Unknown',
+                    'error': str(e),
+                    'ltp': 0
+                })
+        
+        # No data case
+        if not quote_data:
+            logger.warning("No quote data found for the requested symbols")
+            return {
+                "status": "error",
+                "message": "No data retrieved"
             }
             
-            try:
-                response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
-                quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
-                
-                if not quote_data:
-                    return {
-                        'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
-                        'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
-                        'ltp': 0,
-                        'ltq': 0,
-                        'volume': 0,
-                        'open': 0,
-                        'high': 0,
-                        'low': 0,
-                        'prev_close': 0,
-                        'oi': 0,
-                        'totalbuyqty': 0,
-                        'totalsellqty': 0
+        # Single quote - Format exactly as specified by OpenAlgo API, without nesting
+        if len(quote_data) == 1:
+            quote = quote_data[0]
+            logger.info(f"Returning data for {quote.get('symbol', 'unknown')} in OpenAlgo format")
+            
+            # Direct format without nested data structure
+            return {
+                "ask": quote.get('ask_price', 0),
+                "bid": quote.get('bid_price', 0),
+                "high": quote.get('high', 0),
+                "low": quote.get('low', 0),
+                "ltp": quote.get('ltp', 0),
+                "open": quote.get('open', 0),
+                "prev_close": quote.get('prev_close', 0),
+                "volume": quote.get('volume', 0),
+                "status": "success"
+            }
+        
+        # Multiple quotes - return in standard format
+        logger.info(f"Returning data for {len(quote_data)} symbols")
+        return {
+            "status": "success",
+            "data": quote_data
+        }
+
+    def get_market_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+        """
+        Get market depth for a symbol or list of symbols using Groww API.
+        This leverages the get_quotes method since Groww's quote API includes depth information.
+        
+        Args:
+            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
+            timeout (int): Timeout in seconds
+            
+        Returns:
+            Dict[str, Any]: Market depth data in OpenAlgo format
+        """
+        # Reuse get_quotes as it already contains market depth data
+        quotes_response = self.get_quotes(symbol_list, timeout)
+        
+        if quotes_response.get("status") == "success":
+            depth_data = []
+            
+            for quote in quotes_response.get("data", []):
+                if "depth" in quote:
+                    # Quote already contains properly formatted depth data
+                    depth_item = {
+                        "symbol": quote.get("symbol"),
+                        "exchange": quote.get("exchange"),
+                        "token": quote.get("token"),
+                        "depth": quote.get("depth"),
+                        "ltp": quote.get("ltp", 0),
+                        "total_buy_qty": quote.get("total_buy_qty", 0),
+                        "total_sell_qty": quote.get("total_sell_qty", 0),
+                        "timestamp": quote.get("timestamp")
                     }
-                
-                depth = quote_data.get('depth', {})
-                ohlc = quote_data.get('ohlc', {})
-                
-                # Prepare bids and asks arrays
-                bids = []
-                asks = []
-                
-                # Process buy orders
-                buy_orders = depth.get('buy', [])
-                for i in range(5):
-                    if i < len(buy_orders):
-                        bids.append({
-                            'price': float(buy_orders[i].get('price', 0)),
-                            'quantity': int(buy_orders[i].get('quantity', 0))
-                        })
-                    else:
-                        bids.append({'price': 0, 'quantity': 0})
-                
-                # Process sell orders
-                sell_orders = depth.get('sell', [])
-                for i in range(5):
-                    if i < len(sell_orders):
-                        asks.append({
-                            'price': float(sell_orders[i].get('price', 0)),
-                            'quantity': int(sell_orders[i].get('quantity', 0))
-                        })
-                    else:
-                        asks.append({'price': 0, 'quantity': 0})
-                
-                result = {
-                    'bids': bids,
-                    'asks': asks,
-                    'ltp': float(quote_data.get('last_price', 0)),
-                    'ltq': int(quote_data.get('last_quantity', 0)),
-                    'volume': int(quote_data.get('volume', 0)),
-                    'open': float(ohlc.get('open', 0)),
-                    'high': float(ohlc.get('high', 0)),
-                    'low': float(ohlc.get('low', 0)),
-                    'prev_close': float(ohlc.get('close', 0)),
-                    'oi': int(quote_data.get('oi', 0)),
-                    'totalbuyqty': sum(bid['quantity'] for bid in bids),
-                    'totalsellqty': sum(ask['quantity'] for ask in asks)
-                }
-                
-                return result
-                
-            except Exception as api_error:
-                if "not subscribed" in str(api_error).lower():
-                    logger.error("Market data subscription error", exc_info=True)
-                    return {
-                        'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
-                        'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
-                        'ltp': 0,
-                        'ltq': 0,
-                        'volume': 0,
-                        'open': 0,
-                        'high': 0,
-                        'low': 0,
-                        'prev_close': 0,
-                        'oi': 0,
-                        'totalbuyqty': 0,
-                        'totalsellqty': 0,
-                        'error': str(api_error)
+                    depth_data.append(depth_item)
+                else:
+                    # No depth data available, create empty structure
+                    depth_item = {
+                        "symbol": quote.get("symbol"),
+                        "exchange": quote.get("exchange"),
+                        "token": quote.get("token"),
+                        "depth": {
+                            "buy": [],
+                            "sell": []
+                        },
+                        "ltp": quote.get("ltp", 0),
+                        "total_buy_qty": quote.get("total_buy_qty", 0),
+                        "total_sell_qty": quote.get("total_sell_qty", 0),
+                        "timestamp": quote.get("timestamp")
                     }
-                raise
-                
-        except Exception as e:
-            logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
-            raise Exception(f"Error fetching market depth: {str(e)}")
+                    depth_data.append(depth_item)
+            
+            return {
+                "status": "success",
+                "data": depth_data,
+                "message": f"Retrieved depth data for {len(depth_data)} symbols"
+            }
+        else:
+            # Return the error from get_quotes
+            return quotes_response
+
+    def get_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+        """
+        Alias for get_market_depth. Maintains API compatibility.
+        
+        Args:
+            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
+            timeout (int): Timeout in seconds
+            
+        Returns:
+            Dict[str, Any]: Market depth data in OpenAlgo format
+        """
+        return self.get_market_depth(symbol_list, timeout)
