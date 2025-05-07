@@ -1,81 +1,318 @@
-import http.client
 import json
 import os
+import logging
+import uuid
+import re
+from datetime import datetime
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.dhan.mapping.transform_data import map_exchange_type, map_exchange
+from database.token_db import get_br_symbol, get_oa_symbol, get_symbol
+from broker.groww.mapping.transform_data import (
+    # Functions
+    transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data,
+    map_exchange_type, map_exchange, map_segment_type, map_validity, map_order_type, map_transaction_type,
+    # Constants
+    VALIDITY_DAY, VALIDITY_IOC,
+    EXCHANGE_NSE, EXCHANGE_BSE, 
+    SEGMENT_CASH, SEGMENT_FNO, SEGMENT_CURRENCY, SEGMENT_COMMODITY,
+    PRODUCT_CNC, PRODUCT_MIS, PRODUCT_NRML,
+    ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_TYPE_SL, ORDER_TYPE_SLM,
+    TRANSACTION_TYPE_BUY, TRANSACTION_TYPE_SELL,
+    ORDER_STATUS_NEW, ORDER_STATUS_ACKED, ORDER_STATUS_APPROVED, ORDER_STATUS_CANCELLED
+)
+
+# Import Groww SDK
+try:
+    from growwapi import GrowwAPI
+except ImportError:
+    logging.warning("growwapi package not found. Please install it using 'pip install growwapi'.")
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
-
-    AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api.dhan.co")
-    headers = {
-        'access-token': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+def init_groww_client(auth_token):
+    """
+    Initialize and return Groww API client
+    
+    Args:
+        auth_token (str): Authentication token
+        
+    Returns:
+        GrowwAPI: Initialized Groww API client
+    """
+    try:
+        return GrowwAPI(auth_token)
+    except Exception as e:
+        logging.error(f"Failed to initialize Groww API client: {e}")
+        raise
 
 def get_order_book(auth):
-    return get_api_response("/v2/orders",auth)
+    """
+    Get list of orders for the user
+    
+    Args:
+        auth (str): Authentication token
+    
+    Returns:
+        dict: Order book data
+    """
+    try:
+        groww = init_groww_client(auth)
+        orders = groww.get_orders()
+        return orders
+    except Exception as e:
+        logging.error(f"Error fetching order book: {e}")
+        return []
 
 def get_trade_book(auth):
-    return get_api_response("/v2/trades",auth)
+    """
+    Get list of trades for the user
+    
+    Args:
+        auth (str): Authentication token
+    
+    Returns:
+        dict: Trade book data
+    """
+    try:
+        groww = init_groww_client(auth)
+        trades = groww.get_trades()
+        return trades
+    except Exception as e:
+        logging.error(f"Error fetching trade book: {e}")
+        return []
 
 def get_positions(auth):
-    return get_api_response("/v2/positions",auth)
+    """
+    Get current positions for the user
+    
+    Args:
+        auth (str): Authentication token
+    
+    Returns:
+        dict: Positions data
+    """
+    try:
+        groww = init_groww_client(auth)
+        positions = groww.get_positions()
+        return positions
+    except Exception as e:
+        logging.error(f"Error fetching positions: {e}")
+        return []
 
 def get_holdings(auth):
-    return get_api_response("/v2/holdings",auth)
+    """
+    Get holdings for the user
+    
+    Args:
+        auth (str): Authentication token
+    
+    Returns:
+        dict: Holdings data
+    """
+    try:
+        groww = init_groww_client(auth)
+        holdings = groww.get_holdings()
+        return holdings
+    except Exception as e:
+        logging.error(f"Error fetching holdings: {e}")
+        return []
 
 def get_open_position(tradingsymbol, exchange, product, auth):
-
-    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
+    """
+    Get open position for a specific symbol
+    
+    Args:
+        tradingsymbol (str): Trading symbol
+        exchange (str): Exchange
+        product (str): Product type
+        auth (str): Authentication token
+    
+    Returns:
+        str: Net quantity
+    """
+    # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search
+    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
     net_qty = '0'
     
-    if positions_data:
+    # Check if we received positions data in expected format
+    if positions_data and isinstance(positions_data, list):
         for position in positions_data:
-            if position.get('tradingSymbol') == tradingsymbol and position.get('exchangeSegment') == map_exchange_type(exchange) and position.get('productType') == product:
-                net_qty = position.get('netQty', '0')
-                break  # Assuming you need the first match
-
+            if (position.get('trading_symbol') == tradingsymbol and 
+                position.get('exchange') == map_exchange_type(exchange) and 
+                position.get('product') == product):
+                net_qty = str(position.get('net_quantity', '0'))
+                break  # Found the position
+    
     return net_qty
 
-def place_order_api(data,auth):
-    AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
-    token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
-    headers = {
-        'access-token': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    payload = json.dumps(newdata)
+def place_order_api(data, auth):
+    """
+    Place an order with Groww
+    
+    Args:
+        data (dict): Order data in OpenAlgo format
+        auth (str): Authentication token
+    
+    Returns:
+        tuple: (response object, response data, order id)
+    """
+    try:
+        # Initialize Groww client
+        groww = init_groww_client(auth)
+        
+        # Map parameters to Groww SDK format
+        trading_symbol = data.get('symbol')
+        quantity = int(data.get('quantity'))
+        product = map_product_type(data.get('product', 'CNC'))
+        exchange = map_exchange_type(data.get('exchange', 'NSE'))
+        segment = map_segment_type(data.get('exchange', 'NSE'))
+        order_type = map_order_type(data.get('pricetype', 'MARKET'))
+        transaction_type = map_transaction_type(data.get('action', 'BUY'))
+        validity = map_validity(data.get('validity', 'DAY'))
+        
+        # Optional parameters
+        price = float(data.get('price', 0)) if data.get('pricetype', '').upper() == 'LIMIT' else None
+        trigger_price = float(data.get('trigger_price', 0)) if data.get('pricetype', '').upper() in ['SL', 'SL-M'] else None
+        
+        # Generate a valid Groww order reference ID (8-20 alphanumeric with at most two hyphens)
+        raw_id = data.get('order_reference_id', '')
+        if not raw_id:
+            # Create a reference ID based on timestamp and a partial UUID
+            timestamp = datetime.now().strftime('%Y%m%d')
+            uuid_part = str(uuid.uuid4()).replace('-', '')[:8]
+            raw_id = f"{timestamp}-{uuid_part}"
+        
+        # Ensure the ID meets Groww's requirements
+        # 1. Must be 8-20 characters
+        # 2. Must be alphanumeric with at most two hyphens
+        raw_id = re.sub(r'[^a-zA-Z0-9-]', '', raw_id)  # Remove non-alphanumeric/non-hyphen chars
+        hyphen_count = raw_id.count('-')
+        if hyphen_count > 2:
+            # Remove excess hyphens, keeping the first two
+            positions = [pos for pos, char in enumerate(raw_id) if char == '-']
+            for pos in positions[2:]:
+                raw_id = raw_id[:pos] + 'X' + raw_id[pos+1:]  # Replace excess hyphens with 'X'
+            raw_id = raw_id.replace('X', '')  # Remove the placeholder
+            
+        # Ensure length is between 8-20 characters
+        if len(raw_id) < 8:
+            raw_id = raw_id.ljust(8, '0')  # Pad with zeros if too short
+        if len(raw_id) > 20:
+            raw_id = raw_id[:20]  # Truncate if too long
+            
+        order_reference_id = raw_id
+        
+        print(f"Placing {transaction_type} order for {quantity} of {trading_symbol} at {price if price else 'MARKET'}")
+        print(f"SDK Parameters: exchange={exchange}, segment={segment}, product={product}, order_type={order_type}")
+        print(f"Using order reference ID: {order_reference_id}")
+        
+        # Place order using SDK
+        response = groww.place_order(
+            trading_symbol=trading_symbol,
+            quantity=quantity,
+            validity=validity,
+            exchange=exchange,
+            segment=segment,
+            product=product,
+            order_type=order_type,
+            transaction_type=transaction_type,
+            price=price,
+            trigger_price=trigger_price,
+            order_reference_id=order_reference_id
+        )
+        
+        print("Groww Order Response:", response)
+        
+        # Create a response object to maintain compatibility with existing code
+        class ResponseObject:
+            def __init__(self, status_code):
+                self.status = status_code
+        
+        res = ResponseObject(200)
+        
+        # Extract order ID and status
+        orderid = response.get('groww_order_id')
+        order_status = response.get('order_status')
+        
+        print(f"Order ID: {orderid}, Status: {order_status}")
+        
+        return res, response, orderid
+    
+    except Exception as e:
+        print(f"Error placing order: {e}")
+        import traceback
+        traceback.print_exc()
+        class ResponseObject:
+            def __init__(self, status_code):
+                self.status = status_code
+        
+        res = ResponseObject(500)
+        response_data = {"status": "error", "message": str(e)}
+        return res, response_data, None
 
-    print(payload)
 
-    conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("POST", "/v2/orders", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-    print(response_data)
-    if response_data:
-        orderid = response_data['orderId']
-    else:
-        orderid = None
-    return res, response_data, orderid
+def direct_place_order(auth_token, symbol, quantity, price=None, order_type="MARKET", transaction_type="BUY", product="CNC", order_reference_id=None):
+    """
+    Directly place an order with Groww SDK (for testing)
+    
+    Args:
+        auth_token (str): Authentication token
+        symbol (str): Trading symbol
+        quantity (int): Quantity to trade
+        price (float, optional): Price for limit orders. Defaults to None.
+        order_type (str, optional): Order type. Defaults to "MARKET".
+        transaction_type (str, optional): BUY or SELL. Defaults to "BUY".
+        product (str, optional): Product type. Defaults to "CNC".
+        order_reference_id (str, optional): Custom reference ID. If None, a valid ID will be generated.
+        
+    Returns:
+        dict: Order response
+    """
+    try:
+        # Initialize Groww API client
+        groww = init_groww_client(auth_token)
+        
+        # Default exchange and segment
+        exchange = EXCHANGE_NSE
+        segment = SEGMENT_CASH
+        validity = VALIDITY_DAY
+        
+        # Generate a valid Groww order reference ID if not provided
+        if not order_reference_id:
+            timestamp = datetime.now().strftime('%Y%m%d')
+            uuid_part = str(uuid.uuid4()).replace('-', '')[:8]
+            order_reference_id = f"{timestamp}-{uuid_part}"
+            
+            # Ensure it meets Groww's requirements
+            order_reference_id = re.sub(r'[^a-zA-Z0-9-]', '', order_reference_id)[:20]
+            if len(order_reference_id) < 8:
+                order_reference_id = order_reference_id.ljust(8, '0')
+        
+        print(f"Placing {transaction_type} order for {quantity} of {symbol} at {price if price else 'MARKET'}")
+        print(f"SDK Parameters: exchange={exchange}, segment={segment}, product={product}, order_type={order_type}")
+        print(f"Using order reference ID: {order_reference_id}")
+        
+        # Place order using SDK
+        response = groww.place_order(
+            trading_symbol=symbol,
+            quantity=quantity,
+            price=price,
+            validity=validity,
+            exchange=exchange,
+            segment=segment,
+            product=product,
+            order_type=order_type,
+            transaction_type=transaction_type,
+            order_reference_id=order_reference_id
+        )
+        print(f"Direct order response: {response}")
+        return response
+    
+    except Exception as e:
+        print(f"Direct order error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
 
 def place_smartorder_api(data,auth):
 
@@ -217,93 +454,192 @@ def close_all_positions(current_api_key,auth):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid,auth):
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
+def cancel_order(orderid, auth):
+    """
+    Cancel an order by its ID
     
-    # Set up the request headers
-    headers = {
-        'access-token': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
+    Args:
+        orderid (str): Order ID to cancel
+        auth (str): Authentication token
     
+    Returns:
+        tuple: (response object, response data)
+    """
+    try:
+        # Initialize Groww client
+        groww = init_groww_client(auth)
+        
+        # Cancel order using SDK
+        response_data = groww.cancel_order(orderid)
+        print("Cancel Order Response:", response_data)
+        
+        # Create a response object to maintain compatibility with existing code
+        class ResponseObject:
+            def __init__(self, status_code):
+                self.status = status_code
+        
+        res = ResponseObject(200)
+        return res, response_data
+    except Exception as e:
+        print(f"Error cancelling order: {e}")
+        res = type('obj', (object,), {'status': 500})
+        return res, {"status": "error", "message": str(e)}
+
+
+def modify_order(data, auth):
+    """
+    Modify an existing order
     
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("DELETE", f"/v2/orders/{orderid}", headers=headers)  # Append the order ID to the URL
+    Args:
+        data (dict): Order modification data
+        auth (str): Authentication token
     
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    Returns:
+        tuple: (response object, response data, order id)
+    """
+    try:
+        # Initialize Groww client
+        groww = init_groww_client(auth)
+        
+        # Extract order ID and parameters to modify
+        groww_order_id = data['orderid']  # Groww SDK expects 'groww_order_id'
+        
+        # Get the order type
+        order_type = ORDER_TYPE_MARKET  # Default to MARKET
+        if 'pricetype' in data:
+            order_type = map_order_type(data['pricetype'])
+        
+        # Get the exchange and derive segment
+        exchange = data.get('exchange', EXCHANGE_NSE)
+        segment = map_segment_type(exchange)  # Map to CASH, FNO, etc.
+        
+        # Required parameters according to Groww SDK
+        # quantity, order_type, segment, groww_order_id are required
+        if 'quantity' not in data:
+            raise ValueError("Quantity is required for order modification")
+        
+        quantity = int(data['quantity'])
+        
+        # Optional parameters
+        price = None
+        trigger_price = None
+        
+        if order_type == ORDER_TYPE_LIMIT and 'price' in data:
+            price = float(data['price'])
+        
+        if order_type in [ORDER_TYPE_SL, ORDER_TYPE_SLM] and 'trigger_price' in data:
+            trigger_price = float(data['trigger_price'])
+        
+        print(f"Modifying order {groww_order_id} with: quantity={quantity}, order_type={order_type}, segment={segment}")
+        
+        # Modify order using SDK - using the format from docs
+        modify_params = {
+            "quantity": quantity,
+            "order_type": order_type,
+            "segment": segment,
+            "groww_order_id": groww_order_id
+        }
+        
+        # Add optional parameters if available
+        if price is not None:
+            modify_params["price"] = price
+        if trigger_price is not None:
+            modify_params["trigger_price"] = trigger_price
+        
+        response_data = groww.modify_order(**modify_params)
+        print("Modify Order Response:", response_data)
+        
+        # Create a response object to maintain compatibility with existing code
+        class ResponseObject:
+            def __init__(self, status_code):
+                self.status = status_code
+        
+        res = ResponseObject(200)
+        
+        return res, response_data
+    except Exception as e:
+        print(f"Error modifying order: {e}")
+        class ResponseObject:
+            def __init__(self, status_code):
+                self.status = status_code
+        
+        res = ResponseObject(500)
+        response_data = {"status": "error", "message": str(e)}
+        return res, response_data
 
+
+def cancel_all_orders_api(data, auth):
+    """
+    Cancel all open orders
     
-    # Check if the request was successful
-    if data:
-        # Return a success response
-        return {"status": "success", "orderid": orderid}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
-
-
-def modify_order(data,auth):
-
+    Args:
+        data (dict): Request data
+        auth (str): Authentication token
     
-
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
-
-    orderid = data["orderid"];
-    transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
-    
-  
-    # Set up the request headers
-    headers = {
-        'access-token': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    payload = json.dumps(transformed_order_data)
-
-    print(payload)
-
-    conn = http.client.HTTPSConnection("api.dhan.co")
-    conn.request("PUT", f"/v2/orders/{orderid}", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-    #return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
-
-    if data["orderId"]:
-        return {"status": "success", "orderid": data["orderId"]}, 200
-    else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
-    
-
-def cancel_all_orders_api(data,auth):
-    # Get the order book
-    AUTH_TOKEN = auth
-    order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
-    if order_book_response is None:
-        return [], []  # Return empty lists indicating failure to retrieve the order book
-
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response
-                        if order['orderStatus'] in ['PENDING']]
-    print(orders_to_cancel)
-    canceled_orders = []
-    failed_cancellations = []
-
-    # Cancel the filtered orders
-    for order in orders_to_cancel:
-        orderid = order['orderId']
-        cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
-        if status_code == 200:
-            canceled_orders.append(orderid)
-        else:
-            failed_cancellations.append(orderid)
-    
-    return canceled_orders, failed_cancellations
+    Returns:
+        dict: Results of cancellation attempts
+    """
+    try:
+        # Initialize Groww client
+        groww = init_groww_client(auth)
+        
+        # Get all orders
+        orders = get_order_book(auth)
+        cancelled_orders = []
+        failed_to_cancel = []
+        
+        # Check if we have open orders to cancel
+        if orders and isinstance(orders, list) and len(orders) > 0:
+            # Filter cancellable orders
+            cancellable_statuses = ['OPEN', 'PENDING', 'TRIGGER_PENDING', 'PLACED', 'PENDING_ORDER',
+                                    'NEW', 'ACKED', 'APPROVED', 'MODIFICATION_REQUESTED']
+            
+            for order in orders:
+                order_status = order.get('order_status', order.get('status', ''))
+                
+                if order_status.upper() in [s.upper() for s in cancellable_statuses]:
+                    try:
+                        # Get order ID
+                        orderid = None
+                        for key in ['groww_order_id', 'orderId', 'order_id', 'id']:
+                            if key in order:
+                                orderid = order[key]
+                                break
+                        
+                        if not orderid:
+                            continue
+                        
+                        # Cancel order
+                        response = groww.cancel_order(orderid)
+                        
+                        # Check response
+                        if response and 'groww_order_id' in response:
+                            cancelled_orders.append({
+                                'order_id': orderid,
+                                'message': 'Successfully cancelled'
+                            })
+                        else:
+                            failed_to_cancel.append({
+                                'order_id': orderid,
+                                'message': 'Failed to cancel',
+                                'details': response.get('message', 'Unknown error') if response else 'Unknown error'
+                            })
+                            
+                    except Exception as e:
+                        failed_to_cancel.append({
+                            'order_id': orderid if orderid else 'Unknown',
+                            'message': 'Failed to cancel',
+                            'details': str(e)
+                        })
+        
+        return {
+            'cancelled_orders': cancelled_orders,
+            'failed_to_cancel': failed_to_cancel
+        }
+        
+    except Exception as e:
+        print(f"Error cancelling all orders: {e}")
+        return {
+            'cancelled_orders': [],
+            'failed_to_cancel': [{'order_id': 'all', 'message': 'Failed to cancel all orders', 'details': str(e)}]
+        }
