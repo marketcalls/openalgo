@@ -46,21 +46,84 @@ def init_groww_client(auth_token):
 
 def get_order_book(auth):
     """
-    Get list of orders for the user
+    Get list of orders for the user from both CASH and FNO segments
     
     Args:
         auth (str): Authentication token
     
     Returns:
-        dict: Order book data
+        dict: Order book data with combined orders from all segments
     """
     try:
+        logging.info("Initializing Groww client for order book")
         groww = init_groww_client(auth)
-        orders = groww.get_orders()
-        return orders
+        
+        # Get orders from all segments (CASH + FNO)
+        all_orders = []
+        page = 0
+        page_size = 25  # Maximum allowed by Groww API
+        
+        logging.info(f"Fetching order book with pagination (page_size={page_size})")
+        
+        # Keep fetching until we get all orders
+        while True:
+            logging.debug(f"Fetching orders page {page}")
+            try:
+                orders = groww.get_order_list(
+                    page=page,
+                    page_size=page_size
+                )
+                
+                logging.debug(f"API Response structure: {list(orders.keys()) if orders else 'None'}")
+                
+                if not orders or not orders.get('order_list'):
+                    logging.info(f"No orders found or empty response on page {page}")
+                    break
+                
+                current_orders = orders['order_list']
+                logging.info(f"Retrieved {len(current_orders)} orders from page {page}")
+                
+                # Log details about first order for debugging
+                if current_orders and page == 0:
+                    sample_order = current_orders[0]
+                    logging.debug(f"Sample order fields: {list(sample_order.keys())}")
+                    logging.debug(f"Sample order values: {sample_order}")
+                    logging.debug(f"Current orders: {current_orders}")
+                
+                all_orders.extend(current_orders)
+                
+                # If we got less than page_size orders, we've reached the end
+                if len(current_orders) < page_size:
+                    logging.info(f"Reached last page of orders at page {page}")
+                    break
+                    
+                page += 1
+                
+            except Exception as e:
+                logging.error(f"Error in pagination loop at page {page}: {str(e)}")
+                break
+        
+        logging.info(f"Successfully fetched total of {len(all_orders)} orders")
+        
+        # Return orders in the format expected by map_order_data
+        # Keep original Groww response for reference
+        response = {
+            'data': all_orders,
+            'order_list': all_orders,  # Include this for backward compatibility
+            'raw_response': orders if orders else {}
+        }
+        logging.debug(f"Final response structure: {list(response.keys())}")
+        return response
+        
     except Exception as e:
         logging.error(f"Error fetching order book: {e}")
-        return []
+        logging.exception("Full stack trace:")
+        # Return the same structure but with empty data
+        return {
+            'data': [],
+            'order_list': [],
+            'raw_response': {}
+        }
 
 def get_trade_book(auth):
     """

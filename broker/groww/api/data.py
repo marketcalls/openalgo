@@ -116,7 +116,8 @@ class BrokerData:
         }
 
     def _convert_to_groww_params(self, symbol, exchange):
-        """Convert symbol and exchange to Groww API parameters
+        """
+        Convert symbol and exchange to Groww API parameters
         
         Args:
             symbol (str): Trading symbol
@@ -125,26 +126,39 @@ class BrokerData:
         Returns:
             tuple: (exchange, segment, trading_symbol)
         """
-        # Get broker-specific symbol if needed
-        br_symbol = get_br_symbol(symbol, exchange)
-        trading_symbol = br_symbol or symbol
+        logger.debug(f"Converting params - Symbol: {symbol}, Exchange: {exchange}")
+        
+        # Handle cases where exchange is not specified or is same as symbol
+        if not exchange or exchange == symbol:
+            exchange = "NSE"
+            logger.info(f"Exchange not specified, defaulting to NSE for symbol {symbol}")
         
         # Determine segment based on exchange
         if exchange in ["NSE", "BSE"]:
             segment = SEGMENT_CASH
+            logger.debug(f"Using SEGMENT_CASH for exchange {exchange}")
         elif exchange in ["NFO", "BFO"]:
             segment = SEGMENT_FNO
+            logger.debug(f"Using SEGMENT_FNO for exchange {exchange}")
         else:
+            logger.error(f"Unsupported exchange: {exchange}")
             raise ValueError(f"Unsupported exchange: {exchange}")
             
         # Map exchange to Groww's format
         if exchange == "NFO":
             groww_exchange = EXCHANGE_NSE
+            logger.debug("Mapped NFO to EXCHANGE_NSE")
         elif exchange == "BFO":
             groww_exchange = EXCHANGE_BSE
+            logger.debug("Mapped BFO to EXCHANGE_BSE")
         else:
             groww_exchange = exchange
+            logger.debug(f"Using exchange as-is: {exchange}")
             
+        # Get broker-specific symbol if needed
+        br_symbol = get_br_symbol(symbol, exchange)
+        trading_symbol = br_symbol or symbol
+        
         return groww_exchange, segment, trading_symbol
 
     def _convert_date_to_utc(self, date_str: str) -> str:
@@ -152,22 +166,90 @@ class BrokerData:
         # Simply return the date string as the API expects YYYY-MM-DD format
         return date_str
 
-    def get_history(self, exchange: str, token: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, timeframe: str, start_time: str, end_time: str) -> pd.DataFrame:
         """
-        Get historical candle data for a symbol.
+        Get historical candle data for a symbol using Groww SDK.
         
         Args:
             exchange (str): Exchange code (NSE, BSE, NFO, etc.)
-            token (str): Instrument token
+            token (str): Trading symbol (e.g. 'INFY')
             timeframe (str): Timeframe such as '1m', '5m', etc.
-            start_time (int): Start time in Unix timestamp (seconds)
-            end_time (int): End time in Unix timestamp (seconds)
+            start_time (str): Start date in YYYY-MM-DD format
+            end_time (str): End date in YYYY-MM-DD format
             
         Returns:
             pd.DataFrame: DataFrame with historical candle data
         """
-        # Implement when Groww provides historical data API
-        raise NotImplementedError("Groww historical data API not implemented yet")
+        try:
+            logger.debug(f"get_history called with params - Exchange: {exchange}, Symbol: {symbol}, Timeframe: {timeframe}")
+            logger.debug(f"Date range: {start_time} to {end_time}")
+            
+            # Import Groww SDK
+            growwapi = importlib.import_module('growwapi')
+            GrowwAPI = getattr(growwapi, 'GrowwAPI')
+            logger.info("Successfully imported Groww SDK for historical data")
+            
+            # Initialize Groww API
+            groww_api = GrowwAPI(self.auth_token)
+            logger.info("Initialized Groww API for historical data")
+            
+            # Convert date strings to datetime objects
+            start_dt = datetime.strptime(start_time, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_time, '%Y-%m-%d')
+            
+            # Convert to milliseconds timestamp for Groww API
+            start_time_ms = int(start_dt.timestamp() * 1000)
+            end_time_ms = int(end_dt.timestamp() * 1000)
+            logger.debug(f"Converted dates to milliseconds: {start_time} -> {start_time_ms}, {end_time} -> {end_time_ms}")
+            
+            # Get interval in minutes from timeframe
+            if timeframe not in self.timeframe_map:
+                logger.error(f"Unsupported timeframe: {timeframe}")
+                raise ValueError(f"Unsupported timeframe: {timeframe}")
+            interval_minutes = int(self.timeframe_map[timeframe])
+            logger.debug(f"Using interval of {interval_minutes} minutes")
+            
+            # Convert exchange and get segment
+            groww_exchange, segment, trading_symbol = self._convert_to_groww_params(symbol, exchange)
+            logger.info(f"Converted parameters - Exchange: {groww_exchange}, Segment: {segment}, Symbol: {trading_symbol}")
+            
+            # Get historical data from Groww
+            logger.info(f"Requesting historical data for {trading_symbol} on {groww_exchange}")
+            historical_data = groww_api.get_historical_candle_data(
+                trading_symbol=trading_symbol,
+                exchange=groww_exchange,
+                segment=segment,
+                start_time=start_time_ms,
+                end_time=end_time_ms,
+                interval_in_minutes=interval_minutes
+            )
+            logger.debug(f"Raw response from Groww API: {historical_data}")
+            
+            # Check if we got valid data
+            if not historical_data or 'candles' not in historical_data:
+                logger.error(f"No historical data received for {trading_symbol}")
+                return pd.DataFrame()
+            
+            # Convert candles to DataFrame
+            # Candle format: [timestamp, open, high, low, close, volume]
+            candles = historical_data['candles']
+            df = pd.DataFrame(
+                candles,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+            
+            # Convert timestamp from epoch seconds to datetime
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            
+            # Set timestamp as index
+            df.set_index('timestamp', inplace=True)
+            
+            logger.info(f"Successfully retrieved {len(df)} candles for {trading_symbol}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error getting historical data: {str(e)}")
+            raise
 
     def get_intervals(self) -> List[str]:
         """
