@@ -78,23 +78,17 @@ def map_order_data(order_data):
             logging.debug(f"Sample order id: {order_id}, symbol: {symbol}, type: {order_type}")
         
         mapped_order = {
-            'orderid': order_id,
-            'tradingsymbol': symbol,
-            'status': status,
-            'remarks': remark,
-            'quantity': order.get('quantity', 0),
-            'price': order.get('price', 0),
-            'trigger_price': order.get('trigger_price', 0),
-            'filled_quantity': order.get('filled_quantity', 0),
-            'remaining_quantity': order.get('remaining_quantity', 0),
-            'average_price': order.get('average_fill_price', 0),
-            'validity': order.get('validity', 'DAY'),
+            'orderid': order.get('groww_order_id', ''),
+            'trading_symbol': symbol,
             'exchange': order.get('exchange', 'NSE'),
-            'order_type': order_type,
-            'transaction_type': transaction_type,
-            'product': product,
-            'order_timestamp': timestamp,
-            'exchange_timestamp': order.get('exchange_time', ''),
+            'transaction_type': order.get('transaction_type', ''),
+            'order_type': order.get('order_type', 'MARKET'),
+            'status': order.get('order_status', order.get('status', '')),  # Try order_status first, then status
+            'product': order.get('product', 'CNC'),
+            'quantity': order.get('quantity', 0),
+            'price': order.get('price', 0.0),
+            'trigger_price': order.get('trigger_price', 0.0),
+            'order_timestamp': order.get('created_at', ''),
             'order_reference_id': order.get('order_reference_id', '')
         }
         
@@ -292,7 +286,10 @@ def transform_order_data(orders):
         # Get fields with fallbacks between original and mapped formats
         order_id = order.get('groww_order_id', order.get('orderid', ''))
         symbol = order.get('trading_symbol', order.get('tradingsymbol', ''))
+        # Make sure we get the status from all possible fields
         status = order.get('order_status', order.get('status', ''))
+        logging.debug(f"Order {i} raw status: {status}")
+        
         order_type = order.get('order_type', order.get('pricetype', 'MARKET'))
         transaction_type = order.get('transaction_type', order.get('action', ''))
         product = order.get('product', order.get('product', 'CNC'))
@@ -327,7 +324,13 @@ def transform_order_data(orders):
             'CANCELLED': 'cancelled',
             'REJECTED': 'rejected'
         }
-        mapped_status = status_map.get(status, '')
+        # Log original status for debugging
+        logging.debug(f"Original order status for order {i}: '{status}'")
+        
+        # Important: Use the status map but ensure we have a fallback value
+        # If status isn't in our map, use the lowercase version of the original status
+        mapped_status = status_map.get(status, status.lower() if status else '')
+        logging.debug(f"Mapped status for order {i}: '{mapped_status}'")
         
         # Log key fields for debugging
         logging.debug(f"Order {i}: Symbol='{symbol}', ID='{order_id}', Type='{mapped_order_type}', Product='{mapped_product}'")
