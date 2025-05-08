@@ -1,5 +1,10 @@
-import json
+import os
 import logging
+import datetime
+import json
+import pandas as pd
+import re
+from typing import Dict, List, Any, Optional
 from database.token_db import get_symbol 
 from broker.dhan.mapping.transform_data import map_exchange
 
@@ -77,9 +82,38 @@ def map_order_data(order_data):
         if i == 0:
             logging.debug(f"Sample order id: {order_id}, symbol: {symbol}, type: {order_type}")
         
+        # Get the trading symbol from Groww order data
+        broker_symbol = order.get('trading_symbol', '')
+        exchange = order.get('exchange', '')
+        
+        # Convert broker symbol to OpenAlgo format
+        openalgo_symbol = broker_symbol
+        
+        # If it's an options or futures symbol (especially for NFO exchange)
+        if exchange == 'NFO' and broker_symbol and ' ' in broker_symbol:
+            try:
+                # Import the conversion function
+                from broker.groww.database.master_contract_db import format_groww_to_openalgo_symbol
+                openalgo_symbol = format_groww_to_openalgo_symbol(broker_symbol, exchange)
+                logging.info(f"Transformed display symbol: {broker_symbol} -> {openalgo_symbol}")
+            except Exception as e:
+                logging.error(f"Error converting symbol format: {e}")
+        
+        # Look up in database as fallback
+        if openalgo_symbol == broker_symbol and ' ' in broker_symbol:
+            try:
+                # Look up in database
+                from broker.groww.database.master_contract_db import SymToken, db_session
+                db_record = db_session.query(SymToken).filter_by(brsymbol=broker_symbol, brexchange=exchange).first()
+                if db_record and db_record.symbol:
+                    openalgo_symbol = db_record.symbol
+                    logging.info(f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}")
+            except Exception as e:
+                logging.error(f"Error looking up symbol in database: {e}")
+        
         mapped_order = {
             'orderid': order.get('groww_order_id', ''),
-            'trading_symbol': symbol,
+            'symbol': openalgo_symbol,  # Using the converted OpenAlgo format symbol
             'exchange': order.get('exchange', 'NSE'),
             'transaction_type': order.get('transaction_type', ''),
             'order_type': order.get('order_type', 'MARKET'),
@@ -285,7 +319,50 @@ def transform_order_data(orders):
     for i, order in enumerate(orders_to_process):
         # Get fields with fallbacks between original and mapped formats
         order_id = order.get('groww_order_id', order.get('orderid', ''))
-        symbol = order.get('trading_symbol', order.get('tradingsymbol', ''))
+        
+        # Get the symbol, with fallbacks to other field names
+        broker_symbol = order.get('trading_symbol', order.get('tradingsymbol', order.get('symbol', '')))
+        exchange = order.get('exchange', 'NSE')
+        
+        # Get proper OpenAlgo symbol from database using token lookup
+        token = None
+        symbol = broker_symbol
+        
+        # Try to get token from order data if available
+        if 'token' in order:
+            token = order.get('token')
+            
+        # If we have a token or brsymbol (tradingsymbol/trading_symbol), look up the OpenAlgo symbol from the database
+        try:
+            from database.token_db import get_oa_symbol
+            
+            # Try to get the OpenAlgo symbol using the token if available
+            if token:
+                openalgo_symbol = get_oa_symbol(token, exchange)
+                if openalgo_symbol:
+                    symbol = openalgo_symbol
+                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+            
+            # If token lookup failed or token wasn't available, try by broker symbol
+            elif broker_symbol:
+                # First check if we already have the OpenAlgo symbol
+                if exchange == "NFO" and (broker_symbol.endswith('CE') or broker_symbol.endswith('PE')):
+                    # Query the database to find the OpenAlgo symbol for this broker symbol
+                    from broker.groww.database.master_contract_db import SymToken, db_session
+                    with db_session() as session:
+                        record = session.query(SymToken).filter(
+                            SymToken.brsymbol == broker_symbol,
+                            SymToken.exchange == exchange
+                        ).first()
+                        
+                        if record and record.symbol:
+                            symbol = record.symbol
+                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+        except Exception as e:
+            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+            # Fall back to the original symbol
+            symbol = broker_symbol
+        
         # Make sure we get the status from all possible fields
         status = order.get('order_status', order.get('status', ''))
         logging.debug(f"Order {i} raw status: {status}")
@@ -335,9 +412,25 @@ def transform_order_data(orders):
         # Log key fields for debugging
         logging.debug(f"Order {i}: Symbol='{symbol}', ID='{order_id}', Type='{mapped_order_type}', Product='{mapped_product}'")
         
+        # For NFO instruments, ensure the symbol is in OpenAlgo format (AARTIIND29MAY25630CE)
+        exchange = order.get("exchange", "NSE")
+        if exchange == 'NFO' and ' ' in symbol:
+            try:
+                # Import the conversion function
+                from broker.groww.database.master_contract_db import format_groww_to_openalgo_symbol
+                openalgo_symbol = format_groww_to_openalgo_symbol(symbol, exchange)
+                if openalgo_symbol:
+                    # Store broker symbol for reference
+                    broker_symbol = symbol
+                    # Use OpenAlgo symbol format for display
+                    symbol = openalgo_symbol
+                    logging.info(f"Transformed order symbol for UI: {broker_symbol} -> {symbol}")
+            except Exception as e:
+                logging.error(f"Error converting order symbol format: {e}")
+        
         # Create transformed order in OpenAlgo format
         transformed_order = {
-            "symbol": symbol,  # This is the field that was showing empty in logs
+            "symbol": symbol,  # Now guaranteed to be in OpenAlgo format
             "exchange": order.get("exchange", "NSE"),
             "action": transaction_type,
             "quantity": quantity,
@@ -354,6 +447,43 @@ def transform_order_data(orders):
         transformed_orders.append(transformed_order)
 
     logging.info(f"Successfully transformed {len(transformed_orders)} orders")
+    
+    # Final check to ensure all symbols are in OpenAlgo format using database lookups
+    # This avoids complex transformations since the database already has the correct symbols
+    for order in transformed_orders:
+        # Only process NFO symbols that might be in broker format
+        if order.get('exchange') == 'NFO' and 'symbol' in order and order['symbol']:
+            symbol = order['symbol']
+            
+            # If token is available, try token lookup first
+            token = order.get('token')
+            if token:
+                try:
+                    from database.token_db import get_oa_symbol
+                    openalgo_symbol = get_oa_symbol(token, order.get('exchange', 'NSE'))
+                    if openalgo_symbol:
+                        order['symbol'] = openalgo_symbol
+                        logging.info(f"Final token lookup: {symbol} -> {openalgo_symbol}")
+                        continue
+                except Exception as e:
+                    logging.error(f"Error in final token lookup: {e}")
+            
+            # Last resort - try looking up the broker symbol directly from database
+            try:
+                from broker.groww.database.master_contract_db import SymToken, db_session
+                with db_session() as session:
+                    # Look for this symbol as a broker symbol (brsymbol) in the database
+                    record = session.query(SymToken).filter(
+                        SymToken.brsymbol == symbol,
+                        SymToken.exchange == order.get('exchange', 'NSE')
+                    ).first()
+                    
+                    if record and record.symbol:
+                        order['symbol'] = record.symbol
+                        logging.info(f"Final db lookup: {symbol} -> {record.symbol}")
+            except Exception as e:
+                logging.error(f"Error in final database lookup: {e}")
+    
     return transformed_orders
 
 def map_trade_data(trade_data):
