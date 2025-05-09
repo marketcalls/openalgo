@@ -107,4 +107,3 @@ wrapt==1.16.0
 wsproto==1.2.0
 WTForms==3.1.2
 zipp==3.19.2
-growwapi==0.0.6
