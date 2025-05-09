@@ -55,6 +55,9 @@
                 case 'fyers':
                     loginUrl = 'https://api-t1.fyers.in/api/v3/generate-authcode?client_id={{broker_api_key}}&redirect_uri={{redirect_url}}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c';
                     break;
+                case 'groww':
+                    loginUrl = '/groww/callback';
+                    break;
                 case 'icici':
                     loginUrl = 'https://api.icicidirect.com/apiuser/login?api_key={{broker_api_key}}';
                     break;
@@ -146,6 +149,7 @@
                                 <option value="firstock" {{ 'disabled' if broker_name != 'firstock' }}>Firstock {{ '(Disabled)' if broker_name != 'firstock' }}</option>
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
+                                <option value="groww" {{ 'disabled' if broker_name != 'groww' }}>Groww {{ '(Disabled)' if broker_name != 'groww' }}</option>
                                 <option value="icici" {{ 'disabled' if broker_name != 'icici' }}>ICICI Direct {{ '(Disabled)' if broker_name != 'icici' }}</option>
                                 <option value="iifl" {{ 'disabled' if broker_name != 'iifl' }}>IIFL {{ '(Disabled)' if broker_name != 'iifl' }}</option>
                                 <option value="jainam" {{ 'disabled' if broker_name != 'jainam' }}>Jainam (Retail) {{ '(Disabled)' if broker_name != 'jainam' }}</option>
