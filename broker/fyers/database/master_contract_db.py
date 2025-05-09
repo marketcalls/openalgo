@@ -158,7 +158,7 @@ def process_fyers_nse_csv(path):
     print("Processing Fyers NSE CSV Data")
     file_path = f'{path}/NSE_CM.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
 
     # Assigning headers to the DataFrame
@@ -209,7 +209,7 @@ def process_fyers_bse_csv(path):
     print("Processing Fyers BSE CSV Data")
     file_path = f'{path}/BSE_CM.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
     # Assigning headers to the DataFrame
     df.columns = headers
@@ -257,7 +257,7 @@ def process_fyers_nfo_csv(path):
     print("Processing Fyers NFO CSV Data")
     file_path = f'{path}/NSE_FO.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
     df['token'] = df['Fytoken']
     df['name'] = df['Symbol Details']
@@ -304,7 +304,7 @@ def process_fyers_cds_csv(path):
     print("Processing Fyers CDS CSV Data")
     file_path = f'{path}/NSE_CD.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
     df['token'] = df['Fytoken']
     df['name'] = df['Symbol Details']
@@ -351,7 +351,7 @@ def process_fyers_bfo_csv(path):
     print("Processing Fyers BFO CSV Data")
     file_path = f'{path}/BSE_FO.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
     df['token'] = df['Fytoken']
     df['name'] = df['Symbol Details']
@@ -397,7 +397,7 @@ def process_fyers_mcx_csv(path):
     print("Processing Fyers MCX CSV Data")
     file_path = f'{path}/MCX_COM.csv'
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types, header=0)
+    df = pd.read_csv(file_path, names=headers, dtype=data_types)
 
     df['token'] = df['Fytoken']
     df['name'] = df['Symbol Details']
