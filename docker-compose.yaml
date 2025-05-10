@@ -1,15 +1,22 @@
 services:
-  web:
-    build: .
+  openalgo:
+    image: openalgo:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: openalgo-web
     ports:
-      - "5000:5000"
+      - "${FLASK_PORT:-5000}:5000"
+
+    # persistent DB + mount the host .env read-only so dotenv can read it
     volumes:
-      - .:/app
       - ./db:/app/db
-    env_file:
-      - .env
+      - ./.env:/app/.env:ro   # ← .env stays on your machine
+
+    # (optional) extra env-vars that are NOT in .env
     environment:
-      - FLASK_DEBUG=True
-      - FLASK_ENV=development
-      - DATABASE_URL=sqlite:///db/openalgo.db
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
+
     restart: unless-stopped
