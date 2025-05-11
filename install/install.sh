@@ -268,21 +268,24 @@ log_message "\nInstalling uv package installer in virtual environment..." "$BLUE
 sudo $VENV_PATH/bin/pip install uv
 check_status "Failed to install uv in virtual environment"
 
+# Activate the virtual environment for uv
+ACTIVATE_CMD="source $VENV_PATH/bin/activate"
+
 # Install Python dependencies using uv (faster installation)
 log_message "\nInstalling Python dependencies with uv..." "$BLUE"
-sudo $VENV_PATH/bin/uv pip install --venv $VENV_PATH -r $OPENALGO_PATH/requirements-nginx.txt
+sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install -r $OPENALGO_PATH/requirements-nginx.txt"
 check_status "Failed to install Python dependencies"
 
 # Verify gunicorn and eventlet installation
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "gunicorn=="; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo $VENV_PATH/bin/uv pip install --venv $VENV_PATH gunicorn
+    sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install gunicorn"
     check_status "Failed to install gunicorn"
 fi
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "eventlet=="; then
     log_message "Installing eventlet..." "$YELLOW"
-    sudo $VENV_PATH/bin/uv pip install --venv $VENV_PATH eventlet
+    sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install eventlet"
     check_status "Failed to install eventlet"
 fi
 
