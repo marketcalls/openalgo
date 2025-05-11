@@ -228,13 +228,8 @@ check_status "Failed to update system packages"
 
 # Install required packages including Certbot
 log_message "\nInstalling required packages..." "$BLUE"
-sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
+sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common
 check_status "Failed to install required packages"
-
-# Install uv - faster Python package installer
-log_message "\nInstalling uv package installer..." "$BLUE"
-sudo pip install -U uv
-check_status "Failed to install uv"
 
 # Install Certbot
 log_message "\nInstalling Certbot..." "$BLUE"
@@ -254,19 +249,37 @@ log_message "\nCloning OpenAlgo repository..." "$BLUE"
 sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
-# Create virtual environment using uv
-log_message "\nSetting up Python virtual environment with uv..." "$BLUE"
+# Create Python virtual environment
+log_message "\nSetting up Python virtual environment..." "$BLUE"
 if [ -d "$VENV_PATH" ]; then
     log_message "Warning: Virtual environment already exists, removing..." "$YELLOW"
     sudo rm -rf "$VENV_PATH"
 fi
-sudo uv venv $VENV_PATH
-check_status "Failed to create virtual environment with uv"
+sudo python3 -m venv $VENV_PATH
+check_status "Failed to create virtual environment"
+
+# Update pip in the virtual environment
+log_message "\nUpdating pip in virtual environment..." "$BLUE"
+sudo $VENV_PATH/bin/pip install --upgrade pip
+check_status "Failed to update pip in virtual environment"
 
 # Install Python dependencies
 log_message "\nInstalling Python dependencies..." "$BLUE"
-sudo $VENV_PATH/bin/uv pip install -r $OPENALGO_PATH/requirements-nginx.txt
+sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
+
+# Verify gunicorn and eventlet installation
+log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
+if ! sudo $VENV_PATH/bin/pip freeze | grep -q "gunicorn=="; then
+    log_message "Installing gunicorn..." "$YELLOW"
+    sudo $VENV_PATH/bin/pip install gunicorn
+    check_status "Failed to install gunicorn"
+fi
+if ! sudo $VENV_PATH/bin/pip freeze | grep -q "eventlet=="; then
+    log_message "Installing eventlet..." "$YELLOW"
+    sudo $VENV_PATH/bin/pip install eventlet
+    check_status "Failed to install eventlet"
+fi
 
 # Configure .env file
 log_message "\nConfiguring environment file..." "$BLUE"
