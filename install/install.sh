@@ -427,22 +427,17 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$OPENALGO_PATH
-# Virtual environment configuration
-Environment="PATH=$VENV_PATH/bin"
-Environment="VIRTUAL_ENV=$VENV_PATH"
-Environment="PYTHONHOME=$VENV_PATH"
-Environment="PYTHONPATH=$OPENALGO_PATH"
-# Restart settings
-Restart=always
-RestartSec=5
-TimeoutSec=60
-# Gunicorn execution
-ExecStart=$VENV_PATH/bin/gunicorn \
+# Simplified approach to ensure Python environment is properly loaded
+ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \
     --bind unix:$SOCKET_FILE \
     --log-level info \
-    app:app
+    app:app'
+# Restart settings
+Restart=always
+RestartSec=5
+TimeoutSec=60
 
 [Install]
 WantedBy=multi-user.target
