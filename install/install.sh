@@ -258,26 +258,31 @@ fi
 sudo python3 -m venv $VENV_PATH
 check_status "Failed to create virtual environment"
 
-# Update pip in the virtual environment
-log_message "\nUpdating pip in virtual environment..." "$BLUE"
+# Update pip and install uv in the virtual environment
+log_message "\nUpdating pip and installing uv in virtual environment..." "$BLUE"
 sudo $VENV_PATH/bin/pip install --upgrade pip
 check_status "Failed to update pip in virtual environment"
 
-# Install Python dependencies
-log_message "\nInstalling Python dependencies..." "$BLUE"
-sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
+# Install uv in the virtual environment
+log_message "\nInstalling uv package installer in virtual environment..." "$BLUE"
+sudo $VENV_PATH/bin/pip install uv
+check_status "Failed to install uv in virtual environment"
+
+# Install Python dependencies using uv (faster installation)
+log_message "\nInstalling Python dependencies with uv..." "$BLUE"
+sudo $VENV_PATH/bin/uv pip install -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Verify gunicorn and eventlet installation
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "gunicorn=="; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo $VENV_PATH/bin/pip install gunicorn
+    sudo $VENV_PATH/bin/uv pip install gunicorn
     check_status "Failed to install gunicorn"
 fi
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "eventlet=="; then
     log_message "Installing eventlet..." "$YELLOW"
-    sudo $VENV_PATH/bin/pip install eventlet
+    sudo $VENV_PATH/bin/uv pip install eventlet
     check_status "Failed to install eventlet"
 fi
 
@@ -418,13 +423,24 @@ Description=OpenAlgo Gunicorn Daemon ($DEPLOY_NAME)
 After=network.target
 
 [Service]
+User=www-data
+Group=www-data
 WorkingDirectory=$OPENALGO_PATH
+# Virtual environment configuration
 Environment="PATH=$VENV_PATH/bin"
 Environment="VIRTUAL_ENV=$VENV_PATH"
+Environment="PYTHONHOME=$VENV_PATH"
+Environment="PYTHONPATH=$OPENALGO_PATH"
+# Restart settings
+Restart=always
+RestartSec=5
+TimeoutSec=60
+# Gunicorn execution
 ExecStart=$VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \
     --bind unix:$SOCKET_FILE \
+    --log-level info \
     app:app
 
 [Install]
