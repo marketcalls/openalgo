@@ -86,6 +86,17 @@ validate_broker() {
     fi
 }
 
+# Function to check if broker is XTS based
+is_xts_broker() {
+    local broker=$1
+    local xts_brokers="fivepaisaxts,compositedge,iifl,jainam,jainampro,wisdom"
+    if [[ $xts_brokers == *"$broker"* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Function to check and handle existing files/directories
 handle_existing() {
     local path=$1
@@ -181,6 +192,20 @@ if [ -z "$BROKER_API_KEY" ] || [ -z "$BROKER_API_SECRET" ]; then
     exit 1
 fi
 
+# Check if the broker is XTS-based and ask for additional credentials if needed
+BROKER_API_KEY_MARKET=""
+BROKER_API_SECRET_MARKET=""
+if is_xts_broker "$BROKER_NAME"; then
+    log_message "\nThis broker ($BROKER_NAME) is XTS API-based and requires additional market data credentials." "$YELLOW"
+    read -p "Enter your broker market data API key: " BROKER_API_KEY_MARKET
+    read -p "Enter your broker market data API secret: " BROKER_API_SECRET_MARKET
+    
+    if [ -z "$BROKER_API_KEY_MARKET" ] || [ -z "$BROKER_API_SECRET_MARKET" ]; then
+        log_message "Error: Market data API credentials are required for XTS-based brokers" "$RED"
+        exit 1
+    fi
+fi
+
 # Generate random keys
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
@@ -206,6 +231,11 @@ log_message "\nInstalling required packages..." "$BLUE"
 sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
 check_status "Failed to install required packages"
 
+# Install uv - faster Python package installer
+log_message "\nInstalling uv package installer..." "$BLUE"
+sudo pip install -U uv
+check_status "Failed to install uv"
+
 # Install Certbot
 log_message "\nInstalling Certbot..." "$BLUE"
 sudo apt-get install -y certbot python3-certbot-nginx
@@ -224,18 +254,18 @@ log_message "\nCloning OpenAlgo repository..." "$BLUE"
 sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
-# Create and activate virtual environment
-log_message "\nSetting up Python virtual environment..." "$BLUE"
+# Create virtual environment using uv
+log_message "\nSetting up Python virtual environment with uv..." "$BLUE"
 if [ -d "$VENV_PATH" ]; then
     log_message "Warning: Virtual environment already exists, removing..." "$YELLOW"
     sudo rm -rf "$VENV_PATH"
 fi
-sudo python3 -m venv $VENV_PATH
-check_status "Failed to create virtual environment"
+sudo uv venv $VENV_PATH
+check_status "Failed to create virtual environment with uv"
 
 # Install Python dependencies
 log_message "\nInstalling Python dependencies..." "$BLUE"
-sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
+sudo $VENV_PATH/bin/uv pip install -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Configure .env file
@@ -245,6 +275,13 @@ handle_existing "$OPENALGO_PATH/.env" "environment file" ".env file"
 sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" $OPENALGO_PATH/.env
+
+# Update market data API credentials if the broker is XTS-based
+if is_xts_broker "$BROKER_NAME"; then
+    sudo sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" $OPENALGO_PATH/.env
+fi
+
 sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
@@ -370,6 +407,7 @@ After=network.target
 [Service]
 WorkingDirectory=$OPENALGO_PATH
 Environment="PATH=$VENV_PATH/bin"
+Environment="VIRTUAL_ENV=$VENV_PATH"
 ExecStart=$VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \

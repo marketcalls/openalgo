@@ -6,6 +6,7 @@ from flask import Flask, render_template
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
+from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
@@ -53,8 +54,12 @@ def create_app():
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
-    # Initialize Flask-CORS with the app object
-    cors.init_app(app)
+    # Initialize Flask-CORS with the app object using configuration from environment variables
+    from cors import get_cors_config
+    cors.init_app(app, **get_cors_config())
+
+    # Apply Content Security Policy middleware
+    apply_csp_middleware(app)
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
