@@ -228,8 +228,13 @@ check_status "Failed to update system packages"
 
 # Install required packages including Certbot
 log_message "\nInstalling required packages..." "$BLUE"
-sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common
+sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common snapd
 check_status "Failed to install required packages"
+
+# Install uv using snap (global installation)
+log_message "\nInstalling uv package installer using snap..." "$BLUE"
+sudo snap install astral-uv --classic
+check_status "Failed to install uv via snap"
 
 # Install Certbot
 log_message "\nInstalling Certbot..." "$BLUE"
@@ -258,34 +263,26 @@ fi
 sudo python3 -m venv $VENV_PATH
 check_status "Failed to create virtual environment"
 
-# Update pip and install uv in the virtual environment
-log_message "\nUpdating pip and installing uv in virtual environment..." "$BLUE"
+# Update pip in the virtual environment
+log_message "\nUpdating pip in virtual environment..." "$BLUE"
 sudo $VENV_PATH/bin/pip install --upgrade pip
 check_status "Failed to update pip in virtual environment"
 
-# Install uv in the virtual environment
-log_message "\nInstalling uv package installer in virtual environment..." "$BLUE"
-sudo $VENV_PATH/bin/pip install uv
-check_status "Failed to install uv in virtual environment"
-
-# Activate the virtual environment for uv
-ACTIVATE_CMD="source $VENV_PATH/bin/activate"
-
-# Install Python dependencies using uv (faster installation)
+# Install Python dependencies using global uv (faster installation)
 log_message "\nInstalling Python dependencies with uv..." "$BLUE"
-sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install -r $OPENALGO_PATH/requirements-nginx.txt"
+sudo uv pip install --python $VENV_PATH/bin/python -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Verify gunicorn and eventlet installation
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "gunicorn=="; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install gunicorn"
+    sudo uv pip install --python $VENV_PATH/bin/python gunicorn
     check_status "Failed to install gunicorn"
 fi
 if ! sudo $VENV_PATH/bin/pip freeze | grep -q "eventlet=="; then
     log_message "Installing eventlet..." "$YELLOW"
-    sudo bash -c "$ACTIVATE_CMD && $VENV_PATH/bin/uv pip install eventlet"
+    sudo uv pip install --python $VENV_PATH/bin/python eventlet
     check_status "Failed to install eventlet"
 fi
 
