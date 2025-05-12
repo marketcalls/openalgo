@@ -862,56 +862,196 @@ class BrokerData:
         """
         logger.info(f"Getting market depth using direct API calls for: {symbol_list}")
         
-        # Reuse get_quotes as it already contains market depth data
-        quotes_response = self.get_quotes(symbol_list, timeout)
+        # Make direct API call to get quote and depth data in a single request
+        # Define exchange and segment constants
+        EXCHANGE_NSE = 'NSE'
+        EXCHANGE_BSE = 'BSE'
+        SEGMENT_CASH = 'CASH'
+        SEGMENT_FNO = 'FNO'
         
-        if quotes_response.get("status") == "success":
-            depth_data = []
+        # Standardize input to a list of dictionaries with exchange and symbol
+        symbols_to_process = []
+        if isinstance(symbol_list, dict):
+            symbol = symbol_list.get('symbol') or symbol_list.get('SYMBOL')
+            exchange = symbol_list.get('exchange') or symbol_list.get('EXCHANGE')
+            if symbol and exchange:
+                symbols_to_process.append({'symbol': symbol, 'exchange': exchange})
+        elif isinstance(symbol_list, str):
+            symbols_to_process.append({'symbol': symbol_list, 'exchange': 'NSE'})
+        elif isinstance(symbol_list, list):
+            for sym in symbol_list:
+                if isinstance(sym, dict) and 'symbol' in sym and 'exchange' in sym:
+                    symbols_to_process.append(sym)
+                elif isinstance(sym, str):
+                    symbols_to_process.append({'symbol': sym, 'exchange': 'NSE'})
+        
+        # No valid symbols to process
+        if not symbols_to_process:
+            logger.error("No valid symbols to process for market depth")
+            return {}
             
-            for quote in quotes_response.get("data", []):
-                if "depth" in quote:
-                    # Quote already contains properly formatted depth data
-                    depth_item = {
-                        "symbol": quote.get("symbol"),
-                        "exchange": quote.get("exchange"),
-                        "token": quote.get("token"),
-                        "depth": quote.get("depth"),
-                        "ltp": quote.get("ltp", 0),
-                        "total_buy_qty": quote.get("total_buy_qty", 0),
-                        "total_sell_qty": quote.get("total_sell_qty", 0),
-                        "timestamp": quote.get("timestamp")
-                    }
-                    depth_data.append(depth_item)
-                else:
-                    # No depth data available, create empty structure
-                    depth_item = {
-                        "symbol": quote.get("symbol"),
-                        "exchange": quote.get("exchange"),
-                        "token": quote.get("token"),
-                        "depth": {
-                            "buy": [],
-                            "sell": []
-                        },
-                        "ltp": quote.get("ltp", 0),
-                        "total_buy_qty": quote.get("total_buy_qty", 0),
-                        "total_sell_qty": quote.get("total_sell_qty", 0),
-                        "timestamp": quote.get("timestamp")
-                    }
-                    depth_data.append(depth_item)
+        # Process the first symbol (for single symbol requests)
+        sym_data = symbols_to_process[0]
+        symbol = sym_data['symbol']
+        exchange = sym_data['exchange']
+        
+        # Get token for this symbol
+        token = get_token(symbol, exchange)
+        
+        # Map OpenAlgo exchange to Groww exchange format
+        if exchange == 'NSE':
+            groww_exchange = EXCHANGE_NSE
+            segment = SEGMENT_CASH
+        elif exchange == 'BSE':
+            groww_exchange = EXCHANGE_BSE
+            segment = SEGMENT_CASH
+        elif exchange == 'NFO':
+            groww_exchange = EXCHANGE_NSE
+            segment = SEGMENT_FNO
+        elif exchange == 'BFO':
+            groww_exchange = EXCHANGE_BSE
+            segment = SEGMENT_FNO
+        else:
+            groww_exchange = EXCHANGE_NSE
+            segment = SEGMENT_CASH
+        
+        # Get broker-specific symbol if needed
+        trading_symbol = get_br_symbol(symbol, exchange) or symbol
+        
+        logger.info(f"Requesting quote with depth for {trading_symbol} on {groww_exchange} (segment: {segment})")
+        
+        # Define API endpoint for quotes
+        quote_endpoint = "/v1/live-data/quote"
+        
+        # Prepare parameters
+        params = {
+            'exchange': groww_exchange,
+            'segment': segment,
+            'trading_symbol': trading_symbol
+        }
+        
+        # Make the API call using the shared httpx client
+        try:
+            response = get_api_response(
+                endpoint=quote_endpoint,
+                auth_token=self.auth_token,
+                method="GET",
+                params=params,
+                debug=True
+            )
             
-            # Single symbol case
-            if isinstance(symbol_list, (str, dict)) or len(symbol_list) == 1:
-                logger.info(f"Returning depth data for single symbol")
-                return {
-                    "status": "success",
-                    "data": depth_data[0] if depth_data else {}
-                }
+            logger.debug(f"Groww API raw response: {response}")
             
-            # Multiple symbols case
-            return {
-                "status": "success",
-                "data": depth_data
+            # Check if we got a valid response with depth data
+            if not response or response.get('status') != 'SUCCESS' or 'payload' not in response:
+                logger.error(f"No valid quote data received for {symbol}")
+                return {}
+            
+            # Extract payload data
+            payload = response['payload']
+            logger.info(f"Extracted payload with keys: {list(payload.keys())[:10]}")
+            
+            # Create a properly formatted response for OpenAlgo
+            depth_response = {}
+            
+            # Safely convert values to float/int, handling None values
+            def safe_float(value, default=0.0):
+                if value is None:
+                    return default
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+                    
+            def safe_int(value, default=0):
+                if value is None:
+                    return default
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            # Extract OHLC data
+            ohlc_data = payload.get('ohlc', '{}')
+            ohlc = {}
+            if isinstance(ohlc_data, str):
+                # Parse string format like "{open: 149.50,high: 150.50,low: 148.50,close: 149.50}"
+                try:
+                    ohlc_str = ohlc_data.strip('{}')
+                    parts = ohlc_str.split(',')
+                    for part in parts:
+                        key_val = part.split(':')
+                        if len(key_val) == 2:
+                            key = key_val[0].strip()
+                            val = key_val[1].strip()
+                            ohlc[key] = float(val)
+                except Exception as e:
+                    logger.error(f"Error parsing OHLC string: {e}")
+            elif isinstance(ohlc_data, dict):
+                ohlc = ohlc_data
+            
+            # Format bids/asks from market depth
+            bids = []
+            asks = []
+            empty_price_level = {'price': 0, 'quantity': 0}
+            
+            # Extract depth info
+            depth_data = payload.get('depth', {})
+            
+            # Process buy side (bids)
+            for level in depth_data.get('buy', []):
+                if len(bids) < 5:  # Limit to 5 levels
+                    bids.append({
+                        'price': safe_float(level.get('price', 0)),
+                        'quantity': safe_int(level.get('quantity', 0))
+                    })
+            
+            # Process sell side (asks)
+            for level in depth_data.get('sell', []):
+                if len(asks) < 5:  # Limit to 5 levels
+                    asks.append({
+                        'price': safe_float(level.get('price', 0)),
+                        'quantity': safe_int(level.get('quantity', 0))
+                    })
+            
+            # Ensure we have exactly 5 price levels
+            while len(bids) < 5:
+                bids.append(empty_price_level.copy())
+            while len(asks) < 5:
+                asks.append(empty_price_level.copy())
+            
+            # Last traded price and quantity
+            ltp = safe_float(payload.get('last_price', 0))
+            ltq = safe_int(payload.get('last_trade_quantity', 0))
+            
+            # Volume information
+            volume = safe_int(payload.get('volume', 0))
+            total_buy_qty = safe_int(payload.get('total_buy_quantity', 0))
+            total_sell_qty = safe_int(payload.get('total_sell_quantity', 0))
+            
+            # Format the depth response according to OpenAlgo requirements
+            depth_response = {
+                'bids': bids,
+                'asks': asks,
+                'ltp': ltp,
+                'ltq': ltq,
+                'open': safe_float(ohlc.get('open', 0)),
+                'high': safe_float(ohlc.get('high', 0)),
+                'low': safe_float(ohlc.get('low', 0)),
+                'prev_close': safe_float(ohlc.get('close', 0)),
+                'volume': volume,
+                'totalbuyqty': total_buy_qty,
+                'totalsellqty': total_sell_qty,
+                'oi': safe_int(payload.get('open_interest', 0))  # Open interest if available
             }
+            
+            logger.info(f"Formatted market depth response with {len(bids)} bids and {len(asks)} asks")
+            return depth_response
+            
+        except Exception as e:
+            logger.error(f"Error getting market depth: {str(e)}")
+            traceback.print_exc()
+            return {}
 
     def get_market_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
         """Alias for get_depth. Maintains API compatibility.
