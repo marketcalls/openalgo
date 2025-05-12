@@ -106,17 +106,32 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize Groww data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Groww resolutions (if applicable)
+        # Map common timeframe format to Groww resolutions (in minutes)
+        # Only including timeframes that Groww actually provides
         self.timeframe_map = {
             # Minutes
             '1m': '1',    # 1 minute
             '5m': '5',    # 5 minutes
-            '15m': '15',  # 15 minutes
-            '30m': '30',  # 30 minutes
+            '10m': '10',  # 10 minutes
+            # Hours
             '1h': '60',   # 1 hour (60 minutes)
+            '4h': '240',  # 4 hours (240 minutes)
             # Daily
-            'D': 'D'      # Daily data
+            'D': '1440',  # Daily data (1440 minutes)
+            # Weekly
+            'W': '10080'  # Weekly data (10080 minutes)
         }
+        
+        # The duration-based interval constraints as documented in the Groww API
+        self.time_constraints = [
+            {'max_days': 3, 'min_interval': '1'},      # 0-3 days: 1 min minimum
+            {'max_days': 15, 'min_interval': '5'},    # 3-15 days: 5 min minimum
+            {'max_days': 30, 'min_interval': '10'},   # 15-30 days: 10 min minimum
+            {'max_days': 150, 'min_interval': '60'},  # 30-150 days: 60 min minimum
+            {'max_days': 365, 'min_interval': '240'}, # 150-365 days: 240 min minimum
+            {'max_days': 1080, 'min_interval': '1440'}, # 365-1080 days: 1440 min minimum
+            {'max_days': float('inf'), 'min_interval': '10080'} # >1080 days: 10080 min minimum
+        ]
 
     def _convert_to_groww_params(self, symbol, exchange):
         """
@@ -171,11 +186,11 @@ class BrokerData:
 
     def get_history(self, symbol: str, exchange: str, timeframe: str, start_time: str, end_time: str) -> pd.DataFrame:
         """
-        Get historical candle data for a symbol using Groww SDK.
+        Get historical candle data for a symbol using direct Groww API calls.
         
         Args:
             exchange (str): Exchange code (NSE, BSE, NFO, etc.)
-            token (str): Trading symbol (e.g. 'INFY')
+            symbol (str): Trading symbol (e.g. 'INFY')
             timeframe (str): Timeframe such as '1m', '5m', etc.
             start_time (str): Start date in YYYY-MM-DD format
             end_time (str): End date in YYYY-MM-DD format
@@ -187,50 +202,64 @@ class BrokerData:
             logger.debug(f"get_history called with params - Exchange: {exchange}, Symbol: {symbol}, Timeframe: {timeframe}")
             logger.debug(f"Date range: {start_time} to {end_time}")
             
-            # Import Groww SDK
-            growwapi = importlib.import_module('growwapi')
-            GrowwAPI = getattr(growwapi, 'GrowwAPI')
-            logger.info("Successfully imported Groww SDK for historical data")
+            # Convert date strings to datetime objects with time at start of day
+            start_dt = datetime.strptime(f"{start_time} 09:15:00", '%Y-%m-%d %H:%M:%S')
+            end_dt = datetime.strptime(f"{end_time} 15:30:00", '%Y-%m-%d %H:%M:%S')
             
-            # Initialize Groww API
-            groww_api = GrowwAPI(self.auth_token)
-            logger.info("Initialized Groww API for historical data")
+            # Format the start and end times according to Groww API requirements
+            start_time_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+            end_time_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+            logger.debug(f"Formatted date strings: {start_time_str} to {end_time_str}")
             
-            # Convert date strings to datetime objects
-            start_dt = datetime.strptime(start_time, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_time, '%Y-%m-%d')
+            # Get valid interval in minutes based on date range and requested timeframe
+            # This enforces Groww's constraints on minimum intervals for different durations
+            interval_minutes = self.get_valid_interval(start_time, end_time, timeframe)
+            logger.debug(f"Using interval of {interval_minutes} minutes (requested: {timeframe})")
             
-            # Convert to milliseconds timestamp for Groww API
-            start_time_ms = int(start_dt.timestamp() * 1000)
-            end_time_ms = int(end_dt.timestamp() * 1000)
-            logger.debug(f"Converted dates to milliseconds: {start_time} -> {start_time_ms}, {end_time} -> {end_time_ms}")
-            
-            # Get interval in minutes from timeframe
-            if timeframe not in self.timeframe_map:
-                logger.error(f"Unsupported timeframe: {timeframe}")
-                raise ValueError(f"Unsupported timeframe: {timeframe}")
-            interval_minutes = int(self.timeframe_map[timeframe])
-            logger.debug(f"Using interval of {interval_minutes} minutes")
+            # Check if we had to adjust the interval due to constraints
+            requested_minutes = self.timeframe_map.get(timeframe, interval_minutes)
+            if interval_minutes != requested_minutes:
+                logger.warning(f"Adjusted interval from {requested_minutes} to {interval_minutes} minutes due to Groww API constraints")
             
             # Convert exchange and get segment
             groww_exchange, segment, trading_symbol = self._convert_to_groww_params(symbol, exchange)
             logger.info(f"Converted parameters - Exchange: {groww_exchange}, Segment: {segment}, Symbol: {trading_symbol}")
             
-            # Get historical data from Groww
+            # Define API endpoint for historical candle data
+            history_endpoint = "/v1/historical/candle/range"
+            
+            # Prepare parameters
+            params = {
+                'exchange': groww_exchange,
+                'segment': segment,
+                'trading_symbol': trading_symbol,
+                'start_time': start_time_str,
+                'end_time': end_time_str,
+                'interval_in_minutes': interval_minutes
+            }
+            
+            # Make the API call using the shared httpx client
             logger.info(f"Requesting historical data for {trading_symbol} on {groww_exchange}")
-            historical_data = groww_api.get_historical_candle_data(
-                trading_symbol=trading_symbol,
-                exchange=groww_exchange,
-                segment=segment,
-                start_time=start_time_ms,
-                end_time=end_time_ms,
-                interval_in_minutes=interval_minutes
+            response = get_api_response(
+                endpoint=history_endpoint,
+                auth_token=self.auth_token,
+                method="GET",
+                params=params,
+                debug=True
             )
-            logger.debug(f"Raw response from Groww API: {historical_data}")
+            
+            logger.debug(f"Raw response from Groww API: {response}")
             
             # Check if we got valid data
-            if not historical_data or 'candles' not in historical_data:
-                logger.error(f"No historical data received for {trading_symbol}")
+            if not response or response.get('status') != 'SUCCESS' or 'payload' not in response:
+                logger.error(f"No valid historical data received for {trading_symbol}")
+                return pd.DataFrame()
+            
+            # Extract payload data
+            historical_data = response.get('payload', {})
+            
+            if 'candles' not in historical_data or not historical_data['candles']:
+                logger.warning(f"No candles found in response for {trading_symbol}")
                 return pd.DataFrame()
             
             # Convert candles to DataFrame
@@ -247,21 +276,114 @@ class BrokerData:
             # Set timestamp as index
             df.set_index('timestamp', inplace=True)
             
+            # Add additional metadata if needed
+            if 'change_value' in historical_data:
+                df.attrs['change_value'] = historical_data.get('change_value')
+            if 'change_perc' in historical_data:
+                df.attrs['change_perc'] = historical_data.get('change_perc')
+            if 'closing_price' in historical_data:
+                df.attrs['closing_price'] = historical_data.get('closing_price')
+            
             logger.info(f"Successfully retrieved {len(df)} candles for {trading_symbol}")
             return df
             
         except Exception as e:
             logger.error(f"Error getting historical data: {str(e)}")
+            traceback.print_exc()
             raise
 
-    def get_intervals(self) -> List[str]:
+    def get_intervals(self) -> Dict[str, Dict[str, List[str]]]:
         """
-        Get list of supported timeframes.
+        Get supported timeframes for Groww historical data in the OpenAlgo format.
+        
+        Note that Groww has time-based constraints on minimum interval size:
+        - 0-3 days: 1 min minimum
+        - 3-15 days: 5 min minimum
+        - 15-30 days: 10 min minimum
+        - 30-150 days: 60 min (1h) minimum
+        - 150-365 days: 240 min (4h) minimum 
+        - 365-1080 days: 1440 min (1d) minimum
+        - >1080 days: 10080 min (1w) minimum
         
         Returns:
-            List[str]: List of supported timeframe strings
+            Dict: Structured response with categorized timeframes
         """
-        return list(self.timeframe_map.keys())
+        # Define all the categories and their timeframes as supported by Groww
+        # Exactly as provided by Groww: 1m, 5m, 10m, 1h, 4h, D and W
+        intervals = {
+            "seconds": [],  # Groww doesn't support second-level data
+            "minutes": ["1m", "5m", "10m"],
+            "hours": ["1h", "4h"],
+            "days": ["D"],
+            "weeks": ["W"],
+            "months": []  # Groww doesn't support month-level data
+        }
+        
+        # Return in the standard OpenAlgo format
+        return {
+            "status": "success",
+            "data": intervals
+        }
+        
+    def get_valid_interval(self, start_time: str, end_time: str, requested_interval: str) -> str:
+        """
+        Get a valid interval based on Groww's time-based constraints.
+        
+        Args:
+            start_time (str): Start date in YYYY-MM-DD format
+            end_time (str): End date in YYYY-MM-DD format
+            requested_interval (str): The requested interval (e.g., '1m', '5m', etc.)
+            
+        Returns:
+            str: A valid interval that meets Groww's constraints
+        """
+        # Map legacy and alternative formats to supported Groww formats
+        interval_map = {
+            '1d': 'D',   # Map 1d to D
+            '1w': 'W'    # Map 1w to W
+        }
+        
+        # Convert to a format Groww supports if needed
+        if requested_interval in interval_map:
+            requested_interval = interval_map[requested_interval]
+            logger.info(f"Mapped requested interval to Groww-supported format: {requested_interval}")
+        
+        # Verify we have a supported interval
+        if requested_interval not in self.timeframe_map:
+            logger.warning(f"Unsupported interval: {requested_interval}, defaulting to 'D'")
+            return '1440'  # Default to daily
+            
+        # Calculate the duration in days
+        start_dt = datetime.strptime(start_time, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_time, '%Y-%m-%d')
+        duration_days = (end_dt - start_dt).days
+        
+        # Get the requested interval in minutes
+        requested_minutes = int(self.timeframe_map[requested_interval])
+        
+        # Find the minimum allowed interval based on duration
+        min_allowed_interval = '1'  # Default to 1 minute
+        for constraint in self.time_constraints:
+            if duration_days <= constraint['max_days']:
+                min_allowed_interval = constraint['min_interval']
+                break
+                
+        min_allowed_minutes = int(min_allowed_interval)
+        
+        # Check if the requested interval is valid
+        if requested_minutes < min_allowed_minutes:
+            logger.warning(f"Requested interval {requested_interval} is too small for duration {duration_days} days.")
+            
+            # Find the appropriate timeframe to use
+            for tf, minutes in self.timeframe_map.items():
+                if int(minutes) >= min_allowed_minutes:
+                    logger.info(f"Using {tf} ({minutes} minutes) instead of {requested_interval} ({requested_minutes} minutes)")
+                    return minutes
+            
+            # If nothing found (unlikely), use the minimum allowed
+            return min_allowed_interval
+            
+        return self.timeframe_map[requested_interval]
 
     def get_quotes(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
         """
