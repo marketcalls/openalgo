@@ -3,10 +3,10 @@ import os
 from datetime import datetime, timedelta
 import pandas as pd
 import logging
-import requests
+import httpx
 from typing import Dict, List, Any, Union, Optional
-import importlib
 import time
+from utils.httpx_client import get_httpx_client
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 
@@ -24,79 +24,82 @@ SEGMENT_FNO = "FNO"    # Segment code for F&O market
 
 
 def get_api_response(endpoint, auth_token, method="GET", params=None, data=None, debug=False):
-    """Use Groww SDK to make API requests
+    """Make direct API requests to Groww endpoints
     
-    This function initializes the Groww SDK and uses it to make API requests
-    instead of directly using requests. The SDK handles the endpoints and authentication.
+    This function directly calls Groww API endpoints using the shared httpx client
+    with connection pooling for better performance.
     
     Args:
-        endpoint (str): API endpoint (not used with SDK but kept for compatibility)
+        endpoint (str): API endpoint (e.g., '/v1/quotes')
         auth_token (str): Authentication token
-        method (str): HTTP method (GET, POST, etc., not used with SDK but kept for compatibility)
-        params (dict): Parameters for the API call
-        data (dict): Request body data (not used with SDK but kept for compatibility)
+        method (str): HTTP method (GET, POST, etc.)
+        params (dict): URL parameters for the API call
+        data (dict): Request body data for POST/PUT requests
         debug (bool): Enable additional debugging
         
     Returns:
-        dict: Response data from the Groww SDK
+        dict: Response data from the Groww API
     """
-    logger.info(f"Using Groww SDK for API request to endpoint: {endpoint}")
+    logger.info(f"Making direct API request to endpoint: {endpoint}")
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
+    # Ensure endpoint starts with a slash
+    if not endpoint.startswith('/'):
+        endpoint = '/' + endpoint
+    
+    # Build the full URL
+    base_url = "https://api.groww.in"
+    url = f"{base_url}{endpoint}"
+    
+    # Set up headers with authentication token
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {auth_token}'
+    }
     
     try:
-        # Import the SDK
-        growwapi = importlib.import_module('growwapi')
-        GrowwAPI = getattr(growwapi, 'GrowwAPI')
-        
-        # Initialize the SDK with auth token
-        api = GrowwAPI(auth_token)
-        
-        # Log request details
-        logger.info(f"SDK request params: {params}")
-        
-        # Use the SDK's generic request method if available
-        # Or simulate based on endpoint and method
-        if hasattr(api, 'request'):
-            # If the SDK has a generic request method, use it
-            result = api.request(endpoint, params=params, data=data, method=method)
+        # Make the request based on the HTTP method
+        if method.upper() == 'GET':
+            response = client.get(url, headers=headers, params=params)
+        elif method.upper() == 'POST':
+            response = client.post(url, headers=headers, json=data)
+        elif method.upper() == 'PUT':
+            response = client.put(url, headers=headers, json=data)
+        elif method.upper() == 'DELETE':
+            response = client.delete(url, headers=headers, params=params)
         else:
-            # Handle specific endpoints that we know about
-            if 'quote' in endpoint.lower():
-                # Extract parameters for quote
-                exchange = params.get('exchange')
-                segment = params.get('segment')
-                trading_symbol = params.get('trading_symbol') or params.get('symbol')
-                
-                if not all([exchange, segment, trading_symbol]):
-                    raise ValueError(f"Missing required parameters for quote: {params}")
-                
-                logger.info(f"Getting quote for {trading_symbol} on {exchange} ({segment})")
-                result = api.get_quote(exchange=exchange, segment=segment, trading_symbol=trading_symbol)
-            else:
-                # For other endpoints, we would need to map them to SDK functions
-                raise ValueError(f"Unmapped SDK endpoint: {endpoint}")
+            logger.error(f"Unsupported HTTP method: {method}")
+            return {"error": f"Unsupported HTTP method: {method}"}
         
-        # Log the response structure
-        if isinstance(result, dict):
-            logger.info(f"SDK response keys: {list(result.keys())[:10]}")
-            for key in list(result.keys())[:3]:  # Only show first 3 keys for brevity
-                try:
-                    if isinstance(result[key], dict):
-                        logger.info(f"Subkeys for {key}: {list(result[key].keys())[:10]}")
-                except Exception:
-                    pass
-        
-        return result
-    
-    except ImportError:
-        logger.error("Failed to import Groww SDK. Please install with: pip install growwapi")
-        raise ImportError("Groww SDK not installed. Please install with: pip install growwapi")
-    
-    except Exception as e:
-        logger.error(f"Groww SDK error: {str(e)}")
+        # Log request details if debug is enabled
         if debug:
-            logger.error(f"Endpoint: {endpoint}, Params: {params}")
-        raise Exception(f"Groww SDK Error: {str(e)}")
-
+            logger.debug(f"Request URL: {url}")
+            logger.debug(f"Request params: {params}")
+        
+        # Check if the request was successful
+        response.raise_for_status()
+        
+        # Parse the JSON response
+        try:
+            result = response.json()
+            if debug:
+                logger.debug(f"API Response: {result}")
+            return result
+        except ValueError:
+            # Handle non-JSON responses
+            logger.error("Response is not valid JSON")
+            return {"error": "Response is not valid JSON", "content": response.text}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+        return {"error": f"HTTP error: {e.response.status_code}", "details": e.response.text}
+    except Exception as e:
+        logger.error(f"Error in API request: {str(e)}")
+        if debug:
+            logger.exception("Detailed exception info:")
+        return {"error": str(e)}
 
 
 class BrokerData:
@@ -262,9 +265,9 @@ class BrokerData:
 
     def get_quotes(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
         """
-        Get real-time quotes for a list of symbols using Groww SDK.
+        Get real-time quotes for a list of symbols using direct Groww API calls.
         
-        This implementation uses the official Groww SDK to fetch market data.
+        This implementation directly calls Groww API endpoints instead of using the SDK.
         
         Args:
             symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
@@ -273,28 +276,13 @@ class BrokerData:
         Returns:
             Dict[str, Any]: Quote data in OpenAlgo format
         """
-        logger.info(f"Getting quotes using Groww SDK for: {symbol_list}")
+        logger.info(f"Getting quotes using direct API calls for: {symbol_list}")
         
-        # Try to import the Groww SDK
-        try:
-            growwapi = importlib.import_module('growwapi')
-            GrowwAPI = getattr(growwapi, 'GrowwAPI')
-            logger.info("Successfully imported Groww SDK")
-        except ImportError:
-            logger.error("Failed to import growwapi. Please install it with: pip install growwapi")
-            raise ImportError("Groww SDK not installed. Please install it with: pip install growwapi")
-        except Exception as e:
-            logger.error(f"Error importing Groww SDK: {str(e)}")
-            raise
-        
-        # Initialize the GrowwAPI with the auth token
-        groww_api = GrowwAPI(self.auth_token)
-        
-        # Get the exchange and segment constants from the SDK
-        EXCHANGE_NSE = getattr(groww_api, 'EXCHANGE_NSE', 'NSE')
-        EXCHANGE_BSE = getattr(groww_api, 'EXCHANGE_BSE', 'BSE')
-        SEGMENT_CASH = getattr(groww_api, 'SEGMENT_CASH', 'CASH')
-        SEGMENT_FNO = getattr(groww_api, 'SEGMENT_FNO', 'FNO')
+        # Define exchange and segment constants
+        EXCHANGE_NSE = 'NSE'
+        EXCHANGE_BSE = 'BSE'
+        SEGMENT_CASH = 'CASH'
+        SEGMENT_FNO = 'FNO'
         
         # Standardize input to a list of dictionaries with exchange and symbol
         if isinstance(symbol_list, dict):
@@ -329,7 +317,7 @@ class BrokerData:
             logger.info(f"Processing string symbol: {symbol} on {exchange}")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
-        # Process all symbols using the Groww SDK
+        # Process all symbols using direct API calls
         quote_data = []
         
         for sym in symbol_list:
@@ -370,39 +358,8 @@ class BrokerData:
                 trading_symbol = get_br_symbol(symbol, exchange) or symbol
                 
                 logger.info(f"Requesting quote for {trading_symbol} on {groww_exchange} (segment: {segment})")
-                
-                # Make API call using Groww SDK
+                # Make direct API call to Groww quotes endpoint
                 start_time = time.time()
-                try:
-                    response = groww_api.get_quote(
-                        exchange=groww_exchange,
-                        segment=segment,
-                        trading_symbol=trading_symbol
-                    )
-                    print(f"Groww API response: {response}")
-                    elapsed = time.time() - start_time
-                    logger.info(f"Got response from Groww API in {elapsed:.2f}s")
-                    
-                    if response:
-                        logger.info(f"Successfully retrieved quote for {symbol} on {exchange}")
-                        # Log a sample of the data structure
-                        if isinstance(response, dict):
-                            logger.info(f"Response keys: {list(response.keys())[:10]}")
-                    else:
-                        logger.warning(f"Empty response for {symbol} on {exchange}")
-                        response = {}
-                except Exception as api_error:
-                    logger.error(f"Groww API error: {str(api_error)}")
-                    error_msg = str(api_error)
-                    # Add to quote data with error
-                    quote_data.append({
-                        'symbol': symbol,
-                        'exchange': exchange,
-                        'token': token,
-                        'error': error_msg,
-                        'ltp': 0
-                    })
-                    continue
                 
                 # Safely convert values to float/int, handling None values
                 def safe_float(value, default=0.0):
@@ -421,70 +378,198 @@ class BrokerData:
                     except (ValueError, TypeError):
                         return default
                 
-                # Extract OHLC data from the nested structure for easier access
-                ohlc = response.get('ohlc', {})
-                
-                # Create quote_item in OpenAlgo format from Groww response
-                quote_item = {
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'token': token,
-                    'ltp': safe_float(response.get('last_price')),
-                    'open': safe_float(ohlc.get('open')),
-                    'high': safe_float(ohlc.get('high')),
-                    'low': safe_float(ohlc.get('low')),
-                    'close': safe_float(ohlc.get('close')),
-                    'prev_close': safe_float(ohlc.get('close')),  # Using previous day's close
-                    'change': safe_float(response.get('day_change')),
-                    'change_percent': safe_float(response.get('day_change_perc')),
-                    'volume': safe_int(response.get('volume')),
-                    'bid_price': safe_float(response.get('bid_price')),
-                    'bid_qty': safe_int(response.get('bid_quantity')),
-                    'ask_price': safe_float(response.get('offer_price')),
-                    'ask_qty': safe_int(response.get('offer_quantity')),
-                    'total_buy_qty': safe_float(response.get('total_buy_quantity')),
-                    'total_sell_qty': safe_float(response.get('total_sell_quantity')),
-                    'timestamp': response.get('last_trade_time', int(datetime.now().timestamp() * 1000))
-                }
-                
-                # Actually add the quote_item to the quote_data list
-                quote_data.append(quote_item)
-                
-                # Add circuit limits if available
-                if 'upper_circuit_limit' in response:
-                    quote_item['upper_circuit'] = safe_float(response.get('upper_circuit_limit'))
-                if 'lower_circuit_limit' in response:
-                    quote_item['lower_circuit'] = safe_float(response.get('lower_circuit_limit'))
-                
-                # Add market depth if available
-                if 'depth' in response:
-                    depth_data = response['depth']
-                    buy_depth = depth_data.get('buy', [])
-                    sell_depth = depth_data.get('sell', [])
+                try:
+                    # Define API endpoint for quotes
+                    quote_endpoint = "/v1/live-data/quote"
                     
-                    depth = {
-                        'buy': [],
-                        'sell': []
+                    # Prepare parameters
+                    params = {
+                        'exchange': groww_exchange,
+                        'segment': segment,
+                        'trading_symbol': trading_symbol
                     }
                     
-                    # Process buy side
-                    for level in buy_depth:
-                        depth['buy'].append({
-                            'price': safe_float(level.get('price')),
-                            'quantity': safe_int(level.get('quantity')),
-                            'orders': 0  # Groww API doesn't provide order count
-                        })
+                    # Make the API call using the shared httpx client
+                    response = get_api_response(
+                        endpoint=quote_endpoint,
+                        auth_token=self.auth_token,
+                        method="GET",
+                        params=params,
+                        debug=True
+                    )
                     
-                    # Process sell side
-                    for level in sell_depth:
-                        depth['sell'].append({
-                            'price': safe_float(level.get('price')),
-                            'quantity': safe_int(level.get('quantity')),
-                            'orders': 0  # Groww API doesn't provide order count
-                        })
+                    print(f"Groww API response: {response}")
+                    elapsed = time.time() - start_time
+                    logger.info(f"Got response from Groww API in {elapsed:.2f}s")
                     
-                    quote_item['depth'] = depth
-                
+                    if response and not response.get('error'):
+                        logger.info(f"Successfully retrieved quote for {symbol} on {exchange}")
+                        # Log a sample of the data structure
+                        if isinstance(response, dict):
+                            logger.info(f"Response keys: {list(response.keys())[:10]}")
+                            
+                        # Extract payload which contains the actual quote data
+                        if response.get('status') == 'SUCCESS' and isinstance(response.get('payload'), dict):
+                            response = response.get('payload', {})
+                            print(f"response: {response}")
+                            logger.info(f"Extracted payload data with keys: {list(response.keys())[:10]}")
+                            
+                            # Extract OHLC data from the nested structure
+                            # OHLC might be a string in some responses
+                            ohlc_data = response.get('ohlc', {})
+                            logger.info(f"Raw OHLC data: {ohlc_data}")
+                            
+                            # Handle case where ohlc is a string (from sample response)
+                            ohlc = {}
+                            if isinstance(ohlc_data, str):
+                                # Try to parse the string into a dict
+                                try:
+                                    # Convert the string format "{open: 149.50,high: 150.50,low: 148.50,close: 149.50}" to a dict
+                                    ohlc_str = ohlc_data.strip('{}')
+                                    parts = ohlc_str.split(',')
+                                    for part in parts:
+                                        key_val = part.split(':')
+                                        if len(key_val) == 2:
+                                            key = key_val[0].strip()
+                                            val = key_val[1].strip()
+                                            ohlc[key] = float(val)
+                                except Exception as e:
+                                    logger.error(f"Error parsing OHLC string: {e}")
+                            else:
+                                # Use the object directly
+                                ohlc = ohlc_data
+                                
+                            logger.info(f"Processed OHLC data: {ohlc}")
+                            
+                            # Create quote_item in OpenAlgo format
+                            # Print each field being extracted for debugging
+                            print(f"last_price: {response.get('last_price')}")
+                            print(f"ohlc: {ohlc}")
+                            print(f"volume: {response.get('volume')}")
+                            
+                            # CRITICAL: Build the quote item directly with values extracted from the response, using field names that OpenAlgo understands
+                            # The quote_item should use the frontend-compatible field names
+                            last_price = safe_float(response.get('last_price'))
+                            print(f"EXTRACTED last_price = {last_price}")
+                            
+                            quote_item = {
+                                'symbol': symbol,
+                                'exchange': exchange,
+                                'token': token,
+                                # Use 'ltp' directly as that's what the frontend expects
+                                'ltp': last_price,  # This is what the frontend looks for
+                                'last_price': last_price,  # Keep original field too just in case
+                                'open': safe_float(ohlc.get('open')),
+                                'high': safe_float(ohlc.get('high')),
+                                'low': safe_float(ohlc.get('low')),
+                                'close': safe_float(ohlc.get('close')),
+                                'prev_close': safe_float(ohlc.get('close')),  # Using previous day's close
+                                'change': safe_float(response.get('day_change')),
+                                'change_percent': safe_float(response.get('day_change_perc')),
+                                'volume': safe_int(response.get('volume')),
+                                # The frontend uses 'bid' and 'ask' without the _price suffix
+                                'bid': safe_float(response.get('bid_price')),
+                                'ask': safe_float(response.get('offer_price')),
+                                # Also keep original fields
+                                'bid_price': safe_float(response.get('bid_price')),
+                                'bid_qty': safe_int(response.get('bid_quantity')),
+                                'ask_price': safe_float(response.get('offer_price')),
+                                'ask_qty': safe_int(response.get('offer_quantity')),
+                                'total_buy_qty': safe_float(response.get('total_buy_quantity')),
+                                'total_sell_qty': safe_float(response.get('total_sell_quantity')),
+                                'timestamp': response.get('last_trade_time', int(datetime.now().timestamp() * 1000))
+                            }
+                            
+                            # Add circuit limits
+                            if 'upper_circuit_limit' in response:
+                                quote_item['upper_circuit'] = safe_float(response.get('upper_circuit_limit'))
+                            if 'lower_circuit_limit' in response:
+                                quote_item['lower_circuit'] = safe_float(response.get('lower_circuit_limit'))
+                            
+                            # Add market depth if available
+                            if 'depth' in response:
+                                depth_data = response['depth']
+                                buy_depth = depth_data.get('buy', [])
+                                sell_depth = depth_data.get('sell', [])
+                                
+                                depth = {
+                                    'buy': [],
+                                    'sell': []
+                                }
+                                
+                                # Process buy side
+                                for level in buy_depth:
+                                    if safe_float(level.get('price')) > 0:  # Only include non-zero prices
+                                        depth['buy'].append({
+                                            'price': safe_float(level.get('price')),
+                                            'quantity': safe_int(level.get('quantity')),
+                                            'orders': 0  # Groww API doesn't provide order count
+                                        })
+                                
+                                # Process sell side
+                                for level in sell_depth:
+                                    if safe_float(level.get('price')) > 0:  # Only include non-zero prices
+                                        depth['sell'].append({
+                                            'price': safe_float(level.get('price')),
+                                            'quantity': safe_int(level.get('quantity')),
+                                            'orders': 0  # Groww API doesn't provide order count
+                                        })
+                                
+                                quote_item['depth'] = depth
+                            
+                            # Add to quote data
+                            quote_data.append(quote_item)
+                            print(f"Added quote_item: {quote_item}")
+                        else:
+                            logger.warning(f"Invalid response format for {symbol} on {exchange}")
+                            response = {}
+                    else:
+                        logger.warning(f"Empty or error response for {symbol} on {exchange}")
+                        response = {}
+                    
+                    # This section is now handled directly in the response processing code above to avoid duplicate processing
+                    continue
+                    
+                    # Add market depth if available
+                    if 'depth' in response:
+                        depth_data = response['depth']
+                        buy_depth = depth_data.get('buy', [])
+                        sell_depth = depth_data.get('sell', [])
+                        
+                        depth = {
+                            'buy': [],
+                            'sell': []
+                        }
+                        
+                        # Process buy side
+                        for level in buy_depth:
+                            depth['buy'].append({
+                                'price': safe_float(level.get('price')),
+                                'quantity': safe_int(level.get('quantity')),
+                                'orders': 0  # Groww API doesn't provide order count
+                            })
+                        
+                        # Process sell side
+                        for level in sell_depth:
+                            depth['sell'].append({
+                                'price': safe_float(level.get('price')),
+                                'quantity': safe_int(level.get('quantity')),
+                                'orders': 0  # Groww API doesn't provide order count
+                            })
+                        
+                        quote_item['depth'] = depth
+                        
+                except Exception as api_error:
+                    logger.error(f"Groww API error: {str(api_error)}")
+                    error_msg = str(api_error)
+                    # Add to quote data with error
+                    quote_data.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'token': token,
+                        'error': error_msg,
+                        'ltp': 0
+                    })
             except Exception as e:
                 logger.error(f"Error processing Groww API data for {sym}: {str(e)}")
                 # Add empty quote data with error message
@@ -494,6 +579,9 @@ class BrokerData:
                     'error': str(e),
                     'ltp': 0
                 })
+    
+        # Debug output of the final quote_data
+        print(f"FINAL QUOTE DATA: {quote_data}")
         
         # No data case
         if not quote_data:
@@ -502,24 +590,18 @@ class BrokerData:
                 "status": "error",
                 "message": "No data retrieved"
             }
+        
+        # Single symbol case - return in simpler format for OpenAlgo frontend
+        if isinstance(symbol_list, (str, dict)) or len(symbol_list) == 1:
+            logger.info(f"Returning data for single symbol")
+    
+            # Log what is being passed to the formatter
+            logger.debug(f"Quote data passed to formatter: {quote_data}")
             
-        # Single quote - Format exactly as specified by OpenAlgo API, without nesting
-        if len(quote_data) == 1:
-            quote = quote_data[0]
-            logger.info(f"Returning data for {quote.get('symbol', 'unknown')} in OpenAlgo format")
-            
-            # Direct format without nested data structure
-            return {
-                "ask": quote.get('ask_price', 0),
-                "bid": quote.get('bid_price', 0),
-                "high": quote.get('high', 0),
-                "low": quote.get('low', 0),
-                "ltp": quote.get('ltp', 0),
-                "open": quote.get('open', 0),
-                "prev_close": quote.get('prev_close', 0),
-                "volume": quote.get('volume', 0),
-                "status": "success"
-            }
+            # For single symbols, just return the direct quote data
+            # The REST API endpoint will wrap it with status/data
+            return self._format_single_quote_response(quote_data)
+
         
         # Multiple quotes - return in standard format
         logger.info(f"Returning data for {len(quote_data)} symbols")
@@ -527,11 +609,127 @@ class BrokerData:
             "status": "success",
             "data": quote_data
         }
-
-    def get_market_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+    def _format_single_quote_response(self, quote_data):
+        """Helper method to convert from standard dict to the format expected by OpenAlgo frontend
+        
+        Returns only the data portion without status wrapper - status added by the caller
         """
+
+        if not quote_data or not isinstance(quote_data, list) or len(quote_data) == 0:
+            return {}
+
+        quote = quote_data[0]
+
+        logger.info(f"Formatting single quote: {quote}")
+
+        result = {
+            "ltp": quote.get("ltp", 0),
+            "open": quote.get("open", 0),
+            "high": quote.get("high", 0),
+            "low": quote.get("low", 0),
+            "prev_close": quote.get("prev_close", 0),
+            "volume": quote.get("volume", 0),
+            "bid": quote.get("bid_price", 0),
+            "ask": quote.get("ask_price", 0)
+        }
+
+        logger.debug(f"Final OpenAlgo quote format (data only): {result}")
+        return result
+
+    # Commented out alternate implementation
+
+    # Legacy implementation - no longer used
+    # The code below is from the previous implementation and is kept for reference
+    #    print("Empty quote_data received in _format_single_quote_response")
+    #    return {
+    #        "status": "success",
+    #        "data": {}
+    #    }
+    #        
+    #    # Extract first (and only) item in single quote request    
+    #    quote = quote_data[0] if isinstance(quote_data, list) and len(quote_data) > 0 else {}
+        
+        print(f"EXTRACTED QUOTE: {quote}")
+        logger.info(f"Formatting single quote response for OpenAlgo frontend: {quote}")
+        
+        # Based on the sample response, OpenAlgo expects exactly these fields
+        # Keep this extremely simple - just the required fields
+        simple_data = {
+            "ltp": 0,
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "prev_close": 0,
+            "volume": 0,
+            "bid": 0,
+            "ask": 0,
+            "status": "success"
+        }
+        
+        # Now grab values from our quote data, using the field that matches best
+        
+        # LTP - preferred field name in OpenAlgo
+        if "ltp" in quote and quote["ltp"] is not None:
+            simple_data["ltp"] = float(quote["ltp"])
+        elif "last_price" in quote and quote["last_price"] is not None:
+            simple_data["ltp"] = float(quote["last_price"])
+        
+        # Open price
+        if "open" in quote and quote["open"] is not None:
+            simple_data["open"] = float(quote["open"])
+        
+        # High price
+        if "high" in quote and quote["high"] is not None:
+            simple_data["high"] = float(quote["high"])
+        
+        # Low price
+        if "low" in quote and quote["low"] is not None:
+            simple_data["low"] = float(quote["low"])
+        
+        # Previous close
+        if "prev_close" in quote and quote["prev_close"] is not None:
+            simple_data["prev_close"] = float(quote["prev_close"])
+        elif "close" in quote and quote["close"] is not None:
+            simple_data["prev_close"] = float(quote["close"])
+        
+        # Volume
+        if "volume" in quote and quote["volume"] is not None:
+            simple_data["volume"] = int(quote["volume"])
+        
+        # Bid price
+        if "bid" in quote and quote["bid"] is not None:
+            simple_data["bid"] = float(quote["bid"])
+        elif "bid_price" in quote and quote["bid_price"] is not None:
+            simple_data["bid"] = float(quote["bid_price"])
+        
+        # Ask price
+        if "ask" in quote and quote["ask"] is not None:
+            simple_data["ask"] = float(quote["ask"])
+        elif "ask_price" in quote and quote["ask_price"] is not None:
+            simple_data["ask"] = float(quote["ask_price"])
+        elif "offer_price" in quote and quote["offer_price"] is not None:
+            simple_data["ask"] = float(quote["offer_price"])
+            
+        # Debug output
+        print("FINAL SIMPLE FORMAT:")
+        for key, value in simple_data.items():
+            print(f"{key}: {value}")
+        
+        # Return exact structure expected by OpenAlgo
+        result = {
+            "status": "success",
+            "data": simple_data
+        }
+        
+        print(f"FINAL FORMATTED RESULT: {result}")
+        logger.info(f"Formatted result for OpenAlgo frontend: {result}")
+        
+        return result
+        
+    def get_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+        """ 
         Get market depth for a symbol or list of symbols using Groww API.
-        This leverages the get_quotes method since Groww's quote API includes depth information.
+        This leverages the direct API endpoint for quotes, which includes market depth information.
         
         Args:
             symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
@@ -540,6 +738,8 @@ class BrokerData:
         Returns:
             Dict[str, Any]: Market depth data in OpenAlgo format
         """
+        logger.info(f"Getting market depth using direct API calls for: {symbol_list}")
+        
         # Reuse get_quotes as it already contains market depth data
         quotes_response = self.get_quotes(symbol_list, timeout)
         
@@ -577,18 +777,22 @@ class BrokerData:
                     }
                     depth_data.append(depth_item)
             
+            # Single symbol case
+            if isinstance(symbol_list, (str, dict)) or len(symbol_list) == 1:
+                logger.info(f"Returning depth data for single symbol")
+                return {
+                    "status": "success",
+                    "data": depth_data[0] if depth_data else {}
+                }
+            
+            # Multiple symbols case
             return {
                 "status": "success",
-                "data": depth_data,
-                "message": f"Retrieved depth data for {len(depth_data)} symbols"
+                "data": depth_data
             }
-        else:
-            # Return the error from get_quotes
-            return quotes_response
 
-    def get_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
-        """
-        Alias for get_market_depth. Maintains API compatibility.
+    def get_market_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
+        """Alias for get_depth. Maintains API compatibility.
         
         Args:
             symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
@@ -597,4 +801,4 @@ class BrokerData:
         Returns:
             Dict[str, Any]: Market depth data in OpenAlgo format
         """
-        return self.get_market_depth(symbol_list, timeout)
+        return self.get_depth(symbol_list, timeout)
