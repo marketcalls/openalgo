@@ -487,23 +487,82 @@ def transform_order_data(orders):
     return transformed_orders
 
 def map_trade_data(trade_data):
+    logging.info(f"Map trade data received type: {type(trade_data)}")
+    
+    # If it's a tuple with status code (from direct API), extract the data
+    if isinstance(trade_data, tuple) and len(trade_data) == 2:
+        trade_data = trade_data[0]
+        logging.info("Extracted trade data from tuple")
+    
+    # Handle direct list of trades (which our get_trade_book now returns)
+    if isinstance(trade_data, list):
+        logging.info(f"Received direct list of {len(trade_data)} trades")
+        return trade_data
+        
+    # Handle dictionary formats
+    if isinstance(trade_data, dict):
+        # Log keys for debugging
+        logging.info(f"Trade data dict keys: {list(trade_data.keys())}")
+        
+        # Check for data field
+        if 'data' in trade_data and isinstance(trade_data['data'], list):
+            logging.info(f"Using 'data' field with {len(trade_data['data'])} trades")
+            return trade_data['data']
+            
+        # Check for tradebook field
+        if 'tradebook' in trade_data and isinstance(trade_data['tradebook'], list):
+            logging.info(f"Using 'tradebook' field with {len(trade_data['tradebook'])} trades")
+            return trade_data['tradebook']
+    
+    # If all else fails, try the regular order mapping (fallback)
+    logging.info("Falling back to regular order mapping")
     return map_order_data(trade_data)
 
 def transform_tradebook_data(tradebook_data):
+    logging.info(f"Transform tradebook received type: {type(tradebook_data)}")
+    
+    # Handle empty input
+    if not tradebook_data:
+        logging.warning("Tradebook data is empty")
+        return []
+    
+    # Log first trade for debugging
+    if isinstance(tradebook_data, list) and tradebook_data:
+        logging.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
+    
     transformed_data = []
     for trade in tradebook_data:
+        # Get values with fallbacks for different field naming conventions
+        symbol = trade.get('tradingSymbol', trade.get('symbol', ''))
+        exchange = trade.get('exchangeSegment', trade.get('exchange', ''))
+        product = trade.get('productType', trade.get('product', ''))
+        action = trade.get('transactionType', trade.get('transaction_type', ''))
+        quantity = trade.get('tradedQuantity', trade.get('quantity', 0))
+        price = trade.get('tradedPrice', trade.get('price', 0.0))
+        orderid = trade.get('orderId', trade.get('order_id', ''))
+        timestamp = trade.get('updateTime', trade.get('timestamp', trade.get('trade_date_time', '')))
+        tradeid = trade.get('tradeId', trade.get('trade_id', ''))
+        
+        # Calculate trade value
+        trade_value = quantity * price
+        
+        # Create the transformed trade object
         transformed_trade = {
-            "symbol": trade.get('tradingSymbol', ''),
-            "exchange": trade.get('exchangeSegment', ''),
-            "product": trade.get('productType', ''),
-            "action": trade.get('transactionType', ''),
-            "quantity": trade.get('tradedQuantity', 0),
-            "average_price": trade.get('tradedPrice', 0.0),
-            "trade_value": trade.get('tradedQuantity', 0) * trade.get('tradedPrice', 0.0),
-            "orderid": trade.get('orderId', ''),
-            "timestamp": trade.get('updateTime', '')
+            "symbol": symbol,
+            "exchange": exchange,
+            "product": product,
+            "action": action,
+            "quantity": quantity,
+            "average_price": price,
+            "trade_price": price,  # Added for consistency
+            "trade_value": trade_value,
+            "orderid": orderid,
+            "timestamp": timestamp,
+            "tradeid": tradeid  # Added for reference
         }
         transformed_data.append(transformed_trade)
+    
+    logging.info(f"Transformed {len(transformed_data)} trades successfully")
     return transformed_data
 
 def map_position_data(position_data):

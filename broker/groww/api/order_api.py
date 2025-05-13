@@ -29,6 +29,7 @@ GROWW_ORDER_LIST_URL = f'{GROWW_BASE_URL}/v1/order/list'
 GROWW_PLACE_ORDER_URL = f'{GROWW_BASE_URL}/v1/order/create'
 GROWW_MODIFY_ORDER_URL = f'{GROWW_BASE_URL}/v1/order/modify'
 GROWW_CANCEL_ORDER_URL = f'{GROWW_BASE_URL}/v1/order/cancel'
+GROWW_ORDER_TRADES_URL = f'{GROWW_BASE_URL}/v1/order/trades'
 
 def direct_get_order_book(auth):
     """
@@ -288,57 +289,523 @@ def get_order_book(auth):
 
 def get_trade_book(auth):
     """
-    Get list of trades for the user
+    Get list of all trades for the user using direct API calls
     
     Args:
         auth (str): Authentication token
     
     Returns:
-        dict: Trade book data
+        tuple: (trade book data, status code)
     """
     try:
-        groww = init_groww_client(auth)
-        trades = groww.get_trades()
-        return trades
+        logging.info("Using direct API implementation for get_trade_book")
+        
+        # Get order book first to find executed/completed orders
+        order_book_result = get_order_book(auth)
+        logging.info(f"Order book result type: {type(order_book_result).__name__}")
+        
+        # Process the result appropriately based on its structure
+        orders = []
+        
+        # Handle tuple response from direct API implementation
+        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
+            # Extract the order data from the result
+            order_book_data = order_book_result[0]
+            logging.info(f"Order book data type: {type(order_book_data).__name__}")
+            
+            # Extract orders from the order book response based on its structure
+            if isinstance(order_book_data, dict):
+                # Log available keys for debugging
+                logging.info(f"Order book data keys: {list(order_book_data.keys())}")
+                
+                if 'data' in order_book_data and order_book_data['data']:
+                    orders = order_book_data['data']
+                    logging.info(f"Found {len(orders)} orders in 'data' field")
+                elif 'order_list' in order_book_data and order_book_data['order_list']:
+                    orders = order_book_data['order_list']
+                    logging.info(f"Found {len(orders)} orders in 'order_list' field")
+            # Handle direct list of orders
+            elif isinstance(order_book_data, list):
+                orders = order_book_data
+                logging.info(f"Found {len(orders)} orders in list response")
+        # Legacy handling for direct dictionary response
+        elif isinstance(order_book_result, dict):
+            logging.info("Processing legacy dictionary order book result")
+            if 'data' in order_book_result and order_book_result['data']:
+                orders = order_book_result['data']
+            elif 'order_list' in order_book_result and order_book_result['order_list']:
+                orders = order_book_result['order_list']
+            logging.info(f"Found {len(orders)} orders in legacy dictionary response")
+        # Handle direct list response
+        elif isinstance(order_book_result, list):
+            orders = order_book_result
+            logging.info(f"Found {len(orders)} orders in direct list response")
+            
+        # Check if we have any orders to work with
+        if not orders:
+            logging.warning("No orders found in order book, cannot fetch trades")
+            return {'status': 'success', 'message': 'No orders found', 'data': []}, 200
+            
+        # Log the first order for debugging
+        if orders:
+            logging.info(f"First order sample for debugging: {json.dumps(orders[0], indent=2, default=str)}")
+            if 'order_status' in orders[0]:
+                logging.info(f"First order status: {orders[0]['order_status']}")
+            elif 'status' in orders[0]:
+                logging.info(f"First order status: {orders[0]['status']}")
+            else:
+                logging.info("First order has no status field")
+        
+        logging.info(f"Found {len(orders)} orders to check for trades")
+        
+        # Filter orders that might have trades
+        executed_statuses = ['EXECUTED', 'COMPLETED', 'FILLED', 'PARTIAL', 'COMPLETE']
+        potential_trade_orders = []
+        
+        # Log all orders status for debugging
+        for i, order in enumerate(orders):
+            order_status = order.get('order_status', order.get('status', ''))
+            if order_status:
+                order_status = order_status.upper()
+            else:
+                order_status = 'NO_STATUS'
+                
+            filled_qty = order.get('filled_quantity', 0)
+            order_id = None
+            
+            # Extract order ID
+            for key in ['groww_order_id', 'orderid', 'order_id', 'id']:
+                if key in order:
+                    order_id = order[key]
+                    break
+                    
+            logging.info(f"Order {i+1}: ID={order_id}, Status={order_status}, Filled Qty={filled_qty}")
+            
+            # Use more flexible criteria for executed orders
+            is_executed = (
+                order_status in executed_statuses or 
+                'EXECUT' in order_status or 
+                'FILL' in order_status or 
+                'COMPLET' in order_status or 
+                filled_qty > 0
+            )
+            
+            if order_id and is_executed:
+                logging.info(f"*** Found potential trade order: ID={order_id}, Status={order_status}")
+                potential_trade_orders.append({
+                    'order_id': order_id,
+                    'segment': order.get('segment', 'CASH'),
+                    'symbol': order.get('trading_symbol', order.get('symbol', '')),
+                    'status': order_status,
+                    'filled_quantity': filled_qty
+                })
+        
+        logging.info(f"Found {len(potential_trade_orders)} potential orders with trades")
+        
+        # Now fetch trades for each executed order
+        all_trades = []
+        segment_map = {
+            'CASH': SEGMENT_CASH,
+            'FNO': SEGMENT_FNO,
+            'F&O': SEGMENT_FNO,
+            'OPTIONS': SEGMENT_FNO,
+            'FUTURES': SEGMENT_FNO,
+            'CURRENCY': SEGMENT_CURRENCY,
+            'COMMODITY': SEGMENT_COMMODITY
+        }
+        
+        # Attempt to fetch trades for each potential order
+        for index, potential_order in enumerate(potential_trade_orders):
+            order_id = potential_order['order_id']
+            raw_segment = potential_order['segment']
+            
+            # Determine the correct segment based on order ID and segment info
+            if order_id.startswith("GLTFO"):
+                segment = SEGMENT_FNO
+                logging.info(f"Using FNO segment for order {order_id} based on order ID prefix")
+            else:
+                segment = segment_map.get(raw_segment, SEGMENT_CASH)
+                logging.info(f"Using segment {segment} for order {order_id} (from {raw_segment})")
+            
+            logging.info(f"Fetching trades for order {index+1}/{len(potential_trade_orders)}: {order_id} (segment: {segment})")
+            
+            try:
+                # Use our new direct API function to get trades for this order
+                trades_result = get_order_trades(order_id, auth, segment)
+                
+                if isinstance(trades_result, tuple) and len(trades_result) >= 1:
+                    trades_data = trades_result[0]
+                    logging.info(f"Trade result status for order {order_id}: {trades_data.get('status')}")
+                    
+                    # Check if trades were found
+                    if trades_data.get('status') == 'success' and 'trades' in trades_data:
+                        if trades_data['trades']:
+                            all_trades.extend(trades_data['trades'])
+                            logging.info(f"SUCCESS: Added {len(trades_data['trades'])} trades from order {order_id}")
+                        else:
+                            logging.info(f"Order {order_id} has no trades despite being executed")
+                            
+                            # For executed orders with filled quantity but no trades, create a synthetic trade entry
+                            if potential_order.get('filled_quantity', 0) > 0:
+                                logging.info(f"Creating synthetic trade for executed order {order_id} with filled quantity")
+                                
+                                # Create a synthetic trade based on order details
+                                synthetic_trade = {
+                                    'trade_id': f"synthetic_{order_id}",
+                                    'order_id': order_id,
+                                    'exchange_trade_id': '',
+                                    'exchange_order_id': '',
+                                    'symbol': potential_order.get('symbol', ''),
+                                    'quantity': potential_order.get('filled_quantity', 0),
+                                    'price': 0,  # We don't have this information
+                                    'trade_status': 'EXECUTED',
+                                    'exchange': '',
+                                    'segment': raw_segment,
+                                    'product': '',
+                                    'transaction_type': '',
+                                    'created_at': '',
+                                    'trade_date_time': '',
+                                    'settlement_number': '',
+                                    'remarks': 'Synthetic trade created from executed order'
+                                }
+                                all_trades.append(synthetic_trade)
+                                logging.info(f"Added synthetic trade for order {order_id}")
+                    else:
+                        logging.warning(f"No trades found for order {order_id}: {trades_data.get('message', 'Unknown reason')}")
+                else:
+                    logging.warning(f"Unexpected format for trades result for order {order_id}")
+            except Exception as e:
+                logging.error(f"Error fetching trades for order {order_id}: {e}")
+                import traceback
+                logging.error(f"Traceback: {traceback.format_exc()}")
+                
+        # Log summary of trade fetching
+        if all_trades:
+            logging.info(f"Successfully fetched a total of {len(all_trades)} trades across all orders")
+        else:
+            logging.warning("No trades found for any orders")
+            
+        # Print first trade for debugging if available
+        if all_trades:
+            logging.info(f"Sample trade data: {json.dumps(all_trades[0], indent=2, default=str)}")
+        
+        
+        # Format trades to match OpenAlgo's expected format (as used in the REST API)
+        # This matches the format expected by the order_data.py mapping functions
+        openalgo_trades = []
+        for trade in all_trades:
+            # Convert price from paise to rupees if needed (Groww returns prices in paise)
+            price = trade.get('price', 0)
+            if price > 100:
+                price = price / 100
+            
+            # Transform to the exact format expected by map_trade_data and transform_tradebook_data
+            openalgo_trade = {
+                # Fields expected by OpenAlgo's UI
+                'tradingSymbol': trade.get('symbol', ''),  # Capitalized for exact matching
+                'exchangeSegment': trade.get('exchange', ''),
+                'productType': trade.get('product', ''),
+                'transactionType': trade.get('transaction_type', ''),
+                'tradedQuantity': trade.get('quantity', 0),
+                'tradedPrice': price,
+                'orderId': trade.get('order_id', ''),
+                'updateTime': trade.get('trade_date_time', ''),
+                'tradeId': trade.get('trade_id', ''),
+                
+                # Include additional fields that might be needed
+                'trade_id': trade.get('trade_id', ''),
+                'order_id': trade.get('order_id', ''),
+                'exchange': trade.get('exchange', ''),
+                'segment': trade.get('segment', ''),
+                'symbol': trade.get('symbol', ''),
+                'quantity': trade.get('quantity', 0),
+                'price': price,
+                'transaction_type': trade.get('transaction_type', ''),
+                'trade_date_time': trade.get('trade_date_time', ''),
+                'created_at': trade.get('created_at', ''),
+                'status': trade.get('trade_status', 'EXECUTED')
+            }
+            openalgo_trades.append(openalgo_trade)
+        
+        # Log the first transformed trade for debugging
+        if openalgo_trades:
+            logging.info(f"Sample OpenAlgo trade format: {json.dumps(openalgo_trades[0], indent=2, default=str)}")
+        
+        # Create the response with the structure expected by map_trade_data
+        # Note: In the REST API, the map_trade_data function will extract data from this structure
+        response = {
+            'status': 'success',
+            'message': f"Retrieved {len(all_trades)} trades",
+            'data': openalgo_trades,  # This is what map_trade_data will look for first
+            'tradebook': openalgo_trades,  # For compatibility with different naming conventions
+            'raw_data': all_trades  # Keep the original data for reference
+        }
+        
+        logging.info(f"Successfully fetched and transformed {len(all_trades)} trades using direct API")
+        logging.info(f"Response structure: {list(response.keys())}")
+        
+        # Return just the data for direct usage - this is important for the REST API
+        # The REST API in tradebook.py expects a specific structure
+        return response, 200
+    
     except Exception as e:
         logging.error(f"Error fetching trade book: {e}")
-        return []
+        logging.exception("Full stack trace:")
+        # Even in error case, maintain consistent structure with empty data
+        # This ensures map_trade_data can still process it
+        return {
+            'status': 'error',
+            'message': f"Error fetching trades: {str(e)}",
+            'data': [],  # Empty list but with the expected structure
+            'tradebook': [],
+            'raw_data': []
+        }, 500
 
 def get_positions(auth):
     """
-    Get current positions for the user
+    Get current positions for the user using direct API calls
     
     Args:
         auth (str): Authentication token
     
     Returns:
-        dict: Positions data
+        tuple: (positions data, status code)
     """
     try:
-        groww = init_groww_client(auth)
-        positions = groww.get_positions()
-        return positions
+        logging.info("Using direct API implementation for get_positions")
+        
+        # Prepare the API client and headers
+        client = get_httpx_client()
+        headers = {
+            'Authorization': f'Bearer {auth}',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        # Groww API endpoint for positions
+        positions_url = f"{GROWW_BASE_URL}/v1/portfolio/positions"
+        
+        # Log the request details
+        logging.info(f"-------- GET POSITIONS REQUEST --------")
+        logging.info(f"API URL: {positions_url}")
+        
+        # Make the API call
+        response_obj = client.get(
+            positions_url,
+            headers=headers,
+            timeout=30
+        )
+        
+        # Log the response status
+        logging.info(f"-------- GET POSITIONS RESPONSE --------")
+        logging.info(f"Response status code: {response_obj.status_code}")
+        
+        # Parse the response
+        try:
+            response_data = response_obj.json()
+            logging.info(f"Raw positions response: {json.dumps(response_data, indent=2)}")
+            
+            # Process the response to extract position information
+            if response_obj.status_code == 200 and 'payload' in response_data:
+                positions = []
+                
+                # Extract positions from the payload
+                if 'positions' in response_data['payload']:
+                    raw_positions = response_data['payload']['positions']
+                    logging.info(f"Found {len(raw_positions)} positions")
+                    
+                    # Transform positions to a more consistent format
+                    for position in raw_positions:
+                        transformed_position = {
+                            'symbol': position.get('trading_symbol', ''),
+                            'exchange': position.get('exchange', ''),
+                            'product': position.get('product', ''),
+                            'quantity': position.get('quantity', 0),
+                            'average_price': position.get('average_price', 0),
+                            'last_price': position.get('last_price', 0),
+                            'pnl': position.get('pnl', 0),
+                            'close_price': position.get('close_price', 0),
+                            'segment': position.get('segment', ''),
+                            'isin': position.get('isin', ''),
+                            'tradingsymbol': position.get('trading_symbol', ''),
+                            # Using the key names OpenAlgo expects
+                            'instrument_token': position.get('token', ''),
+                            'buy_quantity': position.get('buy_quantity', 0),
+                            'sell_quantity': position.get('sell_quantity', 0),
+                            'net_quantity': position.get('quantity', 0),
+                            'realised': position.get('realised_pnl', 0),
+                            'unrealised': position.get('unrealised_pnl', 0),
+                        }
+                        positions.append(transformed_position)
+                
+                # Create response object
+                formatted_response = {
+                    'status': 'success',
+                    'message': f"Retrieved {len(positions)} positions",
+                    'data': positions,
+                    'raw_response': response_data
+                }
+                
+                logging.info(f"Successfully processed {len(positions)} positions")
+                return formatted_response, 200
+            else:
+                # Handle error responses
+                error_message = response_data.get('message', 'Error retrieving positions')
+                error_details = response_data.get('error', {})
+                
+                logging.warning(f"Error getting positions: {error_message}")
+                if error_details:
+                    logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
+                
+                return {
+                    'status': 'error',
+                    'message': f"Failed to retrieve positions: {error_message}",
+                    'data': [],
+                    'raw_response': response_data
+                }, response_obj.status_code
+        
+        except Exception as e:
+            logging.error(f"Error parsing positions response: {e}")
+            return {
+                'status': 'error',
+                'message': f"Error parsing positions response: {str(e)}",
+                'data': [],
+                'raw_content': response_obj.content.decode('utf-8', errors='replace')
+            }, response_obj.status_code
+    
     except Exception as e:
         logging.error(f"Error fetching positions: {e}")
-        return []
+        return {
+            'status': 'error',
+            'message': f"Error fetching positions: {str(e)}",
+            'data': []
+        }, 500
 
 def get_holdings(auth):
     """
-    Get holdings for the user
+    Get holdings for the user using direct API calls
     
     Args:
         auth (str): Authentication token
     
     Returns:
-        dict: Holdings data
+        tuple: (holdings data, status code)
     """
     try:
-        groww = init_groww_client(auth)
-        holdings = groww.get_holdings()
-        return holdings
+        logging.info("Using direct API implementation for get_holdings")
+        
+        # Prepare the API client and headers
+        client = get_httpx_client()
+        headers = {
+            'Authorization': f'Bearer {auth}',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        # Groww API endpoint for holdings
+        holdings_url = f"{GROWW_BASE_URL}/v1/portfolio/holdings"
+        
+        # Log the request details
+        logging.info(f"-------- GET HOLDINGS REQUEST --------")
+        logging.info(f"API URL: {holdings_url}")
+        
+        # Make the API call
+        response_obj = client.get(
+            holdings_url,
+            headers=headers,
+            timeout=30
+        )
+        
+        # Log the response status
+        logging.info(f"-------- GET HOLDINGS RESPONSE --------")
+        logging.info(f"Response status code: {response_obj.status_code}")
+        
+        # Parse the response
+        try:
+            response_data = response_obj.json()
+            logging.info(f"Raw holdings response received with status code: {response_obj.status_code}")
+            
+            # Process the response to extract holdings information
+            if response_obj.status_code == 200 and 'payload' in response_data:
+                holdings = []
+                
+                # Extract holdings from the payload
+                if 'holdings' in response_data['payload']:
+                    raw_holdings = response_data['payload']['holdings']
+                    logging.info(f"Found {len(raw_holdings)} holdings")
+                    
+                    # Transform holdings to a more consistent format
+                    for holding in raw_holdings:
+                        transformed_holding = {
+                            'symbol': holding.get('trading_symbol', ''),
+                            'exchange': holding.get('exchange', ''),
+                            'isin': holding.get('isin', ''),
+                            'quantity': holding.get('quantity', 0),
+                            'average_price': holding.get('average_price', 0),
+                            'last_price': holding.get('last_price', 0),
+                            'close_price': holding.get('close_price', 0),
+                            'pnl': holding.get('pnl', 0),
+                            'day_change': holding.get('day_change', 0),
+                            'day_change_percentage': holding.get('day_change_percentage', 0),
+                            'value': holding.get('value', 0),
+                            'company_name': holding.get('company_name', ''),
+                            # Using the key names OpenAlgo expects
+                            'tradingsymbol': holding.get('trading_symbol', ''),
+                            'instrument_token': holding.get('token', ''),
+                            't1_quantity': holding.get('t1_quantity', 0),
+                            'realised': holding.get('realised_pnl', 0),
+                            'unrealised': holding.get('unrealised_pnl', 0),
+                        }
+                        holdings.append(transformed_holding)
+                
+                # Create response object
+                formatted_response = {
+                    'status': 'success',
+                    'message': f"Retrieved {len(holdings)} holdings",
+                    'data': holdings,
+                    'raw_response': response_data
+                }
+                
+                logging.info(f"Successfully processed {len(holdings)} holdings")
+                return formatted_response, 200
+            else:
+                # Handle error responses
+                error_message = response_data.get('message', 'Error retrieving holdings')
+                error_details = response_data.get('error', {})
+                
+                logging.warning(f"Error getting holdings: {error_message}")
+                if error_details:
+                    logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
+                
+                return {
+                    'status': 'error',
+                    'message': f"Failed to retrieve holdings: {error_message}",
+                    'data': [],
+                    'raw_response': response_data
+                }, response_obj.status_code
+        
+        except Exception as e:
+            logging.error(f"Error parsing holdings response: {e}")
+            return {
+                'status': 'error',
+                'message': f"Error parsing holdings response: {str(e)}",
+                'data': [],
+                'tradebook': [],
+                'raw_data': response_obj.content.decode('utf-8', errors='replace')
+            }, response_obj.status_code
+    
     except Exception as e:
-        logging.error(f"Error fetching holdings: {e}")
-        return []
+        logging.error(f"Error while fetching trades using direct API: {e}")
+        logging.exception("Full stack trace:")
+        # Even in error case, maintain consistent structure with empty data
+        # This ensures map_trade_data can still process it
+        return {
+            'status': 'error',
+            'message': f"Error fetching trades: {str(e)}",
+            'data': [],  # Empty list but with the expected structure
+            'tradebook': [],
+            'raw_data': []
+        }, 500
 
 def get_open_position(tradingsymbol, exchange, product, auth):
     """
@@ -1573,3 +2040,214 @@ def cancel_all_orders_api(data, auth):
         # The REST API expects two return values: canceled_orders and failed_cancellations
         # Return empty list for cancelled orders and the error entry for failed cancellations
         return [], error_entry
+
+
+def get_order_trades(orderid, auth, segment=None):
+    """
+    Get list of trades for a specific order from Groww using direct API calls
+    
+    Args:
+        orderid (str): Groww order ID to fetch trades for
+        auth (str): Authentication token
+        segment (str, optional): Order segment (CASH, FNO, etc.) - required by Groww API
+    
+    Returns:
+        tuple: (response data, status code)
+    """
+    try:
+        # If segment is not provided, try to determine it
+        if segment is None:
+            logging.info(f"No segment provided for getting trades for order {orderid}, attempting to determine from order book")
+            try:
+                # Get order book to find the order and determine its segment
+                order_book_result = get_order_book(auth)
+                
+                if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
+                    order_book_data = order_book_result[0]
+                    
+                    # Determine segment based on order ID pattern
+                    if orderid.startswith("GLTFO"):
+                        logging.info(f"Order ID {orderid} appears to be an FNO order based on prefix")
+                        segment = SEGMENT_FNO
+                    else:
+                        # Search for the order in the order book
+                        found_segment = False
+                        if isinstance(order_book_data, dict) and 'data' in order_book_data:
+                            for order in order_book_data['data']:
+                                if order.get('groww_order_id') == orderid:
+                                    # Determine segment based on order properties
+                                    if order.get('segment') == 'CASH':
+                                        segment = SEGMENT_CASH
+                                    elif order.get('segment') in ['FNO', 'F&O', 'OPTIONS', 'FUTURES']:
+                                        segment = SEGMENT_FNO
+                                    elif order.get('segment') == 'CURRENCY':
+                                        segment = SEGMENT_CURRENCY
+                                    elif order.get('segment') == 'COMMODITY':
+                                        segment = SEGMENT_COMMODITY
+                                    
+                                    found_segment = True
+                                    logging.info(f"Found order {orderid} in order book with segment {segment}")
+                                    break
+                            
+                            if not found_segment:
+                                logging.warning(f"Could not find order {orderid} in order book")
+                                # Default to CASH segment if order not found
+                                segment = SEGMENT_CASH
+            except Exception as e:
+                logging.error(f"Error determining segment for order {orderid}: {e}")
+                segment = SEGMENT_CASH  # Default to CASH segment if we couldn't determine it
+        
+        # Default to CASH segment if still not determined
+        if segment is None:
+            logging.warning(f"Could not determine segment for order {orderid}, defaulting to CASH segment")
+            segment = SEGMENT_CASH
+        
+        logging.info(f"Fetching trades for order {orderid} in segment {segment}")
+        
+        # Prepare the API client and headers
+        client = get_httpx_client()
+        headers = {
+            'Authorization': f'Bearer {auth}',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        # Define pagination parameters
+        page = 0
+        page_size = 50  # Maximum allowed by Groww API
+        
+        # Prepare the URL with the order ID and query parameters
+        url = f"{GROWW_ORDER_TRADES_URL}/{orderid}?segment={segment}&page={page}&page_size={page_size}"
+        
+        # Log the request details
+        logging.info(f"-------- GET ORDER TRADES REQUEST --------")
+        logging.info(f"Order ID: {orderid}")
+        logging.info(f"Segment: {segment}")
+        logging.info(f"API URL: {url}")
+        
+        # Log request headers (excluding Authorization for security)
+        safe_headers = headers.copy()
+        if 'Authorization' in safe_headers:
+            safe_headers['Authorization'] = 'Bearer ***REDACTED***'
+        logging.info(f"Request headers: {json.dumps(safe_headers, indent=2)}")
+        
+        # Make the API call
+        response_obj = client.get(
+            url,
+            headers=headers,
+            timeout=30
+        )
+        
+        # Log the response status
+        logging.info(f"-------- GET ORDER TRADES RESPONSE --------")
+        logging.info(f"Response status code: {response_obj.status_code}")
+        
+        # Parse the response
+        try:
+            response_data = response_obj.json()
+            
+            # Log the response in a readable format
+            logging.info(f"Raw response: {json.dumps(response_data, indent=2)}")
+            
+            # Format the response to extract trade information
+            if response_obj.status_code == 200 and 'payload' in response_data and 'trade_list' in response_data['payload']:
+                trades = response_data['payload']['trade_list']
+                logging.info(f"Found {len(trades)} trades for order {orderid}")
+                
+                # Transform trades data to a more consistent format
+                transformed_trades = []
+                for trade in trades:
+                    # Extract and convert relevant fields
+                    trade_item = {
+                        'trade_id': trade.get('groww_trade_id', ''),
+                        'order_id': trade.get('groww_order_id', ''),
+                        'exchange_trade_id': trade.get('exchange_trade_id', ''),
+                        'exchange_order_id': trade.get('exchange_order_id', ''),
+                        'symbol': trade.get('trading_symbol', ''),
+                        'quantity': trade.get('quantity', 0),
+                        'price': trade.get('price', 0),
+                        'trade_status': trade.get('trade_status', ''),
+                        'exchange': trade.get('exchange', ''),
+                        'segment': trade.get('segment', ''),
+                        'product': trade.get('product', ''),
+                        'transaction_type': trade.get('transaction_type', ''),
+                        'created_at': trade.get('created_at', ''),
+                        'trade_date_time': trade.get('trade_date_time', ''),
+                        'settlement_number': trade.get('settlement_number', ''),
+                        'remarks': trade.get('remark', '')
+                    }
+                    transformed_trades.append(trade_item)
+                
+                # Create a structured response
+                formatted_response = {
+                    'status': 'success',
+                    'message': f"Successfully retrieved {len(transformed_trades)} trades for order {orderid}",
+                    'order_id': orderid,
+                    'segment': segment,
+                    'trades': transformed_trades,
+                    'raw_response': response_data  # Include raw response for debugging
+                }
+                
+                return formatted_response, 200
+            
+            # Handle case where no trades are found
+            elif response_obj.status_code == 200 and 'payload' in response_data and 'trade_list' in response_data['payload']:
+                if len(response_data['payload']['trade_list']) == 0:
+                    logging.info(f"No trades found for order {orderid}")
+                    return {
+                        'status': 'success',
+                        'message': f"No trades found for order {orderid}",
+                        'order_id': orderid,
+                        'segment': segment,
+                        'trades': [],
+                        'raw_response': response_data
+                    }, 200
+            
+            # Handle API error responses
+            else:
+                error_message = response_data.get('message', 'Error retrieving trades')
+                error_details = response_data.get('error', {})
+                
+                logging.warning(f"Error getting trades for order {orderid}: {error_message}")
+                if error_details:
+                    logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
+                
+                return {
+                    'status': 'error',
+                    'message': f"Failed to retrieve trades: {error_message}",
+                    'order_id': orderid,
+                    'segment': segment,
+                    'trades': [],
+                    'raw_response': response_data
+                }, response_obj.status_code
+                
+        except Exception as e:
+            logging.error(f"Error parsing trades response: {e}")
+            logging.error(f"Raw response content: {response_obj.content}")
+            
+            return {
+                'status': 'error',
+                'message': f"Error parsing trades response: {str(e)}",
+                'order_id': orderid,
+                'segment': segment,
+                'trades': [],
+                'raw_content': response_obj.content.decode('utf-8', errors='replace')
+            }, response_obj.status_code
+    
+    except Exception as e:
+        # Get exception details for better debugging
+        import traceback
+        tb = traceback.format_exc()
+        logging.error(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
+        logging.error(f"Exception: {str(e)}")
+        logging.error(f"Traceback: {tb}")
+        
+        return {
+            'status': 'error',
+            'message': f"Failed to retrieve trades due to exception: {str(e)}",
+            'order_id': orderid,
+            'segment': segment,
+            'trades': [],
+            'exception_details': str(e),
+            'traceback': tb
+        }, 500
