@@ -517,8 +517,96 @@ def map_trade_data(trade_data):
     # If all else fails, try the regular order mapping (fallback)
     logging.info("Falling back to regular order mapping")
     return map_order_data(trade_data)
-
+    
 def transform_tradebook_data(tradebook_data):
+    logging.info(f"Transform tradebook received type: {type(tradebook_data)}")
+    
+    # Handle empty input
+    if not tradebook_data:
+        logging.warning("Tradebook data is empty")
+        return []
+    
+    # Log first trade for debugging
+    if isinstance(tradebook_data, list) and tradebook_data:
+        logging.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
+    
+    transformed_data = []
+    for trade in tradebook_data:
+        # Get values with fallbacks for different field naming conventions
+        broker_symbol = trade.get('tradingSymbol', trade.get('tradingsymbol', trade.get('symbol', '')))
+        exchange = trade.get('exchangeSegment', trade.get('exchange', 'NSE'))
+        segment = trade.get('segment', '')
+        
+        # Determine proper exchange based on segment and symbol pattern
+        if segment == 'FNO' or any(marker in broker_symbol for marker in ['CE', 'PE', 'FUT']):
+            exchange = 'NFO'
+        else:
+            exchange = 'NSE'
+        
+        # Try to get token from trade data if available
+        token = trade.get('token', trade.get('instrument_token', None))
+        symbol = broker_symbol
+        
+        # Try to get OpenAlgo symbol from database
+        try:
+            from database.token_db import get_oa_symbol
+            
+            # Try to get the OpenAlgo symbol using the token if available
+            if token:
+                openalgo_symbol = get_oa_symbol(token, exchange)
+                if openalgo_symbol:
+                    symbol = openalgo_symbol
+                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+            
+            # If token lookup failed or token wasn't available, try by broker symbol
+            elif broker_symbol:
+                # For options/futures specifically, try database lookup
+                if exchange == "NFO" and (broker_symbol.endswith('CE') or broker_symbol.endswith('PE') or 'FUT' in broker_symbol):
+                    # Query the database to find the OpenAlgo symbol for this broker symbol
+                    from broker.groww.database.master_contract_db import SymToken, db_session
+                    with db_session() as session:
+                        record = session.query(SymToken).filter(
+                            SymToken.brsymbol == broker_symbol,
+                            SymToken.exchange == exchange
+                        ).first()
+                        
+                        if record and record.symbol:
+                            symbol = record.symbol
+                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+        except Exception as e:
+            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+        
+        # Get other trade fields
+        product = trade.get('productType', trade.get('product', ''))
+        action = trade.get('transactionType', trade.get('transaction_type', ''))
+        quantity = float(trade.get('tradedQuantity', trade.get('quantity', 0)))
+        price = float(trade.get('tradedPrice', trade.get('price', 0.0)))
+        orderid = trade.get('orderId', trade.get('order_id', ''))
+        timestamp = trade.get('updateTime', trade.get('timestamp', trade.get('trade_date_time', '')))
+        tradeid = trade.get('tradeId', trade.get('trade_id', ''))
+        
+        # Calculate trade value
+        trade_value = quantity * price
+        
+        # Create the transformed trade object
+        transformed_trade = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "product": product,
+            "action": action,
+            "quantity": quantity,
+            "average_price": price,
+            "trade_price": price,
+            "trade_value": trade_value,
+            "orderid": orderid,
+            "timestamp": timestamp,
+            "tradeid": tradeid
+        }
+        transformed_data.append(transformed_trade)
+    
+    logging.info(f"Transformed {len(transformed_data)} trades successfully")
+    return transformed_data
+#def transform_tradebook_data(tradebook_data):
     logging.info(f"Transform tradebook received type: {type(tradebook_data)}")
     
     # Handle empty input
@@ -566,20 +654,120 @@ def transform_tradebook_data(tradebook_data):
     return transformed_data
 
 def map_position_data(position_data):
+    logging.info(f"Map position data received type: {type(position_data)}")
+    
+    # If it's a tuple with status code (from direct API), extract the data
+    if isinstance(position_data, tuple) and len(position_data) == 2:
+        position_data = position_data[0]
+        logging.info("Extracted position data from tuple")
+    
+    # Handle direct list of positions
+    if isinstance(position_data, list):
+        logging.info(f"Received direct list of {len(position_data)} positions")
+        return position_data
+        
+    # Handle dictionary formats
+    if isinstance(position_data, dict):
+        # Log keys for debugging
+        logging.info(f"Position data dict keys: {list(position_data.keys())}")
+        
+        # Check for data field
+        if 'data' in position_data and isinstance(position_data['data'], list):
+            logging.info(f"Using 'data' field with {len(position_data['data'])} positions")
+            return position_data['data']
+    
+    # If all else fails, try the regular order mapping (fallback)
+    logging.info("Falling back to regular order mapping")
     return map_order_data(position_data)
-
-
 def transform_positions_data(positions_data):
+    logging.info(f"Transform positions received type: {type(positions_data)}, length: {len(positions_data) if isinstance(positions_data, list) else 'not a list'}")
+    
+    # Handle empty input
+    if not positions_data:
+        logging.warning("Positions data is empty")
+        return []
+    
+    # Log first position for debugging
+    if isinstance(positions_data, list) and positions_data:
+        logging.info(f"Sample position to transform: {json.dumps(positions_data[0], indent=2)[:500]}")
+    
     transformed_data = []
     for position in positions_data:
+        # Get tradingsymbol with fallbacks
+        broker_symbol = position.get('tradingsymbol', position.get('trading_symbol', position.get('symbol', '')))
+        exchange = position.get('exchange', 'NSE')
+        segment = position.get('segment', '')
+        
+        # Determine proper exchange based on segment and symbol pattern
+        if segment == 'FNO' or any(marker in broker_symbol for marker in ['CE', 'PE', 'FUT']):
+            exchange = 'NFO'
+        else:
+            exchange = 'NSE'
+        
+        # Try to get token from position data if available
+        token = position.get('token', position.get('instrument_token', None))
+        symbol = broker_symbol
+        
+        # Try to get OpenAlgo symbol from database
+        try:
+            from database.token_db import get_oa_symbol
+            
+            # Try to get the OpenAlgo symbol using the token if available
+            if token:
+                openalgo_symbol = get_oa_symbol(token, exchange)
+                if openalgo_symbol:
+                    symbol = openalgo_symbol
+                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+            
+            # If token lookup failed or token wasn't available, try by broker symbol
+            elif broker_symbol:
+                # For options/futures specifically, try database lookup
+                if exchange == "NFO" and (broker_symbol.endswith('CE') or broker_symbol.endswith('PE') or 'FUT' in broker_symbol):
+                    # Query the database to find the OpenAlgo symbol for this broker symbol
+                    from broker.groww.database.master_contract_db import SymToken, db_session
+                    with db_session() as session:
+                        record = session.query(SymToken).filter(
+                            SymToken.brsymbol == broker_symbol,
+                            SymToken.exchange == exchange
+                        ).first()
+                        
+                        if record and record.symbol:
+                            symbol = record.symbol
+                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+        except Exception as e:
+            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+        
+        # Continue with the rest of your transformation
+        quantity = float(position.get('quantity', 0))
+        sell_qty = float(position.get('sellQty', 0))
+        buy_qty = float(position.get('buyQty', 0))
+        avg_price = float(position.get('avgPrice', 0))
+        close_price = float(position.get('closePrice', 0))
+        last_price = float(position.get('lastPrice', 0))
+        pnl = float(position.get('pnl', 0))
+        multiplier = float(position.get('multiplier', 1))
+        unrealised = float(position.get('unrealised', 0))
+        realised = float(position.get('realised', 0))
+        
         transformed_position = {
-            "symbol": position.get('tradingSymbol', ''),
-            "exchange": position.get('exchangeSegment', ''),
-            "product": position.get('productType', ''),
-            "quantity": position.get('netQty', 0),
-            "average_price": position.get('costPrice', 0.0),
+            "symbol": symbol,
+            "exchange": exchange,
+            "product": position.get('product', 'CNC'),
+            "quantity": quantity,
+            "average_price": avg_price,
+            "close_price": close_price,
+            "last_price": last_price,
+            "pnl": pnl,
+            "multiplier": multiplier,
+            "unrealised": unrealised,
+            "realised": realised,
+            "buy_quantity": buy_qty,
+            "sell_quantity": sell_qty,
+            "instrument_token": position.get('instrument_token', position.get('symbol_isin', ''))
         }
         transformed_data.append(transformed_position)
+    
+    logging.info(f"Transformed {len(transformed_data)} positions successfully")
     return transformed_data
 
 def transform_holdings_data(holdings_data):

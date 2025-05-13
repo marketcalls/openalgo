@@ -3,6 +3,7 @@ import os
 import logging
 import uuid
 import re
+import datetime
 from datetime import datetime
 from database.auth_db import get_auth_token
 from database.token_db import get_token
@@ -392,12 +393,47 @@ def get_trade_book(auth):
             
             if order_id and is_executed:
                 logging.info(f"*** Found potential trade order: ID={order_id}, Status={order_status}")
+                # Extract transaction type (BUY/SELL) with multiple possible field names
+                transaction_type = None
+                
+                # Log all fields in the order for debugging
+                logging.info(f"Order fields available: {list(order.keys())}")
+                
+                # Check all possible field names for transaction type
+                for field in ['transaction_type', 'order_type', 'trade_type', 'side', 'action', 'transaction_type', 'buy_sell', 'transactionType']:
+                    if field in order and order[field]:
+                        transaction_type = str(order[field]).upper()
+                        logging.info(f"Found transaction type '{transaction_type}' in field '{field}'")
+                        break
+                        
+                # Additional check for Groww-specific fields
+                if not transaction_type and 'order' in order and isinstance(order['order'], dict):
+                    nested_order = order['order']
+                    for field in ['transaction_type', 'order_type', 'trade_type', 'side', 'action', 'buy_sell', 'transactionType']:
+                        if field in nested_order and nested_order[field]:
+                            transaction_type = str(nested_order[field]).upper()
+                            logging.info(f"Found transaction type '{transaction_type}' in nested order field '{field}'")
+                            break
+                        
+                # Extract product type with multiple possible field names
+                product_type = None
+                for field in ['product', 'product_type', 'order_variety']:
+                    if field in order and order[field]:
+                        product_type = order[field].upper()
+                        logging.info(f"Found product type '{product_type}' in field '{field}'")
+                        break
+                        
+                # Create potential trade order with all available information
                 potential_trade_orders.append({
                     'order_id': order_id,
                     'segment': order.get('segment', 'CASH'),
                     'symbol': order.get('trading_symbol', order.get('symbol', '')),
                     'status': order_status,
-                    'filled_quantity': filled_qty
+                    'filled_quantity': filled_qty,
+                    'transaction_type': transaction_type,  # Add transaction type
+                    'product': product_type,  # Add product type
+                    'exchange': order.get('exchange', ''),  # Add exchange
+                    'price': order.get('price', 0)  # Add price if available
                 })
         
         logging.info(f"Found {len(potential_trade_orders)} potential orders with trades")
@@ -461,17 +497,73 @@ def get_trade_book(auth):
                                     'trade_status': 'EXECUTED',
                                     'exchange': '',
                                     'segment': raw_segment,
-                                    'product': '',
-                                    'transaction_type': '',
-                                    'created_at': '',
-                                    'trade_date_time': '',
+                                    'product': potential_order.get('product', 'MIS'),  # Default to MIS if not available
+                                    'transaction_type': potential_order.get('transaction_type', 'BUY'),  # Use original transaction type when available
+                                    'created_at': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                    'trade_date_time': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                                     'settlement_number': '',
                                     'remarks': 'Synthetic trade created from executed order'
                                 }
                                 all_trades.append(synthetic_trade)
                                 logging.info(f"Added synthetic trade for order {order_id}")
+                    # Check for special cases: 404 errors for FNO orders 
+                    elif trades_data.get('status') == 'error' and segment == SEGMENT_FNO and trades_result[1] == 404:
+                        # For FNO orders that return 404, create a synthetic trade
+                        if potential_order.get('filled_quantity', 0) > 0:
+                            # Log the detailed information from potential_order for debugging
+                            logging.info(f"Creating synthetic trade for FNO order {order_id} due to 404 error")
+                            logging.info(f"Order details for synthetic trade: {json.dumps(potential_order, indent=2, default=str)}")
+                            logging.info(f"Transaction type found: {potential_order.get('transaction_type')}")
+                            
+                            # Create a synthetic trade
+                            synthetic_trade = {
+                                'trade_id': f"synthetic_fno_{order_id}",
+                                'order_id': order_id,
+                                'exchange_trade_id': '',
+                                'exchange_order_id': '',
+                                'symbol': potential_order.get('symbol', ''),
+                                'quantity': potential_order.get('filled_quantity', 0),
+                                'price': potential_order.get('price', 0),
+                                'trade_status': 'EXECUTED',
+                                'exchange': potential_order.get('exchange', ''),
+                                'segment': raw_segment,
+                                'product': potential_order.get('product', 'MIS'),  # Default to MIS if not available
+                                'transaction_type': potential_order.get('transaction_type', 'BUY'),  # Default to BUY if not available
+                                'created_at': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                'trade_date_time': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                'settlement_number': '',
+                                'remarks': 'Synthetic FNO trade created due to API limitation (404)'
+                            }
+                            all_trades.append(synthetic_trade)
+                            logging.info(f"Added synthetic FNO trade for order {order_id}")
                     else:
                         logging.warning(f"No trades found for order {order_id}: {trades_data.get('message', 'Unknown reason')}")
+                        
+                        # Check for orders where we should create synthetic trades anyway
+                        if potential_order.get('filled_quantity', 0) > 0 and potential_order.get('status', '').upper() in ['EXECUTED', 'COMPLETE', 'FILLED']:
+                            logging.info(f"Creating synthetic trade for executed order {order_id} despite API error")
+                            
+                            # Create a synthetic trade based on order details
+                            synthetic_trade = {
+                                'trade_id': f"synthetic_fallback_{order_id}",
+                                'order_id': order_id,
+                                'exchange_trade_id': '',
+                                'exchange_order_id': '',
+                                'symbol': potential_order.get('symbol', ''),
+                                'quantity': potential_order.get('filled_quantity', 0),
+                                'price': potential_order.get('price', 0),
+                                'trade_status': 'EXECUTED',
+                                'exchange': potential_order.get('exchange', ''),
+                                'segment': raw_segment,
+                                'product': potential_order.get('product', 'MIS'),  # Default to MIS if not available
+                                'transaction_type': potential_order.get('transaction_type', 'BUY'),  # Default to BUY if not available
+                                'created_at': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                'trade_date_time': datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                'settlement_number': '',
+                                'remarks': 'Synthetic trade created for executed order (API error fallback)'
+                            }
+                            all_trades.append(synthetic_trade)
+                            logging.info(f"Added synthetic fallback trade for order {order_id}")
                 else:
                     logging.warning(f"Unexpected format for trades result for order {order_id}")
             except Exception as e:
@@ -563,7 +655,8 @@ def get_trade_book(auth):
 
 def get_positions(auth):
     """
-    Get current positions for the user using direct API calls
+    Get current positions for the user using direct API calls to Groww API
+    Uses the /v1/positions/user endpoint as documented
     
     Args:
         auth (str): Authentication token
@@ -582,16 +675,24 @@ def get_positions(auth):
             'Content-Type': 'application/json'
         }
         
-        # Groww API endpoint for positions
-        positions_url = f"{GROWW_BASE_URL}/v1/portfolio/positions"
+        # Groww API endpoint for positions - using documented endpoint
+        positions_url = f"{GROWW_BASE_URL}/v1/positions/user"
         
-        # Log the request details
+        # Get both CASH and FNO segments
+        params = {
+            'segment': 'CASH'  # Default to CASH segment
+        }
+        
+        # Log the request details (with redacted auth token)
         logging.info(f"-------- GET POSITIONS REQUEST --------")
         logging.info(f"API URL: {positions_url}")
+        logging.info(f"Request parameters: {params}")
+        logging.info("Request headers: {\n  \"Authorization\": \"Bearer ***REDACTED***\",\n  \"Accept\": \"application/json\",\n  \"Content-Type\": \"application/json\"\n}")
         
-        # Make the API call
+        # Make the API call for CASH segment
         response_obj = client.get(
             positions_url,
+            params=params,
             headers=headers,
             timeout=30
         )
@@ -601,89 +702,271 @@ def get_positions(auth):
         logging.info(f"Response status code: {response_obj.status_code}")
         
         # Parse the response
+        all_positions = []
+        
         try:
+            # Parse CASH segment response
             response_data = response_obj.json()
-            logging.info(f"Raw positions response: {json.dumps(response_data, indent=2)}")
+            logging.info(f"Raw CASH positions response: {json.dumps(response_data, indent=2)[:1000]}...")
             
             # Process the response to extract position information
-            if response_obj.status_code == 200 and 'payload' in response_data:
-                positions = []
-                
-                # Extract positions from the payload
-                if 'positions' in response_data['payload']:
+            if response_obj.status_code == 200 and response_data.get('status') == 'SUCCESS':
+                # Extract positions from the payload based on the documented format
+                if 'payload' in response_data and 'positions' in response_data['payload']:
                     raw_positions = response_data['payload']['positions']
-                    logging.info(f"Found {len(raw_positions)} positions")
+                    logging.info(f"Found {len(raw_positions)} positions in CASH segment")
                     
-                    # Transform positions to a more consistent format
+                    # Transform positions to match OpenAlgo's expected format
                     for position in raw_positions:
+                        # Calculate net quantities
+                        buy_qty = position.get('credit_quantity', 0) + position.get('carry_forward_credit_quantity', 0)
+                        sell_qty = position.get('debit_quantity', 0) + position.get('carry_forward_debit_quantity', 0)
+                        net_qty = position.get('quantity', buy_qty - sell_qty)
+                        
+                        # Get average price - convert from paise to rupees if needed
+                        avg_price = position.get('net_price', 0)
+                        if avg_price > 1000:  # Likely in paise
+                            avg_price = avg_price / 100
+                        
+                        # Get the trading symbol
+                        groww_symbol = position.get('trading_symbol', '')
+                        openalgo_symbol = groww_symbol
+                        symbol_converted = False
+                        
+                        # Handle symbol conversion for consistency with orderbook
+                        # This is primarily for FNO instruments, but we'll check all symbols
+                        try:
+                            # For Options: Convert from Groww format to OpenAlgo format
+                            groww_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
+                            match = groww_pattern.match(groww_symbol)
+                            
+                            if match:
+                                # Extract components
+                                symbol_name, year, month_num, day, strike, option_type = match.groups()
+                                
+                                # Convert numeric month to alphabetic
+                                months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                                month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
+                                
+                                # Format as OpenAlgo expects: NIFTY15MAY2526650CE
+                                openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
+                                logging.info(f"Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                symbol_converted = True
+                            
+                            # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
+                            else:
+                                future_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?')
+                                match = future_pattern.match(groww_symbol)
+                                
+                                if match:
+                                    # Extract components
+                                    symbol_name, year, month_num, day = match.groups()
+                                    
+                                    # Convert numeric month to alphabetic
+                                    months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                                    month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
+                                    
+                                    # Format as OpenAlgo expects: NIFTY29MAY25FUT
+                                    openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
+                                    logging.info(f"Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                    symbol_converted = True
+                        except Exception as e:
+                            logging.error(f"Error converting position symbol: {e}")
+                            # Fall back to original symbol if conversion fails
+                            
+                        # Map exchange to OpenAlgo format
+                        exchange = position.get('exchange', '')
+                        if exchange == 'NSE':
+                            openalgo_exchange = 'NSE_EQ'
+                        elif exchange == 'BSE':
+                            openalgo_exchange = 'BSE_EQ'
+                        elif exchange == 'NFO':
+                            openalgo_exchange = 'NSE_FO'
+                        else:
+                            openalgo_exchange = exchange
+                            
+                        # Create position object in OpenAlgo format
                         transformed_position = {
-                            'symbol': position.get('trading_symbol', ''),
-                            'exchange': position.get('exchange', ''),
+                            # Standard OpenAlgo fields
+                            'symbol': openalgo_symbol,
+                            'tradingsymbol': openalgo_symbol,
+                            'exchange': openalgo_exchange,
                             'product': position.get('product', ''),
-                            'quantity': position.get('quantity', 0),
-                            'average_price': position.get('average_price', 0),
-                            'last_price': position.get('last_price', 0),
-                            'pnl': position.get('pnl', 0),
-                            'close_price': position.get('close_price', 0),
-                            'segment': position.get('segment', ''),
-                            'isin': position.get('isin', ''),
-                            'tradingsymbol': position.get('trading_symbol', ''),
-                            # Using the key names OpenAlgo expects
-                            'instrument_token': position.get('token', ''),
-                            'buy_quantity': position.get('buy_quantity', 0),
-                            'sell_quantity': position.get('sell_quantity', 0),
-                            'net_quantity': position.get('quantity', 0),
-                            'realised': position.get('realised_pnl', 0),
-                            'unrealised': position.get('unrealised_pnl', 0),
+                            'quantity': net_qty,
+                            'net_quantity': net_qty,
+                            'average_price': avg_price,
+                            'buy_quantity': buy_qty,
+                            'sell_quantity': sell_qty,
+                            'segment': 'EQ',  # OpenAlgo format for CASH segment
+                            
+                            # Specific Groww fields (renamed to match OpenAlgo expectations)
+                            'buy_price': position.get('credit_price', 0) / 100,  # Convert paise to rupees
+                            'sell_price': position.get('debit_price', 0) / 100 if position.get('debit_price', 0) > 0 else 0,
+                            'symbol_isin': position.get('symbol_isin', ''),
+                            
+                            # Fields expected by OpenAlgo's UI
+                            'pnl': 0,  # Not provided in response, calculate if needed
+                            'last_price': 0,  # Not provided in response
+                            'close_price': 0,  # Not provided in response
+                            'instrument_token': position.get('symbol_isin', ''),  # Use ISIN as token
+                            'unrealised': 0,  # Not provided in response
+                            'realised': 0,  # Not provided in response
                         }
-                        positions.append(transformed_position)
+                        all_positions.append(transformed_position)
+            
+            # Now try to get FNO segment positions
+            try:
+                params['segment'] = 'FNO'
+                logging.info(f"Fetching FNO positions with params: {params}")
                 
-                # Create response object
-                formatted_response = {
-                    'status': 'success',
-                    'message': f"Retrieved {len(positions)} positions",
-                    'data': positions,
-                    'raw_response': response_data
-                }
+                fno_response = client.get(
+                    positions_url,
+                    params=params,
+                    headers=headers,
+                    timeout=30
+                )
                 
-                logging.info(f"Successfully processed {len(positions)} positions")
-                return formatted_response, 200
-            else:
-                # Handle error responses
-                error_message = response_data.get('message', 'Error retrieving positions')
-                error_details = response_data.get('error', {})
+                if fno_response.status_code == 200:
+                    fno_data = fno_response.json()
+                    logging.info(f"FNO response status: {fno_data.get('status')}")
+                    
+                    if fno_data.get('status') == 'SUCCESS' and 'payload' in fno_data and 'positions' in fno_data['payload']:
+                        fno_positions = fno_data['payload']['positions']
+                        logging.info(f"Found {len(fno_positions)} positions in FNO segment")
+                        
+                        # Process FNO positions the same way
+                        for position in fno_positions:
+                            # Calculate net quantities
+                            buy_qty = position.get('credit_quantity', 0) + position.get('carry_forward_credit_quantity', 0)
+                            sell_qty = position.get('debit_quantity', 0) + position.get('carry_forward_debit_quantity', 0)
+                            net_qty = position.get('quantity', buy_qty - sell_qty)
+                            
+                            # Get average price - convert from paise to rupees if needed
+                            avg_price = position.get('net_price', 0)
+                            if avg_price > 1000:  # Likely in paise
+                                avg_price = avg_price / 100
+                            
+                            # Get the trading symbol
+                            groww_symbol = position.get('trading_symbol', '')
+                            openalgo_symbol = groww_symbol
+                            symbol_converted = False
+                            
+                            # Handle FNO symbol conversion
+                            if position.get('segment') == 'FNO' or position.get('exchange') == 'NFO':
+                                try:
+                                    # For Options: Convert from Groww format to OpenAlgo format
+                                    # Groww format: "NIFTY25051334000CE" or "BANKNIFTY25051332500PE"
+                                    # OpenAlgo format: "NIFTY13MAY2534000CE" or "BANKNIFTY13MAY2532500PE"
+                                    groww_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
+                                    match = groww_pattern.match(groww_symbol)
+                                    
+                                    if match:
+                                        # Extract components
+                                        symbol_name, year, month_num, day, strike, option_type = match.groups()
+                                        
+                                        # Convert numeric month to alphabetic
+                                        months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                                        month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
+                                        
+                                        # Format as OpenAlgo expects: NIFTY15MAY2526650CE
+                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
+                                        logging.info(f"Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                        symbol_converted = True
+                                    
+                                    # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
+                                    else:
+                                        future_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?')
+                                        match = future_pattern.match(groww_symbol)
+                                        
+                                        if match:
+                                            # Extract components
+                                            symbol_name, year, month_num, day = match.groups()
+                                            
+                                            # Convert numeric month to alphabetic
+                                            months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                                            month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
+                                            
+                                            # Format as OpenAlgo expects: NIFTY29MAY25FUT
+                                            openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
+                                            logging.info(f"Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                            symbol_converted = True
+                                except Exception as e:
+                                    logging.error(f"Error converting position symbol: {e}")
+                                    # Fall back to original symbol if conversion fails
+                            
+                            # Map exchange to OpenAlgo format
+                            exchange = position.get('exchange', '')
+                            if exchange == 'NSE':
+                                openalgo_exchange = 'NSE'
+                            elif exchange == 'BSE':
+                                openalgo_exchange = 'BSE'
+                            elif exchange == 'NFO':
+                                openalgo_exchange = 'NSE_FO'
+                            else:
+                                openalgo_exchange = exchange
+                                
+                            # Create position object with segment set to FNO
+                            transformed_position = {
+                                'symbol': openalgo_symbol,
+                                'tradingsymbol': openalgo_symbol,
+                                'exchange': openalgo_exchange,
+                                'product': position.get('product', ''),
+                                'quantity': net_qty,
+                                'net_quantity': net_qty,
+                                'average_price': avg_price,
+                                'buy_quantity': buy_qty,
+                                'sell_quantity': sell_qty,
+                                'segment': 'FO',  # OpenAlgo format for FNO segment
+                                'buy_price': position.get('credit_price', 0) / 100,
+                                'sell_price': position.get('debit_price', 0) / 100 if position.get('debit_price', 0) > 0 else 0,
+                                'symbol_isin': position.get('symbol_isin', ''),
+                                'pnl': 0,
+                                'last_price': 0,
+                                'close_price': 0,
+                                'instrument_token': position.get('symbol_isin', ''),
+                                'unrealised': 0,
+                                'realised': 0,
+                            }
+                            all_positions.append(transformed_position)
+            except Exception as fno_error:
+                # Don't fail if FNO segment request fails
+                logging.warning(f"Error fetching FNO positions: {fno_error}")
+            
+            # Create formatted response
+            formatted_response = {
+                'status': 'success',
+                'message': f"Retrieved {len(all_positions)} positions",
+                'data': all_positions,
+                'raw_response': response_data  # Include the CASH segment response
+            }
+            
+            logging.info(f"Successfully processed {len(all_positions)} total positions")
+            return formatted_response, 200
                 
-                logging.warning(f"Error getting positions: {error_message}")
-                if error_details:
-                    logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-                
-                return {
-                    'status': 'error',
-                    'message': f"Failed to retrieve positions: {error_message}",
-                    'data': [],
-                    'raw_response': response_data
-                }, response_obj.status_code
-        
-        except Exception as e:
+        except json.JSONDecodeError as e:
             logging.error(f"Error parsing positions response: {e}")
+            logging.error(f"Response content: {response_obj.content[:1000]}")
             return {
                 'status': 'error',
                 'message': f"Error parsing positions response: {str(e)}",
                 'data': [],
-                'raw_content': response_obj.content.decode('utf-8', errors='replace')
+                'raw_content': response_obj.content.decode('utf-8', errors='replace')[:1000]
             }, response_obj.status_code
     
     except Exception as e:
         logging.error(f"Error fetching positions: {e}")
+        logging.exception("Full stack trace:")
         return {
             'status': 'error',
             'message': f"Error fetching positions: {str(e)}",
-            'data': []
+            'data': [],
+            'raw_response': {}
         }, 500
 
 def get_holdings(auth):
     """
     Get holdings for the user using direct API calls
+    ...
     
     Args:
         auth (str): Authentication token
@@ -1247,62 +1530,78 @@ def place_smartorder_api(data,auth):
         #print(response)
         
         return res , response, orderid
-    
-
-
-
-def close_all_positions(current_api_key,auth):
-    AUTH_TOKEN = auth
-    # Fetch the current open positions
-    positions_response = get_positions(AUTH_TOKEN)
-    #print(positions_response)
-    
-    # Check if the positions data is null or empty
-    if positions_response is None or not positions_response:
-        return {"message": "No Open Positions Found"}, 200
-
-    if positions_response:
-        # Loop through each position to close
-        for position in positions_response:
-            # Skip if net quantity is zero
-            if int(position['netQty']) == 0:
-                continue
-
-            # Determine action based on net quantity
-            action = 'SELL' if int(position['netQty']) > 0 else 'BUY'
-            quantity = abs(int(position['netQty']))
-
-            #print(f"Trading Symbol : {position['tradingsymbol']}")
-            #print(f"Exchange : {position['exchange']}")
-
-            #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['securityId'],map_exchange(position['exchangeSegment']))
-            #print(f'The Symbol is {symbol}')
-
-            # Prepare the order payload
-            place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": map_exchange(position['exchangeSegment']),
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['productType']),
-                "quantity": str(quantity)
-            }
-
-            print(place_order_payload)
-
-            # Place the order to close the position
-            _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
-
-            #print(api_response)
+def close_all_positions(token, auth):
+    """
+    Close all open positions for the authenticated user
+    """
+    try:
+        logging.info("Starting close_all_positions function")
+        positions_data, status_code = get_positions(auth)
+        
+        if status_code != 200:
+            logging.error(f"Failed to fetch positions: {positions_data}")
+            return {"status": "error", "message": "Failed to fetch positions"}, 500
             
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+        if not positions_data:
+            logging.info("No positions to close")
+            return {"status": "success", "message": "No positions to close"}, 200
+            
+        success_count = 0
+        failure_count = 0
+        
+        for position in positions_data:
+            try:
+                # Get quantity and validate
+                net_qty = position.get('net_quantity', position.get('quantity', 0))
+                if int(net_qty) == 0:
+                    continue
 
-    return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
+                # Get trading details
+                trading_symbol = position.get('tradingsymbol', position.get('trading_symbol', position.get('symbol')))
+                exchange = position.get('exchange', 'NSE').replace('_EQ', '')
+                product = position.get('product', 'MIS')
+                
+                # Determine order action
+                action = 'SELL' if int(net_qty) > 0 else 'BUY'
+                quantity = abs(int(net_qty))
 
+                # Prepare order payload
+                place_order_payload = {
+                    "apikey": token,
+                    "strategy": "Squareoff",
+                    "symbol": trading_symbol,
+                    "action": action,
+                    "exchange": exchange,
+                    "pricetype": "MARKET",
+                    "product": product,
+                    "quantity": str(quantity)
+                }
 
+                logging.info(f"Sending square-off order: {place_order_payload}")
+                
+                # Place the order
+                res, api_response, order_id = place_order_api(place_order_payload, auth)
+                logging.info(f"Square-off response: {api_response}, order_id: {order_id}")
+                
+                if api_response and api_response.get('status') == 'success':
+                    success_count += 1
+                    logging.info(f"Successfully closed position {trading_symbol}")
+                else:
+                    failure_count += 1
+                    logging.error(f"Failed to close position {trading_symbol}: {api_response}")
+                    
+            except Exception as e:
+                logging.error(f"Error processing position {position}: {str(e)}")
+                failure_count += 1
+                
+        msg = f"Squared off {success_count} positions. Failed: {failure_count}"
+        logging.info(msg)
+        return {'status': 'success', "message": msg}, 200
+                
+    except Exception as e:
+        error_msg = f"Error in close_all_positions: {str(e)}"
+        logging.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
 def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
     """
     Cancel an order by its ID using direct API call
@@ -2055,6 +2354,19 @@ def get_order_trades(orderid, auth, segment=None):
         tuple: (response data, status code)
     """
     try:
+        # Store original order information to use in case we need to create a synthetic trade
+        original_order_info = {
+            'order_id': orderid,
+            'segment': segment or 'UNKNOWN',
+            'filled_quantity': 0,  # Will be populated if we find this in the order book
+            'symbol': '',
+            'exchange': '',
+            'product': '',
+            'transaction_type': '',
+            'price': 0,
+            'status': ''
+        }
+        
         # If segment is not provided, try to determine it
         if segment is None:
             logging.info(f"No segment provided for getting trades for order {orderid}, attempting to determine from order book")
@@ -2062,49 +2374,72 @@ def get_order_trades(orderid, auth, segment=None):
                 # Get order book to find the order and determine its segment
                 order_book_result = get_order_book(auth)
                 
-                if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
+                if isinstance(order_book_result, dict) and 'data' in order_book_result:
+                    order_data = order_book_result['data']
+                elif isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
                     order_book_data = order_book_result[0]
-                    
-                    # Determine segment based on order ID pattern
-                    if orderid.startswith("GLTFO"):
-                        logging.info(f"Order ID {orderid} appears to be an FNO order based on prefix")
-                        segment = SEGMENT_FNO
+                    if isinstance(order_book_data, dict) and 'data' in order_book_data:
+                        order_data = order_book_data['data']
                     else:
-                        # Search for the order in the order book
-                        found_segment = False
-                        if isinstance(order_book_data, dict) and 'data' in order_book_data:
-                            for order in order_book_data['data']:
-                                if order.get('groww_order_id') == orderid:
-                                    # Determine segment based on order properties
-                                    if order.get('segment') == 'CASH':
-                                        segment = SEGMENT_CASH
-                                    elif order.get('segment') in ['FNO', 'F&O', 'OPTIONS', 'FUTURES']:
-                                        segment = SEGMENT_FNO
-                                    elif order.get('segment') == 'CURRENCY':
-                                        segment = SEGMENT_CURRENCY
-                                    elif order.get('segment') == 'COMMODITY':
-                                        segment = SEGMENT_COMMODITY
-                                    
-                                    found_segment = True
-                                    logging.info(f"Found order {orderid} in order book with segment {segment}")
-                                    break
-                            
-                            if not found_segment:
-                                logging.warning(f"Could not find order {orderid} in order book")
-                                # Default to CASH segment if order not found
+                        order_data = []
+                else:
+                    order_data = []
+                    
+                # Determine segment based on order ID pattern
+                if orderid.startswith("GMKFO") or orderid.startswith("GLTFO"):
+                    logging.info(f"Order ID {orderid} appears to be an FNO order based on prefix")
+                    segment = SEGMENT_FNO
+                    original_order_info['segment'] = 'FNO'
+                else:
+                    # Search for the order in the order book
+                    found_segment = False
+                    for order in order_data:
+                        # Check if this is our order
+                        if order.get('groww_order_id', order.get('orderid', '')) == orderid:
+                            # Determine segment based on order properties
+                            if order.get('segment') == 'CASH':
                                 segment = SEGMENT_CASH
+                            elif order.get('segment') in ['FNO', 'F&O', 'OPTIONS', 'FUTURES']:
+                                segment = SEGMENT_FNO
+                            elif order.get('segment') == 'CURRENCY':
+                                segment = SEGMENT_CURRENCY
+                            elif order.get('segment') == 'COMMODITY':
+                                segment = SEGMENT_COMMODITY
+                            
+                            # Store order info for synthetic trade creation if needed
+                            original_order_info['segment'] = order.get('segment', 'UNKNOWN')
+                            original_order_info['filled_quantity'] = order.get('filled_quantity', 0)
+                            original_order_info['symbol'] = order.get('trading_symbol', order.get('tradingsymbol', ''))
+                            original_order_info['exchange'] = order.get('exchange', '')
+                            original_order_info['product'] = order.get('product', '')
+                            original_order_info['transaction_type'] = order.get('transaction_type', order.get('action', ''))
+                            original_order_info['price'] = order.get('price', 0)
+                            original_order_info['status'] = order.get('status', order.get('order_status', ''))
+                            
+                            found_segment = True
+                            logging.info(f"Found order {orderid} in order book with segment {segment}")
+                            break
+                    
+                    if not found_segment:
+                        logging.warning(f"Could not find order {orderid} in order book")
+                        # If this is an executed order but we couldn't determine segment, default based on order ID
+                        if orderid.startswith("GMK"):
+                            segment = SEGMENT_CASH
+                            original_order_info['segment'] = 'CASH'
+                        else:
+                            segment = SEGMENT_CASH  # Default fallback
             except Exception as e:
                 logging.error(f"Error determining segment for order {orderid}: {e}")
-                segment = SEGMENT_CASH  # Default to CASH segment if we couldn't determine it
+                segment = SEGMENT_CASH  # Default to CASH segment
         
-        # Default to CASH segment if still not determined
+        # Fallback to CASH segment if still not determined
         if segment is None:
-            logging.warning(f"Could not determine segment for order {orderid}, defaulting to CASH segment")
+            logging.warning(f"Could not determine segment for order {orderid}, defaulting to CASH")
             segment = SEGMENT_CASH
         
         logging.info(f"Fetching trades for order {orderid} in segment {segment}")
         
-        # Prepare the API client and headers
+        # Prepare API client and headers
         client = get_httpx_client()
         headers = {
             'Authorization': f'Bearer {auth}',
@@ -2112,115 +2447,124 @@ def get_order_trades(orderid, auth, segment=None):
             'Content-Type': 'application/json'
         }
         
-        # Define pagination parameters
+        # Set API parameters
         page = 0
-        page_size = 50  # Maximum allowed by Groww API
+        page_size = 50
         
-        # Prepare the URL with the order ID and query parameters
+        # API endpoint for getting trades for an order
         url = f"{GROWW_ORDER_TRADES_URL}/{orderid}?segment={segment}&page={page}&page_size={page_size}"
         
-        # Log the request details
+        # Log request details
         logging.info(f"-------- GET ORDER TRADES REQUEST --------")
         logging.info(f"Order ID: {orderid}")
         logging.info(f"Segment: {segment}")
         logging.info(f"API URL: {url}")
-        
-        # Log request headers (excluding Authorization for security)
-        safe_headers = headers.copy()
-        if 'Authorization' in safe_headers:
-            safe_headers['Authorization'] = 'Bearer ***REDACTED***'
-        logging.info(f"Request headers: {json.dumps(safe_headers, indent=2)}")
+        logging.info(f"Request headers: {{\n  \"Authorization\": \"Bearer ***REDACTED***\",\n  \"Accept\": \"application/json\",\n  \"Content-Type\": \"application/json\"\n}}")
         
         # Make the API call
-        response_obj = client.get(
-            url,
-            headers=headers,
-            timeout=30
-        )
+        response_obj = client.get(url, headers=headers, timeout=30)
         
-        # Log the response status
+        # Log the response details
         logging.info(f"-------- GET ORDER TRADES RESPONSE --------")
         logging.info(f"Response status code: {response_obj.status_code}")
         
-        # Parse the response
         try:
+            # Parse JSON response
             response_data = response_obj.json()
-            
-            # Log the response in a readable format
             logging.info(f"Raw response: {json.dumps(response_data, indent=2)}")
             
-            # Format the response to extract trade information
-            if response_obj.status_code == 200 and 'payload' in response_data and 'trade_list' in response_data['payload']:
-                trades = response_data['payload']['trade_list']
-                logging.info(f"Found {len(trades)} trades for order {orderid}")
+            if response_obj.status_code == 200 and response_data.get('status') == 'SUCCESS':
+                # Extract trades from the response
+                trades = []
                 
-                # Transform trades data to a more consistent format
-                transformed_trades = []
-                for trade in trades:
-                    # Extract and convert relevant fields
-                    trade_item = {
-                        'trade_id': trade.get('groww_trade_id', ''),
-                        'order_id': trade.get('groww_order_id', ''),
-                        'exchange_trade_id': trade.get('exchange_trade_id', ''),
-                        'exchange_order_id': trade.get('exchange_order_id', ''),
-                        'symbol': trade.get('trading_symbol', ''),
-                        'quantity': trade.get('quantity', 0),
-                        'price': trade.get('price', 0),
-                        'trade_status': trade.get('trade_status', ''),
-                        'exchange': trade.get('exchange', ''),
-                        'segment': trade.get('segment', ''),
-                        'product': trade.get('product', ''),
-                        'transaction_type': trade.get('transaction_type', ''),
-                        'created_at': trade.get('created_at', ''),
-                        'trade_date_time': trade.get('trade_date_time', ''),
-                        'settlement_number': trade.get('settlement_number', ''),
-                        'remarks': trade.get('remark', '')
-                    }
-                    transformed_trades.append(trade_item)
+                if 'payload' in response_data and 'trade_list' in response_data['payload']:
+                    trade_list = response_data['payload']['trade_list']
+                    logging.info(f"Found {len(trade_list)} trades for order {orderid}")
+                    
+                    # Transform trades to standardized format
+                    for trade in trade_list:
+                        # Create a standardized trade object
+                        standardized_trade = {
+                            'trade_id': trade.get('groww_trade_id', ''),
+                            'order_id': trade.get('groww_order_id', orderid),
+                            'exchange_trade_id': trade.get('exchange_trade_id', ''),
+                            'exchange_order_id': trade.get('exchange_order_id', ''),
+                            'symbol': trade.get('trading_symbol', ''),
+                            'quantity': trade.get('quantity', 0),
+                            'price': trade.get('price', 0),
+                            'trade_status': trade.get('trade_status', 'EXECUTED'),
+                            'exchange': trade.get('exchange', ''),
+                            'segment': trade.get('segment', segment),
+                            'product': trade.get('product', ''),
+                            'transaction_type': trade.get('transaction_type', ''),
+                            'created_at': trade.get('created_at', ''),
+                            'trade_date_time': trade.get('trade_date_time', ''),
+                            'settlement_number': trade.get('settlement_number', ''),
+                            'remarks': trade.get('remark', None)
+                        }
+                        trades.append(standardized_trade)
                 
-                # Create a structured response
-                formatted_response = {
+                response = {
                     'status': 'success',
-                    'message': f"Successfully retrieved {len(transformed_trades)} trades for order {orderid}",
-                    'order_id': orderid,
-                    'segment': segment,
-                    'trades': transformed_trades,
-                    'raw_response': response_data  # Include raw response for debugging
+                    'message': f"Retrieved {len(trades)} trades for order {orderid}",
+                    'trades': trades,
+                    'raw_response': response_data
                 }
-                
-                return formatted_response, 200
-            
-            # Handle case where no trades are found
-            elif response_obj.status_code == 200 and 'payload' in response_data and 'trade_list' in response_data['payload']:
-                if len(response_data['payload']['trade_list']) == 0:
-                    logging.info(f"No trades found for order {orderid}")
-                    return {
-                        'status': 'success',
-                        'message': f"No trades found for order {orderid}",
+                return response, 200
+            else:
+                # If we get a 404 error for an FNO order, it's likely the API doesn't support FNO trades
+                # Create a synthetic trade if we have order information
+                if response_obj.status_code == 404 and segment == SEGMENT_FNO and original_order_info['filled_quantity'] > 0:
+                    logging.info(f"Creating synthetic trade for FNO order {orderid} as API returned 404")
+                    
+                    # If this is an executed order with filled quantity, create a synthetic trade
+                    synthetic_trade = {
+                        'trade_id': f"synthetic_{orderid}",
                         'order_id': orderid,
-                        'segment': segment,
+                        'exchange_trade_id': '',
+                        'exchange_order_id': '',
+                        'symbol': original_order_info['symbol'],
+                        'quantity': original_order_info['filled_quantity'],
+                        'price': original_order_info['price'],
+                        'trade_status': 'EXECUTED',
+                        'exchange': original_order_info['exchange'],
+                        'segment': original_order_info['segment'],
+                        'product': original_order_info['product'],
+                        'transaction_type': original_order_info['transaction_type'],
+                        'created_at': datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        'trade_date_time': datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        'settlement_number': '',
+                        'remarks': 'Synthetic trade created from executed FNO order due to API limitation'
+                    }
+                    
+                    response = {
+                        'status': 'success',
+                        'message': f"Created synthetic trade for FNO order {orderid}",
+                        'trades': [synthetic_trade],
+                        'raw_response': response_data,
+                        'synthetic': True
+                    }
+                    logging.info(f"Returning synthetic trade for order {orderid}")
+                    return response, 200
+                else:
+                    # Regular error handling
+                    error_message = response_data.get('error', {}).get('message', 'Error retrieving trades')
+                    error_details = response_data.get('error', {})
+                    
+                    logging.warning(f"Error getting trades for order {orderid}: {error_message}")
+                    if error_details:
+                        logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
+                    
+                    return {
+                        'status': 'error',
+                        'message': f"Failed to retrieve trades: {error_message}",
                         'trades': [],
                         'raw_response': response_data
-                    }, 200
-            
-            # Handle API error responses
-            else:
-                error_message = response_data.get('message', 'Error retrieving trades')
-                error_details = response_data.get('error', {})
+                    }, response_obj.status_code
                 
-                logging.warning(f"Error getting trades for order {orderid}: {error_message}")
-                if error_details:
-                    logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
-                
-                return {
-                    'status': 'error',
-                    'message': f"Failed to retrieve trades: {error_message}",
-                    'order_id': orderid,
-                    'segment': segment,
-                    'trades': [],
-                    'raw_response': response_data
-                }, response_obj.status_code
-                
+        except json.JSONDecodeError as e:
+            # Handle invalid JSON response
+            logging.error(f"Error parsing JSON response for trades for order {orderid}: {e}")
         except Exception as e:
             logging.error(f"Error parsing trades response: {e}")
             logging.error(f"Raw response content: {response_obj.content}")
