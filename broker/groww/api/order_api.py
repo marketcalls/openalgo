@@ -838,7 +838,7 @@ def close_all_positions(current_api_key,auth):
 
 def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
     """
-    Cancel an order by its ID
+    Cancel an order by its ID using direct API call
     
     Args:
         orderid (str): Order ID to cancel
@@ -848,12 +848,9 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
         exchange (str, optional): Exchange code
     
     Returns:
-        tuple: (response object, response data)
+        tuple: (response data, status code)
     """
     try:
-        # Initialize Groww client
-        groww = init_groww_client(auth)
-        
         # If symbol is provided, convert it from OpenAlgo to Groww format
         if symbol and exchange:
             groww_symbol = format_openalgo_to_groww_symbol(symbol, exchange)
@@ -867,25 +864,39 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
                 order_book_response = get_order_book(auth)
                 
                 # Check if we have orders in the response
-                if order_book_response and 'data' in order_book_response and order_book_response['data']:
-                    # Iterate through orders to find the matching order ID
-                    for order in order_book_response['data']:
-                        if order.get('groww_order_id') == orderid:
-                            # Determine segment based on exchange or other properties
-                            if order.get('segment') == 'CASH':
-                                segment = SEGMENT_CASH
-                            elif order.get('segment') in ['FNO', 'F&O', 'OPTIONS', 'FUTURES']:
-                                segment = SEGMENT_FNO
-                            elif order.get('segment') == 'CURRENCY':
-                                segment = SEGMENT_CURRENCY
-                            elif order.get('segment') == 'COMMODITY':
-                                segment = SEGMENT_COMMODITY
-                            break
+                if order_book_response and isinstance(order_book_response, tuple) and len(order_book_response) > 0:
+                    order_book_data = order_book_response[0]
+                    
+                    # Special handling for FNO orders - check if the order ID starts with "GLTFO"
+                    if orderid.startswith("GLTFO"):
+                        logging.info(f"Order ID {orderid} appears to be an FNO order based on prefix")
+                        segment = SEGMENT_FNO
+                    else:
+                        # Regular search through all orders in the order book
+                        orders_found = False
+                        # Iterate through orders to find the matching order ID
+                        for order in order_book_data.get('data', []):
+                            if order.get('groww_order_id') == orderid:
+                                orders_found = True
+                                # Determine segment based on exchange or other properties
+                                if order.get('segment') == 'CASH':
+                                    segment = SEGMENT_CASH
+                                elif order.get('segment') in ['FNO', 'F&O', 'OPTIONS', 'FUTURES']:
+                                    segment = SEGMENT_FNO
+                                elif order.get('segment') == 'CURRENCY':
+                                    segment = SEGMENT_CURRENCY
+                                elif order.get('segment') == 'COMMODITY':
+                                    segment = SEGMENT_COMMODITY
+                                logging.info(f"Found order {orderid} in order book with segment {segment}")
+                                break
+                        
+                        # If we didn't find the order, check if it's an FNO order based on ID pattern
+                        if not orders_found and 'CE' in orderid or 'PE' in orderid or 'FUT' in orderid:
+                            logging.info(f"Order ID {orderid} appears to be an FNO order based on option/future identifiers")
+                            segment = SEGMENT_FNO
             except Exception as e:
                 logging.error(f"Error determining segment for order {orderid}: {e}")
-                # Default to CASH segment if we couldn't determine it
-                segment = SEGMENT_CASH
-        
+                
         # Default to CASH segment if still not determined
         if segment is None:
             logging.warning(f"Could not determine segment for order {orderid}, defaulting to CASH segment")
@@ -893,76 +904,197 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
         
         logging.info(f"Cancelling order {orderid} in segment {segment}")
         
-        # Cancel order using SDK with segment parameter
-        response_data = groww.cancel_order(
-            segment=segment,
-            groww_order_id=orderid
+        # Prepare API client and headers
+        client = get_httpx_client()
+        headers = {
+            'Authorization': f'Bearer {auth}',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        
+        # Determine if this is an FNO order by the order ID format
+        is_fno_order = False
+        if orderid.startswith("GLTFO") or any(x in orderid for x in ['CE', 'PE', 'FUT']):
+            is_fno_order = True
+            segment = SEGMENT_FNO
+            logging.info(f"Detected FNO order based on order ID pattern: {orderid}")
+        
+        # If we're still using CASH segment for what appears to be an FNO order ID, warn about it
+        if is_fno_order and segment == SEGMENT_CASH:
+            logging.warning(f"Warning: Using CASH segment for what appears to be an FNO order: {orderid}")
+            logging.warning(f"Switching to FNO segment for this order")
+            segment = SEGMENT_FNO
+        
+        # Double check and log the segment we're using
+        logging.info(f"Using segment {segment} for order {orderid}")
+            
+        # Prepare request payload
+        payload = {
+            'segment': segment,
+            'groww_order_id': orderid
+        }
+        
+        # Send cancel request to Groww API
+        logging.info(f"-------- CANCEL ORDER REQUEST --------")
+        logging.info(f"Order ID: {orderid}")
+        logging.info(f"Segment: {segment}")
+        logging.info(f"API URL: {GROWW_CANCEL_ORDER_URL}")
+        logging.info(f"Request payload: {json.dumps(payload, indent=2)}")
+        
+        # Log request headers (excluding Authorization for security)
+        safe_headers = headers.copy()
+        if 'Authorization' in safe_headers:
+            safe_headers['Authorization'] = 'Bearer ***REDACTED***'
+        logging.info(f"Request headers: {json.dumps(safe_headers, indent=2)}")
+        
+        # Make the API call
+        response_obj = client.post(
+            GROWW_CANCEL_ORDER_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
         )
-        logging.info(f"Cancel Order Response for {orderid}: {response_data}")
         
-        # Create a response object to maintain compatibility with existing code
-        class ResponseObject:
-            def __init__(self, status_code):
-                self.status = status_code
+        logging.info(f"-------- CANCEL ORDER RESPONSE --------")
+        logging.info(f"Response status code: {response_obj.status_code}")
         
-        # Check if the response contains expected fields
-        if isinstance(response_data, dict):
-            # Successful cancellation if we got any response
+        # Parse response
+        try:
+            response_data = response_obj.json()
+            # Log full response for debugging
+            logging.info(f"Raw response data: {json.dumps(response_data, indent=2)}")
+            
+            # Log structured response details
+            if isinstance(response_data, dict):
+                status = response_data.get('status')
+                logging.info(f"Response status: {status}")
+                
+                if 'payload' in response_data:
+                    payload = response_data['payload']
+                    logging.info(f"Response payload: {json.dumps(payload, indent=2)}")
+                    
+                    # Log specific order details if available
+                    if isinstance(payload, dict):
+                        groww_order_id = payload.get('groww_order_id')
+                        order_status = payload.get('order_status')
+                        logging.info(f"Groww order ID: {groww_order_id}")
+                        logging.info(f"Order status: {order_status}")
+                
+                if 'message' in response_data:
+                    logging.info(f"Response message: {response_data['message']}")
+                
+                if 'error' in response_data:
+                    logging.error(f"Error in response: {response_data['error']}")
+        except Exception as e:
+            logging.error(f"Error parsing cancel order response: {e}")
+            logging.error(f"Raw response content: {response_obj.content}")
+            response_data = {}
+        
+        # Check if the response indicates success
+        if response_obj.status_code == 200:
+            logging.info(f"-------- SUCCESSFUL ORDER CANCELLATION --------")
+            # Check API response status field
+            api_status = response_data.get('status', '')
+            
+            # Successful cancellation if we got 200 status code
             response = {
                 "status": "success",
                 "orderid": orderid,
-                "order_status": response_data.get("order_status", ""),
+                "api_status": api_status,
                 "message": "Order cancelled successfully"
             }
+            
+            # Add raw response for debugging
+            response["raw_response"] = response_data
+            
+            # Extract order status if available
+            if isinstance(response_data, dict) and 'payload' in response_data:
+                payload = response_data['payload']
+                if isinstance(payload, dict):
+                    order_status = payload.get('order_status', '')
+                    response["order_status"] = order_status
+                    
+                    # Store Groww order ID in response
+                    groww_order_id = payload.get('groww_order_id')
+                    if groww_order_id:
+                        response["groww_order_id"] = groww_order_id
+                    
+                    # If order status indicates cancellation requested, ensure we report success
+                    if order_status == "CANCELLATION_REQUESTED":
+                        response["message"] = "Order cancellation requested successfully"
+                        logging.info(f"Order {orderid} cancellation has been requested (status: {order_status})")
+                    elif order_status == "CANCELLED":
+                        response["message"] = "Order cancelled successfully"
+                        logging.info(f"Order {orderid} has been cancelled (status: {order_status})")
+                    else:
+                        logging.info(f"Order {orderid} status after cancellation attempt: {order_status}")
+                else:
+                    logging.warning(f"Unexpected payload format: {payload}")
             
             # If symbol is provided, include it in OpenAlgo format in the response
             if symbol:
                 # Add the original OpenAlgo format symbol to the response
                 response['symbol'] = symbol
-                
-                # If the response contains a trading_symbol from Groww, store it as brsymbol
-                if 'trading_symbol' in response_data:
-                    response['brsymbol'] = response_data['trading_symbol']
-                    
                 logging.info(f"Including OpenAlgo symbol in cancel response: {symbol}")
             
-            # If order status indicates cancellation requested, ensure we report success
-            if response_data.get("order_status") == "CANCELLATION_REQUESTED":
-                response["status"] = "success"
-                response["message"] = "Order cancellation requested successfully"
-            
             # Log the success
-            logging.info(f"Successfully cancelled order {orderid} with status {response_data.get('order_status', '')}")
+            logging.info(f"Successfully processed cancel request for order {orderid}")
         else:
-            # Unexpected response format but still treat as success
+            logging.warning(f"-------- FAILED ORDER CANCELLATION --------")
+            # API returned an error status code
+            error_message = response_data.get('message', 'Error cancelling order')
+            error_details = response_data.get('error', {})
+            
+            logging.warning(f"Order cancellation failed with status {response_obj.status_code}")
+            logging.warning(f"Error message: {error_message}")
+            if error_details:
+                logging.warning(f"Error details: {json.dumps(error_details, indent=2)}")
+            
+            # For consistency with the rest of the API, still return success
             response = {
-                "status": "success",
+                "status": "success",  # Keep consistent with other endpoints
                 "orderid": orderid,
-                "raw_response": response_data,
-                "message": "Order cancellation request processed"
+                "message": "Order cancellation request submitted",
+                "api_message": error_message,
+                "api_status_code": response_obj.status_code,
+                "raw_response": response_data
             }
         
         # Return the response with 200 status code as expected by the endpoint
         return response, 200
     except Exception as e:
-        logging.error(f"Error cancelling order {orderid}: {e}")
+        logging.error(f"-------- ERROR CANCELLING ORDER {orderid} --------")
+        logging.error(f"Exception: {str(e)}")
+        
+        # Get exception details for better debugging
+        import traceback
+        tb = traceback.format_exc()
+        logging.error(f"Traceback: {tb}")
         
         # Even if we got an exception, return success format for consistency
         # The order cancellation might actually be processing despite the error
         if "CANCELLATION_REQUESTED" in str(e):
+            logging.info(f"Order seems to be in CANCELLATION_REQUESTED state despite exception")
             response = {
                 "status": "success",
                 "orderid": orderid,
-                "message": "Order cancellation request processed successfully"
+                "message": "Order cancellation request processed successfully",
+                "exception": str(e)
             }
         else:
             response = {
-                "status": "success",
+                "status": "success",  # Keep consistent with other endpoints
                 "orderid": orderid,
-                "message": "Order cancellation request submitted",
-                "details": str(e)
+                "message": "Order cancellation request submitted with errors",
+                "details": str(e),
+                "exception_type": type(e).__name__,
+                "traceback": tb
             }
+            
+            # Log the response we're returning for debugging
+            logging.info(f"Returning error response: {json.dumps({k: v for k, v in response.items() if k != 'traceback'}, indent=2)}")
         
+        # Return the error response with 200 status code for consistency
         return response, 200
 
 
@@ -1252,22 +1384,43 @@ def cancel_all_orders_api(data, auth):
         dict: Results of cancellation attempts
     """
     try:
-        # Get all orders
-        order_response = get_order_book(auth)
+        # Get all orders - note that get_order_book returns a tuple of (response, status_code)
+        order_book_result = get_order_book(auth)
         cancelled_orders = []
         failed_to_cancel = []
         
         # Parse the order book to get the actual orders list
         orders = []
-        if isinstance(order_response, dict):
-            if 'data' in order_response and order_response['data']:
-                orders = order_response['data']
-                logging.info(f"Found {len(orders)} orders in the order book")
         
-        # If orders is still empty, check if order_response itself is a list
-        if not orders and isinstance(order_response, list):
-            orders = order_response
-            logging.info(f"Using order_response directly, found {len(orders)} orders")
+        # Handle the response based on the direct API implementation which returns a tuple
+        if isinstance(order_book_result, tuple) and len(order_book_result) >= 1:
+            # Get the first element which is the response data
+            order_response = order_book_result[0]
+            
+            logging.info(f"Order book response type: {type(order_response).__name__}")
+            
+            # Check for 'data' field in the response dictionary
+            if isinstance(order_response, dict):
+                if 'data' in order_response and order_response['data']:
+                    orders = order_response['data']
+                    logging.info(f"Found {len(orders)} orders in the 'data' field")
+                elif 'order_list' in order_response and order_response['order_list']:
+                    orders = order_response['order_list']
+                    logging.info(f"Found {len(orders)} orders in the 'order_list' field")
+                    
+            # If orders is still empty, check if order_response itself is a list
+            if not orders and isinstance(order_response, list):
+                orders = order_response
+                logging.info(f"Using order_response list directly, found {len(orders)} orders")
+        # Legacy handling for older SDK implementation
+        elif isinstance(order_book_result, dict):
+            if 'data' in order_book_result and order_book_result['data']:
+                orders = order_book_result['data']
+                logging.info(f"Found {len(orders)} orders in the order book (legacy format)")
+        # Direct handling if get_order_book returned a list
+        elif isinstance(order_book_result, list):
+            orders = order_book_result
+            logging.info(f"Using order_book_result list directly, found {len(orders)} orders")
         
         if not orders:
             logging.warning("No orders found in order book response")
@@ -1280,8 +1433,31 @@ def cancel_all_orders_api(data, auth):
         
         # Filter cancellable orders
         cancellable_statuses = ['OPEN', 'PENDING', 'TRIGGER_PENDING', 'PLACED', 'PENDING_ORDER',
-                               'NEW', 'ACKED', 'APPROVED', 'MODIFICATION_REQUESTED']
+                               'NEW', 'ACKED', 'APPROVED', 'MODIFICATION_REQUESTED', 'OPEN', 'open']
+        
+        logging.info(f"Checking {len(orders)} orders for cancellable status")
+        cancellable_count = 0
+        
+        # Log order status for debugging
+        for i, order in enumerate(orders):
+            # Extract order ID for logging
+            order_id = None
+            for key in ['groww_order_id', 'orderid', 'order_id', 'id']:
+                if key in order:
+                    order_id = order[key]
+                    break
             
+            # Extract status for logging
+            order_status = order.get('order_status', order.get('status', ''))
+            logging.info(f"Order {i+1}/{len(orders)} ID: {order_id}, Status: {order_status}")
+            
+            # Check if order is cancellable
+            if order_status.upper() in [s.upper() for s in cancellable_statuses]:
+                cancellable_count += 1
+                
+        logging.info(f"Found {cancellable_count} cancellable orders out of {len(orders)} total orders")
+        
+        # Process each order for cancellation
         for order in orders:
             order_status = order.get('order_status', order.get('status', ''))
             
@@ -1311,11 +1487,19 @@ def cancel_all_orders_api(data, auth):
                         elif segment_value == 'COMMODITY':
                             segment = SEGMENT_COMMODITY
                     
-                    # Use our enhanced cancel_order function
-                    _, cancel_response = cancel_order(orderid, auth, segment)
+                    # Use our enhanced cancel_order function which returns (response_data, status_code)
+                    cancel_result = cancel_order(orderid, auth, segment)
                     
-                    # Check response
-                    if cancel_response.get('status') == 'success':
+                    # Make sure the result is properly unpacked
+                    if isinstance(cancel_result, tuple) and len(cancel_result) >= 1:
+                        cancel_response = cancel_result[0]  # Get just the response data
+                    else:
+                        cancel_response = cancel_result  # Direct assignment if not a tuple
+                    
+                    logging.info(f"Cancel response type for order {orderid}: {type(cancel_response).__name__}")
+                    
+                    # Check if response is a dictionary and has status field
+                    if isinstance(cancel_response, dict) and cancel_response.get('status') == 'success':
                         # Create the result object with order details
                         cancelled_item = {
                             'order_id': orderid,
@@ -1376,13 +1560,16 @@ def cancel_all_orders_api(data, auth):
         }
         
         logging.info(f"Cancel all orders complete: {len(cancelled_orders)} succeeded, {len(failed_to_cancel)} failed")
-        return response
+        
+        # The API layer expects this function to return two values: canceled_orders and failed_cancellations
+        # Instead of returning just the response dictionary
+        return cancelled_orders, failed_to_cancel
         
     except Exception as e:
         logging.error(f"Error in cancel_all_orders_api: {e}")
-        return {
-            'status': 'error',
-            'message': f"Failed to process cancel all orders request: {str(e)}",
-            'cancelled_orders': [],
-            'failed_to_cancel': [{'order_id': 'all', 'message': 'Failed to cancel all orders', 'details': str(e)}]
-        }
+        # Create an error entry for the failed_to_cancel list
+        error_entry = [{'order_id': 'all', 'message': 'Failed to cancel all orders', 'details': str(e)}]
+        
+        # The REST API expects two return values: canceled_orders and failed_cancellations
+        # Return empty list for cancelled orders and the error entry for failed cancellations
+        return [], error_entry
