@@ -39,6 +39,8 @@ fernet = get_encryption_key()
 auth_cache = TTLCache(maxsize=1024, ttl=30)
 # Define a separate cache for feed tokens with a 30-second TTL
 feed_token_cache = TTLCache(maxsize=1024, ttl=30)
+# Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
+broker_cache = TTLCache(maxsize=1024, ttl=3000)
 
 engine = create_engine(
     DATABASE_URL,
@@ -227,6 +229,30 @@ def verify_api_key(provided_api_key):
     except Exception as e:
         print(f"Error verifying API key: {e}")
         return None
+
+def get_broker_name(provided_api_key):
+    """Get only the broker name for a valid API key with caching"""
+    # Check if broker name is in cache
+    if provided_api_key in broker_cache:
+        return broker_cache[provided_api_key]
+    
+    # Not in cache, need to look it up
+    user_id = verify_api_key(provided_api_key)
+    
+    if user_id:
+        try:
+            auth_obj = Auth.query.filter_by(name=user_id).first()
+            if auth_obj and not auth_obj.is_revoked:
+                # Cache the broker name
+                broker_cache[provided_api_key] = auth_obj.broker
+                return auth_obj.broker
+            else:
+                print(f"No valid broker found for user_id '{user_id}'.")
+                return None
+        except Exception as e:
+            print("Error while querying the database for broker name:", e)
+            return None
+    return None
 
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
     """Get auth token, feed token (optional) and broker for a valid API key"""
