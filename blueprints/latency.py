@@ -76,7 +76,7 @@ def get_histogram_data(broker=None):
             'max_rtt': float(max_rtt)
         }
         
-        logger.info(f"Histogram data for broker {broker}: {data}")
+        # logger.info(f"Histogram data for broker {broker}: {data}")  # Commented out to reduce log verbosity
         return data
         
     except Exception as e:
@@ -128,7 +128,7 @@ def latency_dashboard():
         if broker:  # Skip None values
             broker_histograms[broker] = get_histogram_data(broker)
     
-    logger.info(f"Broker histograms data: {broker_histograms}")
+    # logger.info(f"Broker histograms data: {broker_histograms}")  # Commented out to reduce log verbosity
     
     # Format timestamps in IST
     for log in recent_logs:
