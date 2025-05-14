@@ -14,8 +14,7 @@ EXCHANGE_BSE = "BSE"
 # Segment types
 SEGMENT_CASH = "CASH"
 SEGMENT_FNO = "FNO"
-SEGMENT_CURRENCY = "CURRENCY"
-SEGMENT_COMMODITY = "COMMODITY"
+
 
 # Product types
 PRODUCT_CNC = "CNC"
@@ -158,10 +157,7 @@ def map_exchange_type(exchange):
         "NSE": EXCHANGE_NSE,
         "BSE": EXCHANGE_BSE,
         "NFO": EXCHANGE_NSE,  # NFO is part of NSE for Groww
-        "CDS": EXCHANGE_NSE,  # Assuming currency is under NSE
-        "BFO": EXCHANGE_BSE,  # BSE futures & options
-        "BCD": EXCHANGE_BSE,  # BSE currency
-        "MCX": "MCX"          # Commodities
+        "BFO": EXCHANGE_BSE  # BSE futures & options
     }
     return exchange_mapping.get(exchange.upper(), EXCHANGE_NSE)  # Default to NSE if not found
 
@@ -174,11 +170,8 @@ def map_exchange(brexchange):
     exchange_mapping = {
         EXCHANGE_NSE: "NSE",
         EXCHANGE_BSE: "BSE",
-        "NSE_CURRENCY": "CDS",
         "NSE_FNO": "NFO",
-        "BSE_FNO": "BFO",
-        "BSE_CURRENCY": "BCD",
-        "MCX": "MCX"
+        "BSE_FNO": "BFO"
     }
     return exchange_mapping.get(brexchange, "NSE")  # Default to NSE if not found
 
@@ -206,6 +199,18 @@ def reverse_map_product_type(product):
     }
     return product_mapping.get(product)  # Return None if not found
 
+def get_segment(exchange):
+    """
+    Map exchange to segment type for Groww
+    """
+    segment_mapping = {
+        "NSE": SEGMENT_CASH,
+        "BSE": SEGMENT_CASH,
+        "NFO": SEGMENT_FNO,
+        "BFO": SEGMENT_FNO
+    }
+    return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
+
 def map_segment_type(exchange):
     """
     Maps the OpenAlgo exchange to Groww segment type.
@@ -214,10 +219,7 @@ def map_segment_type(exchange):
         "NSE": SEGMENT_CASH,
         "BSE": SEGMENT_CASH,
         "NFO": SEGMENT_FNO,
-        "CDS": SEGMENT_CURRENCY,
-        "BFO": SEGMENT_FNO,
-        "BCD": SEGMENT_CURRENCY,
-        "MCX": SEGMENT_COMMODITY
+        "BFO": SEGMENT_FNO
     }
     return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
 

@@ -789,17 +789,50 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    """
+    Transform holdings data from Groww API
+    
+    Args:
+        holdings_data: Can be a list of holdings or a tuple (holdings_list, metadata)
+    
+    Returns:
+        List of transformed holdings
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Handle dictionary input with nested holdings
+    if isinstance(holdings_data, dict) and 'data' in holdings_data:
+        holdings_data = holdings_data['data'].get('holdings', [])
+    
+    # Handle tuple input (holdings list, metadata)
+    if isinstance(holdings_data, tuple):
+        holdings_data = holdings_data[0]  # Take the first element (holdings list)
+    
+    # Validate input
+    if not isinstance(holdings_data, list):
+        logger.error(f"Invalid holdings data format: {type(holdings_data)}")
+        return []
+    
     transformed_data = []
     for holdings in holdings_data:
+        # Extract symbol from trading symbol
+        symbol = holdings.get('symbol', '')
+        if not symbol and 'trading_symbol' in holdings:
+            # Try to extract symbol from trading symbol
+            symbol = holdings['trading_symbol'].replace('NSE:', '').replace('BSE:', '')
+        
         transformed_position = {
-            "symbol": holdings.get('tradingSymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('totalQty', 0),
-            "product": 'CNC',
-            "pnl": 0.0,
-            "pnlpercent": 0.0
+            "symbol": symbol,
+            "exchange": holdings.get('exchange', 'NSE'),  # Default to NSE
+            "quantity": float(holdings.get('quantity', holdings.get('totalQty', 0))),
+            "average_price": float(holdings.get('average_price', holdings.get('avgPrice', 0))),
+            "product": holdings.get('product', 'CNC'),
+            "pnl": float(holdings.get('pnl', 0)),
+            "pnlpercent": float(holdings.get('pnlpercent', 0))
         }
         transformed_data.append(transformed_position)
+    
     return transformed_data
 
     
@@ -826,18 +859,77 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item['avgCostPrice'] * item['totalQty'] for item in holdings_data)
-    totalinvvalue = sum(item['avgCostPrice'] * item['totalQty'] for item in holdings_data)
+    """
+    Calculate portfolio statistics from Groww API holdings data
+    
+    Parameters:
+    - holdings_data: Holdings data from Groww API
+    
+    Returns:
+    - Dictionary with portfolio statistics
+    """
+    # Logging for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Input holdings data type: {type(holdings_data)}")
+    logger.info(f"Input holdings data: {holdings_data}")
+    
+    # Check if holdings_data is empty or None
+    if not holdings_data:
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalpnlpercentage": 0,
+            "totalprofitandloss": 0
+        }
+    
+    # Extract holdings from the API response structure
+    if isinstance(holdings_data, dict):
+        # Check if statistics are already provided
+        if 'data' in holdings_data and 'statistics' in holdings_data['data']:
+            return holdings_data['data']['statistics']
+        
+        if 'payload' in holdings_data:
+            holdings_data = holdings_data['payload'].get('holdings', [])
+        elif 'data' in holdings_data and 'holdings' in holdings_data['data']:
+            holdings_data = holdings_data['data']['holdings']
+    
+    # Validate holdings data
+    if not isinstance(holdings_data, list):
+        logger.error(f"Invalid holdings data format: {type(holdings_data)}")
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalpnlpercentage": 0,
+            "totalprofitandloss": 0
+        }
+    
+    # Calculate total holding value
+    totalholdingvalue = 0
+    totalinvvalue = 0
     totalprofitandloss = 0
     
-    # To avoid division by zero in the case when total_investment_value is 0
+    for holding in holdings_data:
+        # Handle different possible key variations
+        quantity = float(holding.get('quantity', holding.get('qty', 0)))
+        avg_price = float(holding.get('average_price', holding.get('avgPrice', 0)))
+        
+        # Calculate holding value
+        holding_value = quantity * avg_price
+        totalholdingvalue += holding_value
+        totalinvvalue += holding_value
+        
+        # Use provided PnL if available
+        pnl = float(holding.get('pnl', 0))
+        totalprofitandloss += pnl
+    
+    # Calculate PnL percentage
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
-
+    
+    # Prepare and return statistics
     return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
+        "totalholdingvalue": round(totalholdingvalue, 2),
+        "totalinvvalue": round(totalinvvalue, 2),
+        "totalpnlpercentage": round(totalpnlpercentage, 2),
+        "totalprofitandloss": round(totalprofitandloss, 2)
     }
-
-

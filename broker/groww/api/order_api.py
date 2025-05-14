@@ -17,7 +17,7 @@ from broker.groww.mapping.transform_data import (
     # Constants
     VALIDITY_DAY, VALIDITY_IOC,
     EXCHANGE_NSE, EXCHANGE_BSE, 
-    SEGMENT_CASH, SEGMENT_FNO, SEGMENT_CURRENCY, SEGMENT_COMMODITY,
+    SEGMENT_CASH, SEGMENT_FNO,
     PRODUCT_CNC, PRODUCT_MIS, PRODUCT_NRML,
     ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_TYPE_SL, ORDER_TYPE_SLM,
     TRANSACTION_TYPE_BUY, TRANSACTION_TYPE_SELL,
@@ -1624,6 +1624,86 @@ def place_smartorder_api(data, auth):
         traceback.print_exc()
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
         return None, response, None
+
+def get_holdings(auth):
+    """
+    Fetch user's current stock holdings from Groww API
+    
+    Args:
+        auth (str): Authentication token
+    
+    Returns:
+        tuple: (holdings data, response status)
+    """
+    try:
+        # Logging for debugging
+        logging.info("===== FETCH HOLDINGS START =====")
+        
+        # Prepare headers for the API request
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {auth}',
+            'X-API-VERSION': '1.0'
+        }
+        
+        # Make the API request
+        import httpx
+        
+        with httpx.Client() as client:
+            response = client.get(
+                'https://api.groww.in/v1/holdings/user', 
+                headers=headers,
+                timeout=10.0  # 10-second timeout
+            )
+        
+        # Log the raw response
+        logging.info(f"Holdings API Response Status: {response.status_code}")
+        logging.info(f"Holdings API Response: {response.text}")
+        
+        # Check response status
+        if response.status_code != 200:
+            error_msg = f"Holdings API Error: {response.status_code} - {response.text}"
+            logging.error(error_msg)
+            return None, {"status": "error", "message": error_msg}
+        
+        # Parse the response
+        response_data = response.json()
+        
+        # Validate response structure
+        if not response_data or response_data.get('status') != 'SUCCESS':
+            error_msg = f"Invalid holdings response: {response_data}"
+            logging.error(error_msg)
+            return None, {"status": "error", "message": error_msg}
+        
+        # Transform holdings to OpenAlgo format
+        holdings = response_data.get('payload', {}).get('holdings', [])
+        formatted_holdings = []
+        
+        for holding in holdings:
+            formatted_holding = {
+                'symbol': holding.get('trading_symbol'),
+                'isin': holding.get('isin'),
+                'quantity': holding.get('quantity', 0),
+                'average_price': holding.get('average_price', 0),
+                'free_quantity': holding.get('demat_free_quantity', 0),
+                'locked_quantity': (
+                    holding.get('demat_locked_quantity', 0) + 
+                    holding.get('groww_locked_quantity', 0)
+                ),
+                'pledged_quantity': holding.get('pledge_quantity', 0),
+                't1_quantity': holding.get('t1_quantity', 0)
+            }
+            formatted_holdings.append(formatted_holding)
+        
+        logging.info(f"Processed {len(formatted_holdings)} holdings")
+        
+        return formatted_holdings, {"status": "success"}
+    
+    except Exception as e:
+        error_msg = f"Error fetching holdings: {str(e)}"
+        logging.error(error_msg, exc_info=True)
+        return None, {"status": "error", "message": error_msg}
+
 
 def close_all_positions(token=None, auth=None):
     logging.info(f"Starting close_all_positions")
