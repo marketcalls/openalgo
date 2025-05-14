@@ -394,6 +394,7 @@ def download_groww_instrument_data(output_path):
     """
     Downloads Groww instrument data CSV, replaces headers with expected ones,
     and saves it to the specified output directory.
+    Uses shared httpx client with connection pooling for efficient downloads.
     """
     print("Downloading Groww Instrument Data...")
 
@@ -409,27 +410,30 @@ def download_groww_instrument_data(output_path):
     expected_headers = headers_csv.split(",")
 
     try:
-        with httpx.Client() as client:
-            response = client.get(csv_url)
-            response.raise_for_status()
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        # Make the API request using the shared client
+        response = client.get(csv_url)
+        response.raise_for_status()
 
-            content = response.text
-            if ',' in content and len(content.splitlines()) > 1:
-                # Read CSV using pandas
-                df = pd.read_csv(StringIO(content))
+        content = response.text
+        if ',' in content and len(content.splitlines()) > 1:
+            # Read CSV using pandas
+            df = pd.read_csv(StringIO(content))
 
-                # Replace headers if column count matches
-                if len(df.columns) == len(expected_headers):
-                    df.columns = expected_headers
-                else:
-                    raise ValueError("Downloaded CSV column count does not match expected headers.")
-
-                # Save with new headers
-                df.to_csv(file_path, index=False)
-                print(f"Successfully saved instruments CSV to: {file_path}")
-                return [file_path]
+            # Replace headers if column count matches
+            if len(df.columns) == len(expected_headers):
+                df.columns = expected_headers
             else:
-                raise ValueError("Downloaded content does not appear to be a valid CSV.")
+                raise ValueError("Downloaded CSV column count does not match expected headers.")
+
+            # Save with new headers
+            df.to_csv(file_path, index=False)
+            print(f"Successfully saved instruments CSV to: {file_path}")
+            return [file_path]
+        else:
+            raise ValueError("Downloaded content does not appear to be a valid CSV.")
     except Exception as e:
         print(f"Failed to download or process Groww instrument data: {e}")
         raise

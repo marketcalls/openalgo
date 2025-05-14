@@ -18,7 +18,7 @@ def authenticate_broker(code):
     """
     try:
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-        BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
+        #BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
         
         # Get the shared httpx client with connection pooling

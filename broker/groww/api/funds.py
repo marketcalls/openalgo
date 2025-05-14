@@ -3,26 +3,48 @@
 import os
 import json
 import logging
-
-try:
-    from growwapi import GrowwAPI
-except ImportError:
-    logging.warning("growwapi package not found. Please install it using 'pip install growwapi'.")
+import httpx
+from utils.httpx_client import get_httpx_client
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Groww API using the provided auth token."""
+    """Fetch margin data directly from Groww API using the provided auth token."""
     print(f"Getting margin data with token: {auth_token}...")
     
     try:
-        # Initialize Groww API client
-        groww = GrowwAPI(auth_token)
+        # Define the API endpoint for user margin details
+        url = "https://api.groww.in/v1/margins/detail/user"
         
-        # Get available margin details
-        margin_data = groww.get_available_margin_details()
-        print(f"Funds Details: {margin_data}")
+        # Set up headers with authentication token
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {auth_token}'
+        }
+        
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        # Make the API request using the shared client
+        response = client.get(url, headers=headers)
+        
+        # Check if the request was successful
+        if response.status_code != 200:
+            print(f"Error fetching margin data: HTTP {response.status_code} - {response.text}")
+            return {}
+        
+        # Parse the JSON response
+        response_data = response.json()
+        print(f"Funds Details: {response_data}")
+        
+        # Check if the response was successful according to Groww's status field
+        if response_data.get('status') != 'SUCCESS':
+            print(f"Error fetching margin data: {response_data.get('status')}")
+            return {}
+        
+        # Extract the margin data from the payload
+        margin_data = response_data.get('payload', {})
         
         if not margin_data:
-            print("Error fetching margin data: Empty response")
+            print("Error fetching margin data: Empty payload")
             return {}
             
         # Create position data structure to calculate P&L
@@ -40,6 +62,10 @@ def get_margin_data(auth_token):
             # Default to zeros if unable to fetch
             total_unrealised = 0
             total_realised = 0
+        
+        # Extract equity and F&O margin details
+        equity_margin_details = margin_data.get('equity_margin_details', {})
+        fno_margin_details = margin_data.get('fno_margin_details', {})
         
         # Construct and return the processed margin data in the standard format
         # Map Groww API response fields to the expected structure
@@ -61,22 +87,23 @@ def get_margin_data(auth_token):
             
             # Additional Groww-specific fields that might be useful
             "brokerage_and_charges": "{:.2f}".format(margin_data.get('brokerage_and_charges', 0)),
+            "adhoc_margin": "{:.2f}".format(margin_data.get('adhoc_margin', 0)),
             
             # Add equity and F&O specific balances for additional details
             "equity_cnc_balance": "{:.2f}".format(
-                margin_data.get('equity_margin_details', {}).get('cnc_balance_available', 0)
+                equity_margin_details.get('cnc_balance_available', 0)
             ),
             "equity_mis_balance": "{:.2f}".format(
-                margin_data.get('equity_margin_details', {}).get('mis_balance_available', 0)
+                equity_margin_details.get('mis_balance_available', 0)
             ),
             "fno_futures_balance": "{:.2f}".format(
-                margin_data.get('fno_margin_details', {}).get('future_balance_available', 0)
+                fno_margin_details.get('future_balance_available', 0)
             ),
             "fno_option_buy_balance": "{:.2f}".format(
-                margin_data.get('fno_margin_details', {}).get('option_buy_balance_available', 0)
+                fno_margin_details.get('option_buy_balance_available', 0)
             ),
             "fno_option_sell_balance": "{:.2f}".format(
-                margin_data.get('fno_margin_details', {}).get('option_sell_balance_available', 0)
+                fno_margin_details.get('option_sell_balance_available', 0)
             ),
         }
         return processed_margin_data
