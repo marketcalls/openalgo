@@ -694,19 +694,37 @@ def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
         # Get tradingsymbol with fallbacks
-        broker_symbol = position.get('tradingsymbol', position.get('trading_symbol', position.get('symbol', '')))
+        # Make sure we explicitly check for the trading_symbol field which is in the Groww API response
+        trading_symbol = position.get('trading_symbol', '')
+        broker_symbol = position.get('tradingsymbol', trading_symbol)
+        if not broker_symbol:
+            broker_symbol = position.get('symbol', '')
+            
+        # Ensure broker_symbol is a string, not None
+        broker_symbol = str(broker_symbol) if broker_symbol is not None else ''
         exchange = position.get('exchange', 'NSE')
         segment = position.get('segment', '')
         
+        # For debugging
+        logging.info(f"Processing position with trading_symbol: {trading_symbol}, broker_symbol: {broker_symbol}, segment: {segment}")
+        
         # Determine proper exchange based on segment and symbol pattern
-        if segment == 'FNO' or any(marker in broker_symbol for marker in ['CE', 'PE', 'FUT']):
+        if segment == 'FNO' or (broker_symbol and any(marker in broker_symbol for marker in ['CE', 'PE', 'FUT'])):
             exchange = 'NFO'
         else:
             exchange = 'NSE'
         
         # Try to get token from position data if available
         token = position.get('token', position.get('instrument_token', None))
-        symbol = broker_symbol
+        
+        # For cash segment, use the trading_symbol directly
+        if segment == 'CASH' or exchange == 'NSE':
+            symbol = broker_symbol
+            # Ensure we have a trading symbol for cash segment
+            if not symbol and 'trading_symbol' in position:
+                symbol = position['trading_symbol']
+        else:
+            symbol = broker_symbol
         
         # Try to get OpenAlgo symbol from database
         try:

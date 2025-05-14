@@ -736,40 +736,54 @@ def get_positions(auth):
                         # Handle symbol conversion for consistency with orderbook
                         # This is primarily for FNO instruments, but we'll check all symbols
                         try:
-                            # For Options: Convert from Groww format to OpenAlgo format
-                            groww_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
-                            match = groww_pattern.match(groww_symbol)
+                            # Import get_oa_symbol from token_db with fallback paths
+                            try:
+                                from database.token_db import get_oa_symbol
+                            except ImportError:
+                                from openalgo.database.token_db import get_oa_symbol
                             
-                            if match:
-                                # Extract components
-                                symbol_name, year, month_num, day, strike, option_type = match.groups()
-                                
-                                # Convert numeric month to alphabetic
-                                months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-                                month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
-                                
-                                # Format as OpenAlgo expects: NIFTY15MAY2526650CE
-                                openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                logging.info(f"Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}")
+                            # First try database lookup for any symbol
+                            db_symbol = get_oa_symbol(groww_symbol, 'NFO')
+                            if db_symbol:
+                                openalgo_symbol = db_symbol
+                                logging.info(f"Database: Converted Groww symbol: {groww_symbol} -> {openalgo_symbol}")
                                 symbol_converted = True
-                            
-                            # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
                             else:
-                                future_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?')
-                                match = future_pattern.match(groww_symbol)
+                                # Pattern matching fallbacks if database lookup fails
+                                # 1. Try option pattern
+                                option_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
+                                option_match = option_pattern.match(groww_symbol)
                                 
-                                if match:
+                                if option_match:
                                     # Extract components
-                                    symbol_name, year, month_num, day = match.groups()
+                                    symbol_name, year, month_num, day, strike, option_type = option_match.groups()
                                     
                                     # Convert numeric month to alphabetic
                                     months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
                                     month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
                                     
-                                    # Format as OpenAlgo expects: NIFTY29MAY25FUT
-                                    openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                    logging.info(f"Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                    # Format as OpenAlgo expects: NIFTY15MAY2526650CE
+                                    openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
+                                    logging.info(f"Pattern: Converted Groww option symbol: {groww_symbol} -> {openalgo_symbol}")
                                     symbol_converted = True
+                                else:
+                                    # 2. Try futures pattern
+                                    future_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(?:FUT)?')
+                                    future_match = future_pattern.match(groww_symbol)
+                                    
+                                    if future_match:
+                                        # Extract components
+                                        symbol_name, year, month_num, day = future_match.groups()
+                                        
+                                        # Convert numeric month to alphabetic
+                                        months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+                                        month_name = months[int(month_num) - 1] if 1 <= int(month_num) <= 12 else f"M{month_num}"
+                                        
+                                        # Format as OpenAlgo expects: NIFTY29MAY25FUT
+                                        openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
+                                        logging.info(f"Pattern: Converted Groww futures symbol: {groww_symbol} -> {openalgo_symbol}")
+                                        symbol_converted = True
+                        
                         except Exception as e:
                             logging.error(f"Error converting position symbol: {e}")
                             # Fall back to original symbol if conversion fails
@@ -786,10 +800,16 @@ def get_positions(auth):
                             openalgo_exchange = exchange
                             
                         # Create position object in OpenAlgo format
+                        # For CASH segment, use the original trading_symbol as the symbol
+                        if position.get('segment') == 'CASH':
+                            position_symbol = position.get('trading_symbol', groww_symbol)  # Use trading_symbol for cash segment
+                        else:
+                            position_symbol = openalgo_symbol  # Use converted symbol for other segments
+                            
                         transformed_position = {
                             # Standard OpenAlgo fields
-                            'symbol': openalgo_symbol,
-                            'tradingsymbol': openalgo_symbol,
+                            'symbol': position_symbol,
+                            'tradingsymbol': position_symbol,
                             'exchange': openalgo_exchange,
                             'product': position.get('product', ''),
                             'quantity': net_qty,
@@ -854,11 +874,25 @@ def get_positions(auth):
                             # Handle FNO symbol conversion
                             if position.get('segment') == 'FNO' or position.get('exchange') == 'NFO':
                                 try:
-                                    # For Options: Convert from Groww format to OpenAlgo format
-                                    # Groww format: "NIFTY25051334000CE" or "BANKNIFTY25051332500PE"
-                                    # OpenAlgo format: "NIFTY13MAY2534000CE" or "BANKNIFTY13MAY2532500PE"
-                                    groww_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
-                                    match = groww_pattern.match(groww_symbol)
+                                    # Import get_oa_symbol with fallback paths
+                                    try:
+                                        from database.token_db import get_oa_symbol
+                                    except ImportError:
+                                        from openalgo.database.token_db import get_oa_symbol
+                                    
+                                    # First try database lookup for this FNO symbol
+                                    db_symbol = get_oa_symbol(groww_symbol, 'NFO')
+                                    if db_symbol:
+                                        openalgo_symbol = db_symbol
+                                        logging.info(f"Database: Converted Groww FNO symbol: {groww_symbol} -> {openalgo_symbol}")
+                                        symbol_converted = True
+                                    else:
+                                        # Fallback to pattern matching if database lookup fails
+                                        # For Options: Convert from Groww format to OpenAlgo format
+                                        # Groww format: "NIFTY25051334000CE" or "BANKNIFTY25051332500PE"
+                                        # OpenAlgo format: "NIFTY13MAY2534000CE" or "BANKNIFTY13MAY2532500PE"
+                                        groww_pattern = re.compile(r'([A-Z]+)(\d{2})(\d{2})(\d{2})(\d+)([CP]E)')
+                                        match = groww_pattern.match(groww_symbol)
                                     
                                     if match:
                                         # Extract components
@@ -870,7 +904,7 @@ def get_positions(auth):
                                         
                                         # Format as OpenAlgo expects: NIFTY15MAY2526650CE
                                         openalgo_symbol = f"{symbol_name}{day}{month_name}{year}{strike}{option_type}"
-                                        logging.info(f"Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                        logging.info(f"Pattern: Converted Groww option position symbol: {groww_symbol} -> {openalgo_symbol}")
                                         symbol_converted = True
                                     
                                     # For Futures: Convert from "NIFTY2551FUT" to "NIFTY29MAY25FUT"
@@ -888,7 +922,7 @@ def get_positions(auth):
                                             
                                             # Format as OpenAlgo expects: NIFTY29MAY25FUT
                                             openalgo_symbol = f"{symbol_name}{day}{month_name}{year}FUT"
-                                            logging.info(f"Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}")
+                                            logging.info(f"Pattern: Converted Groww futures position symbol: {groww_symbol} -> {openalgo_symbol}")
                                             symbol_converted = True
                                 except Exception as e:
                                     logging.error(f"Error converting position symbol: {e}")
@@ -1531,6 +1565,10 @@ def place_smartorder_api(data,auth):
         
         return res , response, orderid
 def close_all_positions(token, auth):
+    try:
+        from database.token_db import get_br_symbol
+    except ImportError:
+        from openalgo.database.token_db import get_br_symbol
     """
     Close all open positions for the authenticated user
     """
@@ -1542,28 +1580,62 @@ def close_all_positions(token, auth):
             logging.error(f"Failed to fetch positions: {positions_data}")
             return {"status": "error", "message": "Failed to fetch positions"}, 500
             
-        if not positions_data:
+        if not positions_data or 'data' not in positions_data:
             logging.info("No positions to close")
             return {"status": "success", "message": "No positions to close"}, 200
-            
+        
+        # Ensure we're using the data from the positions_data
+        positions = positions_data.get('data', [])
+        
         success_count = 0
         failure_count = 0
+        detailed_results = []
         
-        for position in positions_data:
+        logging.info(f"Total positions to process: {len(positions)}")
+        
+        for position in positions:
             try:
+                # Extensive logging of position details
+                logging.info(f"Processing position: {json.dumps(position, indent=2)}")
+
                 # Get quantity and validate
                 net_qty = position.get('net_quantity', position.get('quantity', 0))
+                logging.info(f"Net Quantity: {net_qty}")
+                
                 if int(net_qty) == 0:
+                    logging.info(f"Skipping position with zero net quantity")
                     continue
 
                 # Get trading details
                 trading_symbol = position.get('tradingsymbol', position.get('trading_symbol', position.get('symbol')))
-                exchange = position.get('exchange', 'NSE').replace('_EQ', '')
+                exchange = position.get('exchange', 'NSE').replace('_EQ', '').replace('_FO', '')
                 product = position.get('product', 'MIS')
+                segment = position.get('segment', '')
+
+                # Retrieve broker symbol from database
+                br_symbol = get_br_symbol(trading_symbol, exchange)
+                if br_symbol:
+                    trading_symbol = br_symbol
+                    logging.info(f"Retrieved broker symbol: {br_symbol}")
+                else:
+                    logging.warning(f"No broker symbol found for {trading_symbol} in {exchange}")
                 
+                # Extensive logging of trading details
+                logging.info(f"Trading Symbol: {trading_symbol}")
+                logging.info(f"Exchange: {exchange}")
+                logging.info(f"Product: {product}")
+                logging.info(f"Segment: {segment}")
+
                 # Determine order action
                 action = 'SELL' if int(net_qty) > 0 else 'BUY'
                 quantity = abs(int(net_qty))
+
+                # Special handling for FNO segment with more logging
+                if segment.upper() == 'FO' or 'FNO' in exchange.upper() or 'NFO' in exchange.upper():
+                    logging.info(f"Detected FNO/Derivative segment for {trading_symbol}")
+                    exchange = 'NFO'
+                    product = 'MIS'  # Ensure MIS for derivatives
+                    logging.info(f"Updated Exchange to {exchange}, Product to {product}")
 
                 # Prepare order payload
                 place_order_payload = {
@@ -1577,26 +1649,60 @@ def close_all_positions(token, auth):
                     "quantity": str(quantity)
                 }
 
-                logging.info(f"Sending square-off order: {place_order_payload}")
+                logging.info(f"Prepared square-off order payload: {json.dumps(place_order_payload, indent=2)}")
                 
                 # Place the order
                 res, api_response, order_id = place_order_api(place_order_payload, auth)
                 logging.info(f"Square-off response: {api_response}, order_id: {order_id}")
                 
+                # Enhanced logging for detailed tracking
+                result_entry = {
+                    'symbol': trading_symbol,
+                    'segment': segment,
+                    'quantity': quantity,
+                    'action': action,
+                    'order_id': order_id,
+                    'response': api_response,
+                    'exchange': exchange,
+                    'product': product
+                }
+                
+                # Handle 400 Bad Request more gracefully
                 if api_response and api_response.get('status') == 'success':
                     success_count += 1
-                    logging.info(f"Successfully closed position {trading_symbol}")
+                    result_entry['status'] = 'success'
+                    logging.info(f"Successfully closed position {trading_symbol} in {segment} segment")
+                elif api_response and api_response.get('message', '').startswith('API error: 400'):
+                    # Specific handling for 400 Bad Request
+                    logging.error(f"400 Bad Request for {trading_symbol}. Possible symbol mismatch or invalid order parameters.")
+                    failure_count += 1
+                    result_entry['status'] = 'error'
+                    result_entry['error_details'] = 'Invalid order parameters'
                 else:
                     failure_count += 1
-                    logging.error(f"Failed to close position {trading_symbol}: {api_response}")
+                    result_entry['status'] = 'failed'
+                    logging.error(f"Failed to close position {trading_symbol} in {segment} segment: {api_response}")
+                
+                detailed_results.append(result_entry)
                     
             except Exception as e:
                 logging.error(f"Error processing position {position}: {str(e)}")
+                import traceback
+                logging.error(traceback.format_exc())
                 failure_count += 1
+                detailed_results.append({
+                    'symbol': trading_symbol,
+                    'status': 'error',
+                    'error_message': str(e)
+                })
                 
         msg = f"Squared off {success_count} positions. Failed: {failure_count}"
         logging.info(msg)
-        return {'status': 'success', "message": msg}, 200
+        return {
+            'status': 'success', 
+            "message": msg, 
+            "detailed_results": detailed_results
+        }, 200
                 
     except Exception as e:
         error_msg = f"Error in close_all_positions: {str(e)}"
