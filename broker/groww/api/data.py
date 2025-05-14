@@ -699,7 +699,8 @@ class BrokerData:
                             df = weekly_df
                     
                     # Now get Unix timestamps from the properly aligned IST datetime index
-                    unix_timestamps_ist = [int(dt.timestamp()) for dt in df.index]
+                    #unix_timestamps_ist = [int(dt.timestamp()) for dt in df.index]
+                    unix_timestamps_ist = [int((dt + timedelta(hours=5, minutes=30)).timestamp()) for dt in df.index]
                     if unix_timestamps_ist:
                         logger.info(f'Unix timestamps (showing proper market hours): {unix_timestamps_ist[:min(5, len(unix_timestamps_ist))]}...')
                 except Exception as e:
