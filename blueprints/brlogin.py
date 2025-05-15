@@ -197,6 +197,25 @@ def broker_callback(broker,para=None):
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='tradejini':
+        if request.method == 'GET':
+            return render_template('tradejini.html')
+        
+        elif request.method == 'POST':
+            password = request.form.get('password')
+            twofa = request.form.get('twofa')
+            twofatype = request.form.get('twofatype')
+            
+            # Get auth token using individual token service
+            auth_token, error_message = auth_function(password=password, twofa=twofa, twofa_type=twofatype)
+            
+            if auth_token:
+                return handle_auth_success(auth_token, session['user'], broker)
+            else:
+                return render_template('tradejini.html', error=error_message)
+        
+        forward_url = 'broker.html'
+        
     elif broker=='icici':
         full_url = request.full_path
         print(f'Full URL: {full_url}') 
