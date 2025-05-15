@@ -1,6 +1,6 @@
 import os
-import http.client
 import json
+from utils.httpx_client import get_httpx_client
 
 def calculate_pnl(entry):
     """Calculate realized and unrealized PnL for a given entry."""
@@ -8,65 +8,67 @@ def calculate_pnl(entry):
     realized_pnl = (float(entry.get("daysellavgprc", 0)) - float(entry.get("daybuyavgprc", 0))) * float(entry.get("daysellqty", 0))
     return realized_pnl, unrealized_pnl
 
-def fetch_data(endpoint, payload, headers, conn):
-    """Send a POST request and return the parsed JSON response."""
-    conn.request("POST", endpoint, payload, headers)
-    response = conn.getresponse()
-    return json.loads(response.read().decode("utf-8"))
-
 def get_margin_data(auth_token):
-    """Fetch and process margin and position data."""
-    url = "piconnect.flattrade.in"
-    full_api_key = os.getenv('BROKER_API_KEY')
-    userid = full_api_key.split(':::')[0]
-    actid = userid
-
-    # Prepare payload
-    data = {"uid": userid, "actid": actid}
-    payload = f"jData={json.dumps(data)}&jKey={auth_token}"
-    headers = {'Content-Type': 'application/json'}
-
-    # Initialize HTTP connection
-    conn = http.client.HTTPSConnection(url)
-
-    # Fetch margin data
-    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, conn)
+    """Fetch margin data from Tradejini's API
     
-    # Check if the request was successful
-    if margin_data.get('stat') != 'Ok':
-        # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('emsg')}")
-        return {}
-
-    # Fetch position data
-    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, conn)
-    
-    total_realised = 0
-    total_unrealised = 0
-
-    # Process position data if it's a list
-    if isinstance(position_data, list):
-        for entry in position_data:
-            realized_pnl, unrealized_pnl = calculate_pnl(entry)
-            total_realised += realized_pnl
-            total_unrealised += unrealized_pnl
-
+    Args:
+        auth_token (str): The authentication token
+        
+    Returns:
+        dict: Processed margin data in OpenAlgo format
+    """
     try:
-        # Calculate total_available_margin as the sum of 'cash' and 'payin'
-        total_available_margin = float(margin_data.get('cash',0)) + float(margin_data.get('payin',0)) - float(margin_data.get('marginused',0))
-        total_collateral = float(margin_data.get('brkcollamt',0))
-        total_used_margin = float(margin_data.get('marginused',0))
-
-        # Construct and return the processed margin data
-        processed_margin_data = {
-            "availablecash": "{:.2f}".format(total_available_margin),
-            "collateral": "{:.2f}".format(total_collateral),
-            "m2munrealized": "{:.2f}".format(total_unrealised),
-            "m2mrealized": "{:.2f}".format(total_realised),
-            "utiliseddebits": "{:.2f}".format(total_used_margin),
+        # Get API key from environment
+        api_key = os.getenv('BROKER_API_SECRET')
+        if not api_key:
+            print("Error: BROKER_API_SECRET not set")
+            return {}
+            
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Set up authentication header
+        auth_header = f"{api_key}:{auth_token}"
+        headers = {
+            'Authorization': f'Bearer {auth_header}',
+            'Content-Type': 'application/json'
         }
+        
+        # Make request to get limits
+        response = client.get(
+            'https://api.tradejini.com/v2/api/oms/limits',
+            headers=headers
+        )
+        
+        # Print response for debugging
+        print('Tradejini Funds Response:', response.status_code)
+        print('Tradejini Funds Data:', response.text)
+        
+        if response.status_code != 200:
+            print(f"Error fetching margin data: {response.text}")
+            return {}
+            
+        data = response.json()
+        
+        # Check if response is valid
+        if data.get('s') != 'ok' or 'd' not in data:
+            print(f"Invalid response format: {data}")
+            return {}
+            
+        # Extract margin details
+        margin = data['d']
+        
+        # Map Tradejini response to OpenAlgo format
+        processed_margin_data = {
+            "availablecash": "{:.2f}".format(float(margin.get('availMargin', 0))),
+            "collateral": "{:.2f}".format(float(margin.get('stockCollateral', 0))),
+            "m2munrealized": "{:.2f}".format(float(margin.get('unrealizedPnL', 0))),
+            "m2mrealized": "{:.2f}".format(float(margin.get('realizedPnl', 0))),
+            "utiliseddebits": "{:.2f}".format(float(margin.get('marginUsed', 0))),
+        }
+        
         return processed_margin_data
-    except KeyError as e:
-        # Log the exception and return an empty dictionary if there's an unexpected error
+        
+    except Exception as e:
         print(f"Error processing margin data: {str(e)}")
         return {}
