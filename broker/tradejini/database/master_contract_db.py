@@ -1,5 +1,5 @@
 import os
-import requests
+import httpx
 import pandas as pd
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
@@ -10,7 +10,8 @@ try:
 except ImportError:
     socketio = None
 
-
+# Create a shared httpx client for connection pooling
+client = httpx.Client(timeout=30.0)
 
 # Database setup
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
@@ -77,628 +78,340 @@ def copy_from_dataframe(df):
         print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-# Define the Flattrade URLs for downloading the symbol files
-flattrade_urls = {
-    "NSE": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/NSE_Equity.csv",
-    "NFO_EQ": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Equity_Derivatives.csv",
-    "NFO_IDX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Index_Derivatives.csv",
-    "CDS": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Currency_Derivatives.csv",
-    "MCX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Commodity.csv",
-    "BSE": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/BSE_Equity.csv",
-    "BFO_IDX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Index_Derivatives.csv",
-    "BFO_EQ": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Equity_Derivatives.csv"
-}
+# Define Tradejini API endpoints
+TRADEJINI_BASE_URL = 'https://api.tradejini.com/v2'
+SCRIP_GROUPS_URL = f'{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store'
+SCRIP_DATA_URL = f'{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store/{{group}}'
 
-def download_csv_data(output_path):
-    """
-    Downloads CSV files directly to the tmp folder.
-    """
-    print("Downloading CSV Data")
-
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-
-    downloaded_files = []
-
-    for key, url in flattrade_urls.items():
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                print(f"Successfully downloaded {key} from {url}")
-                output_file = os.path.join(output_path, f"{key}.csv")
-                with open(output_file, 'wb') as f:
-                    f.write(response.content)
-                downloaded_files.append(f"{key}.csv")
-            else:
-                print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
-        except Exception as e:
-            print(f"Error downloading {key} from {url}: {e}")
-
-    # Combine NFO and BFO files
-    combine_nfo_files(output_path)
-    combine_bfo_files(output_path)
-
-    return downloaded_files
-
-# Placeholder functions for processing data
-
-def process_flattrade_nse_data(output_path):
-    """
-    Processes the Flattrade NSE data (NSE_Equity.csv) to generate OpenAlgo symbols.
-    Separates EQ, BE symbols, and Index symbols.
-    """
-    print("Processing Flattrade NSE Data")
-    file_path = f'{output_path}/NSE.csv'
-
+def get_scrip_groups():
+    """Fetch available scrip groups from Tradejini API"""
+    print("Fetching scrip groups")
     try:
-        # Read the CSV file once
-        df = pd.read_csv(file_path)
+        # Add version=0 parameter to force fresh data
+        params = {'version': '0'}
+        response = client.get(SCRIP_GROUPS_URL, params=params)
+        response.raise_for_status()
+        data = response.json()
+        print(f"Received scrip groups data: {data}")
         
-        if df.empty:
-            print("Warning: NSE CSV file is empty")
-            return pd.DataFrame()  # Return empty DataFrame if file is empty
-            
-        print("Available columns in NSE CSV:", df.columns.tolist())
-
-        # Validate required columns
-        required_columns = ['Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns in NSE CSV: {missing_columns}")
-
-        # Rename columns to match your schema
-        column_mapping = {
-            'Token': 'token',
-            'Lotsize': 'lotsize',
-            'Symbol': 'name',
-            'Tradingsymbol': 'brsymbol',
-            'Instrument': 'instrumenttype',
-            'Expiry': 'expiry',
-            'Strike': 'strike',
-            'Optiontype': 'optiontype'
-        }
+        # Extract symbolStore array from response
+        if isinstance(data, dict) and 's' in data and data['s'] == 'ok':
+            if 'd' in data and 'symbolStore' in data['d']:
+                return data['d']['symbolStore']
         
-        df = df.rename(columns=column_mapping)
-
-        # Fill NaN values in required fields
-        df['name'] = df['name'].fillna('')
-        df['brsymbol'] = df['brsymbol'].fillna('')
-        df['token'] = df['token'].fillna('').astype(str)
-        
-        # Remove rows where brsymbol is empty (required field)
-        df = df[df['brsymbol'] != '']
-        
-        # Add missing columns
-        df['symbol'] = df['brsymbol'].copy()  # Initialize 'symbol' with 'brsymbol'
-        df['tick_size'] = 0.05  # Default tick size for NSE
-
-        # Apply transformation for OpenAlgo symbols
-        def get_openalgo_symbol(broker_symbol):
-            if pd.isna(broker_symbol) or not broker_symbol:  # Handle NaN and empty values
-                return broker_symbol  # Return as is, will be filtered out later
-            broker_symbol = str(broker_symbol)  # Convert to string to ensure string operations work
-            # Separate by hyphen and apply logic for EQ and BE
-            if '-EQ' in broker_symbol:
-                return broker_symbol.replace('-EQ', '')
-            elif '-BE' in broker_symbol:
-                return broker_symbol.replace('-BE', '')
-            else:
-                # For other symbols (including index), OpenAlgo symbol remains the same as broker symbol
-                return broker_symbol
-
-        # Update the 'symbol' column
-        df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
-
-        # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
-        df['instrumenttype'] = df['instrumenttype'].fillna('EQ')  # Fill NaN values with 'EQ'
-        df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
-        df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
-
-        # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-        df['expiry'] = df.get('expiry', '').fillna('')
-        df['strike'] = pd.to_numeric(df.get('strike', pd.Series([-1] * len(df))), errors='coerce').fillna(-1)
-
-        # Ensure the instrument type is consistent
-        df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'EQ' if x in ['EQ', 'BE'] else x)
-
-        # Handle missing or invalid numeric values in 'lotsize'
-        df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(1).astype(int)  # Default lotsize to 1
-
-        # Reorder the columns to match the database structure
-        columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-        df_filtered = df[columns_to_keep]
-
-        # Final validation - remove any rows with empty required fields
-        df_filtered = df_filtered[
-            (df_filtered['symbol'].notna()) & 
-            (df_filtered['brsymbol'].notna()) & 
-            (df_filtered['token'].notna()) & 
-            (df_filtered['symbol'] != '') & 
-            (df_filtered['brsymbol'] != '') & 
-            (df_filtered['token'] != '')
-        ]
-
-        df_filtered['symbol'] = df_filtered['symbol'].replace({
-            'Nifty 50': 'NIFTY',
-            'Nifty Bank': 'BANKNIFTY',
-            'Nifty Fin': 'FINNIFTY',
-            'Nifty Next 50': 'NIFTYNXT50',
-            'NIFTY MID SELECT': 'MIDCPNIFTY',
-            'INDIAVIX': 'INDIAVIX'
-        })
-
-      
-        print(f"Successfully processed {len(df_filtered)} NSE records")
-        return df_filtered
-        
+        print(f"Unexpected response format: {data}")
+        return []
     except Exception as e:
-        print(f"Error processing NSE data: {str(e)}")
-        raise  # Re-raise the exception after logging
+        print(f"Error fetching scrip groups: {e}")
+        return []
 
-def process_flattrade_nfo_data(output_path):
-    """
-    Processes the Flattrade NFO data (NFO.csv) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
-    """
-    print("Processing Flattrade NFO Data")
-    file_path = f'{output_path}/NFO.csv'
+def get_scrip_data(scrip_group):
+    """Fetch scrip data for a specific group"""
+    print(f"Fetching scrip data for {scrip_group}")
+    try:
+        # Add version=0 parameter to force fresh data
+        params = {'version': '0'}
+        response = client.get(SCRIP_DATA_URL.format(group=scrip_group), params=params)
+        response.raise_for_status()
+        
+        # Split the response text into lines
+        lines = response.text.strip().split('\n')
+        if not lines:
+            return []
+            
+        # First line contains headers
+        headers = lines[0].strip().split(',')
+        
+        # Convert remaining lines into list of dicts
+        data = []
+        for line in lines[1:]:
+            values = line.strip().split(',')
+            if len(values) == len(headers):
+                data.append(dict(zip(headers, values)))
+        
+        print(f"Processed {len(data)} records for {scrip_group}")
+        return data
+    except Exception as e:
+        print(f"Error fetching scrip data for {scrip_group}: {e}")
+        return []
 
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in NFO CSV:", df.columns.tolist())
-
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
-    
-    df = df.rename(columns=column_mapping)
-
-    # Add missing columns
-    df['tick_size'] = 0.05  # Default tick size for NFO
-
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
-    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
-
-    # Define a function to format the expiry date as DDMMMYY
-    def format_expiry_date(date_str):
-        try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
-        except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
-            return None
-
-    # Apply the expiry date format
-    df['expiry'] = df['expiry'].apply(format_expiry_date)
-
-    # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
-
-    # Format the symbol column based on the instrument type
-    def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+def format_symbol(row, id_format):
+    """Format symbol based on Tradejini's idFormat patterns"""
+    try:
+        # Handle different idFormat patterns
+        if id_format == 'instrument_symbol_series_exchange':
+            # For equity symbols
+            return row.get('symbol', '')
+            
+        elif id_format == 'instrument_symbol_exchange_expiry':
+            # For futures
+            symbol = row.get('symbol', '')
+            expiry = row.get('expiry', '')
+            return f"{symbol}{expiry}FUT" if expiry else symbol
+            
+        elif id_format == 'instrument_symbol_exchange_expiry_strike_optType':
+            # For options
+            symbol = row.get('symbol', '')
+            expiry = row.get('expiry', '')
+            strike = row.get('strikePrice')
+            opt_type = row.get('optionType', 'CE')
+            
+            if all([symbol, expiry, strike, opt_type]):
+                strike_fmt = int(float(strike)) if float(strike).is_integer() else float(strike)
+                return f"{symbol}{expiry}{strike_fmt}{opt_type}"
+            return symbol
+            
+        elif id_format == 'instrument_excToken_exchange':
+            # For indices
+            return row.get('symbol', '').replace(' ', '')
+            
         else:
-            # Ensure strike prices are either integers or floats
-            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
+            # Default to trading symbol if format not recognized
+            return row.get('tradingSymbol', row.get('symbol', ''))
+            
+    except Exception as e:
+        print(f"Error formatting symbol with format {id_format}: {e}")
+        return row.get('tradingSymbol', row.get('symbol', ''))
 
-    df['symbol'] = df.apply(format_symbol, axis=1)
-
-    # Define Exchange
-    df['exchange'] = 'NFO'
-    df['brexchange'] = df['exchange']
-
-    # Ensure strike prices are handled as either float or int
-    def handle_strike_price(strike):
-        try:
-            if float(strike).is_integer():
-                return int(float(strike))  # Return as integer if no decimal
-            else:
-                return float(strike)  # Return as float if decimal exists
-        except (ValueError, TypeError):
-            return -1  # If there's an error or it's empty, return -1
-
-    # Apply the function to strike column
-    df['strike'] = df['strike'].apply(handle_strike_price)
-
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
-
-    # Return the processed DataFrame
-    return df_filtered
-
-def process_flattrade_cds_data(output_path):
-    """
-    Processes the Flattrade CDS data (Currency_Derivatives.csv) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
-    """
-    print("Processing Flattrade CDS Data")
-    file_path = f'{output_path}/CDS.csv'
-
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in CDS CSV:", df.columns.tolist())
-
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
+def process_scrip_data(scrip_data, group_info):
+    """Process scrip data into DataFrame format"""
+    records = []
     
-    df = df.rename(columns=column_mapping)
-
-    # Add missing columns
-    df['tick_size'] = 0.0025  # Default tick size for CDS
-
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
-    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
-
-    # Define a function to format the expiry date as DDMMMYY
-    def format_expiry_date(date_str):
-        try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
-        except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
-            return None
-
-    # Apply the expiry date format
-    df['expiry'] = df['expiry'].apply(format_expiry_date)
-
-    # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
-
-    # Format the symbol column based on the instrument type
-    def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
-        else:
-            # Ensure strike prices are either integers or floats
-            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
-
-    df['symbol'] = df.apply(format_symbol, axis=1)
-
-    # Define Exchange
-    df['exchange'] = 'CDS'
-    df['brexchange'] = df['exchange']
-
-    # Ensure strike prices are handled as either float or int
-    def handle_strike_price(strike):
-        try:
-            if float(strike).is_integer():
-                return int(float(strike))  # Return as integer if no decimal
-            else:
-                return float(strike)  # Return as float if decimal exists
-        except (ValueError, TypeError):
-            return -1  # If there's an error or it's empty, return -1
-
-    # Apply the function to strike column
-    df['strike'] = df['strike'].apply(handle_strike_price)
-
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
-
-    # Return the processed DataFrame
-    return df_filtered
-
-def process_flattrade_mcx_data(output_path):
-    """
-    Processes the Flattrade MCX data (Commodity.csv) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
-    """
-    print("Processing Flattrade MCX Data")
-    file_path = f'{output_path}/MCX.csv'
-
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in MCX CSV:", df.columns.tolist())
-
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
+    # Convert CSV string to list of dictionaries if needed
+    if isinstance(scrip_data, str):
+        lines = scrip_data.strip().split('\n')
+        if not lines:
+            return pd.DataFrame()
+            
+        # First line contains headers
+        headers = lines[0].strip().split(',')
+        
+        # Convert remaining lines into list of dicts
+        scrip_data = []
+        for line in lines[1:]:
+            values = line.strip().split(',')
+            if len(values) == len(headers):
+                scrip_data.append(dict(zip(headers, values)))
     
-    df = df.rename(columns=column_mapping)
-
-    # Add missing columns
-    df['tick_size'] = 0.05  # Default tick size for MCX
-
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
-    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
-
-    # Define a function to format the expiry date as DDMMMYY
-    def format_expiry_date(date_str):
-        try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
-        except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
-            return None
-
-    # Apply the expiry date format
-    df['expiry'] = df['expiry'].apply(format_expiry_date)
-
-    # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
-
-    # Format the symbol column based on the instrument type
-    def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
-        else:
-            # Ensure strike prices are either integers or floats
-            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
-
-    df['symbol'] = df.apply(format_symbol, axis=1)
-
-    # Define Exchange
-    df['exchange'] = 'MCX'
-    df['brexchange'] = df['exchange']
-
-    # Ensure strike prices are handled as either float or int
-    def handle_strike_price(strike):
-        try:
-            if float(strike).is_integer():
-                return int(float(strike))  # Return as integer if no decimal
-            else:
-                return float(strike)  # Return as float if decimal exists
-        except (ValueError, TypeError):
-            return -1  # If there's an error or it's empty, return -1
-
-    # Apply the function to strike column
-    df['strike'] = df['strike'].apply(handle_strike_price)
-
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
-
-    # Return the processed DataFrame
-    return df_filtered
-
-def process_flattrade_bse_data(output_path):
-    """
-    Processes the Flattrade BSE data (BSE_Equity.csv) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
-    """
-    print("Processing Flattrade BSE Data")
-    file_path = f'{output_path}/BSE.csv'
-
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in BSE CSV:", df.columns.tolist())
-
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
+    # Get group name and format
+    group_name = group_info.get('name', '')
     
-    df = df.rename(columns=column_mapping)
-
-    # Add missing columns
-    df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
-    df['tick_size'] = 0.05  # Default tick size for BSE
-
-    # Apply transformation for OpenAlgo symbols (no special logic needed here)
-    def get_openalgo_symbol(broker_symbol):
-        return broker_symbol
-
-    # Update the 'symbol' column
-    df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
-
-    # Set Exchange: 'BSE' for all rows
-    df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']
-
-    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    if 'expiry' not in df.columns:
-        df['expiry'] = ''  # No expiry for these instruments
-    if 'strike' not in df.columns:
-        df['strike'] = -1  # Set default value -1 for strike price where missing
-
-    # Ensure the instrument type is consistent
-    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
-
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
-
-    # Replace 'BSE' with 'BSE_INDEX' for specific symbols
-    df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
-
-
-    # Return the processed DataFrame
-    return df_filtered
-
-def process_flattrade_bfo_data(output_path):
-    """
-    Processes the Flattrade BFO data (BFO.csv) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
-    """
-    print("Processing Flattrade BFO Data")
-    file_path = f'{output_path}/BFO.csv'
-
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    print("Available columns in BFO CSV:", df.columns.tolist())
-
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
+    # Handle index data separately
+    if group_name == 'Index':
+        # Process index records
+        for item in scrip_data:
+            try:
+                # Parse the id to get exchange
+                parts = item['id'].split('_')
+                if len(parts) >= 3:
+                    raw_exchange = parts[-1]  # Last part is exchange (NSE/BSE)
+                    
+                    # Map exchange for OpenAlgo format
+                    exchange_map = {
+                        'NSE': 'NSE_INDEX',
+                        'BSE': 'BSE_INDEX'
+                    }
+                    
+                    record = {
+                        'symbol': item['symbol'],  # Use symbol field directly
+                        'brsymbol': item['dispName'],  # Use display name as broker symbol
+                        'name': item['dispName'],  # Use display name as full name
+                        'exchange': exchange_map.get(raw_exchange, raw_exchange),
+                        'brexchange': raw_exchange,
+                        'token': str(item['excToken']),
+                        'expiry': '',
+                        'strike': 0,
+                        'lotsize': 1,
+                        'instrumenttype': 'INDEX',
+                        'tick_size': 0.05
+                    }
+                    records.append(record)
+            except Exception as e:
+                print(f"Error processing index {item.get('dispName', '')}: {e}")
+                continue
+    else:
+        # Process regular records
+        for item in scrip_data:
+            try:
+                # Skip spot records
+                if 'spot' in item['id'].lower():
+                    continue
+                    
+                # Parse the id to get exchange and other details
+                parts = item['id'].split('_')
+                if len(parts) < 2:  # Need at least instrument type and symbol
+                    continue
+                    
+                instr_type = parts[0]
+                
+                # Skip spot records early
+                if item.get('asset') == 'spot' or 'spot' in item['id'].lower():
+                    continue
+                
+                # Handle different groups
+                if group_name == 'Securities':
+                    # Format: instrument_symbol_series_exchange
+                    if len(parts) >= 4:
+                        exchange = parts[-1]
+                        record = {
+                            'symbol': item['dispName'],
+                            'brsymbol': item['dispName'],
+                            'name': item.get('desc', item['dispName']),
+                            'exchange': exchange,
+                            'brexchange': exchange,
+                            'token': str(item['excToken']),
+                            'expiry': '',
+                            'strike': 0,
+                            'lotsize': int(item.get('lot', 1)),
+                            'instrumenttype': 'EQ',
+                            'tick_size': float(item.get('tick', 0.05))
+                        }
+                        records.append(record)
+                        
+                elif group_name in ['FutureContracts', 'CurrencyFuture', 'CommodityFuture']:
+                    # Format: instrument_symbol_exchange_expiry
+                    if len(parts) >= 4:
+                        base_symbol = parts[1]
+                        exchange = parts[2]
+                        expiry_date = parts[3]
+                        
+                        try:
+                            expiry_dt = datetime.strptime(expiry_date, '%Y-%m-%d')
+                            expiry_formatted = expiry_dt.strftime('%d%b%y').upper()
+                            openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
+                            
+                            record = {
+                                'symbol': openalgo_symbol,
+                                'brsymbol': item['dispName'],
+                                'name': item.get('desc', item['dispName']),
+                                'exchange': exchange,
+                                'brexchange': exchange,
+                                'token': str(item['excToken']),
+                                'expiry': expiry_date,
+                                'strike': 0,
+                                'lotsize': int(item.get('lot', 1)),
+                                'instrumenttype': 'FUT',
+                                'tick_size': float(item.get('tick', 0.05))
+                            }
+                            records.append(record)
+                        except Exception as e:
+                            print(f"Error processing future {item['id']}: {e}")
+                            
+                elif group_name in ['NSEOptions', 'BSEOptions', 'CurrencyOptions', 'CommodityOptions']:
+                    # Format: instrument_symbol_exchange_expiry_strike_optType
+                    if len(parts) >= 6:
+                        base_symbol = parts[1]
+                        exchange = parts[2]
+                        expiry_date = parts[3]
+                        strike_price = float(parts[4])
+                        option_type = parts[5]
+                        
+                        try:
+                            expiry_dt = datetime.strptime(expiry_date, '%Y-%m-%d')
+                            expiry_formatted = expiry_dt.strftime('%d%b%y').upper()
+                            strike_str = str(int(strike_price)) if strike_price.is_integer() else str(strike_price)
+                            openalgo_symbol = f"{base_symbol}{expiry_formatted}{strike_str}{option_type}"
+                            
+                            record = {
+                                'symbol': openalgo_symbol,
+                                'brsymbol': item['dispName'],
+                                'name': item.get('desc', item['dispName']),
+                                'exchange': exchange,
+                                'brexchange': exchange,
+                                'token': str(item['excToken']),
+                                'expiry': expiry_date,
+                                'strike': strike_price,
+                                'lotsize': int(item.get('lot', 1)),
+                                'instrumenttype': option_type,
+                                'tick_size': float(item.get('tick', 0.05))
+                            }
+                            records.append(record)
+                        except Exception as e:
+                            print(f"Error processing option {item['id']}: {e}")
+                            
+                elif instr_type == 'IDX':
+                    # Handle index symbols
+                    raw_exchange = parts[-1]  # Last part is exchange (NSE/BSE)
+                    
+                    # Map exchange for OpenAlgo format
+                    exchange_map = {
+                        'NSE': 'NSE_INDEX',
+                        'BSE': 'BSE_INDEX'
+                    }
+                    
+                    record = {
+                        'symbol': item['dispName'],  # Use dispName as symbol
+                        'brsymbol': item['dispName'],  # Use dispName as brsymbol
+                        'name': item.get('symbol', item['dispName']),  # Use symbol field if available
+                        'exchange': exchange_map.get(raw_exchange, raw_exchange),  # Map to *_INDEX
+                        'brexchange': raw_exchange,  # Keep original exchange
+                        'token': str(item['excToken']),
+                        'expiry': '',
+                        'strike': 0,
+                        'lotsize': 1,
+                        'instrumenttype': 'INDEX',
+                        'tick_size': 0.05
+                    }
+            except Exception as e:
+                print(f"Error processing item {item}: {e}")
+                continue
     
-    df = df.rename(columns=column_mapping)
-
-    # Add missing columns
-    df['tick_size'] = 0.05  # Default tick size for BFO
-
-    # Add missing columns to ensure DataFrame matches the database structure
-    df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
-    df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
-
-    # Define a function to format the expiry date as DDMMMYY
-    def format_expiry_date(date_str):
-        try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
-        except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
-            return None
-
-    # Apply the expiry date format
-    df['expiry'] = df['expiry'].apply(format_expiry_date)
-
-    # Replace the 'XX' option type with 'FUT' for futures
-    df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
-
-    # Format the symbol column based on the instrument type
-    def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
-        else:
-            # Ensure strike prices are either integers or floats
-            formatted_strike = int(float(row['strike'])) if float(row['strike']).is_integer() else float(row['strike'])
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
-
-    df['symbol'] = df.apply(format_symbol, axis=1)
-
-    # Define Exchange
-    df['exchange'] = 'BFO'
-    df['brexchange'] = df['exchange']
-
-    # Ensure strike prices are handled as either float or int
-    def handle_strike_price(strike):
-        try:
-            if float(strike).is_integer():
-                return int(float(strike))  # Return as integer if no decimal
-            else:
-                return float(strike)  # Return as float if decimal exists
-        except (ValueError, TypeError):
-            return -1  # If there's an error or it's empty, return -1
-
-    # Apply the function to strike column
-    df['strike'] = df['strike'].apply(handle_strike_price)
-
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
-
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
-
-    # Return the processed DataFrame
-    return df_filtered
-
-def combine_nfo_files(output_path):
-    """Combines NFO equity and index files into one"""
-    print("Combining NFO files")
-    nfo_eq = pd.read_csv(f"{output_path}/NFO_EQ.csv")
-    nfo_idx = pd.read_csv(f"{output_path}/NFO_IDX.csv")
-    combined = pd.concat([nfo_eq, nfo_idx], ignore_index=True)
-    combined.to_csv(f"{output_path}/NFO.csv", index=False)
-
-def combine_bfo_files(output_path):
-    """Combines BFO equity and index files into one"""
-    print("Combining BFO files")
-    bfo_eq = pd.read_csv(f"{output_path}/BFO_EQ.csv")
-    bfo_idx = pd.read_csv(f"{output_path}/BFO_IDX.csv")
-    combined = pd.concat([bfo_eq, bfo_idx], ignore_index=True)
-    combined.to_csv(f"{output_path}/BFO.csv", index=False)
-
-def delete_flattrade_temp_data(output_path):
-    """
-    Deletes the Flattrade symbol files from the tmp folder after processing.
-    """
-    for filename in os.listdir(output_path):
-        file_path = os.path.join(output_path, filename)
-        if filename.endswith(".csv") and os.path.isfile(file_path):
-            os.remove(file_path)
-            print(f"Deleted {file_path}")
+    return pd.DataFrame(records)
 
 def master_contract_download():
-    """
-    Downloads, processes, and deletes Flattrade data.
-    """
-    print("Downloading Flattrade Master Contract")
-
-    output_path = 'tmp'
+    """Download and process Tradejini scrip data"""
+    print("Starting Tradejini Master Contract Download")
+    
     try:
-        download_csv_data(output_path)
+        # Delete existing data
         delete_symtoken_table()
         
-        # Placeholders for processing different exchanges
-        token_df = process_flattrade_nse_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_bse_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_nfo_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_cds_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_mcx_data(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_flattrade_bfo_data(output_path)
-        copy_from_dataframe(token_df)
+        # Get scrip groups
+        scrip_groups = get_scrip_groups()
+        if not scrip_groups:
+            print("No scrip groups found. Exiting.")
+            return False
+            
+        print(f"Found {len(scrip_groups)} scrip groups")
         
-        delete_flattrade_temp_data(output_path)
+        # Process each scrip group
+        for group in scrip_groups:
+            try:
+                group_name = group.get('name')
+                if not group_name:
+                    continue
+                    
+                print(f"Processing group: {group_name} (format: {group.get('idFormat')})")
+                scrip_data = get_scrip_data(group_name)
+                
+                if scrip_data:
+                    # Check if response is successful
+                    if isinstance(scrip_data, dict) and scrip_data.get('s') == 'ok':
+                        scrip_data = scrip_data.get('d', [])
+                    
+                    # Process the data into DataFrame
+                    df = process_scrip_data(scrip_data, group)
+                    
+                    # Insert into database
+                    if not df.empty:
+                        copy_from_dataframe(df)
+                        print(f"Processed {len(df)} symbols for {group_name}")
+                    else:
+                        print(f"No valid records found for {group_name}")
+                else:
+                    print(f"No data received for {group_name}")
+                    
+            except Exception as group_error:
+                print(f"Error processing group {group_name}: {group_error}")
+                continue
         
         if socketio:
-            return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
-        else:
-            print("Successfully downloaded and processed all contracts")
+            socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully downloaded all contracts'})
+        return True
+    
     except Exception as e:
         error_msg = f"Error in master contract download: {e}"
         print(error_msg)
         if socketio:
-            return socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
-        raise e
+            socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
+        return False
