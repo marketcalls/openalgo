@@ -266,14 +266,14 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('password_change', function(data) {
         playAlertSound();
         showToast(data.message, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Master contract download notification
     socket.on('master_contract_download', function(data) {
         playAlertSound();
         showToast(`Master Contract: ${data.message}`, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Cancel order notification
@@ -297,7 +297,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshOrderbook();
+            //refreshOrderbook();
             refreshCurrentPageContent();
         }
     });
@@ -309,8 +309,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshPositions();
-            refreshCurrentPageContent();
+            // Add a 1-second delay before refreshing content
+            setTimeout(() => {
+                refreshCurrentPageContent();
+            }, 1000);
         }
     });
 
@@ -327,7 +329,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isOnAnalyzerPage) {
                 refreshAnalyzer();
             } else {
-                refreshCurrentPageContent();
+                // Add a 1-second delay before refreshing content
+                setTimeout(() => {
+                    refreshCurrentPageContent();
+                }, 1000);
             }
         }
     });

@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, render_template, session, redirec
 from importlib import import_module
 from database.auth_db import get_auth_token
 from utils.session import check_session_validity
+from services.place_smart_order_service import place_smart_order
 import logging
 import csv
 import io
@@ -399,3 +400,86 @@ def export_positions():
     except Exception as e:
         logger.error(f"Error exporting positions: {str(e)}")
         return "Error exporting positions", 500
+
+@orders_bp.route('/close_position', methods=['POST'])
+@check_session_validity
+def close_position():
+    """Close a specific position directly using the broker API"""
+    try:
+        # Get data from request
+        data = request.json
+        symbol = data.get('symbol')
+        exchange = data.get('exchange')
+        product = data.get('product')
+        
+        if not all([symbol, exchange, product]):
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameters (symbol, exchange, product)'
+            }), 400
+        
+        # Get auth token from session
+        login_username = session['user']
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get('broker')
+        
+        if not auth_token or not broker_name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Authentication error'
+            }), 401
+        
+        # Dynamically import broker-specific modules for API
+        api_funcs = dynamic_import(broker_name, 'api.order_api', ['place_smartorder_api', 'get_open_position'])
+        
+        if not api_funcs:
+            logger.error(f"Error loading broker-specific modules for {broker_name}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Error loading broker modules'
+            }), 500
+        
+        # Get the functions we need
+        place_smartorder_api = api_funcs['place_smartorder_api']
+        
+        # Prepare order data for direct broker API call
+        order_data = {
+            "strategy": "UI Exit Position",
+            "exchange": exchange,
+            "symbol": symbol,
+            "action": "BUY",  # Will be determined by the smart order API based on current position
+            "product": product,
+            "pricetype": "MARKET",
+            "quantity": "0",
+            "price": "0",
+            "trigger_price": "0",
+            "disclosed_quantity": "0",
+            "position_size": "0"  # Setting to 0 to close the position
+        }
+        
+        # Call the broker API directly
+        res, response, orderid = place_smartorder_api(order_data, auth_token)
+        
+        # Format the response
+        if response.get('status') == 'success':
+            response_data = {
+                'status': 'success',
+                'message': 'Position closed successfully',
+                'orderid': orderid
+            }
+            status_code = 200
+        else:
+            response_data = {
+                'status': 'error',
+                'message': response.get('message', 'Failed to close position')
+            }
+            status_code = res.status if res and hasattr(res, 'status') else 400
+        
+        return jsonify(response_data), status_code
+        
+    except Exception as e:
+        logger.error(f"Error in close_position endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'An error occurred: {str(e)}'
+        }), 500
