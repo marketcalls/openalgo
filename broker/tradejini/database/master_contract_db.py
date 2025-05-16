@@ -196,6 +196,17 @@ def process_scrip_data(scrip_data, group_info):
     # Get group name and format
     group_name = group_info.get('name', '')
     
+    # Common index symbol mappings
+    COMMON_INDEX_MAP = {
+        'NSE_INDEX': [
+            'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY',
+            'MIDCPNIFTY', 'INDIAVIX'
+        ],
+        'BSE_INDEX': [
+            'SENSEX', 'BANKEX', 'SENSEX50'
+        ]
+    }
+    
     # Handle index data separately
     if group_name == 'Index':
         # Process index records
@@ -211,6 +222,16 @@ def process_scrip_data(scrip_data, group_info):
                         'NSE': 'NSE_INDEX',
                         'BSE': 'BSE_INDEX'
                     }
+                    
+                    # Symbol mapping for special cases
+                    symbol_map = {
+                        'India VIX': 'INDIAVIX',
+                        'SNXT50': 'SENSEX50'
+                    }
+                    
+                    # Apply symbol mapping if needed
+                    if item['symbol'] in symbol_map:
+                        item['symbol'] = symbol_map[item['symbol']]
                     
                     record = {
                         'symbol': item['symbol'],  # Use symbol field directly
@@ -255,7 +276,7 @@ def process_scrip_data(scrip_data, group_info):
                         exchange = parts[-1]
                         record = {
                             'symbol': item['dispName'],
-                            'brsymbol': item['dispName'],
+                            'brsymbol': item['id'],
                             'name': item.get('desc', item['dispName']),
                             'exchange': exchange,
                             'brexchange': exchange,
@@ -282,7 +303,7 @@ def process_scrip_data(scrip_data, group_info):
                             
                             record = {
                                 'symbol': openalgo_symbol,
-                                'brsymbol': item['dispName'],
+                                'brsymbol': item['id'],
                                 'name': item.get('desc', item['dispName']),
                                 'exchange': exchange,
                                 'brexchange': exchange,
@@ -314,7 +335,7 @@ def process_scrip_data(scrip_data, group_info):
                             
                             record = {
                                 'symbol': openalgo_symbol,
-                                'brsymbol': item['dispName'],
+                                'brsymbol': item['id'],
                                 'name': item.get('desc', item['dispName']),
                                 'exchange': exchange,
                                 'brexchange': exchange,
@@ -339,19 +360,89 @@ def process_scrip_data(scrip_data, group_info):
                         'BSE': 'BSE_INDEX'
                     }
                     
-                    record = {
-                        'symbol': item['dispName'],  # Use dispName as symbol
-                        'brsymbol': item['dispName'],  # Use dispName as brsymbol
-                        'name': item.get('symbol', item['dispName']),  # Use symbol field if available
-                        'exchange': exchange_map.get(raw_exchange, raw_exchange),  # Map to *_INDEX
-                        'brexchange': raw_exchange,  # Keep original exchange
-                        'token': str(item['excToken']),
-                        'expiry': '',
-                        'strike': 0,
-                        'lotsize': 1,
-                        'instrumenttype': 'INDEX',
-                        'tick_size': 0.05
-                    }
+                    # Get OpenAlgo exchange
+                    openalgo_exchange = exchange_map.get(raw_exchange, raw_exchange)
+                    
+                    # Check if this is a common index symbol
+                    if openalgo_exchange == 'BSE_INDEX':
+                        # Handle BSE indices
+                        if item['symbol'].upper() in COMMON_INDEX_MAP[openalgo_exchange]['common']:
+                            # Use common symbol format for main indices
+                            record = {
+                                'symbol': item['symbol'].upper(),  # Use uppercase symbol
+                                'brsymbol': item['id'],  # Use dispName as brsymbol
+                                'name': item.get('symbol', item['dispName']),  # Use symbol field if available
+                                'exchange': openalgo_exchange,
+                                'brexchange': raw_exchange,
+                                'token': str(item['excToken']),
+                                'expiry': '',
+                                'strike': 0,
+                                'lotsize': 1,
+                                'instrumenttype': 'INDEX',
+                                'tick_size': 0.05
+                            }
+                        elif item['symbol'].upper() in COMMON_INDEX_MAP[openalgo_exchange]['sectoral']:
+                            # Use sectoral index format
+                            record = {
+                                'symbol': item['symbol'].upper(),  # Use uppercase symbol
+                                'brsymbol': COMMON_INDEX_MAP[openalgo_exchange]['sectoral'][item['symbol'].upper()],  # Use mapped brsymbol
+                                'name': item.get('symbol', item['dispName']),  # Use symbol field if available
+                                'exchange': openalgo_exchange,
+                                'brexchange': raw_exchange,
+                                'token': str(item['excToken']),
+                                'expiry': '',
+                                'strike': 0,
+                                'lotsize': 1,
+                                'instrumenttype': 'INDEX',
+                                'tick_size': 0.05
+                            }
+                        else:
+                            # Use regular symbol format
+                            record = {
+                                'symbol': item['dispName'],  # Use dispName for non-common symbols
+                                'brsymbol': item['id'],
+                                'name': item.get('symbol', item['dispName']),
+                                'exchange': openalgo_exchange,
+                                'brexchange': raw_exchange,
+                                'token': str(item['excToken']),
+                                'expiry': '',
+                                'strike': 0,
+                                'lotsize': 1,
+                                'instrumenttype': 'INDEX',
+                                'tick_size': 0.05
+                            }
+                    else:
+                        # Handle NSE indices
+                        if item['symbol'].upper() in COMMON_INDEX_MAP[openalgo_exchange]:
+                            # Use common symbol format
+                            record = {
+                                'symbol': item['symbol'].upper(),  # Use uppercase symbol
+                                'brsymbol': item['id'],  # Use dispName as brsymbol
+                                'name': item.get('symbol', item['dispName']),  # Use symbol field if available
+                                'exchange': openalgo_exchange,
+                                'brexchange': raw_exchange,
+                                'token': str(item['excToken']),
+                                'expiry': '',
+                                'strike': 0,
+                                'lotsize': 1,
+                                'instrumenttype': 'INDEX',
+                                'tick_size': 0.05
+                            }
+                        else:
+                            # Use regular symbol format
+                            record = {
+                                'symbol': item['dispName'],  # Use dispName for non-common symbols
+                                'brsymbol': item['id'],
+                                'name': item.get('symbol', item['dispName']),
+                                'exchange': openalgo_exchange,
+                                'brexchange': raw_exchange,
+                                'token': str(item['excToken']),
+                                'expiry': '',
+                                'strike': 0,
+                                'lotsize': 1,
+                                'instrumenttype': 'INDEX',
+                                'tick_size': 0.05
+                            }
             except Exception as e:
                 print(f"Error processing item {item}: {e}")
                 continue
