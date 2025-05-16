@@ -49,7 +49,110 @@ def get_api_response(endpoint, auth, method="GET", data=None):
     return response.json()
 
 def get_order_book(auth):
-    return get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
+    """
+    Get list of orders placed using Tradejini API.
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        dict: Order book data in OpenAlgo format
+    """
+    try:
+        # Get API key from environment
+        api_key = os.getenv('BROKER_API_SECRET')
+        if not api_key:
+            raise ValueError("Error: BROKER_API_SECRET not set")
+            
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Set up authentication header
+        auth_header = f"{api_key}:{auth}"
+        headers = {
+            'Authorization': f'Bearer {auth_header}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        print(f"[DEBUG] get_order_book - Making request to: {client.base_url}/v2/api/oms/orders")
+        print(f"[DEBUG] get_order_book - Headers: {headers}")
+        print(f"[DEBUG] get_order_book - Query params: {{'symDetails': 'true'}}")
+        
+        # Make API request
+        response = client.get(
+            "https://api.tradejini.com/v2/api/oms/orders",
+            headers=headers,
+            params={"symDetails": "true"}
+        )
+        
+        print(f"[DEBUG] get_order_book - Response status: {response.status_code}")
+        print(f"[DEBUG] get_order_book - Response headers: {dict(response.headers)}")
+        
+        response.raise_for_status()
+        
+        # Transform response data to OpenAlgo format
+        response_data = response.json()
+        print(f"[DEBUG] get_order_book - Raw response data: {response_data}")
+        
+        if response_data['s'] == 'ok':
+            print(f"[DEBUG] get_order_book - Found {len(response_data['d'])} orders")
+            # Transform each order to OpenAlgo format
+            transformed_orders = []
+            for order in response_data['d']:
+                print(f"[DEBUG] get_order_book - Processing order: {order}")
+                try:
+                    transformed_order = {
+                        'stat': 'Ok',  # OpenAlgo expects 'stat' field
+                        'data': {
+                            'tradingsymbol': order['sym']['sym'],  # Changed from 'symbol' to 'sym'
+                            'exchange': order['sym']['exch'],      # Changed from 'exchange' to 'exch'
+                            'token': order['symId'],
+                            'exch': order['sym']['exch'],         # Changed from 'exchange' to 'exch'
+                            'quantity': order['qty'],
+                            'side': order['side'],
+                            'type': order['type'],
+                            'product': order['product'],
+                            'order_id': order['orderId'],
+                            'order_time': order['orderTime'],
+                            'status': order['status'],
+                            'avg_price': order['avgPrice'],
+                            'limit_price': order['limitPrice'],
+                            'fill_quantity': order['fillQty'],
+                            'pending_quantity': order['pendingQty'],
+                            'validity': order['validity'],
+                            'valid_till': order['validTill']
+                        }
+                    }
+                    print(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
+                    transformed_orders.append(transformed_order)
+                except KeyError as e:
+                    print(f"[ERROR] get_order_book - Missing field in order: {str(e)}")
+                    print(f"[ERROR] get_order_book - Order data: {order}")
+                    continue
+            
+            return {
+                'stat': 'Ok',
+                'data': transformed_orders
+            }
+        else:
+            print(f"[DEBUG] get_order_book - API error: {response_data.get('d', {}).get('msg', 'Unknown error')}")
+            return {
+                'stat': 'Not_Ok',
+                'data': {
+                    'msg': response_data.get('d', {}).get('msg', 'Unknown error')
+                }
+            }
+            
+    except Exception as e:
+        print(f"[ERROR] get_order_book - Exception occurred: {str(e)}")
+        import traceback
+        print(f"[ERROR] get_order_book - Traceback: {traceback.format_exc()}")
+        return {
+            'stat': 'Not_Ok',
+            'data': {
+                'msg': str(e)
+            }
+        }
 
 def get_trade_book(auth):
     return get_api_response("/PiConnectTP/TradeBook",auth,method="POST")

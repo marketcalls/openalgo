@@ -1,62 +1,56 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
+from broker.tradejini.mapping.transform_data import reverse_map_product_type
 
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
     
     Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    - order_data: Tradejini API response containing order information
     
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+    - The modified order_data with updated fields
     """
-        # Check if 'data' is None
-    if order_data is None or (isinstance(order_data, dict) and (order_data['stat'] == "Not_Ok")):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data
-        
-
-
-    if order_data:
-        for order in order_data:
-            # Extract the instrument_token and exchange for the current order
-            symboltoken = order['token']
-            exchange = order['exch']
+    print(f"[DEBUG] map_order_data - Input order_data: {order_data}")
+    
+    # Check if response status is ok
+    if order_data.get('stat') != 'Ok':
+        print("[DEBUG] map_order_data - Error in API response")
+        return []
+    
+    # Get orders from response - they are nested under 'data' field
+    orders_data = order_data.get('data', [])
+    print(f"[DEBUG] map_order_data - Found {len(orders_data)} orders in response")
+    print(f"[DEBUG] map_order_data - Orders data: {orders_data}")
+    
+    # Process each order
+    if orders_data:
+        for order in orders_data:
+            # Get the actual order data from the nested structure
+            order_info = order.get('data', {})
+            print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
             
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
+            # Update fields in place
+            order['action'] = "BUY" if order_info.get('side') == 'buy' else "SELL"
+            order['exchange'] = order_info.get('exchange', '')
+            order['order_status'] = order_info.get('status', '').lower()
+            order['orderid'] = str(order_info.get('order_id', ''))
+            order['price'] = float(order_info.get('limit_price', 0))
+            order['pricetype'] = order_info.get('type', '').upper()
             
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tsym'] = symbol_from_db
-                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
-                    order['prd'] = 'CNC'
-                               
-                elif order['prd'] == 'I':
-                    order['prd'] = 'MIS'
-                
-                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
-                    order['prd'] = 'NRML'
-
-                if(order['prctyp']=="MKT"):
-                    order['prctyp']="MARKET"
-                elif(order['prctyp']=="LMT"):
-                    order['prctyp']="LIMIT"
-                elif(order['prctyp']=="SL-MKT"):
-                    order['prctyp']="SL-M"
-                elif(order['prctyp']=="SL-LMT"):
-                    order['prctyp']="SL"
-                
-            else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
-                
-    return order_data
+            # Map product type using reverse mapping function
+            product = order_info.get('product', '').lower()
+            order['product'] = reverse_map_product_type(product) or 'MIS'
+            
+            order['quantity'] = int(order_info.get('quantity', 0))
+            order['symbol'] = order_info.get('tradingsymbol', '')
+            order['timestamp'] = order_info.get('order_time', '')
+            order['trigger_price'] = float(order_info.get('trigPrice', 0))
+            
+            print(f"[DEBUG] map_order_data - Updated order: {order}")
+    
+    return orders_data
 
 
 def calculate_order_statistics(order_data):
@@ -65,11 +59,13 @@ def calculate_order_statistics(order_data):
     completed orders, open orders, and rejected orders.
 
     Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    - order_data: List of orders with modified fields
 
     Returns:
-    - A dictionary containing counts of different types of orders.
+    - Dictionary containing counts of different types of orders
     """
+    print(f"[DEBUG] calculate_order_statistics - Input order_data: {order_data}")
+    
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
     total_completed_orders = total_open_orders = total_rejected_orders = 0
@@ -77,20 +73,19 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['trantype'] == 'B':
-                order['trantype'] = 'BUY'
+            if order.get('action') == 'BUY':
                 total_buy_orders += 1
-            elif order['trantype'] == 'S':
-                order['trantype'] = 'SELL'
+            elif order.get('action') == 'SELL':
                 total_sell_orders += 1
             
             # Count orders based on their status
-            if order['status'] == 'COMPLETE':
+            status = order.get('order_status', '').lower()
+            if status == 'complete':
                 total_completed_orders += 1
-            elif order['status'] == 'OPEN':
-                total_open_orders += 1
-            elif order['status'] == 'REJECTED':
+            elif status == 'rejected':
                 total_rejected_orders += 1
+            elif status == 'open':
+                total_open_orders += 1
 
     # Compile and return the statistics
     return {
@@ -103,32 +98,42 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """
+    Processes and modifies a list of order dictionaries into the final OpenAlgo format.
     
+    Parameters:
+    - orders: List of orders with modified fields
+    
+    Returns:
+    - Dictionary with orders in OpenAlgo format
+    """
+    print(f"[DEBUG] transform_order_data - Input orders: {orders}")
+    
+    # Directly handling a dictionary assuming it's the structure we expect
+    if isinstance(orders, dict):
+        # Convert the single dictionary into a list of one dictionary
+        orders = [orders]
 
     transformed_orders = []
     
     for order in orders:
-        # Make sure each item is indeed a dictionary
-        if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
-            continue
-
+        # Convert to OpenAlgo format if needed
         transformed_order = {
-            "symbol": order.get("tsym", ""),
-            "exchange": order.get("exch", ""),
-            "action": order.get("trantype", ""),
-            "quantity": order.get("qty", 0),
-            "price": order.get("prc", 0.0),
-            "trigger_price": order.get("trgprc", 0.0),
-            "pricetype": order.get("prctyp", ""),
-            "product": order.get("prd", ""),
-            "orderid": order.get("norenordno", ""),
-            "order_status": order.get("status", "").lower(),
-            "timestamp": order.get("norentm", "")
+            "action": order.get('action', ''),
+            "exchange": order.get('exchange', ''),
+            "order_status": order.get('order_status', ''),
+            "orderid": str(order.get('orderid', '')),
+            "price": float(order.get('price', 0)),
+            "pricetype": order.get('pricetype', '').upper(),
+            "product": order.get('product', '').upper(),
+            "quantity": int(order.get('quantity', 0)),
+            "symbol": order.get('symbol', ''),
+            "timestamp": order.get('timestamp', ''),
+            "trigger_price": float(order.get('trigger_price', 0))
         }
-
         transformed_orders.append(transformed_order)
-
+        print(f"[DEBUG] transform_order_data - Transformed order: {transformed_order}")
+    
     return transformed_orders
 
 
