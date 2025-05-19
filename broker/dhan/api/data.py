@@ -473,17 +473,18 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
+                print(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
                 
                 if not quote_data:
@@ -554,13 +555,13 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:
