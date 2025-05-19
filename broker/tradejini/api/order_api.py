@@ -383,58 +383,141 @@ def get_positions(auth):
             'Content-Type': 'application/json'
         }
         
-        # Make API request
+        # Make API request directly - not using any helper functions
         response = client.get(
             "https://api.tradejini.com/v2/api/oms/positions",
             headers=headers,
-            params={"symDetails": "true"}
+            params={"symDetails": "true"},
+            timeout=10
         )
         
         response.raise_for_status()
-        
-        # Transform response data to OpenAlgo format
         response_data = response.json()
         
-        # Debug logging
-        logger.debug(f"get_positions - Raw response data: {response_data}")
+        # Log raw response at INFO level for better visibility
+        logger.info(f"Raw positions response from TradeJini API: {json.dumps(response_data, indent=2)}")
+        
+        # Direct transformation without using external mapping functions
+        positions_list = []
         
         if response_data.get('s') == 'ok':
-            # Map and transform position data
-            mapped_data = map_position_data(response_data.get('d', []))
-            transformed_data = transform_positions_data(mapped_data)
+            positions = response_data.get('d', [])
+            logger.debug(f"Found {len(positions)} positions")
             
+            for position in positions:
+                try:
+                    # Skip positions with zero quantity
+                    net_qty = position.get('netQty', 0)
+                    
+                    # Get symbol info from the nested sym object
+                    sym = position.get('sym', {})
+                    exchange_symbol = sym.get('sym', '')
+                    tradingsymbol = sym.get('trdSym', '')
+                    exchange = sym.get('exch', '')
+                    
+                    # Get symbol ID and details from the position data
+                    symbol_id = position.get('symId', '')
+                    
+                    # Log position data for debugging
+                    logger.info(f"Position data: symId={symbol_id}, tradingsymbol={tradingsymbol}, exchange={exchange}")
+                    
+                    # Get OpenAlgo symbol - follow same approach as TradeBook implementation
+                    openalgo_symbol = None
+                    try:
+                        # First try with the symbol ID from sym object
+                        symid_from_object = sym.get('id', '')
+                        if symid_from_object:
+                            openalgo_symbol = get_oa_symbol(symid_from_object, exchange)
+                            logger.info(f"Symbol lookup with sym.id: {symid_from_object} -> {openalgo_symbol}")
+                        
+                        # If not found and we have the position symId, try that
+                        if not openalgo_symbol and symbol_id:
+                            openalgo_symbol = get_oa_symbol(symbol_id, '')
+                            logger.info(f"Symbol lookup with position.symId: {symbol_id} -> {openalgo_symbol}")
+                            
+                        # If still not found, try with exchange symbol
+                        if not openalgo_symbol:
+                            openalgo_symbol = get_oa_symbol(exchange_symbol, exchange)
+                            logger.info(f"Symbol lookup with exchange symbol: {exchange_symbol} -> {openalgo_symbol}")
+                            
+                    except Exception as e:
+                        logger.warning(f"Symbol lookup failed: {str(e)}")
+                        openalgo_symbol = None
+                    
+                    # Determine the final symbol to use
+                    final_symbol = ""
+                    if openalgo_symbol:
+                        final_symbol = openalgo_symbol
+                        logger.info(f"Using OpenAlgo symbol: {final_symbol}")
+                    else:
+                        # Fallback to exchange symbol if OpenAlgo symbol isn't available
+                        final_symbol = exchange_symbol
+                        logger.info(f"Fallback to exchange symbol: {final_symbol}")
+                    
+                    # Map product type
+                    product = position.get('product', '').lower()
+                    if product == 'delivery':
+                        mapped_product = 'CNC'
+                    elif product == 'intraday':
+                        mapped_product = 'MIS'
+                    elif product == 'margin':
+                        mapped_product = 'NRML'
+                    else:
+                        mapped_product = 'MIS'  # Default
+                    
+                    # Format the position data according to OpenAlgo format
+                    # Removing tradingsymbol field as requested
+                    transformed_position = {
+                        'symbol': final_symbol,  # Use final symbol (OpenAlgo or fallback)
+                        'exchange': exchange,
+                        'product': mapped_product,
+                        'quantity': net_qty,
+                        'average_price': str(round(float(position.get('netAvgPrice', 0.0)), 2))
+                    }
+                    
+                    logger.debug(f"Position transformed: {tradingsymbol} → {openalgo_symbol}")
+                    
+                    positions_list.append(transformed_position)
+                    logger.debug(f"Transformed position: {transformed_position}")
+                    
+                except Exception as e:
+                    logger.error(f"Error transforming position: {str(e)}", exc_info=True)
+                    continue
+            
+            # Return in OpenAlgo format - same pattern as orderbook and tradebook
             return {
                 "status": "success",
-                "data": transformed_data
+                "data": positions_list
             }
         else:
-            error_msg = response_data.get('d', {}).get('msg', 'Unknown error')
-            logger.debug(f"get_positions - API error: {error_msg}")
+            error_msg = response_data.get('d', {}).get('message', 'Unknown error')
+            logger.error(f"Failed to fetch positions: {error_msg}")
             return {
                 "status": "error",
                 "message": error_msg
             }
             
     except httpx.HTTPStatusError as e:
-        logger.debug(f"get_positions - HTTP error: {e.response.status_code}")
-        logger.debug(f"get_positions - Response: {e.response.text}")
+        error_msg = f"HTTP error {e.response.status_code}: {e.response.text}"
+        logger.error(error_msg)
         return {
             "status": "error",
-            "message": f"HTTP error {e.response.status_code}: {e.response.text}"
+            "message": error_msg
         }
+        
     except httpx.RequestError as e:
-        logger.debug(f"get_positions - Network error: {str(e)}")
+        error_msg = f"Request failed: {str(e)}"
+        logger.error(error_msg)
         return {
             "status": "error",
-            "message": f"Network error: {str(e)}"
+            "message": error_msg
         }
+        
     except Exception as e:
-        logger.debug(f"get_positions - Unexpected error: {str(e)}")
-        import traceback
-        logger.debug(f"get_positions - Traceback: {traceback.format_exc()}")
+        logger.error(f"Unexpected error in get_positions: {str(e)}", exc_info=True)
         return {
             "status": "error",
-            "message": f"Unexpected error: {str(e)}"
+            "message": "An unexpected error occurred while fetching positions"
         }
 
 def get_holdings(auth):

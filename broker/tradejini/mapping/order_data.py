@@ -362,92 +362,159 @@ def transform_tradebook_data(trades):
     logger.debug(f"transform_tradebook_data - Transformed {len(transformed_trades)} trades")
     
     return transformed_trades
-    
 
+# Position mapping functions have been moved to get_positions function in order_api.py
+# These compatibility functions are kept for backward compatibility
 
 def map_position_data(position_data):
     """
-    Maps TradeJini position data to OpenAlgo format.
-    
-    Args:
-        position_data: List of position dictionaries from TradeJini API
-        
-    Returns:
-        List of mapped position dictionaries
+    Map TradeJini position data to a standardized format.
+    DEPRECATED: This function is kept for backward compatibility only.
+    Position mapping is now done directly in get_positions function.
     """
-    if position_data is None or (isinstance(position_data, dict) and (position_data.get('s') != "ok")):
-        print("No valid position data available.")
+    logger.warning("map_position_data is deprecated - position mapping is now done directly in get_positions")
+    
+    # Check for different response formats
+    if isinstance(position_data, dict):
+        # Handle the case where the entire API response is passed
+        if position_data.get('s') == 'ok' and 'd' in position_data:
+            position_data = position_data.get('d', [])
+        # Handle already processed data with status and data fields
+        elif position_data.get('status') == 'success' and 'data' in position_data:
+            # Data already mapped - return as is
+            return position_data.get('data', [])
+    
+    if not position_data or not isinstance(position_data, list):
+        logger.warning("No valid position data available or invalid format")
         return []
         
     mapped_positions = []
     
     for position in position_data:
-        # Extract position details
-        sym = position.get('sym', {})
-        
-        # Map product type
-        product = position.get('product', '').lower()
-        mapped_product = 'MIS'
-        if product == 'delivery':
-            mapped_product = 'CNC'
-        elif product == 'intraday':
-            mapped_product = 'MIS'
-        elif product == 'margin':
-            mapped_product = 'NRML'
-        
-        # Create mapped position
-        mapped_position = {
-            'tsym': sym.get('symbol', ''),
-            'exch': sym.get('exchange', ''),
-            'prd': mapped_product,
-            'netqty': position.get('netQty', 0),
-            'netavgprc': position.get('netAvgPrice', 0.0),
-            'realizedpnl': position.get('realizedPnl', 0.0),
-            'dayqty': position.get('dayPos', {}).get('dayQty', 0),
-            'dayavg': position.get('dayPos', {}).get('dayAvg', 0.0),
-            'dayrealizedpnl': position.get('dayPos', {}).get('dayRealizedPnl', 0.0)
-        }
-        
-        mapped_positions.append(mapped_position)
+        try:
+            # Skip zero positions
+            net_qty = position.get('netQty', 0)
+            if net_qty == 0:
+                continue
+                
+            # Map product type
+            product_map = {
+                'delivery': 'CNC',
+                'intraday': 'MIS',
+                'margin': 'NRML'
+            }
+            product = product_map.get(position.get('product', '').lower(), 'MIS')
+            
+            sym = position.get('sym', {})
+            exchange_symbol = sym.get('sym', '')
+            tradingsymbol = sym.get('trdSym', '')
+            exchange = sym.get('exch', '')
+            
+            # Get symbol ID from the position data
+            symbol_id = position.get('symId', '')
+            
+            # Log position data for debugging
+            logger.info(f"Position data: symId={symbol_id}, tradingsymbol={tradingsymbol}, exchange={exchange}")
+            
+            # Get OpenAlgo symbol - follow same approach as the main implementation
+            openalgo_symbol = None
+            try:
+                # First try with the symbol ID from sym object
+                symid_from_object = sym.get('id', '') if sym else ''
+                if symid_from_object:
+                    openalgo_symbol = get_oa_symbol(symid_from_object, exchange)
+                    logger.info(f"Symbol lookup with sym.id: {symid_from_object} -> {openalgo_symbol}")
+                
+                # If not found and we have the position symId, try that
+                if not openalgo_symbol and symbol_id:
+                    openalgo_symbol = get_oa_symbol(symbol_id, '')
+                    logger.info(f"Symbol lookup with position.symId: {symbol_id} -> {openalgo_symbol}")
+                    
+                # If still not found, try with exchange symbol
+                if not openalgo_symbol:
+                    openalgo_symbol = get_oa_symbol(exchange_symbol, exchange)
+                    logger.info(f"Symbol lookup with exchange symbol: {exchange_symbol} -> {openalgo_symbol}")
+                    
+            except Exception as e:
+                logger.warning(f"Symbol lookup failed: {str(e)}")
+                openalgo_symbol = None
+            
+            # Determine the final symbol to use
+            final_symbol = ""
+            if openalgo_symbol:
+                final_symbol = openalgo_symbol
+                logger.info(f"Using OpenAlgo symbol: {final_symbol}")
+            else:
+                # Fallback to exchange symbol if OpenAlgo symbol isn't available
+                final_symbol = exchange_symbol
+                logger.info(f"Fallback to exchange symbol: {final_symbol}")
+            
+            # Create mapped position - without tradingsymbol field as requested
+            mapped_position = {
+                'symbol': final_symbol,  # Use final symbol (OpenAlgo or fallback)
+                'exchange': exchange,
+                'product': product,
+                'quantity': int(position.get('netQty', 0)),
+                'average_price': str(round(float(position.get('netAvgPrice', 0.0)), 2)),
+                'pnl': position.get('realizedPnl', 0.0),
+                'day_quantity': position.get('dayPos', {}).get('dayQty', 0),
+                'day_average': position.get('dayPos', {}).get('dayAvg', 0.0),
+                'day_pnl': position.get('dayPos', {}).get('dayRealizedPnl', 0.0)
+            }
+            
+            mapped_positions.append(mapped_position)
+            
+        except Exception as e:
+            logger.error(f"Error mapping position: {e}", exc_info=True)
     
     return mapped_positions
 
 def transform_positions_data(positions_data):
     """
-    Transforms mapped position data to OpenAlgo format.
-    
-    Args:
-        positions_data: List of mapped position dictionaries
-        
-    Returns:
-        List of positions in OpenAlgo format
+    Transform mapped position data to OpenAlgo format.
+    DEPRECATED: This function is kept for backward compatibility only.
+    Position transformation is now done directly in get_positions function.
     """
+    logger.warning("transform_positions_data is deprecated - transformation is now done directly in get_positions")
+    
+    # Handle already processed data with status and data fields
+    if isinstance(positions_data, dict):
+        if positions_data.get('status') == 'success' and 'data' in positions_data:
+            return positions_data.get('data', [])
+    
+    # Check if this is an empty or invalid list
+    if not positions_data or not isinstance(positions_data, list):
+        logger.warning("No valid positions data to transform")
+        return []
+    
     transformed_data = []
+    
     for position in positions_data:
-        # Convert quantities to integers
-        quantity = int(position.get('netqty', 0))
-        day_quantity = int(position.get('dayqty', 0))
-        
-        # Convert prices to strings
-        average_price = str(float(position.get('netavgprc', 0.0)))
-        day_average_price = str(float(position.get('dayavg', 0.0)))
-        
-        # Calculate total P&L
-        total_pnl = float(position.get('realizedpnl', 0.0)) + \
-                   (quantity * (float(position.get('ltp', 0.0)) - float(position.get('netavgprc', 0.0))))
-        
-        transformed_position = {
-            "symbol": position.get('tsym', ''),
-            "exchange": position.get('exch', ''),
-            "product": position.get('prd', ''),
-            "quantity": quantity,
-            "average_price": average_price,
-            "day_quantity": day_quantity,
-            "day_average_price": day_average_price,
-            "total_pnl": str(total_pnl)
-        }
-        
-        transformed_data.append(transformed_position)
+        try:
+            # Check if position data is already in expected format
+            if all(k in position for k in ('symbol', 'exchange', 'product', 'quantity', 'average_price')):
+                # Already transformed, just add to list
+                transformed_data.append(position)
+                continue
+                
+            # Convert quantity to int and skip zero positions
+            quantity = int(position.get('quantity', 0))
+            if quantity == 0:
+                continue
+                
+            # Create transformed position with required fields
+            transformed_position = {
+                'symbol': position.get('symbol', ''),
+                'exchange': position.get('exchange', 'NSE'),
+                'product': position.get('product', 'MIS'),
+                'quantity': quantity,
+                'average_price': str(round(float(position.get('average_price', 0.0)), 2))
+            }
+            
+            transformed_data.append(transformed_position)
+            
+        except Exception as e:
+            logger.error(f"Error transforming position: {e}", exc_info=True)
     
     return transformed_data
 
