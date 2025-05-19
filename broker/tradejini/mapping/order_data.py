@@ -21,15 +21,15 @@ def map_order_data(order_data):
     
     # Get orders from response - they are nested under 'data' field
     orders_data = order_data.get('data', [])
-    print(f"[DEBUG] map_order_data - Found {len(orders_data)} orders in response")
-    print(f"[DEBUG] map_order_data - Orders data: {orders_data}")
+    #print(f"[DEBUG] map_order_data - Found {len(orders_data)} orders in response")
+    #print(f"[DEBUG] map_order_data - Orders data: {orders_data}")
     
     # Process each order
     if orders_data:
         for order in orders_data:
             # Get the actual order data from the nested structure
             order_info = order.get('data', {})
-            print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
+           # print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
             
             # Update fields in place
             order['action'] = "BUY" if order_info.get('side') == 'buy' else "SELL"
@@ -48,7 +48,7 @@ def map_order_data(order_data):
             order['timestamp'] = order_info.get('order_time', '')
             order['trigger_price'] = float(order_info.get('trigPrice', 0))
             
-            print(f"[DEBUG] map_order_data - Updated order: {order}")
+            #print(f"[DEBUG] map_order_data - Updated order: {order}")
     
     return orders_data
 
@@ -64,7 +64,7 @@ def calculate_order_statistics(order_data):
     Returns:
     - Dictionary containing counts of different types of orders
     """
-    print(f"[DEBUG] calculate_order_statistics - Input order_data: {order_data}")
+    #print(f"[DEBUG] calculate_order_statistics - Input order_data: {order_data}")
     
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
@@ -107,7 +107,7 @@ def transform_order_data(orders):
     Returns:
     - Dictionary with orders in OpenAlgo format
     """
-    print(f"[DEBUG] transform_order_data - Input orders: {orders}")
+    #print(f"[DEBUG] transform_order_data - Input orders: {orders}")
     
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
@@ -132,7 +132,7 @@ def transform_order_data(orders):
             "trigger_price": float(order.get('trigger_price', 0))
         }
         transformed_orders.append(transformed_order)
-        print(f"[DEBUG] transform_order_data - Transformed order: {transformed_order}")
+        #print(f"[DEBUG] transform_order_data - Transformed order: {transformed_order}")
     
     return transformed_orders
 
