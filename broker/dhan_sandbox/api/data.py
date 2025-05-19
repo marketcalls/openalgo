@@ -473,7 +473,7 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
@@ -554,7 +554,7 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
