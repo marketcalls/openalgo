@@ -27,6 +27,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **AliceBlue**
 - **AngelOne**
 - **Dhan**
+- **Dhan (Sandbox)**
 - **Firstock**
 - **Flattrade**
 - **Fyers**
@@ -37,6 +38,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Paytm**
 - **Pocketful**
 - **Shoonya**
+- **Tradejini**
 - **Upstox**
 - **Wisdom Capital**
 - **Zebu**
