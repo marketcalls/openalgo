@@ -3,10 +3,10 @@
 import os
 import json
 import httpx
-from broker.dhan.api.order_api import get_positions
-from broker.dhan.mapping.order_data import map_position_data
+from broker.dhan_sandbox.api.order_api import get_positions
+from broker.dhan_sandbox.mapping.order_data import map_position_data
 from utils.httpx_client import get_httpx_client
-from broker.dhan.api.baseurl import get_url
+from broker.dhan_sandbox.api.baseurl import get_url
 
 def get_margin_data(auth_token):
     print(auth_token)
