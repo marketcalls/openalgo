@@ -4,6 +4,7 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token, get_br_symbol, get_symbol
 from ..mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from ..mapping.order_data import transform_tradebook_data, transform_holdings_data
 
 from utils.httpx_client import get_httpx_client
 
@@ -155,13 +156,191 @@ def get_order_book(auth):
         }
 
 def get_trade_book(auth):
-    return get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
+    """
+    Get list of trades using Tradejini API.
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        dict: Trade book data in OpenAlgo format
+    """
+    try:
+        # Get API key from environment
+        api_key = os.getenv('BROKER_API_SECRET')
+        if not api_key:
+            raise ValueError("Error: BROKER_API_SECRET not set")
+            
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Create auth header in the format used by funds.py
+        auth_header = f"{api_key}:{auth}"
+        headers = {
+            'Authorization': f'Bearer {auth_header}',
+            'Content-Type': 'application/json'  # Changed from x-www-form-urlencoded to json
+        }
+        
+        # Make API request
+        response = client.get(
+            "https://api.tradejini.com/v2/api/oms/trades",
+            headers=headers,
+            params={"symDetails": "true"}
+        )
+        
+        response.raise_for_status()
+        
+        # Transform response data to OpenAlgo format
+        response_data = response.json()
+        
+        if response_data['s'] == 'ok':
+            # Extract trade data from response
+            trade_data = response_data['d']
+            
+            # Transform trade data using existing function
+            transformed_trades = transform_tradebook_data(trade_data)
+            
+            return {
+                'status': 'success',
+                'data': transformed_trades,
+                'stat': 'Ok',
+                'msg': 'Successfully fetched trade book'
+            }
+        else:
+            return {
+                'status': 'error',
+                'message': f"TradeJini API returned error: {response_data.get('m', 'Unknown error')}",
+                'stat': 'Not_Ok',
+                'msg': f"TradeJini API returned error: {response_data.get('m', 'Unknown error')}"
+            }
+            
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': f"Error fetching trade book: {str(e)}",
+            'stat': 'Not_Ok',
+            'msg': f"Error fetching trade book: {str(e)}"
+        }
 
 def get_positions(auth):
-    return get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
+    """
+    Get list of positions using Tradejini API.
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        dict: Positions data in OpenAlgo format
+    """
+    try:
+        # Get API key from environment
+        api_key = os.getenv('BROKER_API_SECRET')
+        if not api_key:
+            raise ValueError("Error: BROKER_API_SECRET not set")
+            
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Create auth header
+        auth_header = f"{api_key}:{auth}"
+        headers = {
+            'Authorization': f'Bearer {auth_header}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Make API request
+        response = client.get(
+            "https://api.tradejini.com/v2/api/oms/positions",
+            headers=headers,
+            params={"symDetails": "true"}
+        )
+        
+        response.raise_for_status()
+        
+        # Transform response data to OpenAlgo format
+        response_data = response.json()
+        
+        # Debug logging
+        print(f"[DEBUG] get_positions - Raw response data: {response_data}")
+        
+        if response_data.get('s') == 'ok':
+            # Map and transform position data
+            mapped_data = map_position_data(response_data.get('d', []))
+            transformed_data = transform_positions_data(mapped_data)
+            
+            return {
+                "status": "success",
+                "data": transformed_data
+            }
+        else:
+            error_msg = response_data.get('d', {}).get('msg', 'Unknown error')
+            print(f"[DEBUG] get_positions - API error: {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg
+            }
+            
+    except httpx.HTTPStatusError as e:
+        print(f"[DEBUG] get_positions - HTTP error: {e.response.status_code}")
+        print(f"[DEBUG] get_positions - Response: {e.response.text}")
+        return {
+            "status": "error",
+            "message": f"HTTP error {e.response.status_code}: {e.response.text}"
+        }
+    except httpx.RequestError as e:
+        print(f"[DEBUG] get_positions - Network error: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Network error: {str(e)}"
+        }
+    except Exception as e:
+        print(f"[DEBUG] get_positions - Unexpected error: {str(e)}")
+        import traceback
+        print(f"[DEBUG] get_positions - Traceback: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}"
+        }
 
 def get_holdings(auth):
-    return get_api_response("/PiConnectTP/Holdings",auth,method="POST")
+    """
+    Get list of holdings using Tradejini API.
+    
+    Args:
+        auth (str): Authentication token
+        
+    Returns:
+        dict: Holdings data in OpenAlgo format
+    """
+    try:
+        print("[DEBUG] Fetching holdings from Tradejini API")
+        # Make API request with symDetails=true to get symbol details
+        response = get_api_response(
+            '/api/oms/holdings',
+            auth,
+            method="GET",
+            data={"symDetails": "true"}
+        )
+        
+        print(f"[DEBUG] API Response: {response}")
+        
+        # Get holdings data from response
+        holdings_data = response.get('d', {}).get('holdings', [])
+        print(f"[DEBUG] Raw holdings data: {holdings_data}")
+        
+        if not isinstance(holdings_data, list):
+            print("[ERROR] Holdings data is not a list")
+            return {"status": "error", "message": "Invalid holdings data format"}
+            
+        # Transform data to OpenAlgo format
+        from ..mapping.order_data import transform_holdings_data
+        transformed_data = transform_holdings_data(holdings_data)
+        
+        return transformed_data
+        
+    except Exception as e:
+        print(f"[ERROR] Error fetching holdings: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -402,10 +581,10 @@ def cancel_order(orderid, auth):
     client = get_httpx_client()
     
     # Make API request
-    response = client.post(
-        "https://api.tradejini.com/v2/oms/cancel-order",
+    response = client.delete(
+        "https://api.tradejini.com/v2/api/oms/cancel-order",
         headers=headers,
-        data=f"orderId={orderid}"
+        params={"orderId": orderid}
     )
     response.raise_for_status()
     response_data = response.json()
@@ -418,44 +597,38 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     """
     Modify an order using Tradejini API.
-    """
-    # Get API key from environment
-    api_key = os.getenv('BROKER_API_SECRET')
-    if not api_key:
-        raise ValueError("Error: BROKER_API_SECRET not set")
+    
+    Args:
+        data (dict): Order modification data
+        auth (str): Authentication token
         
-    # Set up authentication header
-    auth_header = f"{api_key}:{auth_token}"
-    headers = {
-        'Authorization': f'Bearer {auth_header}',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    
-    # Get token and transform data
-    token = get_token(data['symbol'], data['exchange'])
-    transformed_data = transform_modify_order_data(data, token)
-    
-    # Convert transformed data to x-www-form-urlencoded format
-    payload = '&'.join([f'{k}={v}' for k, v in transformed_data.items()])
-    
-    # Get the shared httpx client
-    client = get_httpx_client()
-    
-    # Make API request
-    response = client.post(
-        "https://api.tradejini.com/v2/oms/modify-order",
-        headers=headers,
-        data=payload
-    )
-    response.raise_for_status()
-    response_data = response.json()
-    
-    if response_data['s'] == 'ok':
-        return None, {"status": "success", "message": response_data['d']['msg']}, 200
-    else:
-        return None, {"status": "error", "message": response_data.get('d', {}).get('msg', 'Order modification failed')}, response.status_code
-
-
+    Returns:
+        tuple: (None, response_data, order_id)
+    """
+    try:
+        # Get broker symbol token
+        token = get_token(data["symbol"], data["exchange"])
+        if not token:
+            return None, {"stat": "Not_Ok", "data": {"msg": "Symbol not found in token database"}}, None
+            
+        # Transform data to Tradejini format
+        transformed_data = transform_modify_order_data(data, token)
+        
+        # Make API request
+        response = get_api_response(
+            "/api/oms/modify-order",
+            auth,
+            method="PUT",
+            data=transformed_data
+        )
+        
+        if response["s"] == "ok":
+            return None, {"stat": "Ok", "data": {"msg": "Order modified successfully", "order_id": response["d"]["orderId"]}}, response["d"]["orderId"]
+        else:
+            return None, {"stat": "Not_Ok", "data": response["d"]}, None
+            
+    except Exception as e:
+        return None, {"stat": "Not_Ok", "data": {"msg": str(e)}}, None
 
 async def cancel_all_orders_api(data, auth):
     """
@@ -485,4 +658,3 @@ async def cancel_all_orders_api(data, auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-

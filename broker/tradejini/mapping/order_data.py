@@ -196,77 +196,133 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transforms TradeJini trade book data to OpenAlgo format.
+    
+    Args:
+        tradebook_data (list): List of trade records from TradeJini API
+        
+    Returns:
+        list: List of trades in OpenAlgo format
+    """
     transformed_data = []
     for trade in tradebook_data:
+        # Get symbol details from the sym object
+        symbol = trade.get('sym', {})
+        
         transformed_trade = {
-            "symbol": trade.get('tsym', ''),
-            "exchange": trade.get('exch', ''),
-            "product": trade.get('prd', ''),
-            "action": trade.get('trantype', ''),
-            "quantity": trade.get('qty', 0),
-            "average_price": trade.get('avgprc', 0.0),
-            "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
-            "orderid": trade.get('norenordno', ''),
-            "timestamp": trade.get('norentm', '')
+            "symbol": symbol.get('symbol', ''),
+            "exchange": symbol.get('exchange', ''),
+            "product": reverse_map_product_type(trade.get('product', '')),
+            "action": trade.get('side', '').upper(),
+            "quantity": trade.get('fillQty', 0),
+            "price": trade.get('fillPrice', 0.0),
+            "value": trade.get('fillValue', 0.0),
+            "order_id": trade.get('orderId', ''),
+            "trade_id": trade.get('fillId', ''),
+            "average_price": trade.get('avgPrice', 0.0),
+            "timestamp": trade.get('time', ''),
+            "exchange_order_id": trade.get('exchOrderId', ''),
+            "remarks": trade.get('remarks', ''),
+            "leg_type": trade.get('legType', ''),
+            "main_leg_order_id": trade.get('mainLegOrderId', ''),
+            "tradingsymbol": symbol.get('tradSymbol', ''),
+            "company_name": symbol.get('companyName', ''),
+            "expiry": symbol.get('expiry', ''),
+            "asset": symbol.get('asset', ''),
+            "lot_size": symbol.get('lot', 0),
+            "instrument_type": symbol.get('instrument', ''),
+            "display_symbol": symbol.get('dispSymbol', ''),
+            "price_tick": symbol.get('priceTick', 0.0)
         }
         transformed_data.append(transformed_trade)
     return transformed_data
 
 
 def map_position_data(position_data):
-
-    if  position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        position_data = position_data
+    """
+    Maps TradeJini position data to OpenAlgo format.
+    
+    Args:
+        position_data: List of position dictionaries from TradeJini API
         
-
-
-    if position_data:
-        for order in position_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order['tsym']
-            exchange = order['exch']
-            
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tsym'] = symbol_from_db
-                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
-                    order['prd'] = 'CNC'
-                               
-                elif order['prd'] == 'I':
-                    order['prd'] = 'MIS'
-                
-                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
-                    order['prd'] = 'NRML'
-
-
-                
-                
-            else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
-    return position_data
-
+    Returns:
+        List of mapped position dictionaries
+    """
+    if position_data is None or (isinstance(position_data, dict) and (position_data.get('s') != "ok")):
+        print("No valid position data available.")
+        return []
+        
+    mapped_positions = []
+    
+    for position in position_data:
+        # Extract position details
+        sym = position.get('sym', {})
+        
+        # Map product type
+        product = position.get('product', '').lower()
+        mapped_product = 'MIS'
+        if product == 'delivery':
+            mapped_product = 'CNC'
+        elif product == 'intraday':
+            mapped_product = 'MIS'
+        elif product == 'margin':
+            mapped_product = 'NRML'
+        
+        # Create mapped position
+        mapped_position = {
+            'tsym': sym.get('symbol', ''),
+            'exch': sym.get('exchange', ''),
+            'prd': mapped_product,
+            'netqty': position.get('netQty', 0),
+            'netavgprc': position.get('netAvgPrice', 0.0),
+            'realizedpnl': position.get('realizedPnl', 0.0),
+            'dayqty': position.get('dayPos', {}).get('dayQty', 0),
+            'dayavg': position.get('dayPos', {}).get('dayAvg', 0.0),
+            'dayrealizedpnl': position.get('dayPos', {}).get('dayRealizedPnl', 0.0)
+        }
+        
+        mapped_positions.append(mapped_position)
+    
+    return mapped_positions
 
 def transform_positions_data(positions_data):
+    """
+    Transforms mapped position data to OpenAlgo format.
+    
+    Args:
+        positions_data: List of mapped position dictionaries
+        
+    Returns:
+        List of positions in OpenAlgo format
+    """
     transformed_data = []
     for position in positions_data:
+        # Convert quantities to integers
+        quantity = int(position.get('netqty', 0))
+        day_quantity = int(position.get('dayqty', 0))
+        
+        # Convert prices to strings
+        average_price = str(float(position.get('netavgprc', 0.0)))
+        day_average_price = str(float(position.get('dayavg', 0.0)))
+        
+        # Calculate total P&L
+        total_pnl = float(position.get('realizedpnl', 0.0)) + \
+                   (quantity * (float(position.get('ltp', 0.0)) - float(position.get('netavgprc', 0.0))))
+        
         transformed_position = {
             "symbol": position.get('tsym', ''),
             "exchange": position.get('exch', ''),
             "product": position.get('prd', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('netavgprc', 0.0),
+            "quantity": quantity,
+            "average_price": average_price,
+            "day_quantity": day_quantity,
+            "day_average_price": day_average_price,
+            "total_pnl": str(total_pnl)
         }
+        
         transformed_data.append(transformed_position)
+    
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
@@ -379,19 +435,75 @@ def calculate_portfolio_statistics(holdings_data):
     }
 
 def transform_holdings_data(holdings_data):
-    transformed_data = []
-    if isinstance(holdings_data, list):
+    """
+    Transforms Tradejini holdings data to OpenAlgo format.
+    
+    Args:
+        holdings_data (list): List of holdings dictionaries from TradeJini API
+        
+    Returns:
+        dict: Holdings data in OpenAlgo format
+    """
+    try:
+        print(f"[DEBUG] Transforming holdings data: {holdings_data}")
+        
+        # Calculate statistics if we have holdings data
+        statistics = {} if not holdings_data else calculate_portfolio_statistics(holdings_data)
+        
+        # Transform individual holdings
+        transformed_holdings = []
+        
+        if not isinstance(holdings_data, list):
+            print("[ERROR] Holdings data is not a list")
+            return {"status": "error", "message": "Invalid holdings data format"}
+            
         for holding in holdings_data:
-            # Filter out only NSE exchange
-            nse_entries = [exch for exch in holding.get('exch_tsym', []) if exch.get('exch') == 'NSE']
-            for exch_tsym in nse_entries:
-                transformed_position = {
-                    "symbol": exch_tsym.get('tsym', ''),
-                    "exchange": exch_tsym.get('exch', ''),
-                    "quantity": int(holding.get('holdqty', 0)) + max(int(holding.get('npoadt1qty', 0)) , int(holding.get('dpqty', 0))),
-                    "product": exch_tsym.get('product', 'CNC'),
-                    "pnl": holding.get('profitandloss', 0.0),
-                    "pnlpercent": holding.get('pnlpercentage', 0.0)
+            try:
+                if not isinstance(holding, dict):
+                    print("[WARNING] Non-dict item in holdings list")
+                    continue
+                    
+                # Get symbol details from the sym object
+                sym = holding.get('sym', {})
+                
+                # Skip if we don't have basic required data
+                if not sym or not sym.get('tradSymbol'):
+                    print("[WARNING] Missing symbol data")
+                    continue
+                    
+                transformed_holding = {
+                    "exchange": sym.get('exchange', ''),
+                    "pnl": holding.get('realizedPnl', 0),
+                    "pnlpercent": 0,
+                    "product": map_product_type(holding.get('product', '').lower()),
+                    "quantity": holding.get('qty', 0),
+                    "symbol": sym.get('tradSymbol', '')
                 }
-                transformed_data.append(transformed_position)
-    return transformed_data
+                
+                # Calculate pnl percentage safely
+                try:
+                    if holding.get('avgPrice', 0) != 0:
+                        total_value = holding.get('avgPrice', 0) * holding.get('qty', 0)
+                        transformed_holding["pnlpercent"] = round((holding.get('realizedPnl', 0) / total_value) * 100, 2)
+                except (ZeroDivisionError, TypeError):
+                    print("[WARNING] Could not calculate P&L percentage")
+                    transformed_holding["pnlpercent"] = 0
+                    
+                transformed_holdings.append(transformed_holding)
+                
+            except Exception as e:
+                print(f"[ERROR] Error transforming holding: {str(e)}")
+                print(f"[DEBUG] Holding data: {holding}")
+                continue
+        
+        return {
+            "status": "success",
+            "data": {
+                "holdings": transformed_holdings,
+                "statistics": statistics
+            }
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Error in transform_holdings_data: {str(e)}")
+        return {"status": "error", "message": str(e)}

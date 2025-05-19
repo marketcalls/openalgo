@@ -36,12 +36,42 @@ def transform_data(data, token):
 def transform_modify_order_data(data, token):
     """
     Transforms OpenAlgo modify order format to Tradejini API format.
+    
+    Args:
+        data (dict): OpenAlgo modify order data
+        token (str): Broker symbol token
+        
+    Returns:
+        dict: Transformed data for Tradejini API
     """
-    return {
-        "symId": data["symbol"],
+    # Calculate total quantity (filled + modified)
+    filled_qty = int(data.get("filled_quantity", 0))
+    modified_qty = int(data["quantity"])
+    total_qty = filled_qty + modified_qty
+    
+    transformed = {
+        "symId": token,
         "orderId": data["orderid"],
-        "qty": str(data["quantity"])
+        "qty": total_qty,
+        "type": map_order_type(data["pricetype"]),
+        "validity": map_validity(data.get("validity", "DAY")),
+        "side": data["action"].lower(),
     }
+    
+    # Add optional fields based on order type
+    if data["pricetype"] in ["LIMIT", "SL"]:
+        transformed["limitPrice"] = float(data["price"])
+    
+    if data["pricetype"] in ["SL", "SL-M"]:
+        transformed["trigPrice"] = float(data["trigger_price"])
+    
+    if data.get("disclosed_quantity"):
+        transformed["discQty"] = int(data["disclosed_quantity"])
+    
+    if data.get("market_protection"):
+        transformed["mktProt"] = float(data["market_protection"])
+    
+    return transformed
 
 
 def map_order_type(pricetype):
