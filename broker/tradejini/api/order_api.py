@@ -11,43 +11,84 @@ from utils.httpx_client import get_httpx_client
 def get_api_response(endpoint, auth, method="GET", data=None):
     """
     Make API request to Tradejini API with proper authentication.
+    
+    Args:
+        endpoint (str): API endpoint path
+        auth (str): Authentication token
+        method (str): HTTP method (GET/POST/PUT)
+        data (dict): Request data
+        
+    Returns:
+        dict: API response data
     """
-    AUTH_TOKEN = auth
-    
-    # Get API key from environment
-    api_key = os.getenv('BROKER_API_SECRET')
-    if not api_key:
-        raise ValueError("Error: BROKER_API_SECRET not set")
+    try:
+        # Get API key from environment
+        api_key = os.getenv('BROKER_API_SECRET')
+        if not api_key:
+            raise ValueError("Error: BROKER_API_SECRET not set")
+            
+        # Create auth header
+        auth_header = f"{api_key}:{auth}"
+        print(f"[DEBUG] get_api_response - Using auth header: {auth_header}")
         
-    # Extract auth token from auth
-    auth_token = AUTH_TOKEN.split(':')[1]
-    
-    # Set up authentication header
-    auth_header = f"{api_key}:{auth_token}"
-    
-    headers = {
-        'Authorization': f'Bearer {auth_header}',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    
-    # Get the shared httpx client
-    client = get_httpx_client()
-    
-    if method == "GET":
-        response = client.get(
-            f"https://api.tradejini.com/v2{endpoint}",
-            headers=headers,
-            params=data
-        )
-    else:  # POST
-        response = client.post(
-            f"https://api.tradejini.com/v2{endpoint}",
-            headers=headers,
-            data=data
-        )
+        headers = {
+            'Authorization': f'Bearer {auth_header}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
         
-    response.raise_for_status()  # Raise exception for bad status codes
-    return response.json()
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        # Convert data to x-www-form-urlencoded format
+        if data:
+            data_str = '&'.join([f'{k}={v}' for k, v in data.items()])
+            print(f"[DEBUG] get_api_response - Sending data: {data_str}")
+        
+        # Make API request
+        if method == "GET":
+            response = client.get(
+                f"https://api.tradejini.com/v2{endpoint}",
+                headers=headers,
+                params=data
+            )
+        else:  # POST/PUT
+            response = client.put(
+                f"https://api.tradejini.com/v2{endpoint}",
+                headers=headers,
+                data=data_str  # Send as string for x-www-form-urlencoded
+            )
+            
+        print(f"[DEBUG] get_api_response - Response status: {response.status_code}")
+        print(f"[DEBUG] get_api_response - Response headers: {dict(response.headers)}")
+        print(f"[DEBUG] get_api_response - Response body: {response.text}")
+        
+        # Handle 404 differently since it's a common error
+        if response.status_code == 404:
+            print("[WARNING] get_api_response - API endpoint not found. Trying without /v2 prefix")
+            if method == "GET":
+                response = client.get(
+                    f"https://api.tradejini.com{endpoint}",
+                    headers=headers,
+                    params=data
+                )
+            else:
+                response = client.put(
+                    f"https://api.tradejini.com{endpoint}",
+                    headers=headers,
+                    data=data_str
+                )
+            
+            print(f"[DEBUG] get_api_response - Second attempt status: {response.status_code}")
+            print(f"[DEBUG] get_api_response - Second attempt body: {response.text}")
+            
+        response.raise_for_status()  # Raise exception for bad status codes
+        return response.json()
+        
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] get_api_response - Exception occurred: {str(e)}")
+        print(f"[ERROR] get_api_response - Traceback: {traceback.format_exc()}")
+        raise
 
 def get_order_book(auth):
     """
@@ -68,7 +109,7 @@ def get_order_book(auth):
         # Get the shared httpx client
         client = get_httpx_client()
         
-        # Set up authentication header
+        # Create auth header
         auth_header = f"{api_key}:{auth}"
         headers = {
             'Authorization': f'Bearer {auth_header}',
@@ -603,32 +644,65 @@ def modify_order(data, auth):
         auth (str): Authentication token
         
     Returns:
-        tuple: (None, response_data, order_id)
+        tuple: (response_data, status_code)
     """
     try:
+        print(f"[DEBUG] modify_order - Received data: {data}")
+        print(f"[DEBUG] modify_order - Received auth: {auth}")
+        
         # Get broker symbol token
         token = get_token(data["symbol"], data["exchange"])
+        print(f"[DEBUG] modify_order - Token lookup result: {token}")
+        
         if not token:
-            return None, {"stat": "Not_Ok", "data": {"msg": "Symbol not found in token database"}}, None
+            error_msg = "Symbol not found in token database"
+            print(f"[ERROR] modify_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
             
         # Transform data to Tradejini format
-        transformed_data = transform_modify_order_data(data, token)
+        try:
+            transformed_data = transform_modify_order_data(data, token)
+            print(f"[DEBUG] modify_order - Transformed data: {transformed_data}")
+        except ValueError as e:
+            error_msg = str(e)
+            print(f"[ERROR] modify_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         
         # Make API request
+        print(f"[DEBUG] modify_order - Making API request to /api/oms/modify-order")
         response = get_api_response(
             "/api/oms/modify-order",
             auth,
             method="PUT",
             data=transformed_data
         )
+        print(f"[DEBUG] modify_order - API response: {response}")
         
+        # Handle different response formats
         if response["s"] == "ok":
-            return None, {"stat": "Ok", "data": {"msg": "Order modified successfully", "order_id": response["d"]["orderId"]}}, response["d"]["orderId"]
+            print(f"[DEBUG] modify_order - Order modified successfully")
+            return {
+                "stat": "Ok",
+                "data": {
+                    "msg": "Order modified successfully",
+                    "order_id": response["d"]["orderId"]
+                }
+            }, 200
+        elif response["s"] == "no-data":
+            error_msg = f"Order modification failed: {response["msg"]}"
+            print(f"[ERROR] modify_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         else:
-            return None, {"stat": "Not_Ok", "data": response["d"]}, None
+            error_msg = f"Order modification failed: {response.get('msg', 'Unknown error')}"
+            print(f"[ERROR] modify_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
             
     except Exception as e:
-        return None, {"stat": "Not_Ok", "data": {"msg": str(e)}}, None
+        error_msg = f"Exception in modify_order: {str(e)}"
+        print(f"[ERROR] modify_order - {error_msg}")
+        import traceback
+        print(f"[ERROR] modify_order - Traceback: {traceback.format_exc()}")
+        return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
 
 async def cancel_all_orders_api(data, auth):
     """
