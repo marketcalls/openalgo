@@ -3,6 +3,7 @@ from importlib import import_module
 from database.auth_db import get_auth_token
 from utils.session import check_session_validity
 from services.place_smart_order_service import place_smart_order
+from services.close_position_service import close_position
 import logging
 import csv
 import io
@@ -479,6 +480,56 @@ def close_position():
         
     except Exception as e:
         logger.error(f"Error in close_position endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'An error occurred: {str(e)}'
+        }), 500
+
+@orders_bp.route('/close_all_positions', methods=['POST'])
+@check_session_validity
+def close_all_positions():
+    """Close all open positions using the broker API"""
+    try:
+        # Get auth token from session
+        login_username = session['user']
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get('broker')
+        
+        if not auth_token or not broker_name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Authentication error'
+            }), 401
+        
+        # Dynamically import broker-specific modules for API
+        api_funcs = dynamic_import(broker_name, 'api.order_api', ['close_all_positions'])
+        
+        if not api_funcs or 'close_all_positions' not in api_funcs:
+            logger.error(f"Error loading broker-specific modules for {broker_name}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Error loading broker modules'
+            }), 500
+        
+        # Use the broker's close_all_positions function directly
+        response_code, status_code = api_funcs['close_all_positions']('', auth_token)
+        
+        if status_code == 200:
+            response_data = {
+                'status': 'success',
+                'message': 'All Open Positions Squared Off'
+            }
+            return jsonify(response_data), 200
+        else:
+            message = response_code.get('message', 'Failed to close positions') if isinstance(response_code, dict) else 'Failed to close positions'
+            error_response = {
+                'status': 'error',
+                'message': message
+            }
+            return jsonify(error_response), status_code
+        
+    except Exception as e:
+        logger.error(f"Error in close_all_positions endpoint: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': f'An error occurred: {str(e)}'

@@ -4,10 +4,10 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.dhan.mapping.transform_data import map_exchange_type, map_exchange
+from broker.dhan_sandbox.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.dhan_sandbox.mapping.transform_data import map_exchange_type, map_exchange
 from utils.httpx_client import get_httpx_client
-from broker.dhan.api.baseurl import get_url
+from broker.dhan_sandbox.api.baseurl import get_url
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):

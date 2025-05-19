@@ -45,6 +45,9 @@
                 case 'dhan':
                     loginUrl = '/dhan/callback';
                     break;
+                case 'dhan_sandbox':
+                    loginUrl = '/dhan_sandbox/callback';
+                    break;
                 case 'firstock':
                     loginUrl = '/firstock/callback';
                     break;
@@ -146,6 +149,7 @@
                                 <option value="angel" {{ 'disabled' if broker_name != 'angel' }}>Angel One {{ '(Disabled)' if broker_name != 'angel' }}</option>
                                 <option value="compositedge" {{ 'disabled' if broker_name != 'compositedge' }}>CompositEdge {{ '(Disabled)' if broker_name != 'compositedge' }}</option>
                                 <option value="dhan" {{ 'disabled' if broker_name != 'dhan' }}>Dhan {{ '(Disabled)' if broker_name != 'dhan' }}</option>
+                                <option value="dhan_sandbox" {{ 'disabled' if broker_name != 'dhan_sandbox' }}>Dhan (Sandbox) {{ '(Disabled)' if broker_name != 'dhan_sandbox' }}</option>
                                 <option value="firstock" {{ 'disabled' if broker_name != 'firstock' }}>Firstock {{ '(Disabled)' if broker_name != 'firstock' }}</option>
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>

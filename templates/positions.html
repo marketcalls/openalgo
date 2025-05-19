@@ -62,17 +62,25 @@
             <h1 class="text-3xl font-bold">Trading Positions</h1>
             <p class="text-base-content/60">Monitor and manage your active trading positions</p>
         </div>
-        <a href="{{ url_for('orders_bp.export_positions') }}" class="btn btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
-            </svg>
-            Export to CSV
-        </a>
+        <div class="flex gap-2">
+            <button onclick="openCloseAllModal()" class="btn btn-error">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                Close All
+            </button>
+            <a href="{{ url_for('orders_bp.export_positions') }}" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                Export to CSV
+            </a>
+        </div>
     </div>
 
     <!-- Positions Table -->
     <div id="positions-table-container" class="table-container">
-        <table class="table w-full">
+        <table class="table w-full table-zebra">
             <thead class="table-header">
                 <tr>
                     <th class="cursor-pointer hover:bg-base-300">
@@ -222,8 +230,57 @@ function exitPosition(symbol, exchange, product) {
     });
 }
 
+function closeAllPositions() {
+    // Close the modal
+    document.getElementById('close-all-modal').checked = false;
+    
+    // Call the close_all_positions endpoint
+    fetch('/close_all_positions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Show toast notification
+        if (data.status === 'success') {
+            showToast(data.message, 'success');
+            // Reload the page after a short delay to show updated positions
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showToast('An error occurred while closing all positions.', 'error');
+    });
+}
+
+function openCloseAllModal() {
+    document.getElementById('close-all-modal').checked = true;
+}
+
 function modifyPosition(symbol, exchange) {
     console.log(`Modifying position for ${symbol} on ${exchange}`);
 }
 </script>
+
+<!-- DaisyUI Modal for Close All confirmation -->
+<input type="checkbox" id="close-all-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg text-error">⚠️ Close All Positions</h3>
+        <p class="py-4">Are you sure you want to close all open positions? This action will exit all your current trades immediately at market price.</p>
+        <div class="modal-action">
+            <label for="close-all-modal" class="btn">Cancel</label>
+            <button onclick="closeAllPositions()" class="btn btn-error">Yes, Close All</button>
+        </div>
+    </div>
+    <label class="modal-backdrop" for="close-all-modal"></label>
+</div>
 {% endblock %}
