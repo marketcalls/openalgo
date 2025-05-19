@@ -2,21 +2,22 @@ import httpx
 import json
 import os
 from database.auth_db import get_auth_token
-from database.token_db import get_token, get_br_symbol, get_symbol
+from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from ..mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from ..mapping.order_data import transform_tradebook_data, transform_holdings_data
 
 from utils.httpx_client import get_httpx_client
 
-def get_api_response(endpoint, auth, method="GET", data=None):
+def get_api_response(endpoint, auth, method="GET", data=None, params=None):
     """
     Make API request to Tradejini API with proper authentication.
     
     Args:
         endpoint (str): API endpoint path
         auth (str): Authentication token
-        method (str): HTTP method (GET/POST/PUT)
+        method (str): HTTP method (GET/POST/PUT/DELETE)
         data (dict): Request data
+        params (dict): Query parameters
         
     Returns:
         dict: API response data
@@ -39,23 +40,29 @@ def get_api_response(endpoint, auth, method="GET", data=None):
         # Get the shared httpx client
         client = get_httpx_client()
         
-        # Convert data to x-www-form-urlencoded format
-        if data:
-            data_str = '&'.join([f'{k}={v}' for k, v in data.items()])
-            print(f"[DEBUG] get_api_response - Sending data: {data_str}")
-        
         # Make API request
         if method == "GET":
             response = client.get(
                 f"https://api.tradejini.com/v2{endpoint}",
                 headers=headers,
-                params=data
+                params=params if params else data
+            )
+        elif method == "DELETE":
+            response = client.delete(
+                f"https://api.tradejini.com/v2{endpoint}",
+                headers=headers,
+                params=params
             )
         else:  # POST/PUT
+            # Convert data to x-www-form-urlencoded format
+            if data:
+                data_str = '&'.join([f'{k}={v}' for k, v in data.items()])
+                print(f"[DEBUG] get_api_response - Sending data: {data_str}")
+            
             response = client.put(
                 f"https://api.tradejini.com/v2{endpoint}",
                 headers=headers,
-                data=data_str  # Send as string for x-www-form-urlencoded
+                data=data_str if data else None
             )
             
         print(f"[DEBUG] get_api_response - Response status: {response.status_code}")
@@ -69,13 +76,19 @@ def get_api_response(endpoint, auth, method="GET", data=None):
                 response = client.get(
                     f"https://api.tradejini.com{endpoint}",
                     headers=headers,
-                    params=data
+                    params=params if params else data
+                )
+            elif method == "DELETE":
+                response = client.delete(
+                    f"https://api.tradejini.com{endpoint}",
+                    headers=headers,
+                    params=params
                 )
             else:
                 response = client.put(
                     f"https://api.tradejini.com{endpoint}",
                     headers=headers,
-                    data=data_str
+                    data=data_str if data else None
                 )
             
             print(f"[DEBUG] get_api_response - Second attempt status: {response.status_code}")
@@ -116,9 +129,9 @@ def get_order_book(auth):
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        print(f"[DEBUG] get_order_book - Making request to: {client.base_url}/v2/api/oms/orders")
-        print(f"[DEBUG] get_order_book - Headers: {headers}")
-        print(f"[DEBUG] get_order_book - Query params: {{'symDetails': 'true'}}")
+        #print(f"[DEBUG] get_order_book - Making request to: {client.base_url}/v2/api/oms/orders")
+        #print(f"[DEBUG] get_order_book - Headers: {headers}")
+        #print(f"[DEBUG] get_order_book - Query params: {{'symDetails': 'true'}}")
         
         # Make API request
         response = client.get(
@@ -127,8 +140,8 @@ def get_order_book(auth):
             params={"symDetails": "true"}
         )
         
-        print(f"[DEBUG] get_order_book - Response status: {response.status_code}")
-        print(f"[DEBUG] get_order_book - Response headers: {dict(response.headers)}")
+        #print(f"[DEBUG] get_order_book - Response status: {response.status_code}")
+        #print(f"[DEBUG] get_order_book - Response headers: {dict(response.headers)}")
         
         response.raise_for_status()
         
@@ -137,19 +150,26 @@ def get_order_book(auth):
         print(f"[DEBUG] get_order_book - Raw response data: {response_data}")
         
         if response_data['s'] == 'ok':
-            print(f"[DEBUG] get_order_book - Found {len(response_data['d'])} orders")
+            #print(f"[DEBUG] get_order_book - Found {len(response_data['d'])} orders")
             # Transform each order to OpenAlgo format
             transformed_orders = []
             for order in response_data['d']:
-                print(f"[DEBUG] get_order_book - Processing order: {order}")
+                #print(f"[DEBUG] get_order_book - Processing order: {order}")
                 try:
+                    # Get OpenAlgo symbol using symbol and exchange
+                    openalgo_symbol = get_oa_symbol(
+                        symbol=order['sym']['id'],
+                        exchange=order['sym']['exch']
+                    )
+                    #print(f"[DEBUG] get_order_book - OpenAlgo symbol lookup for symbol {order['sym']['sym']}: {openalgo_symbol}")
+                    
                     transformed_order = {
                         'stat': 'Ok',  # OpenAlgo expects 'stat' field
                         'data': {
-                            'tradingsymbol': order['sym']['sym'],  # Changed from 'symbol' to 'sym'
-                            'exchange': order['sym']['exch'],      # Changed from 'exchange' to 'exch'
+                            'tradingsymbol': openalgo_symbol if openalgo_symbol else order['sym']['sym'],  # Fallback to Tradejini symbol if OpenAlgo not found
+                            'exchange': order['sym']['exch'],
                             'token': order['symId'],
-                            'exch': order['sym']['exch'],         # Changed from 'exchange' to 'exch'
+                            'exch': order['sym']['exch'],
                             'quantity': order['qty'],
                             'side': order['side'],
                             'type': order['type'],
@@ -165,7 +185,7 @@ def get_order_book(auth):
                             'valid_till': order['validTill']
                         }
                     }
-                    print(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
+                    #print(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
                     transformed_orders.append(transformed_order)
                 except KeyError as e:
                     print(f"[ERROR] get_order_book - Missing field in order: {str(e)}")
@@ -186,13 +206,14 @@ def get_order_book(auth):
             }
             
     except Exception as e:
-        print(f"[ERROR] get_order_book - Exception occurred: {str(e)}")
+        error_msg = f"Exception in get_order_book: {str(e)}"
+        print(f"[ERROR] get_order_book - {error_msg}")
         import traceback
         print(f"[ERROR] get_order_book - Traceback: {traceback.format_exc()}")
         return {
             'stat': 'Not_Ok',
             'data': {
-                'msg': str(e)
+                'msg': error_msg
             }
         }
 
@@ -563,14 +584,15 @@ async def close_all_positions(current_api_key, auth):
     Close all open positions using Tradejini API.
     """
     AUTH_TOKEN = auth
-
-    positions_response = await get_positions(auth)
-
-    if positions_response is None or positions_response.get('stat') == "Not_Ok":
+    
+    # Get order book
+    order_book_response = await get_order_book(auth)
+    
+    if not order_book_response:
         return {"status": "success", "message": "No Open Positions Found"}
 
-    if positions_response:
-        for position in positions_response:
+    if order_book_response:
+        for position in order_book_response:
             if int(position.get('netqty', 0)) == 0:
                 continue
 
@@ -599,41 +621,110 @@ async def close_all_positions(current_api_key, auth):
 def cancel_order(orderid, auth):
     """
     Cancel an order using Tradejini API.
-    """
-    AUTH_TOKEN = auth
     
-    # Get API key from environment
-    api_key = os.getenv('BROKER_API_SECRET')
-    if not api_key:
-        raise ValueError("Error: BROKER_API_SECRET not set")
+    Args:
+        orderid (str): Order ID to cancel
+        auth (str): Authentication token
         
-    # Extract auth token from auth
-    auth_token = AUTH_TOKEN.split(':')[1]
+    Returns:
+        tuple: (response_data, status_code)
+    """
+    try:
+        print(f"[DEBUG] cancel_order - Received orderid: {orderid}")
+        print(f"[DEBUG] cancel_order - Received auth: {auth}")
+        
+        # Prepare query parameters
+        params = {"orderId": orderid}
+        print(f"[DEBUG] cancel_order - Query parameters: {params}")
+        
+        # Make API request
+        print(f"[DEBUG] cancel_order - Making API request to /api/oms/cancel-order")
+        response = get_api_response(
+            "/api/oms/cancel-order",
+            auth=auth,
+            method="DELETE",
+            params=params  # Using params instead of data
+        )
+        print(f"[DEBUG] cancel_order - API response: {response}")
+        
+        # Handle response
+        if response["s"] == "ok":
+            print(f"[DEBUG] cancel_order - Order cancelled successfully")
+            return {
+                "stat": "Ok",
+                "data": {
+                    "msg": "Order cancelled successfully",
+                    "order_id": response["d"]["orderId"]
+                }
+            }, 200
+        elif response["s"] == "no-data":
+            error_msg = f"Order cancellation failed: {response["msg"]}"
+            print(f"[ERROR] cancel_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
+        else:
+            error_msg = f"Order cancellation failed: {response.get('msg', 'Unknown error')}"
+            print(f"[ERROR] cancel_order - {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
+            
+    except Exception as e:
+        error_msg = f"Exception in cancel_order: {str(e)}"
+        print(f"[ERROR] cancel_order - {error_msg}")
+        import traceback
+        print(f"[ERROR] cancel_order - Traceback: {traceback.format_exc()}")
+        return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
+
+def cancel_all_orders_api(data, auth):
+    """
+    Cancel all open orders using Tradejini API.
     
-    # Set up authentication header
-    auth_header = f"{api_key}:{auth_token}"
-    
-    headers = {
-        'Authorization': f'Bearer {auth_header}',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    
-    # Get the shared httpx client
-    client = get_httpx_client()
-    
-    # Make API request
-    response = client.delete(
-        "https://api.tradejini.com/v2/api/oms/cancel-order",
-        headers=headers,
-        params={"orderId": orderid}
-    )
-    response.raise_for_status()
-    response_data = response.json()
-    
-    if response_data['s'] == 'ok':
-        return None, {"status": "success", "message": response_data['d']['msg']}, 200
-    else:
-        return None, {"status": "error", "message": response_data.get('d', {}).get('msg', 'Order cancellation failed')}, response.status_code
+    Args:
+        data (dict): Order data
+        auth (str): Authentication token
+        
+    Returns:
+        tuple: (list of canceled orders, list of failed cancellations)
+    """
+    try:
+        print(f"[DEBUG] cancel_all_orders_api - Getting order book")
+        order_book_response = get_order_book(auth)
+        print(f"[DEBUG] cancel_all_orders_api - Order book response: {order_book_response}")
+        
+        if not order_book_response:
+            print("[DEBUG] cancel_all_orders_api - No orders found")
+            return [], []
+
+        if order_book_response.get('stat') == 'Ok':
+            orders = order_book_response.get('data', [])
+            print(f"[DEBUG] cancel_all_orders_api - Found {len(orders)} orders")
+            
+            canceled_orders = []
+            failed_cancellations = []
+            
+            for order in orders:
+                if order.get('status') in ['OPEN', 'TRIGGER PENDING', 'MODIFIED']:
+                    print(f"[DEBUG] cancel_all_orders_api - Cancelling order: {order.get('orderId')}")
+                    cancel_response, status_code = cancel_order(order.get('orderId'), auth)
+                    print(f"[DEBUG] cancel_all_orders_api - Cancel response: {cancel_response}")
+                    
+                    if cancel_response[0].get('stat') == 'Ok':
+                        canceled_orders.append(order.get('orderId'))
+                    else:
+                        error_msg = f"Failed to cancel order {order.get('orderId')}: {cancel_response[0].get('data', {}).get('msg', 'Unknown error')}"
+                        print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+                        failed_cancellations.append({"orderId": order.get('orderId'), "error": error_msg})
+            
+            return canceled_orders, failed_cancellations
+        else:
+            error_msg = f"Failed to get order book: {order_book_response.get('data', {}).get('msg', 'Unknown error')}"
+            print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+            return [], []
+            
+    except Exception as e:
+        error_msg = f"Exception in cancel_all_orders_api: {str(e)}"
+        print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+        import traceback
+        print(f"[ERROR] cancel_all_orders_api - Traceback: {traceback.format_exc()}")
+        return [], []
 
 def modify_order(data, auth):
     """
@@ -672,7 +763,7 @@ def modify_order(data, auth):
         print(f"[DEBUG] modify_order - Making API request to /api/oms/modify-order")
         response = get_api_response(
             "/api/oms/modify-order",
-            auth,
+            auth=auth,
             method="PUT",
             data=transformed_data
         )
@@ -703,32 +794,3 @@ def modify_order(data, auth):
         import traceback
         print(f"[ERROR] modify_order - Traceback: {traceback.format_exc()}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
-
-async def cancel_all_orders_api(data, auth):
-    """
-    Cancel all open orders using Tradejini API.
-    """
-    AUTH_TOKEN = auth
-    
-    # Get order book
-    order_book_response = await get_order_book(auth)
-    
-    if order_book_response is None:
-        return [], []  # Return empty lists indicating failure to retrieve the order book
-
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response
-                        if order['status'] in ['OPEN', 'TRIGGER_PENDING']]
-    canceled_orders = []
-    failed_cancellations = []
-
-    # Cancel the filtered orders
-    for order in orders_to_cancel:
-        orderid = order['norenordno']
-        cancel_response, status_code = await cancel_order(orderid, auth)
-        if status_code == 200:
-            canceled_orders.append(orderid)
-        else:
-            failed_cancellations.append(orderid)
-    
-    return canceled_orders, failed_cancellations
