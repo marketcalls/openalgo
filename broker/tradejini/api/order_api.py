@@ -1,12 +1,17 @@
 import httpx
 import json
 import os
+import logging
 from database.auth_db import get_auth_token
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from ..mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
-from ..mapping.order_data import transform_tradebook_data, transform_holdings_data
+from ..mapping.order_data import transform_tradebook_data, transform_holdings_data, map_trade_data
 
 from utils.httpx_client import get_httpx_client
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def get_api_response(endpoint, auth, method="GET", data=None, params=None):
     """
@@ -30,7 +35,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
             
         # Create auth header
         auth_header = f"{api_key}:{auth}"
-        print(f"[DEBUG] get_api_response - Using auth header: {auth_header}")
+        logger.debug(f"get_api_response - Using auth header: {auth_header}")
         
         headers = {
             'Authorization': f'Bearer {auth_header}',
@@ -57,7 +62,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
             # Convert data to x-www-form-urlencoded format
             if data:
                 data_str = '&'.join([f'{k}={v}' for k, v in data.items()])
-                print(f"[DEBUG] get_api_response - Sending data: {data_str}")
+                logger.debug(f"get_api_response - Sending data: {data_str}")
             
             response = client.put(
                 f"https://api.tradejini.com/v2{endpoint}",
@@ -65,13 +70,13 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
                 data=data_str if data else None
             )
             
-        print(f"[DEBUG] get_api_response - Response status: {response.status_code}")
-        print(f"[DEBUG] get_api_response - Response headers: {dict(response.headers)}")
-        print(f"[DEBUG] get_api_response - Response body: {response.text}")
+        logger.debug(f"get_api_response - Response status: {response.status_code}")
+        logger.debug(f"get_api_response - Response headers: {dict(response.headers)}")
+        logger.debug(f"get_api_response - Response body: {response.text}")
         
         # Handle 404 differently since it's a common error
         if response.status_code == 404:
-            print("[WARNING] get_api_response - API endpoint not found. Trying without /v2 prefix")
+            logger.warning("get_api_response - API endpoint not found. Trying without /v2 prefix")
             if method == "GET":
                 response = client.get(
                     f"https://api.tradejini.com{endpoint}",
@@ -91,16 +96,16 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
                     data=data_str if data else None
                 )
             
-            print(f"[DEBUG] get_api_response - Second attempt status: {response.status_code}")
-            print(f"[DEBUG] get_api_response - Second attempt body: {response.text}")
+            logger.debug(f"get_api_response - Second attempt status: {response.status_code}")
+            logger.debug(f"get_api_response - Second attempt body: {response.text}")
             
         response.raise_for_status()  # Raise exception for bad status codes
         return response.json()
         
     except Exception as e:
+        logger.error(f"get_api_response - Exception occurred: {str(e)}")
         import traceback
-        print(f"[ERROR] get_api_response - Exception occurred: {str(e)}")
-        print(f"[ERROR] get_api_response - Traceback: {traceback.format_exc()}")
+        logger.error(f"get_api_response - Traceback: {traceback.format_exc()}")
         raise
 
 def get_order_book(auth):
@@ -147,7 +152,7 @@ def get_order_book(auth):
         
         # Transform response data to OpenAlgo format
         response_data = response.json()
-        print(f"[DEBUG] get_order_book - Raw response data: {response_data}")
+        logger.debug(f"get_order_book - Raw response data: {response_data}")
         
         if response_data['s'] == 'ok':
             #print(f"[DEBUG] get_order_book - Found {len(response_data['d'])} orders")
@@ -188,8 +193,8 @@ def get_order_book(auth):
                     #print(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
                     transformed_orders.append(transformed_order)
                 except KeyError as e:
-                    print(f"[ERROR] get_order_book - Missing field in order: {str(e)}")
-                    print(f"[ERROR] get_order_book - Order data: {order}")
+                    logger.error(f"get_order_book - Missing field in order: {str(e)}")
+                    logger.error(f"get_order_book - Order data: {order}")
                     continue
             
             return {
@@ -197,7 +202,7 @@ def get_order_book(auth):
                 'data': transformed_orders
             }
         else:
-            print(f"[DEBUG] get_order_book - API error: {response_data.get('d', {}).get('msg', 'Unknown error')}")
+            logger.debug(f"get_order_book - API error: {response_data.get('d', {}).get('msg', 'Unknown error')}")
             return {
                 'stat': 'Not_Ok',
                 'data': {
@@ -206,16 +211,10 @@ def get_order_book(auth):
             }
             
     except Exception as e:
-        error_msg = f"Exception in get_order_book: {str(e)}"
-        print(f"[ERROR] get_order_book - {error_msg}")
+        logger.error(f"get_order_book - Exception occurred: {str(e)}")
         import traceback
-        print(f"[ERROR] get_order_book - Traceback: {traceback.format_exc()}")
-        return {
-            'stat': 'Not_Ok',
-            'data': {
-                'msg': error_msg
-            }
-        }
+        logger.error(f"get_order_book - Traceback: {traceback.format_exc()}")
+        raise
 
 def get_trade_book(auth):
     """
@@ -225,7 +224,7 @@ def get_trade_book(auth):
         auth (str): Authentication token
         
     Returns:
-        dict: Trade book data in OpenAlgo format
+        dict: Trade book data in OpenAlgo format {'data': [...], 'status': 'success'}
     """
     try:
         # Get API key from environment
@@ -236,14 +235,15 @@ def get_trade_book(auth):
         # Get the shared httpx client
         client = get_httpx_client()
         
-        # Create auth header in the format used by funds.py
+        # Create auth header
         auth_header = f"{api_key}:{auth}"
         headers = {
             'Authorization': f'Bearer {auth_header}',
-            'Content-Type': 'application/json'  # Changed from x-www-form-urlencoded to json
+            'Content-Type': 'application/json'
         }
         
         # Make API request
+        logger.info("get_trade_book - Making request to TradeJini API")
         response = client.get(
             "https://api.tradejini.com/v2/api/oms/trades",
             headers=headers,
@@ -252,37 +252,110 @@ def get_trade_book(auth):
         
         response.raise_for_status()
         
-        # Transform response data to OpenAlgo format
+        # Get raw response data
         response_data = response.json()
+        logger.info(f"get_trade_book - Raw response type: {type(response_data)}")
+        logger.info(f"get_trade_book - Raw response keys: {response_data.keys() if isinstance(response_data, dict) else 'not a dict'}")
         
-        if response_data['s'] == 'ok':
-            # Extract trade data from response
-            trade_data = response_data['d']
-            
-            # Transform trade data using existing function
-            transformed_trades = transform_tradebook_data(trade_data)
-            
-            return {
-                'status': 'success',
-                'data': transformed_trades,
-                'stat': 'Ok',
-                'msg': 'Successfully fetched trade book'
-            }
-        else:
+        # Check response format
+        if not isinstance(response_data, dict) or 's' not in response_data:
+            logger.error(f"get_trade_book - Invalid API response format: {response_data}")
             return {
                 'status': 'error',
-                'message': f"TradeJini API returned error: {response_data.get('m', 'Unknown error')}",
-                'stat': 'Not_Ok',
-                'msg': f"TradeJini API returned error: {response_data.get('m', 'Unknown error')}"
+                'data': [],
+                'message': "Invalid API response format"
             }
             
+        # Check response status
+        if response_data['s'] != 'ok':
+            error_msg = f"API error: {response_data.get('d', {}).get('msg', 'Unknown error')}"
+            logger.error(f"get_trade_book - {error_msg}")
+            return {
+                'status': 'error',
+                'data': [],
+                'message': error_msg
+            }
+        
+        # Get trades from response
+        trades_data = response_data.get('d', [])
+        logger.info(f"get_trade_book - Found {len(trades_data)} trades")
+        
+        # Transform trades directly to OpenAlgo format
+        transformed_trades = []
+        for trade in trades_data:
+            try:
+                # Get symbol details
+                symbol = trade.get('sym', {})
+                
+                # Get OpenAlgo symbol
+                openalgo_symbol = None
+                try:
+                    openalgo_symbol = get_oa_symbol(
+                        symbol=symbol.get('id', ''),
+                        exchange=symbol.get('exch', '')
+                    )
+                except Exception as e:
+                    logger.warning(f"get_trade_book - Symbol lookup failed: {str(e)}")
+                
+                # Map product type
+                product = trade.get('product', '').lower()
+                if product == 'intraday':
+                    product = 'MIS'
+                elif product == 'delivery':
+                    product = 'CNC'
+                elif product == 'coverorder':
+                    product = 'CO'
+                elif product == 'bracketorder':
+                    product = 'BO'
+                else:
+                    product = 'NRML'
+                
+                # Map side to action
+                side = trade.get('side', '').lower()
+                action = 'BUY' if side == 'buy' else 'SELL'
+                
+                # Create transformed trade - match OpenAlgo format exactly
+                # Determine the symbol to use (OpenAlgo symbol if available)
+                final_symbol = ""  
+                if openalgo_symbol:
+                    final_symbol = openalgo_symbol
+                else:
+                    # Fallback to exchange symbol if OpenAlgo symbol isn't available
+                    final_symbol = symbol.get('sym', symbol.get('trdSym', ''))
+                    
+                transformed_trade = {
+                    "action": action,
+                    "average_price": float(trade.get('fillPrice', 0.0)),
+                    "exchange": symbol.get('exch', '').upper(),
+                    "orderid": str(trade.get('orderId', '')),
+                    "product": product,
+                    "quantity": int(trade.get('fillQty', 0)),
+                    "symbol": final_symbol,  # Using OpenAlgo symbol here
+                    "timestamp": trade.get('time', ''),
+                    "trade_value": float(trade.get('fillValue', 0.0))
+                }
+                
+                # Exchange order ID is removed as per requirements
+                
+                transformed_trades.append(transformed_trade)
+                logger.debug(f"get_trade_book - Transformed trade: {transformed_trade['orderid']}")
+                
+            except KeyError as e:
+                logger.error(f"get_trade_book - Missing field in trade: {str(e)}")
+                logger.error(f"get_trade_book - Trade data: {trade}")
+                continue
+        
+        # Return ONLY the array of trades - service layer will add the wrapper
+        logger.info(f"get_trade_book - Returning {len(transformed_trades)} raw trades")
+        return transformed_trades
+        
     except Exception as e:
-        return {
-            'status': 'error',
-            'message': f"Error fetching trade book: {str(e)}",
-            'stat': 'Not_Ok',
-            'msg': f"Error fetching trade book: {str(e)}"
-        }
+        error_msg = f"Error fetching trade book: {str(e)}"
+        logger.error(error_msg)
+        import traceback
+        logger.error(f"get_trade_book - Traceback: {traceback.format_exc()}")
+        # Return empty array - service layer will handle error formatting
+        return []
 
 def get_positions(auth):
     """
@@ -323,7 +396,7 @@ def get_positions(auth):
         response_data = response.json()
         
         # Debug logging
-        print(f"[DEBUG] get_positions - Raw response data: {response_data}")
+        logger.debug(f"get_positions - Raw response data: {response_data}")
         
         if response_data.get('s') == 'ok':
             # Map and transform position data
@@ -336,29 +409,29 @@ def get_positions(auth):
             }
         else:
             error_msg = response_data.get('d', {}).get('msg', 'Unknown error')
-            print(f"[DEBUG] get_positions - API error: {error_msg}")
+            logger.debug(f"get_positions - API error: {error_msg}")
             return {
                 "status": "error",
                 "message": error_msg
             }
             
     except httpx.HTTPStatusError as e:
-        print(f"[DEBUG] get_positions - HTTP error: {e.response.status_code}")
-        print(f"[DEBUG] get_positions - Response: {e.response.text}")
+        logger.debug(f"get_positions - HTTP error: {e.response.status_code}")
+        logger.debug(f"get_positions - Response: {e.response.text}")
         return {
             "status": "error",
             "message": f"HTTP error {e.response.status_code}: {e.response.text}"
         }
     except httpx.RequestError as e:
-        print(f"[DEBUG] get_positions - Network error: {str(e)}")
+        logger.debug(f"get_positions - Network error: {str(e)}")
         return {
             "status": "error",
             "message": f"Network error: {str(e)}"
         }
     except Exception as e:
-        print(f"[DEBUG] get_positions - Unexpected error: {str(e)}")
+        logger.debug(f"get_positions - Unexpected error: {str(e)}")
         import traceback
-        print(f"[DEBUG] get_positions - Traceback: {traceback.format_exc()}")
+        logger.debug(f"get_positions - Traceback: {traceback.format_exc()}")
         return {
             "status": "error",
             "message": f"Unexpected error: {str(e)}"
@@ -375,7 +448,7 @@ def get_holdings(auth):
         dict: Holdings data in OpenAlgo format
     """
     try:
-        print("[DEBUG] Fetching holdings from Tradejini API")
+        logger.debug("Fetching holdings from Tradejini API")
         # Make API request with symDetails=true to get symbol details
         response = get_api_response(
             '/api/oms/holdings',
@@ -384,14 +457,14 @@ def get_holdings(auth):
             data={"symDetails": "true"}
         )
         
-        print(f"[DEBUG] API Response: {response}")
+        logger.debug(f"API Response: {response}")
         
         # Get holdings data from response
         holdings_data = response.get('d', {}).get('holdings', [])
-        print(f"[DEBUG] Raw holdings data: {holdings_data}")
+        logger.debug(f"Raw holdings data: {holdings_data}")
         
         if not isinstance(holdings_data, list):
-            print("[ERROR] Holdings data is not a list")
+            logger.error("Holdings data is not a list")
             return {"status": "error", "message": "Invalid holdings data format"}
             
         # Transform data to OpenAlgo format
@@ -401,7 +474,7 @@ def get_holdings(auth):
         return transformed_data
         
     except Exception as e:
-        print(f"[ERROR] Error fetching holdings: {str(e)}")
+        logger.error(f"Error fetching holdings: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
@@ -409,13 +482,13 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
 
-    print(positions_data)
+    logger.debug(positions_data)
 
     net_qty = '0'
 
     if positions_data is None or (isinstance(positions_data, dict) and (positions_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
-        print("No data available.")
+        logger.debug("No data available.")
         net_qty = '0'
 
     if positions_data and isinstance(positions_data, list):
@@ -442,9 +515,9 @@ def place_order_api(data, auth):
         api_key = os.getenv('BROKER_API_KEY')
         
         # Log input parameters for debugging
-        print(f"[DEBUG] place_order_api - Input data: {data}")
-        print(f"[DEBUG] place_order_api - AUTH_TOKEN: {AUTH_TOKEN}")
-        print(f"[DEBUG] place_order_api - BROKER_API_KEY: {api_key}")
+        logger.debug(f"place_order_api - Input data: {data}")
+        logger.debug(f"place_order_api - AUTH_TOKEN: {AUTH_TOKEN}")
+        logger.debug(f"place_order_api - BROKER_API_KEY: {api_key}")
         
         # Get token and transform data
         token = get_token(data['symbol'], data['exchange'])
@@ -452,8 +525,8 @@ def place_order_api(data, auth):
         
         # Convert transformed data to x-www-form-urlencoded format
         payload = '&'.join([f'{k}={v}' for k, v in transformed_data.items()])
-        print(f"[DEBUG] place_order_api - Payload: {payload}")
-        print(f"[DEBUG] place_order_api - Input auth: {AUTH_TOKEN}")
+        logger.debug(f"place_order_api - Payload: {payload}")
+        logger.debug(f"place_order_api - Input auth: {AUTH_TOKEN}")
         
         # Get API key from environment
         api_key = os.getenv('BROKER_API_SECRET')
@@ -464,9 +537,9 @@ def place_order_api(data, auth):
         auth_token = AUTH_TOKEN
         auth_header = f"{api_key}:{auth_token}"
         
-        print(f"[DEBUG] place_order_api - API Key: {api_key}")
-        print(f"[DEBUG] place_order_api - Auth Token: {auth_token}")
-        print(f"[DEBUG] place_order_api - Auth Header: {auth_header}")
+        logger.debug(f"place_order_api - API Key: {api_key}")
+        logger.debug(f"place_order_api - Auth Token: {auth_token}")
+        logger.debug(f"place_order_api - Auth Header: {auth_header}")
         
         headers = {
             'Authorization': f'Bearer {auth_header}',
@@ -477,7 +550,7 @@ def place_order_api(data, auth):
         client = get_httpx_client()
         
         # Make API request
-        print(f"[DEBUG] place_order_api - Making request to: https://api.tradejini.com/v2/oms/place-order")
+        logger.debug(f"place_order_api - Making request to: https://api.tradejini.com/v2/oms/place-order")
         response = client.post(
             "https://api.tradejini.com/v2/oms/place-order",
             headers=headers,
@@ -485,12 +558,12 @@ def place_order_api(data, auth):
         )
         
         # Log response details
-        print(f"[DEBUG] place_order_api - Response status: {response.status_code}")
-        print(f"[DEBUG] place_order_api - Response headers: {dict(response.headers)}")
+        logger.debug(f"place_order_api - Response status: {response.status_code}")
+        logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
         
         response.raise_for_status()
         response_data = response.json()
-        print(f"[DEBUG] place_order_api - Response data: {response_data}")
+        logger.debug(f"place_order_api - Response data: {response_data}")
         
         if response_data['s'] == 'ok':
             # Create a response-like object with status attribute
@@ -510,9 +583,9 @@ def place_order_api(data, auth):
             return response_obj, {"status": "error", "message": response_data.get('d', {}).get('msg', 'Order placement failed')}, None
             
     except Exception as e:
-        print(f"[ERROR] place_order_api - Exception occurred: {str(e)}")
+        logger.error(f"place_order_api - Exception occurred: {str(e)}")
         import traceback
-        print(f"[ERROR] place_order_api - Traceback: {traceback.format_exc()}")
+        logger.error(f"place_order_api - Traceback: {traceback.format_exc()}")
         return None, {"status": "error", "message": f"Order placement failed: {str(e)}"}, None
 
 async def place_smartorder_api(data, auth):
@@ -530,8 +603,8 @@ async def place_smartorder_api(data, auth):
     # Get current open position for the symbol
     current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
 
-    print(f"position_size: {position_size}")
-    print(f"Open Position: {current_position}")
+    logger.debug(f"position_size: {position_size}")
+    logger.debug(f"Open Position: {current_position}")
     
     # Determine action based on position_size and current_position
     action = None
@@ -600,7 +673,7 @@ async def close_all_positions(current_api_key, auth):
             quantity = abs(int(position['netqty']))
 
             symbol = get_symbol(position['token'], position['exch'])
-            print(f'The Symbol is {symbol}')
+            logger.debug(f'The Symbol is {symbol}')
 
             order_data = {
                 "apikey": current_api_key,
@@ -613,7 +686,7 @@ async def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity)
             }
 
-            print(order_data)
+            logger.debug(order_data)
             res, response, orderid = await place_order_api(order_data, auth)
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}
@@ -630,26 +703,26 @@ def cancel_order(orderid, auth):
         tuple: (response_data, status_code)
     """
     try:
-        print(f"[DEBUG] cancel_order - Received orderid: {orderid}")
-        print(f"[DEBUG] cancel_order - Received auth: {auth}")
+        logger.debug(f"cancel_order - Received orderid: {orderid}")
+        logger.debug(f"cancel_order - Received auth: {auth}")
         
         # Prepare query parameters
         params = {"orderId": orderid}
-        print(f"[DEBUG] cancel_order - Query parameters: {params}")
+        logger.debug(f"cancel_order - Query parameters: {params}")
         
         # Make API request
-        print(f"[DEBUG] cancel_order - Making API request to /api/oms/cancel-order")
+        logger.debug(f"cancel_order - Making API request to /api/oms/cancel-order")
         response = get_api_response(
             "/api/oms/cancel-order",
             auth=auth,
             method="DELETE",
             params=params  # Using params instead of data
         )
-        print(f"[DEBUG] cancel_order - API response: {response}")
+        logger.debug(f"cancel_order - API response: {response}")
         
         # Handle response
         if response["s"] == "ok":
-            print(f"[DEBUG] cancel_order - Order cancelled successfully")
+            logger.debug(f"cancel_order - Order cancelled successfully")
             return {
                 "stat": "Ok",
                 "data": {
@@ -659,18 +732,18 @@ def cancel_order(orderid, auth):
             }, 200
         elif response["s"] == "no-data":
             error_msg = f"Order cancellation failed: {response["msg"]}"
-            print(f"[ERROR] cancel_order - {error_msg}")
+            logger.error(f"cancel_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         else:
             error_msg = f"Order cancellation failed: {response.get('msg', 'Unknown error')}"
-            print(f"[ERROR] cancel_order - {error_msg}")
+            logger.error(f"cancel_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
             
     except Exception as e:
         error_msg = f"Exception in cancel_order: {str(e)}"
-        print(f"[ERROR] cancel_order - {error_msg}")
+        logger.error(f"cancel_order - {error_msg}")
         import traceback
-        print(f"[ERROR] cancel_order - Traceback: {traceback.format_exc()}")
+        logger.error(f"cancel_order - Traceback: {traceback.format_exc()}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
 
 def cancel_all_orders_api(data, auth):
@@ -685,45 +758,45 @@ def cancel_all_orders_api(data, auth):
         tuple: (list of canceled orders, list of failed cancellations)
     """
     try:
-        print(f"[DEBUG] cancel_all_orders_api - Getting order book")
+        logger.debug(f"cancel_all_orders_api - Getting order book")
         order_book_response = get_order_book(auth)
-        print(f"[DEBUG] cancel_all_orders_api - Order book response: {order_book_response}")
+        logger.debug(f"cancel_all_orders_api - Order book response: {order_book_response}")
         
         if not order_book_response:
-            print("[DEBUG] cancel_all_orders_api - No orders found")
+            logger.debug("cancel_all_orders_api - No orders found")
             return [], []
 
         if order_book_response.get('stat') == 'Ok':
             orders = order_book_response.get('data', [])
-            print(f"[DEBUG] cancel_all_orders_api - Found {len(orders)} orders")
+            logger.debug(f"cancel_all_orders_api - Found {len(orders)} orders")
             
             canceled_orders = []
             failed_cancellations = []
             
             for order in orders:
                 if order.get('status') in ['OPEN', 'TRIGGER PENDING', 'MODIFIED']:
-                    print(f"[DEBUG] cancel_all_orders_api - Cancelling order: {order.get('orderId')}")
+                    logger.debug(f"cancel_all_orders_api - Cancelling order: {order.get('orderId')}")
                     cancel_response, status_code = cancel_order(order.get('orderId'), auth)
-                    print(f"[DEBUG] cancel_all_orders_api - Cancel response: {cancel_response}")
+                    logger.debug(f"cancel_all_orders_api - Cancel response: {cancel_response}")
                     
                     if cancel_response[0].get('stat') == 'Ok':
                         canceled_orders.append(order.get('orderId'))
                     else:
                         error_msg = f"Failed to cancel order {order.get('orderId')}: {cancel_response[0].get('data', {}).get('msg', 'Unknown error')}"
-                        print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+                        logger.error(f"cancel_all_orders_api - {error_msg}")
                         failed_cancellations.append({"orderId": order.get('orderId'), "error": error_msg})
             
             return canceled_orders, failed_cancellations
         else:
             error_msg = f"Failed to get order book: {order_book_response.get('data', {}).get('msg', 'Unknown error')}"
-            print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+            logger.error(f"cancel_all_orders_api - {error_msg}")
             return [], []
             
     except Exception as e:
         error_msg = f"Exception in cancel_all_orders_api: {str(e)}"
-        print(f"[ERROR] cancel_all_orders_api - {error_msg}")
+        logger.error(f"cancel_all_orders_api - {error_msg}")
         import traceback
-        print(f"[ERROR] cancel_all_orders_api - Traceback: {traceback.format_exc()}")
+        logger.error(f"cancel_all_orders_api - Traceback: {traceback.format_exc()}")
         return [], []
 
 def modify_order(data, auth):
@@ -738,40 +811,40 @@ def modify_order(data, auth):
         tuple: (response_data, status_code)
     """
     try:
-        print(f"[DEBUG] modify_order - Received data: {data}")
-        print(f"[DEBUG] modify_order - Received auth: {auth}")
+        logger.debug(f"modify_order - Received data: {data}")
+        logger.debug(f"modify_order - Received auth: {auth}")
         
         # Get broker symbol token
         token = get_token(data["symbol"], data["exchange"])
-        print(f"[DEBUG] modify_order - Token lookup result: {token}")
+        logger.debug(f"modify_order - Token lookup result: {token}")
         
         if not token:
             error_msg = "Symbol not found in token database"
-            print(f"[ERROR] modify_order - {error_msg}")
+            logger.error(f"modify_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
             
         # Transform data to Tradejini format
         try:
             transformed_data = transform_modify_order_data(data, token)
-            print(f"[DEBUG] modify_order - Transformed data: {transformed_data}")
+            logger.debug(f"modify_order - Transformed data: {transformed_data}")
         except ValueError as e:
             error_msg = str(e)
-            print(f"[ERROR] modify_order - {error_msg}")
+            logger.error(f"modify_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         
         # Make API request
-        print(f"[DEBUG] modify_order - Making API request to /api/oms/modify-order")
+        logger.debug(f"modify_order - Making API request to /api/oms/modify-order")
         response = get_api_response(
             "/api/oms/modify-order",
             auth=auth,
             method="PUT",
             data=transformed_data
         )
-        print(f"[DEBUG] modify_order - API response: {response}")
+        logger.debug(f"modify_order - API response: {response}")
         
         # Handle different response formats
         if response["s"] == "ok":
-            print(f"[DEBUG] modify_order - Order modified successfully")
+            logger.debug(f"modify_order - Order modified successfully")
             return {
                 "stat": "Ok",
                 "data": {
@@ -781,16 +854,16 @@ def modify_order(data, auth):
             }, 200
         elif response["s"] == "no-data":
             error_msg = f"Order modification failed: {response["msg"]}"
-            print(f"[ERROR] modify_order - {error_msg}")
+            logger.error(f"modify_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         else:
             error_msg = f"Order modification failed: {response.get('msg', 'Unknown error')}"
-            print(f"[ERROR] modify_order - {error_msg}")
+            logger.error(f"modify_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
             
     except Exception as e:
         error_msg = f"Exception in modify_order: {str(e)}"
-        print(f"[ERROR] modify_order - {error_msg}")
+        logger.error(f"modify_order - {error_msg}")
         import traceback
-        print(f"[ERROR] modify_order - Traceback: {traceback.format_exc()}")
+        logger.error(f"modify_order - Traceback: {traceback.format_exc()}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500

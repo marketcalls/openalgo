@@ -1,6 +1,11 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.tradejini.mapping.transform_data import reverse_map_product_type
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def map_order_data(order_data):
     """
@@ -140,103 +145,224 @@ def transform_order_data(orders):
 
 def map_trade_data(trade_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-    
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
-    
-    Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
-    """
-        # Check if 'data' is None
-    if trade_data is None or (isinstance(trade_data, dict) and (trade_data['stat'] == "Not_Ok")):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        trade_data = trade_data
-        
-
-
-    if trade_data:
-        for order in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order['tsym']
-            exchange = order['exch']
-            
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tsym'] = symbol_from_db
-                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
-                    order['prd'] = 'CNC'
-                               
-                elif order['prd'] == 'I':
-                    order['prd'] = 'MIS'
-                
-                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
-                    order['prd'] = 'NRML'
-
-                if(order['trantype']=="B"):
-                    order['trantype']="BUY"
-                elif(order['trantype']=="S"):
-                    order['trantype']="SELL"
-                
-                
-            else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
-    return trade_data
-
-
-
-
-def transform_tradebook_data(tradebook_data):
-    """
-    Transforms TradeJini trade book data to OpenAlgo format.
+    Processes and modifies a list of trade dictionaries based on specific conditions.
     
     Args:
-        tradebook_data (list): List of trade records from TradeJini API
+        trade_data: Tradejini API response containing trade information
         
     Returns:
-        list: List of trades in OpenAlgo format
+        The modified trade_data with updated fields
     """
-    transformed_data = []
-    for trade in tradebook_data:
-        # Get symbol details from the sym object
-        symbol = trade.get('sym', {})
+    logger.debug(f"map_trade_data - Input trade_data type: {type(trade_data)}")
+    
+    # Handle already transformed data that might be in different formats
+    
+    # Handle direct array of trades (from get_trade_book)
+    if isinstance(trade_data, list):
+        # If it's already a list of trades, just return it
+        return trade_data
         
-        transformed_trade = {
-            "symbol": symbol.get('symbol', ''),
-            "exchange": symbol.get('exchange', ''),
-            "product": reverse_map_product_type(trade.get('product', '')),
-            "action": trade.get('side', '').upper(),
-            "quantity": trade.get('fillQty', 0),
-            "price": trade.get('fillPrice', 0.0),
-            "value": trade.get('fillValue', 0.0),
-            "order_id": trade.get('orderId', ''),
-            "trade_id": trade.get('fillId', ''),
-            "average_price": trade.get('avgPrice', 0.0),
-            "timestamp": trade.get('time', ''),
-            "exchange_order_id": trade.get('exchOrderId', ''),
-            "remarks": trade.get('remarks', ''),
-            "leg_type": trade.get('legType', ''),
-            "main_leg_order_id": trade.get('mainLegOrderId', ''),
-            "tradingsymbol": symbol.get('tradSymbol', ''),
-            "company_name": symbol.get('companyName', ''),
-            "expiry": symbol.get('expiry', ''),
-            "asset": symbol.get('asset', ''),
-            "lot_size": symbol.get('lot', 0),
-            "instrument_type": symbol.get('instrument', ''),
-            "display_symbol": symbol.get('dispSymbol', ''),
-            "price_tick": symbol.get('priceTick', 0.0)
+    # Handle OpenAlgo format with status and data fields
+    if isinstance(trade_data, dict) and 'status' in trade_data and trade_data.get('status') == 'success':
+        if 'data' in trade_data and isinstance(trade_data['data'], list):
+            return trade_data['data']
+        return []
+    
+    # Check if it's a TradeJini API response
+    if not isinstance(trade_data, dict) or 's' not in trade_data or trade_data.get('s') != 'ok':
+        # Not a TradeJini API response - log at debug level instead of warning to avoid unnecessary warnings
+        logger.debug(f"map_trade_data - Not a TradeJini API response format")
+        return []
+    
+    # Get trades from response - they are in the 'd' array
+    trades_data = trade_data.get('d', [])
+    logger.debug(f"map_trade_data - Found {len(trades_data)} trades in response")
+    
+    # Process each trade
+    mapped_trades = []
+    if trades_data:
+        for trade in trades_data:
+            # Get symbol details from the sym object
+            symbol = trade.get('sym', {})
+            
+            # Map product types
+            product = trade.get('product', '').lower()
+            if product == 'intraday':
+                product = 'MIS'
+            elif product == 'delivery':
+                product = 'CNC'
+            elif product == 'coverorder':
+                product = 'CO'
+            elif product == 'bracketorder':
+                product = 'BO'
+            else:
+                product = 'NRML'
+            
+            # Map side to action
+            side = trade.get('side', '').lower()
+            action = 'BUY' if side == 'buy' else 'SELL'
+            
+            # Get exchange from sym object
+            exchange = symbol.get('exch', '').upper()
+            
+            # Create mapped trade
+            mapped_trade = {
+                "symbol": symbol.get('trdSym', ''),
+                "exchange": exchange,
+                "product": product,
+                "action": action,
+                "quantity": trade.get('fillQty', 0),
+                "average_price": trade.get('fillPrice', 0.0),
+                "trade_value": trade.get('fillValue', 0.0),
+                "orderid": trade.get('orderId', ''),
+                "timestamp": trade.get('time', ''),
+                "sym_id": symbol.get('id', '') # Store symbol ID for OpenAlgo lookup
+            }
+            
+            # Add optional fields if present
+            if trade.get('exchOrderId'):
+                mapped_trade["exchange_order_id"] = trade.get('exchOrderId', '')
+            
+            if trade.get('remarks'):
+                mapped_trade["remarks"] = trade.get('remarks', '')
+                
+            mapped_trades.append(mapped_trade)
+            
+    return mapped_trades
+
+
+def transform_tradebook_data(trades):
+    """
+    Transforms mapped trade data to OpenAlgo format.
+    
+    Args:
+        trades: List of mapped trade dictionaries or raw API response
+        
+    Returns:
+        dict: Trade book data in OpenAlgo format with {'data': [...], 'status': 'success'}
+    """
+    logger.debug(f"transform_tradebook_data - Input trades type: {type(trades)}")
+    
+    # Check if already in OpenAlgo format
+    if isinstance(trades, dict) and 'status' in trades and 'data' in trades:
+        logger.debug("transform_tradebook_data - Already in OpenAlgo format")
+        # Extract just the data array without the wrapper
+        return trades['data']
+    
+    # Handle empty list case
+    if not trades:
+        logger.debug("transform_tradebook_data - Empty trades list")
+        # Return just the array without any wrapper
+        return []
+    
+    # Check if raw TradeJini API response
+    if isinstance(trades, dict) and 's' in trades and trades.get('s') == 'ok' and 'd' in trades:
+        logger.debug("transform_tradebook_data - Processing raw TradeJini API response")
+        trades = trades.get('d', [])
+    
+    # Directly handling a dictionary assuming it's a single trade
+    if isinstance(trades, dict) and 'action' not in trades and 'orderid' not in trades:
+        # Convert the single dictionary into a list of one dictionary
+        logger.debug("transform_tradebook_data - Converting single dict to list")
+        trades = [trades]
+        
+    if not isinstance(trades, list):
+        logger.error(f"Invalid input data type: Expected list or dict, got {type(trades)}")
+        return {
+            'status': 'error',
+            'data': [],
+            'message': f"Invalid input data type: Expected list or dict, got {type(trades)}"
         }
-        transformed_data.append(transformed_trade)
-    return transformed_data
+    
+    transformed_trades = []
+    
+    for trade in trades:
+        if not isinstance(trade, dict):
+            logger.warning(f"Skipping invalid trade data: {type(trade)}")
+            continue
+            
+        # Check if this is already transformed
+        if all(key in trade for key in ['action', 'average_price', 'exchange', 'orderid']):
+            transformed_trades.append(trade)
+            continue
+        
+        # Get Symbol details if it exists
+        symbol = trade.get('sym', {})
+        sym_id = ''
+        
+        if isinstance(symbol, dict):
+            sym_id = symbol.get('id', '')
+            exchange = symbol.get('exch', '')
+            trading_symbol = symbol.get('trdSym', '')
+        else:
+            # Use data from trade directly if sym object doesn't exist
+            sym_id = trade.get('sym_id', '')
+            exchange = trade.get('exchange', '')
+            trading_symbol = trade.get('symbol', '')
+        
+        # Get OpenAlgo symbol if possible
+        try:
+            openalgo_symbol = get_oa_symbol(
+                symbol=sym_id, 
+                exchange=exchange
+            )
+        except Exception as e:
+            logger.warning(f"Symbol lookup failed: {str(e)}")
+            openalgo_symbol = None
+            
+        # Map product type if needed
+        if 'product' in trade:
+            product = trade['product']
+            if isinstance(product, str) and product.lower() in ['intraday', 'delivery', 'coverorder', 'bracketorder']:
+                product = trade.get('product', '').lower()
+                if product == 'intraday':
+                    product = 'MIS'
+                elif product == 'delivery':
+                    product = 'CNC'
+                elif product == 'coverorder':
+                    product = 'CO'
+                elif product == 'bracketorder':
+                    product = 'BO'
+                else:
+                    product = 'NRML'
+            else:
+                product = str(product).upper()
+        else:
+            product = 'MIS'  # Default
+            
+        # Map side to action if needed
+        if 'action' in trade:
+            action = trade['action']
+        elif 'side' in trade:
+            side = trade.get('side', '').lower()
+            action = 'BUY' if side == 'buy' else 'SELL'
+        else:
+            action = ''  # Can't determine
+            
+        # Create transformed trade - match OpenAlgo format exactly
+        transformed_trade = {
+            "action": action,
+            "average_price": float(trade.get('fillPrice', trade.get('average_price', 0.0))),
+            "exchange": exchange.upper() if exchange else '',
+            "orderid": str(trade.get('orderId', trade.get('orderid', ''))),
+            "product": product,
+            "quantity": int(trade.get('fillQty', trade.get('quantity', 0))),
+            "symbol": trading_symbol,
+            "timestamp": trade.get('time', trade.get('timestamp', '')),
+            "trade_value": float(trade.get('fillValue', trade.get('trade_value', 0.0)))
+        }
+        
+        # Removed tradingsymbol and exchange_order_id fields as per requirements
+        
+        if 'remarks' in trade:
+            transformed_trade["remarks"] = trade.get('remarks', '')
+        
+        transformed_trades.append(transformed_trade)
+        
+    logger.debug(f"transform_tradebook_data - Transformed {len(transformed_trades)} trades")
+    
+    return transformed_trades
+    
 
 
 def map_position_data(position_data):
