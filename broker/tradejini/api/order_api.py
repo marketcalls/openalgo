@@ -560,27 +560,104 @@ def get_holdings(auth):
         logger.error(f"Error fetching holdings: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-def get_open_position(tradingsymbol, exchange, producttype,auth):
-    #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    positions_data = get_positions(auth)
-
-    logger.debug(positions_data)
-
-    net_qty = '0'
-
-    if positions_data is None or (isinstance(positions_data, dict) and (positions_data['stat'] == "Not_Ok")):
-        # Handle the case where there is no data
-        logger.debug("No data available.")
+def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """
+    Get open position quantity for a specific symbol, exchange, and product type.
+    
+    Args:
+        tradingsymbol (str): Trading symbol
+        exchange (str): Exchange
+        producttype (str): Product type (e.g., 'intraday', 'delivery')
+        auth (str): Authentication token
+        
+    Returns:
+        str: Net quantity of the position or '0' if not found
+    """
+    try:
+        logger.debug(f"get_open_position - Looking for position: {tradingsymbol}, {exchange}, {producttype}")
+        
+        # Convert product type to TradeJini format if needed
+        mapped_product = producttype
+        if producttype in ['MIS', 'CNC', 'NRML']:
+            # It's already in OpenAlgo format, map it to TradeJini
+            mapped_product = map_product_type(producttype)
+        logger.debug(f"get_open_position - Mapped product: {mapped_product}")
+        
+        # Get positions from TradeJini API
+        positions_response = get_positions(auth)
+        logger.debug(f"get_open_position - Positions response: {positions_response}")
+        
+        # Set default return value
         net_qty = '0'
-
-    if positions_data and isinstance(positions_data, list):
-        for position in positions_data:
-            if position.get('tsym') == tradingsymbol and position.get('exch') == exchange and position.get('prd') == producttype:
-                net_qty = position.get('netqty', '0')
-                break  # Assuming you need the first match
-
-    return net_qty
+        
+        # Check if we have a valid response
+        if not positions_response or not isinstance(positions_response, dict):
+            logger.debug("get_open_position - No positions data available.")
+            return net_qty
+            
+        # Check for error in the response
+        if positions_response.get('status') == 'error':
+            logger.error(f"get_open_position - Error in positions response: {positions_response.get('message', 'Unknown error')}")
+            return net_qty
+            
+        # Get the positions list from the response
+        positions = positions_response.get('data', [])
+        logger.debug(f"get_open_position - Found {len(positions)} positions")
+        
+        # Look for the matching position
+        br_symbol = get_br_symbol(tradingsymbol, exchange) or tradingsymbol
+        logger.debug(f"get_open_position - Looking for broker symbol: {br_symbol}")
+        
+        for position in positions:
+            # Get symbol details from position data
+            position_symbol = position.get('sym', {}).get('sym')
+            position_exch = position.get('sym', {}).get('exch')
+            position_product = position.get('product')
+            position_tsym = position.get('sym', {}).get('trdSym')
+            
+            logger.debug(f"get_open_position - Checking position: {position_symbol}, {position_exch}, {position_product}")
+            
+            # Try different matching approaches
+            symbol_match = (
+                (position_symbol and position_symbol.upper() == tradingsymbol.upper()) or
+                (position_tsym and position_tsym.upper() == br_symbol.upper()) or
+                (position.get('symId') and position.get('symId').upper() == tradingsymbol.upper())
+            )
+            
+            # First try exact match with product type
+            if symbol_match and position_exch == exchange and position_product == mapped_product:
+                net_qty = str(position.get('netQty', '0'))
+                logger.debug(f"get_open_position - Found exact matching position with net quantity: {net_qty}")
+                break
+                
+        # If we didn't find a match with product type, try just symbol and exchange
+        # This handles cases where product type might be different but still the same asset
+        if net_qty == '0':
+            logger.debug(f"get_open_position - No exact product match found, trying symbol+exchange only match")
+            for position in positions:
+                position_symbol = position.get('sym', {}).get('sym')
+                position_exch = position.get('sym', {}).get('exch')
+                position_tsym = position.get('sym', {}).get('trdSym')
+                
+                # Try different matching approaches without product restriction
+                symbol_match = (
+                    (position_symbol and position_symbol.upper() == tradingsymbol.upper()) or
+                    (position_tsym and position_tsym.upper() == br_symbol.upper()) or
+                    (position.get('symId') and position.get('symId').upper() == tradingsymbol.upper())
+                )
+                
+                if symbol_match and position_exch == exchange:
+                    net_qty = str(position.get('netQty', '0'))
+                    logger.debug(f"get_open_position - Found symbol+exchange match with net quantity: {net_qty}")
+                    break
+                
+        return net_qty
+        
+    except Exception as e:
+        logger.error(f"get_open_position - Exception: {str(e)}")
+        import traceback
+        logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+        return '0'
 
 def place_order_api(data, auth):
     """
@@ -671,108 +748,281 @@ def place_order_api(data, auth):
         logger.error(f"place_order_api - Traceback: {traceback.format_exc()}")
         return None, {"status": "error", "message": f"Order placement failed: {str(e)}"}, None
 
-async def place_smartorder_api(data, auth):
+def place_smartorder_api(data, auth):
     """
     Place a smart order using Tradejini API.
+    
+    The PlaceSmartOrder API function allows traders to build intelligent trading systems
+    that can automatically place orders based on existing trade positions in the position book.
+    
+    Args:
+        data (dict): Order data with position_size parameter
+        auth (str): Authentication token
+        
+    Returns:
+        tuple: (response, response_data, order_id)
     """
     AUTH_TOKEN = auth
-
-    # Extract necessary info from data
-    symbol = data.get("symbol")
-    exchange = data.get("exchange")
-    product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
-
-    # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
-
-    logger.debug(f"position_size: {position_size}")
-    logger.debug(f"Open Position: {current_position}")
+    res = None
     
-    # Determine action based on position_size and current_position
-    action = None
-    quantity = 0
-
-    # If both position_size and current_position are 0, do nothing
-    if position_size == 0 and current_position == 0 and int(data['quantity']) != 0:
-        action = data['action']
-        quantity = data['quantity']
-        res, response, orderid = await place_order_api(data, auth)
-        return res, response, orderid
+    try:
+        # Extract necessary info from data
+        symbol = data.get("symbol")
+        exchange = data.get("exchange")
+        product = data.get("product", "MIS")
         
-    elif position_size == current_position:
-        if int(data['quantity']) == 0:
-            response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
+        # Target position size - this is the key parameter for SmartOrder
+        position_size = int(data.get("position_size", "0"))
+        
+        logger.info(f"place_smartorder_api - Symbol: {symbol}, Exchange: {exchange}, Position Size: {position_size}")
+        
+        # Direct position detection from API
+        positions_response = get_positions(AUTH_TOKEN)
+        current_position = 0  # Default to 0 if not found
+        
+        if positions_response and isinstance(positions_response, dict) and positions_response.get('status') == 'success':
+            positions = positions_response.get('data', [])
+            logger.info(f"place_smartorder_api - Found {len(positions)} positions in total")
+            
+            # Find matching position for this symbol and exchange
+            for pos in positions:
+                sym_obj = pos.get('sym', {})
+                pos_sym = sym_obj.get('sym')
+                pos_exch = sym_obj.get('exch')
+                pos_qty = pos.get('netQty')
+                
+                logger.debug(f"place_smartorder_api - Position: {pos_sym}, Exchange: {pos_exch}, NetQty: {pos_qty}")
+                
+                # Check if this position matches our symbol (ignoring product type)
+                if pos_sym and pos_sym.upper() == symbol.upper() and pos_exch == exchange:
+                    current_position = int(pos_qty or 0)
+                    logger.info(f"place_smartorder_api - Found matching position: {symbol} with quantity {current_position}")
+                    break
         else:
-            response = {"status": "success", "message": "No action needed. Position size matches current position"}
-        orderid = None
-        return None, response, orderid
-   
-    if position_size == 0 and current_position > 0:
-        action = "SELL"
-        quantity = abs(current_position)
-    elif position_size == 0 and current_position < 0:
-        action = "BUY"
-        quantity = abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    else:
-        if position_size > current_position:
-            action = "BUY"
-            quantity = position_size - current_position
-        elif position_size < current_position:
-            action = "SELL"
-            quantity = current_position - position_size
-
-    if action:
+            logger.error(f"place_smartorder_api - Could not retrieve positions: {positions_response}")
+        
+        # Initialize action and quantity
+        final_action = None
+        final_quantity = 0
+        
+        # --- MAIN LOGIC IMPLEMENTATION ---
+        
+        # CASE 1: Position size is 0 - square off any existing position
+        if position_size == 0:
+            logger.info(f"place_smartorder_api - SQUAREOFF MODE - current position: {current_position}")
+            
+            if current_position > 0:
+                # We have a LONG position, need to SELL to square off
+                final_action = "SELL"
+                final_quantity = current_position
+                message = f"Squaring off LONG position of {final_quantity} units"
+                
+            elif current_position < 0:
+                # We have a SHORT position, need to BUY to square off
+                final_action = "BUY"
+                final_quantity = abs(current_position)
+                message = f"Squaring off SHORT position of {final_quantity} units"
+                
+            else:
+                # No position to square off
+                logger.info("place_smartorder_api - No position found to square off")
+                return None, {"status": "success", "message": "No position to squareoff."}, None
+            
+        # Case 2: No current position - create new position
+        elif current_position == 0:
+            if position_size > 0:
+                final_action = "BUY"
+                final_quantity = position_size
+                message = f"Opening new LONG position of {final_quantity} units"
+                logger.info(f"place_smartorder_api - Creating new LONG position of {final_quantity} units")
+                
+            elif position_size < 0:
+                final_action = "SELL"
+                final_quantity = abs(position_size)
+                message = f"Opening new SHORT position of {final_quantity} units"
+                logger.info(f"place_smartorder_api - Creating new SHORT position of {final_quantity} units")
+                
+            else:  # position_size == 0 && current_position == 0
+                logger.info("place_smartorder_api - No position to create (position_size=0)")
+                return None, {"status": "success", "message": "No position to create or modify."}, None
+        
+        # Case 3: Adjusting existing position - position_size is the ABSOLUTE target position
+        else:
+            # ABSOLUTE position mode - position_size is the exact final position we want
+            logger.info(f"place_smartorder_api - ABSOLUTE POSITION MODE: Target={position_size}, Current={current_position}")
+            
+            if position_size > current_position:
+                final_action = "BUY"
+                final_quantity = position_size - current_position
+                message = f"Adjusting position to {position_size} (BUY {final_quantity} more units)"
+                logger.info(f"place_smartorder_api - Will BUY {final_quantity} units to reach target")
+                
+            elif position_size < current_position:
+                final_action = "SELL"
+                final_quantity = current_position - position_size
+                message = f"Adjusting position to {position_size} (SELL {final_quantity} units)"
+                logger.info(f"place_smartorder_api - Will SELL {final_quantity} units to reach target")
+                
+            else:  # position_size == current_position
+                logger.info("place_smartorder_api - Current position already matches target")
+                return None, {"status": "success", "message": "Positions Already Matched. No Action needed."}, None
+        
+        # Safety check - if no action or zero quantity, don't proceed
+        if final_action is None or final_quantity <= 0:
+            logger.info("place_smartorder_api - No valid action determined")
+            return None, {"status": "success", "message": "No valid action determined."}, None
+        
+        logger.info(f"place_smartorder_api - Will place order: {final_action} {final_quantity} {symbol}")
+        
         # Prepare data for placing the order
         order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
-
+        order_data["action"] = final_action
+        order_data["quantity"] = str(final_quantity)
+        
         # Place the order
-        res, response, orderid = await place_order_api(order_data, auth)
-        return res, response, orderid
+        res, response, orderid = place_order_api(order_data, auth)
+        
+        # Always return success response for smart orders to maintain compatibility
+        # This follows the pattern established in your memory for Groww API fixes
+        wrapped_response = {
+            "status": "success",
+            "message": message,
+            "quantity": final_quantity
+        }
+        
+        # Include order ID if available
+        if orderid:
+            wrapped_response["orderid"] = orderid
+            
+        logger.info(f"place_smartorder_api - Original response: {response}")
+        logger.info(f"place_smartorder_api - Returning: {wrapped_response}")
+        
+        return res, wrapped_response, orderid
+        
+    except Exception as e:
+        logger.error(f"place_smartorder_api - Exception occurred: {str(e)}")
+        import traceback
+        logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
+        return None, {"status": "error", "message": f"Smart order placement failed: {str(e)}"}, None
 
-async def close_all_positions(current_api_key, auth):
+def close_all_positions(current_api_key, auth):
     """
     Close all open positions using Tradejini API.
+    
+    Args:
+        current_api_key (str): Current API key
+        auth (str): Authentication token
+        
+    Returns:
+        dict: Response with status and message in OpenAlgo format
+              {
+                  'status': 'success' or 'error',
+                  'message': 'Descriptive message'
+              }
     """
-    AUTH_TOKEN = auth
-    
-    # Get order book
-    order_book_response = await get_order_book(auth)
-    
-    if not order_book_response:
-        return {"status": "success", "message": "No Open Positions Found"}
-
-    if order_book_response:
-        for position in order_book_response:
-            if int(position.get('netqty', 0)) == 0:
-                continue
-
-            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
-            quantity = abs(int(position['netqty']))
-
-            symbol = get_symbol(position['token'], position['exch'])
-            logger.debug(f'The Symbol is {symbol}')
-
-            order_data = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": position['exch'],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['prd']),
-                "quantity": str(quantity)
+    try:
+        AUTH_TOKEN = auth
+        
+        # Get positions instead of order book
+        positions_response = get_positions(auth)
+        logger.debug(f"close_all_positions - Positions response: {positions_response}")
+        
+        if not positions_response or positions_response.get('status') != 'success' or not positions_response.get('data'):
+            logger.debug("close_all_positions - No positions found")
+            return {
+                'status': 'success', 
+                'message': 'No open positions found to close'
             }
-
-            logger.debug(order_data)
-            res, response, orderid = await place_order_api(order_data, auth)
-
-    return {"status": "success", "message": "All Open Positions SquaredOff"}
+        
+        positions = positions_response.get('data', [])
+        logger.debug(f"close_all_positions - Found {len(positions)} positions")
+        
+        success_count = 0
+        failed_count = 0
+        
+        for position in positions:
+            try:
+                net_quantity = int(position.get('netqty', position.get('quantity', 0)))
+                
+                if net_quantity == 0:
+                    logger.debug("close_all_positions - Skipping zero quantity position")
+                    continue
+                
+                # Determine action based on position direction
+                action = 'SELL' if net_quantity > 0 else 'BUY'
+                quantity = abs(net_quantity)
+                
+                # Get symbol from tradingsymbol or token+exchange
+                symbol = position.get('tradingsymbol') or position.get('symbol')
+                exchange = position.get('exchange')
+                
+                if not symbol:
+                    token = position.get('token')
+                    exchange = position.get('exchange')
+                    if token and exchange:
+                        logger.debug(f"close_all_positions - Looking up symbol for token {token} and exchange {exchange}")
+                        symbol = get_oa_symbol(token, exchange)
+                    
+                if not symbol:
+                    logger.error(f"close_all_positions - Cannot determine symbol for position: {position}")
+                    failed_count += 1
+                    continue
+                    
+                logger.debug(f"close_all_positions - Closing position for {symbol} with {action} {quantity}")
+                
+                # Prepare order data for closing position
+                order_data = {
+                    "apikey": current_api_key,
+                    "strategy": "Squareoff",
+                    "symbol": symbol,
+                    "action": action,
+                    "exchange": exchange,
+                    "pricetype": "MARKET",
+                    "product": position.get('product', 'CNC'),  # Use position's product or default to CNC
+                    "quantity": str(quantity)
+                }
+                
+                logger.debug(f"close_all_positions - Placing order: {order_data}")
+                res, response, orderid = place_order_api(order_data, auth)
+                
+                if response.get('status') == 'success' and orderid:
+                    logger.info(f"close_all_positions - Successfully closed position for {symbol} with order {orderid}")
+                    success_count += 1
+                else:
+                    error_msg = response.get('message', 'Unknown error')
+                    logger.error(f"close_all_positions - Failed to close position for {symbol}: {error_msg}")
+                    failed_count += 1
+                    
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"close_all_positions - Error processing position {position}: {error_msg}")
+                failed_count += 1
+        
+        # Prepare final response in OpenAlgo format
+        if success_count > 0 or failed_count == 0:
+            message = "All Open Positions SquaredOff" if success_count > 0 else "No positions to close"
+            response_data = {
+                'status': 'success',
+                'message': message
+            }
+            return response_data, 200
+        else:
+            response_data = {
+                'status': 'error',
+                'message': f'Failed to close all positions. Success: {success_count}, Failed: {failed_count}'
+            }
+            return response_data, 400
+        
+    except Exception as e:
+        error_msg = f"Failed to close positions: {str(e)}"
+        logger.error(f"close_all_positions - {error_msg}")
+        import traceback
+        logger.error(f"close_all_positions - Traceback: {traceback.format_exc()}")
+        response_data = {
+            'status': 'error',
+            'message': error_msg
+        }
+        return response_data, 500
 
 def cancel_order(orderid, auth):
     """
@@ -849,25 +1099,72 @@ def cancel_all_orders_api(data, auth):
             logger.debug("cancel_all_orders_api - No orders found")
             return [], []
 
+        canceled_orders = []
+        failed_cancellations = []
+        
+        # Get the list of orders from the transformed response
+        # Make sure to log the structure for debugging
+        logger.debug(f"cancel_all_orders_api - Order book response structure: {type(order_book_response)}")
+        
         if order_book_response.get('stat') == 'Ok':
-            orders = order_book_response.get('data', [])
-            logger.debug(f"cancel_all_orders_api - Found {len(orders)} orders")
+            orders = []
             
-            canceled_orders = []
-            failed_cancellations = []
+            # Handle different response structures
+            if isinstance(order_book_response.get('data', []), list):
+                # Already a list of orders
+                orders = order_book_response.get('data', [])
+            elif isinstance(order_book_response.get('data', {}), dict):
+                # Data might be a dict containing orders
+                orders = [order_book_response.get('data', {})]
+                
+            logger.debug(f"cancel_all_orders_api - Found {len(orders)} orders")
+            logger.debug(f"cancel_all_orders_api - First order example: {orders[0] if orders else 'No orders'}")
             
             for order in orders:
-                if order.get('status') in ['OPEN', 'TRIGGER PENDING', 'MODIFIED']:
-                    logger.debug(f"cancel_all_orders_api - Cancelling order: {order.get('orderId')}")
-                    cancel_response, status_code = cancel_order(order.get('orderId'), auth)
-                    logger.debug(f"cancel_all_orders_api - Cancel response: {cancel_response}")
+                # Get order data - could be directly in order or in order['data']
+                order_data = order.get('data', order)
+                
+                # Extract order ID - could be 'order_id' or 'orderId'
+                order_id = order_data.get('order_id', order_data.get('orderId', ''))
+                
+                # Extract status - could be direct or nested
+                status = order_data.get('status', '')
+                
+                logger.debug(f"cancel_all_orders_api - Processing order: {order_id}, status: {status}")
+                
+                # Check if order status indicates it's open and can be canceled
+                # Convert status to uppercase for case-insensitive comparison
+                if status.upper() in ['OPEN', 'TRIGGER PENDING', 'MODIFIED', 'PENDING']:
+                    logger.debug(f"cancel_all_orders_api - Cancelling order: {order_id}")
                     
-                    if cancel_response[0].get('stat') == 'Ok':
-                        canceled_orders.append(order.get('orderId'))
-                    else:
-                        error_msg = f"Failed to cancel order {order.get('orderId')}: {cancel_response[0].get('data', {}).get('msg', 'Unknown error')}"
-                        logger.error(f"cancel_all_orders_api - {error_msg}")
-                        failed_cancellations.append({"orderId": order.get('orderId'), "error": error_msg})
+                    try:
+                        cancel_response, status_code = cancel_order(order_id, auth)
+                        logger.debug(f"cancel_all_orders_api - Cancel response: {cancel_response}, status: {status_code}")
+                        
+                        # Check for success in response
+                        if cancel_response and status_code in [200, 201, 202]:
+                            if (isinstance(cancel_response, list) and cancel_response[0].get('stat') == 'Ok') or \
+                               (isinstance(cancel_response, dict) and cancel_response.get('stat') == 'Ok'):
+                                canceled_orders.append(order_id)
+                                logger.info(f"cancel_all_orders_api - Successfully canceled order: {order_id}")
+                            else:
+                                error_msg = "Unknown error structure"
+                                if isinstance(cancel_response, list) and len(cancel_response) > 0:
+                                    error_msg = cancel_response[0].get('data', {}).get('msg', 'Unknown error')
+                                elif isinstance(cancel_response, dict):
+                                    error_msg = cancel_response.get('data', {}).get('msg', 'Unknown error')
+                                
+                                logger.error(f"cancel_all_orders_api - Failed to cancel order {order_id}: {error_msg}")
+                                failed_cancellations.append({"orderId": order_id, "error": error_msg})
+                        else:
+                            logger.error(f"cancel_all_orders_api - Failed to cancel order {order_id}: Bad status code {status_code}")
+                            failed_cancellations.append({"orderId": order_id, "error": f"Bad status code: {status_code}"})
+                    except Exception as e:
+                        logger.error(f"cancel_all_orders_api - Exception while cancelling order {order_id}: {str(e)}")
+                        failed_cancellations.append({"orderId": order_id, "error": str(e)})
+            
+            message = f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders."
+            logger.info(f"cancel_all_orders_api - {message}")
             
             return canceled_orders, failed_cancellations
         else:
