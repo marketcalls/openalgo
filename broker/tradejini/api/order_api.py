@@ -565,8 +565,8 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     Get open position quantity for a specific symbol, exchange, and product type.
     
     Args:
-        tradingsymbol (str): Trading symbol
-        exchange (str): Exchange
+        tradingsymbol (str): Trading symbol (e.g., 'YESBANK' or 'NIFTY22MAY2526650CE')
+        exchange (str): Exchange (e.g., 'NSE' or 'NFO')
         producttype (str): Product type (e.g., 'intraday', 'delivery')
         auth (str): Authentication token
         
@@ -574,84 +574,122 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         str: Net quantity of the position or '0' if not found
     """
     try:
-        logger.debug(f"get_open_position - Looking for position: {tradingsymbol}, {exchange}, {producttype}")
+        # Normalize inputs
+        tradingsymbol = str(tradingsymbol).upper().strip()
+        exchange = str(exchange).upper().strip()
         
-        # Convert product type to TradeJini format if needed
-        mapped_product = producttype
+        logger.info(f"get_open_position - Looking for position: {tradingsymbol} on {exchange}, product: {producttype}")
+        
+        # Map product type if needed
+        mapped_product = producttype.upper()
         if producttype in ['MIS', 'CNC', 'NRML']:
-            # It's already in OpenAlgo format, map it to TradeJini
             mapped_product = map_product_type(producttype)
-        logger.debug(f"get_open_position - Mapped product: {mapped_product}")
         
         # Get positions from TradeJini API
         positions_response = get_positions(auth)
-        logger.debug(f"get_open_position - Positions response: {positions_response}")
-        
-        # Set default return value
-        net_qty = '0'
-        
-        # Check if we have a valid response
         if not positions_response or not isinstance(positions_response, dict):
-            logger.debug("get_open_position - No positions data available.")
-            return net_qty
-            
-        # Check for error in the response
-        if positions_response.get('status') == 'error':
-            logger.error(f"get_open_position - Error in positions response: {positions_response.get('message', 'Unknown error')}")
-            return net_qty
-            
-        # Get the positions list from the response
-        positions = positions_response.get('data', [])
-        logger.debug(f"get_open_position - Found {len(positions)} positions")
+            logger.error(f"get_open_position - Invalid positions response: {positions_response}")
+            return '0'
         
-        # Look for the matching position
-        br_symbol = get_br_symbol(tradingsymbol, exchange) or tradingsymbol
-        logger.debug(f"get_open_position - Looking for broker symbol: {br_symbol}")
-        
-        for position in positions:
-            # Get symbol details from position data
-            position_symbol = position.get('sym', {}).get('sym')
-            position_exch = position.get('sym', {}).get('exch')
-            position_product = position.get('product')
-            position_tsym = position.get('sym', {}).get('trdSym')
+        # Check if this is already in OpenAlgo format
+        if positions_response.get('status') == 'success' and 'data' in positions_response:
+            logger.info("get_open_position - Processing OpenAlgo format positions")
+            positions = positions_response['data']
             
-            logger.debug(f"get_open_position - Checking position: {position_symbol}, {position_exch}, {position_product}")
-            
-            # Try different matching approaches
-            symbol_match = (
-                (position_symbol and position_symbol.upper() == tradingsymbol.upper()) or
-                (position_tsym and position_tsym.upper() == br_symbol.upper()) or
-                (position.get('symId') and position.get('symId').upper() == tradingsymbol.upper())
-            )
-            
-            # First try exact match with product type
-            if symbol_match and position_exch == exchange and position_product == mapped_product:
-                net_qty = str(position.get('netQty', '0'))
-                logger.debug(f"get_open_position - Found exact matching position with net quantity: {net_qty}")
-                break
-                
-        # If we didn't find a match with product type, try just symbol and exchange
-        # This handles cases where product type might be different but still the same asset
-        if net_qty == '0':
-            logger.debug(f"get_open_position - No exact product match found, trying symbol+exchange only match")
             for position in positions:
-                position_symbol = position.get('sym', {}).get('sym')
-                position_exch = position.get('sym', {}).get('exch')
-                position_tsym = position.get('sym', {}).get('trdSym')
+                if not isinstance(position, dict):
+                    continue
+                    
+                pos_symbol = str(position.get('symbol', '')).upper().strip()
+                pos_exch = str(position.get('exchange', '')).upper().strip()
+                pos_qty = int(float(position.get('quantity', 0)))
                 
-                # Try different matching approaches without product restriction
-                symbol_match = (
-                    (position_symbol and position_symbol.upper() == tradingsymbol.upper()) or
-                    (position_tsym and position_tsym.upper() == br_symbol.upper()) or
-                    (position.get('symId') and position.get('symId').upper() == tradingsymbol.upper())
-                )
+                logger.info(f"get_open_position - Checking OpenAlgo position: {pos_symbol} on {pos_exch}, qty: {pos_qty}")
                 
-                if symbol_match and position_exch == exchange:
-                    net_qty = str(position.get('netQty', '0'))
-                    logger.debug(f"get_open_position - Found symbol+exchange match with net quantity: {net_qty}")
-                    break
+                if pos_exch == exchange and pos_symbol == tradingsymbol and pos_qty != 0:
+                    logger.info(f"get_open_position - Found matching OpenAlgo position: {pos_symbol} with quantity {pos_qty}")
+                    return str(pos_qty)
+            
+            logger.info(f"get_open_position - No matching OpenAlgo position found for {tradingsymbol} on {exchange}")
+            return '0'
+        
+        # Handle raw TradeJini format
+        if positions_response.get('s') != 'ok':
+            logger.error(f"get_open_position - Invalid positions response: {positions_response}")
+            return '0'
+        
+        # Get the positions list from the response
+        positions = positions_response.get('d', [])
+        logger.info(f"get_open_position - Found {len(positions)} positions to check")
+        
+        # Try to find the position
+        for position in positions:
+            try:
+                if not isinstance(position, dict):
+                    continue
                 
-        return net_qty
+                # Extract position details
+                sym_data = position.get('sym', {}) or {}
+                
+                # Get all possible symbol identifiers
+                pos_trd_sym = str(sym_data.get('trdSym', '')).upper().strip()  # e.g., 'YESBANK-EQ'
+                pos_sym = str(sym_data.get('sym', '')).upper().strip()        # e.g., 'YESBANK'
+                pos_exch = str(sym_data.get('exch', '')).upper().strip()      # e.g., 'NSE'
+                pos_id = str(position.get('symId', '')).upper().strip()        # e.g., 'EQT_YESBANK_EQ_NSE'
+                
+                # Get position quantity
+                try:
+                    pos_qty = int(float(position.get('netQty', 0)))
+                except (ValueError, TypeError):
+                    logger.warning(f"get_open_position - Invalid netQty {position.get('netQty')}")
+                    continue
+                
+                # Skip positions with zero quantity
+                if pos_qty == 0:
+                    continue
+                
+                # Log position details for debugging
+                logger.info(f"get_open_position - Checking position - "
+                          f"sym: '{pos_sym}', trdSym: '{pos_trd_sym}', "
+                          f"exchange: '{pos_exch}', id: '{pos_id}', qty: {pos_qty}")
+                
+                # First check if exchange matches
+                if pos_exch != exchange:
+                    continue
+                
+                # Check all possible symbol matches
+                possible_matches = [
+                    pos_sym,                    # 'YESBANK'
+                    pos_trd_sym,                 # 'YESBANK-EQ'
+                    pos_trd_sym.split('-')[0],   # 'YESBANK' from 'YESBANK-EQ'
+                    pos_id.split('_')[1] if '_' in pos_id else '',  # 'YESBANK' from 'EQT_YESBANK_EQ_NSE'
+                    position.get('dispSym', '').split()[0].upper()  # First word from display symbol
+                ]
+                
+                # Remove empty strings
+                possible_matches = [m for m in possible_matches if m]
+                
+                # Log all possible matches for debugging
+                logger.info(f"get_open_position - Possible symbol matches for {tradingsymbol}: {possible_matches}")
+                
+                # Check if any symbol matches our target
+                if tradingsymbol in possible_matches:
+                    logger.info(f"get_open_position - Found matching position: {tradingsymbol} with quantity {pos_qty}")
+                    return str(pos_qty)
+                
+                # Also check with spaces removed for symbols like 'NIFTY22MAY2526650CE'
+                if tradingsymbol.replace(' ', '') in [m.replace(' ', '') for m in possible_matches if m]:
+                    logger.info(f"get_open_position - Found matching position (spaces removed): {tradingsymbol} with quantity {pos_qty}")
+                    return str(pos_qty)
+                
+            except Exception as e:
+                logger.error(f"get_open_position - Error processing position: {str(e)}")
+                import traceback
+                logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+                continue
+        
+        logger.info(f"get_open_position - No matching position found for {tradingsymbol} on {exchange}")
+        return '0'
         
     except Exception as e:
         logger.error(f"get_open_position - Exception: {str(e)}")
@@ -668,85 +706,137 @@ def place_order_api(data, auth):
         auth (str): Authentication token
         
     Returns:
-        tuple: (None, response_data, order_id)
+        tuple: (response_obj, response_data, order_id)
+            - response_obj: Object with status attribute
+            - response_data: Dict with status and message
+            - order_id: String order ID if successful, None otherwise
     """
     try:
+        # Validate required fields
+        required_fields = ['symbol', 'exchange', 'action', 'quantity', 'product']
+        missing_fields = [field for field in required_fields if field not in data or not data[field]]
+        if missing_fields:
+            error_msg = f"Missing required fields: {', '.join(missing_fields)}"
+            logger.error(f"place_order_api - {error_msg}")
+            return None, {"status": "error", "message": error_msg}, None
+            
         AUTH_TOKEN = auth
-        api_key = os.getenv('BROKER_API_KEY')
+        logger.info(f"place_order_api - Placing order for {data['symbol']} on {data['exchange']}")
         
-        # Log input parameters for debugging
-        logger.debug(f"place_order_api - Input data: {data}")
-        logger.debug(f"place_order_api - AUTH_TOKEN: {AUTH_TOKEN}")
-        logger.debug(f"place_order_api - BROKER_API_KEY: {api_key}")
+        # Log input parameters (sensitive data redacted)
+        log_data = data.copy()
+        if 'apikey' in log_data:
+            log_data['apikey'] = '***REDACTED***'
+        logger.debug(f"place_order_api - Input data: {log_data}")
         
         # Get token and transform data
-        token = get_token(data['symbol'], data['exchange'])
-        transformed_data = transform_data(data, token)
+        try:
+            token = get_token(data['symbol'], data['exchange'])
+            transformed_data = transform_data(data, token)
+            logger.debug(f"place_order_api - Transformed data: {transformed_data}")
+        except Exception as e:
+            error_msg = f"Error transforming order data: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None, {"status": "error", "message": error_msg}, None
         
         # Convert transformed data to x-www-form-urlencoded format
-        payload = '&'.join([f'{k}={v}' for k, v in transformed_data.items()])
-        logger.debug(f"place_order_api - Payload: {payload}")
-        logger.debug(f"place_order_api - Input auth: {AUTH_TOKEN}")
+        try:
+            payload = '&'.join([f'{k}={v}' for k, v in transformed_data.items()])
+            logger.debug(f"place_order_api - Payload: {payload}")
+        except Exception as e:
+            error_msg = f"Error creating payload: {str(e)}"
+            logger.error(error_msg)
+            return None, {"status": "error", "message": error_msg}, None
         
         # Get API key from environment
         api_key = os.getenv('BROKER_API_SECRET')
         if not api_key:
-            raise ValueError("Error: BROKER_API_SECRET not set")
+            error_msg = "BROKER_API_SECRET not set in environment"
+            logger.error(error_msg)
+            return None, {"status": "error", "message": error_msg}, None
             
-        # Use the auth token directly
-        auth_token = AUTH_TOKEN
-        auth_header = f"{api_key}:{auth_token}"
-        
-        logger.debug(f"place_order_api - API Key: {api_key}")
-        logger.debug(f"place_order_api - Auth Token: {auth_token}")
-        logger.debug(f"place_order_api - Auth Header: {auth_header}")
+        # Prepare authorization
+        auth_header = f"{api_key}:{AUTH_TOKEN}"
+        logger.debug(f"place_order_api - Using auth header: {api_key[:4]}...:{AUTH_TOKEN[-4:] if AUTH_TOKEN else 'None'}")
         
         headers = {
             'Authorization': f'Bearer {auth_header}',
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        # Get the shared httpx client
-        client = get_httpx_client()
-        
         # Make API request
-        logger.debug(f"place_order_api - Making request to: https://api.tradejini.com/v2/oms/place-order")
-        response = client.post(
-            "https://api.tradejini.com/v2/oms/place-order",
-            headers=headers,
-            data=payload
-        )
-        
-        # Log response details
-        logger.debug(f"place_order_api - Response status: {response.status_code}")
-        logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
-        
-        response.raise_for_status()
-        response_data = response.json()
-        logger.debug(f"place_order_api - Response data: {response_data}")
-        
-        if response_data['s'] == 'ok':
+        try:
+            client = get_httpx_client()
+            url = "https://api.tradejini.com/v2/oms/place-order"
+            
+            logger.info(f"place_order_api - Sending request to {url}")
+            logger.debug(f"place_order_api - Headers: {headers}")
+            
+            response = client.post(
+                url,
+                headers=headers,
+                data=payload,
+                timeout=30.0  # 30 seconds timeout
+            )
+            
+            # Log response details
+            logger.debug(f"place_order_api - Response status: {response.status_code}")
+            logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
+            
+            response.raise_for_status()
+            response_data = response.json()
+            logger.info(f"place_order_api - API response: {response_data}")
+            
             # Create a response-like object with status attribute
             class ResponseLike:
                 def __init__(self, status_code):
                     self.status = status_code
             
-            response_obj = ResponseLike(200)
-            return response_obj, {"status": "success", "message": response_data['d']['msg'], "orderid": response_data['d']['orderId']}, response_data['d']['orderId']
-        else:
-            # Create a response-like object with error status
-            class ResponseLike:
-                def __init__(self, status_code):
-                    self.status = status_code
-            
             response_obj = ResponseLike(response.status_code)
-            return response_obj, {"status": "error", "message": response_data.get('d', {}).get('msg', 'Order placement failed')}, None
+            
+            # Parse successful response
+            if response_data.get('s') == 'ok' and 'd' in response_data:
+                order_id = response_data['d'].get('orderId')
+                message = response_data['d'].get('msg', 'Order placed successfully')
+                
+                if not order_id:
+                    logger.warning(f"place_order_api - No order ID in response: {response_data}")
+                    return response_obj, {"status": "error", "message": "No order ID in response"}, None
+                
+                logger.info(f"place_order_api - Order placed successfully. Order ID: {order_id}")
+                return response_obj, {
+                    "status": "success", 
+                    "message": message, 
+                    "orderid": str(order_id)
+                }, str(order_id)
+            else:
+                error_msg = response_data.get('d', {}).get('msg', 'Unknown error from broker')
+                logger.error(f"place_order_api - Order placement failed: {error_msg}")
+                return response_obj, {"status": "error", "message": error_msg}, None
+                
+        except httpx.HTTPStatusError as e:
+            error_msg = f"HTTP error: {str(e)}"
+            if e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('d', {}).get('msg', error_msg)
+                except:
+                    error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
+            logger.error(f"place_order_api - {error_msg}")
+            return None, {"status": "error", "message": error_msg}, None
+            
+        except Exception as e:
+            error_msg = f"Error placing order: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None, {"status": "error", "message": error_msg}, None
             
     except Exception as e:
-        logger.error(f"place_order_api - Exception occurred: {str(e)}")
-        import traceback
-        logger.error(f"place_order_api - Traceback: {traceback.format_exc()}")
-        return None, {"status": "error", "message": f"Order placement failed: {str(e)}"}, None
+        error_msg = f"Unexpected error in place_order_api: {str(e)}"
+        logger.error(error_msg)
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, {"status": "error", "message": error_msg}, None
 
 def place_smartorder_api(data, auth):
     """
@@ -761,6 +851,12 @@ def place_smartorder_api(data, auth):
         
     Returns:
         tuple: (response, response_data, order_id)
+        
+        Expected response format:
+        {
+            "status": "success",
+            "orderid": "12345"
+        }
     """
     AUTH_TOKEN = auth
     res = None
@@ -772,35 +868,27 @@ def place_smartorder_api(data, auth):
         product = data.get("product", "MIS")
         
         # Target position size - this is the key parameter for SmartOrder
-        position_size = int(data.get("position_size", "0"))
+        try:
+            position_size = int(float(data.get("position_size", "0")))
+        except (ValueError, TypeError):
+            return None, {"status": "error", "message": "Invalid position_size"}, None
         
         logger.info(f"place_smartorder_api - Symbol: {symbol}, Exchange: {exchange}, Position Size: {position_size}")
         
-        # Direct position detection from API
-        positions_response = get_positions(AUTH_TOKEN)
-        current_position = 0  # Default to 0 if not found
-        
-        if positions_response and isinstance(positions_response, dict) and positions_response.get('status') == 'success':
-            positions = positions_response.get('data', [])
-            logger.info(f"place_smartorder_api - Found {len(positions)} positions in total")
+        # Use the working get_open_position function to get the current position
+        try:
+            # Get the position quantity as a string and convert to int
+            pos_qty_str = get_open_position(symbol, exchange, product, AUTH_TOKEN)
+            current_position = int(float(pos_qty_str)) if pos_qty_str else 0
             
-            # Find matching position for this symbol and exchange
-            for pos in positions:
-                sym_obj = pos.get('sym', {})
-                pos_sym = sym_obj.get('sym')
-                pos_exch = sym_obj.get('exch')
-                pos_qty = pos.get('netQty')
-                
-                logger.debug(f"place_smartorder_api - Position: {pos_sym}, Exchange: {pos_exch}, NetQty: {pos_qty}")
-                
-                # Check if this position matches our symbol (ignoring product type)
-                if pos_sym and pos_sym.upper() == symbol.upper() and pos_exch == exchange:
-                    current_position = int(pos_qty or 0)
-                    logger.info(f"place_smartorder_api - Found matching position: {symbol} with quantity {current_position}")
-                    break
-        else:
-            logger.error(f"place_smartorder_api - Could not retrieve positions: {positions_response}")
-        
+            logger.info(f"place_smartorder_api - Current position for {symbol}: {current_position} "
+                      f"(from get_open_position)")
+            
+        except Exception as e:
+            logger.error(f"place_smartorder_api - Error getting position: {str(e)}")
+            import traceback
+            logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
+            return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
         # Initialize action and quantity
         final_action = None
         final_quantity = 0
@@ -815,36 +903,34 @@ def place_smartorder_api(data, auth):
                 # We have a LONG position, need to SELL to square off
                 final_action = "SELL"
                 final_quantity = current_position
-                message = f"Squaring off LONG position of {final_quantity} units"
+                logger.info(f"place_smartorder_api - Will SELL {final_quantity} to square off LONG position")
                 
             elif current_position < 0:
                 # We have a SHORT position, need to BUY to square off
                 final_action = "BUY"
                 final_quantity = abs(current_position)
-                message = f"Squaring off SHORT position of {final_quantity} units"
+                logger.info(f"place_smartorder_api - Will BUY {final_quantity} to square off SHORT position")
                 
             else:
                 # No position to square off
                 logger.info("place_smartorder_api - No position found to square off")
-                return None, {"status": "success", "message": "No position to squareoff."}, None
+                return None, {"status": "success", "orderid": ""}, ""
             
         # Case 2: No current position - create new position
         elif current_position == 0:
             if position_size > 0:
                 final_action = "BUY"
                 final_quantity = position_size
-                message = f"Opening new LONG position of {final_quantity} units"
                 logger.info(f"place_smartorder_api - Creating new LONG position of {final_quantity} units")
                 
             elif position_size < 0:
                 final_action = "SELL"
                 final_quantity = abs(position_size)
-                message = f"Opening new SHORT position of {final_quantity} units"
                 logger.info(f"place_smartorder_api - Creating new SHORT position of {final_quantity} units")
                 
             else:  # position_size == 0 && current_position == 0
                 logger.info("place_smartorder_api - No position to create (position_size=0)")
-                return None, {"status": "success", "message": "No position to create or modify."}, None
+                return None, {"status": "success", "orderid": ""}, ""
         
         # Case 3: Adjusting existing position - position_size is the ABSOLUTE target position
         else:
@@ -854,23 +940,21 @@ def place_smartorder_api(data, auth):
             if position_size > current_position:
                 final_action = "BUY"
                 final_quantity = position_size - current_position
-                message = f"Adjusting position to {position_size} (BUY {final_quantity} more units)"
-                logger.info(f"place_smartorder_api - Will BUY {final_quantity} units to reach target")
+                logger.info(f"place_smartorder_api - Will BUY {final_quantity} more units to reach target")
                 
             elif position_size < current_position:
                 final_action = "SELL"
                 final_quantity = current_position - position_size
-                message = f"Adjusting position to {position_size} (SELL {final_quantity} units)"
                 logger.info(f"place_smartorder_api - Will SELL {final_quantity} units to reach target")
                 
             else:  # position_size == current_position
                 logger.info("place_smartorder_api - Current position already matches target")
-                return None, {"status": "success", "message": "Positions Already Matched. No Action needed."}, None
+                return None, {"status": "success", "orderid": ""}, ""
         
         # Safety check - if no action or zero quantity, don't proceed
         if final_action is None or final_quantity <= 0:
             logger.info("place_smartorder_api - No valid action determined")
-            return None, {"status": "success", "message": "No valid action determined."}, None
+            return None, {"status": "error", "message": "No valid action determined"}, None
         
         logger.info(f"place_smartorder_api - Will place order: {final_action} {final_quantity} {symbol}")
         
@@ -880,30 +964,41 @@ def place_smartorder_api(data, auth):
         order_data["quantity"] = str(final_quantity)
         
         # Place the order
-        res, response, orderid = place_order_api(order_data, auth)
-        
-        # Always return success response for smart orders to maintain compatibility
-        # This follows the pattern established in your memory for Groww API fixes
-        wrapped_response = {
-            "status": "success",
-            "message": message,
-            "quantity": final_quantity
-        }
-        
-        # Include order ID if available
-        if orderid:
-            wrapped_response["orderid"] = orderid
+        logger.info(f"place_smartorder_api - Placing order with data: {order_data}")
+        try:
+            res, response, orderid = place_order_api(order_data, auth)
+            logger.info(f"place_smartorder_api - place_order_api response - res: {res}, response: {response}, orderid: {orderid}")
             
-        logger.info(f"place_smartorder_api - Original response: {response}")
-        logger.info(f"place_smartorder_api - Returning: {wrapped_response}")
-        
-        return res, wrapped_response, orderid
+            # Format response to match OpenAlgo's expected format
+            if response and isinstance(response, dict) and response.get('status') == 'success' and orderid:
+                wrapped_response = {
+                    "status": "success",
+                    "orderid": str(orderid)
+                }
+                logger.info(f"place_smartorder_api - Order placed successfully: {wrapped_response}")
+                return res, wrapped_response, orderid
+            else:
+                error_msg = 'Unknown error in order placement'
+                if isinstance(response, dict):
+                    error_msg = response.get('message', 'Order placement failed without error message')
+                    logger.error(f"place_smartorder_api - Order placement failed. Response: {response}")
+                else:
+                    logger.error(f"place_smartorder_api - Invalid response format from place_order_api: {response}")
+                
+                return None, {"status": "error", "message": error_msg}, None
+                
+        except Exception as e:
+            error_msg = f"Exception in place_order_api: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None, {"status": "error", "message": error_msg}, None
         
     except Exception as e:
-        logger.error(f"place_smartorder_api - Exception occurred: {str(e)}")
+        error_msg = f"Smart order placement failed: {str(e)}"
+        logger.error(f"place_smartorder_api - Exception occurred: {error_msg}")
         import traceback
         logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
-        return None, {"status": "error", "message": f"Smart order placement failed: {str(e)}"}, None
+        return None, {"status": "error", "message": error_msg}, None
 
 def close_all_positions(current_api_key, auth):
     """
