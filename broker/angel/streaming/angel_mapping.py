@@ -35,11 +35,12 @@ class AngelCapabilityRegistry:
     """
     
     # Angel broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'MCX', 'CDS']
+    exchanges = ['NSE', 'BSE', 'BFO','NFO', 'MCX', 'CDS']
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Snap Quote (Depth)
     depth_support = {
         'NSE': [5],   # NSE supports only 5 levels
         'BSE': [5],           # BSE supports only 5 levels
+        'BFO': [5],           # BFO supports only 5 levels
         'NFO': [5],       # NFO supports only 5 levels
         'MCX': [5],           # MCX supports only 5 levels
         'CDS': [5]            # CDS supports only 5 levels

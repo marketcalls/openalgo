@@ -13,10 +13,10 @@ import sys
 
 # Configuration
 WS_URL = "ws://localhost:8765"  # Update if your server is on a different host/port
-API_KEY = "7c943a439ef0da4f3b8301730c84c7a84d5427c108db39378ca9415ee8db33bf"  # Your OpenAlgo API key
+API_KEY = "918d504f250e6f7d6b533b245a46009d3f3b8cad8e6314c8b45ae8a35b972d8a"  # Your OpenAlgo API key
 
 # Test symbols
-RELIANCE_NSE = {"exchange": "MCX", "symbol": "CRUDEOIL18JUN25FUT"}
+RELIANCE_NSE = {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"}
 NIFTY_INDEX = {"exchange": "MCX", "symbol": "GOLD05JUN25FUT"}
 BANKNIFTY_INDEX = {"exchange": "MCX", "symbol": "SILVER04JUL25FUT"}
 
