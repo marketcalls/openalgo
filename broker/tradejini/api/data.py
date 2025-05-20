@@ -340,62 +340,148 @@ class TradejiniWebSocket:
             self.connection_state['last_error'] = error_msg
             return False
 
+    def _parse_binary_message(self, message):
+        """Parse binary message from TradeJini WebSocket"""
+        try:
+            if len(message) < 6:  # Need at least 6 bytes for header
+                logger.warning(f"Binary message too short: {len(message)} bytes")
+                return None
+                
+            # Total received length is first 4 bytes
+            total_received_len = struct.unpack("i", message[:4])[0]
+            # Version is the 5th byte
+            version = struct.unpack("b", message[4:5])[0]
+            # Compression algorithm is the 6th byte
+            compression_algo = struct.unpack("b", message[5:6])[0]
+            
+            logger.debug(f"Binary message: length={total_received_len}, version={version}, compression={compression_algo}")
+            
+            # Decompress if needed
+            dc_data = message[6:]
+            if compression_algo == 100:
+                try:
+                    dc_data = zlib.decompress(message[6:])
+                    logger.debug(f"Decompressed data length: {len(dc_data)}")
+                except Exception as e:
+                    logger.error(f"Decompression error: {e}")
+                    return None
+            
+            # Process all packets in the message
+            total_received_len = len(dc_data)
+            buffer_index = 0
+            while buffer_index < total_received_len:
+                # Each packet starts with a 2-byte length
+                pkt_len = struct.unpack("h", dc_data[buffer_index:(buffer_index + 2)])[0]
+                if pkt_len <= 0:
+                    logger.warning(f"Invalid packet length: {pkt_len}")
+                    break
+                
+                # Process single packet
+                self._process_single_packet(dc_data[buffer_index:(buffer_index + pkt_len)], pkt_len)
+                buffer_index += pkt_len
+            
+        except Exception as e:
+            logger.error(f"Error parsing binary message: {str(e)}", exc_info=True)
+            return None
+            
+    def _handle_subscription_response(self, data):
+        """Handle subscription confirmation/response"""
+        try:
+            if not isinstance(data, dict):
+                return False
+                
+            status = data.get('status', '').lower()
+            request_id = data.get('request_id')
+            
+            if request_id and request_id in self.pending_requests:
+                if status == 'success':
+                    logger.info(f"Subscription successful for request_id: {request_id}")
+                    self.pending_requests[request_id]['data'] = data
+                    self.pending_requests[request_id]['event'].set()
+                    return True
+                else:
+                    error_msg = data.get('message', 'Unknown error')
+                    logger.error(f"Subscription failed for request_id {request_id}: {error_msg}")
+                    self.pending_requests[request_id]['error'] = error_msg
+                    self.pending_requests[request_id]['event'].set()
+                    return False
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error handling subscription response: {str(e)}", exc_info=True)
+            return False
+            
+    def _process_quote(self, data):
+        """Process incoming quote data"""
+        try:
+            if not isinstance(data, dict):
+                logger.warning(f"Expected dict for quote data, got {type(data)}")
+                return
+                
+            # Check if this is a subscription response
+            if data.get('type') in ['sub_ack', 'unsub_ack']:
+                self._handle_subscription_response(data)
+                return
+                
+            # Handle different quote types
+            quote_type = data.get('type', '').lower()
+            
+            # Store the last quote for get_quotes
+            with self.lock:
+                self.last_quote = data
+                
+            # Log the quote data
+            logger.debug(f"Quote update: {json.dumps(data, indent=2)}")
+            
+        except Exception as e:
+            logger.error(f"Error processing quote data: {str(e)}", exc_info=True)
+    
     def on_message(self, ws, message):
         """Handle incoming WebSocket messages"""
         try:
             self.last_message_time = time.time()
-            # Log the raw message with more detail for debugging
-            if isinstance(message, bytes):
-                logger.debug(f"Raw binary message received: length={len(message)} bytes")
-                # First few bytes can help identify the message type
-                logger.debug(f"First 20 bytes: {message[:20].hex()}")
-            else:
-                logger.debug(f"Raw message received: {message[:200]}..." if len(message) > 200 else f"Raw message received: {message}")
             
-            # Try to parse as JSON first
-            try:
-                data = json.loads(message)
-                logger.info(f"Parsed JSON message type: {data.get('type', 'unknown')}")
-                logger.debug(f"Full message content: {json.dumps(data, indent=2)}")
-                
-                # Handle different message types
-                if isinstance(data, dict):
-                    msg_type = data.get('type')
+            if isinstance(message, bytes):
+                logger.info(f"Received binary message ({len(message)} bytes)")
+                logger.info(f"Binary message first 64 bytes (hex): {message[:64].hex()}")
+                try:
+                    # Process according to TradeJini format
+                    self._parse_binary_message(message)
+                except Exception as e:
+                    logger.error(f"Error processing binary message: {e}", exc_info=True)
+                    logger.debug(f"Full binary message (hex): {message.hex()}")
+            else:
+                try:
+                    data = json.loads(message)
+                    logger.info(f"Received JSON message: {json.dumps(data, indent=2)}")
+                    
+                    msg_type = data.get('type', '').lower()
                     request_id = data.get('request_id')
                     
-                    # Handle authentication response
-                    if msg_type == 'auth_ack':
-                        logger.info(f"Received authentication acknowledgement: {data}")
+                    # Handle different message types
+                    if msg_type == 'authenticate':
+                        logger.info("Authentication response received")
                         self._handle_auth_response(data)
-                    elif msg_type in ['L1', 'L2', 'quote']:
-                        self._process_quote(data)
-                    elif msg_type == 'error':
-                        error_code = data.get('code', 'Unknown')
-                        error_msg = data.get('message', 'Unknown error')
-                        logger.error(f"Error from TradeJini WebSocket: Code={error_code}, Message={error_msg}")
-                        self.connection_state['last_error'] = f"{error_code} - {error_msg}"
+                    elif msg_type in ['l1', 'l5']:
+                        logger.info(f"Received {msg_type.upper()} data")
+                        if msg_type == 'l1':
+                            self._process_quote(data)
+                            # Update last_quote for get_quotes
+                            with self.lock:
+                                self.last_quote = data
+                        elif msg_type == 'l5':
+                            self._process_depth(data)
                     elif msg_type == 'ping':
-                        logger.debug("Received ping message")
+                        logger.info("Received ping message, sending pong")
                         # Send pong in response to ping
                         pong_msg = {"type": "PONG"}
                         self.ws.send(json.dumps(pong_msg))
-                    elif msg_type == 'pong':
-                        logger.debug("Received pong message")
-                        self.connection_state['last_pong'] = time.time()
                     else:
                         logger.info(f"Received message with type: {msg_type}")
-                    
-                    # Process pending requests
-                    if request_id and request_id in self.pending_requests:
-                        logger.debug(f"Processing response for request_id: {request_id}")
-                        self.pending_requests[request_id]['data'] = data
-                        self.pending_requests[request_id]['event'].set()
                         
-            except json.JSONDecodeError:
-                # Handle binary or non-JSON messages
-                logger.debug(f"Received non-JSON message (length: {len(message)} bytes)")
-                self._handle_binary_message(message)
-                
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error decoding JSON message: {e}")
+                    logger.info(f"Raw non-JSON message: {message}")
         except Exception as e:
             error_msg = f"Error processing WebSocket message: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -890,113 +976,80 @@ class TradejiniWebSocket:
     def _process_single_packet(self, data, data_len):
         """Process a single binary packet based on its type."""
         try:
-            # Get packet type
-            pktType = struct.unpack("b", data[2:3])[0]
-            pktSpec = self.DEFAULT_PKT_INFO["PKT_SPEC"]
+            # Log the raw packet data for debugging
+            logger.info(f"Processing binary packet: length={data_len}, first 32 bytes={data[:32].hex()}")
             
-            if pktType not in pktSpec:
-                logger.error(f"Unknown packet type: {pktType}")
+            # Get packet type from the 3rd byte
+            pkt_type = struct.unpack("b", data[2:3])[0]
+            if pkt_type not in self.PKT_TYPE:
+                logger.warning(f"Unknown packet type: {pkt_type}")
                 return
                 
-            packet_type = self.PKT_TYPE[pktType]
-            quote_spec = pktSpec[pktType]
+            packet_type = self.PKT_TYPE[pkt_type]
+            logger.info(f"Processing packet of type: {packet_type}")
+            
+            # Get packet spec for this type
+            pkt_spec = self.DEFAULT_PKT_INFO["PKT_SPEC"].get(pkt_type, {})
+            if not pkt_spec:
+                logger.warning(f"No packet spec found for type {pkt_type} ({packet_type})")
+                return
+                
+            logger.info(f"Using packet spec with {len(pkt_spec)} fields")
+            
+            # Decode based on packet type
             jData = None
             
-            # Process packet based on its type
             if packet_type == "L1":
-                jData = self._decode_l1_packet(quote_spec, data_len, data)
+                jData = self._decode_l1_packet(pkt_spec, data_len, data)
+                logger.info(f"Decoded L1 data: {json.dumps(jData, indent=2) if jData else 'None'}")
             elif packet_type == "L5":
-                jData = self._decode_l2_packet(quote_spec, data_len, data)
+                jData = self._decode_l2_packet(pkt_spec, data_len, data)
+                logger.info(f"Decoded L5 depth data: {json.dumps(jData, indent=2) if jData else 'None'}")
             elif packet_type == "OHLC":
-                jData = self._decode_ohlc_packet(quote_spec, data_len, data)
+                jData = self._decode_ohlc_packet(pkt_spec, data_len, data)
+                logger.info(f"Decoded OHLC data: {json.dumps(jData, indent=2) if jData else 'None'}")                
             elif packet_type == "auth":
-                jData = self._decode_auth_packet(quote_spec, data_len, data)
+                jData = self._decode_auth_packet(pkt_spec, data_len, data)
+                logger.info(f"Decoded auth data: {json.dumps(jData, indent=2) if jData else 'None'}")                
             elif packet_type == "marketStatus":
-                jData = self._decode_market_status(quote_spec, data_len, data)
+                jData = self._decode_market_status(pkt_spec, data_len, data)
             elif packet_type == "EVENTS":
-                jData = self._decode_events_message(quote_spec, data_len, data)
+                jData = self._decode_events_message(pkt_spec, data_len, data)
             elif packet_type == "PING":
-                jData = self._decode_ping_status(quote_spec, data_len, data)
+                jData = self._decode_ping_status(pkt_spec, data_len, data)
             elif packet_type == "greeks":
-                jData = self._decode_l1_packet(quote_spec, data_len, data)  # Same structure as L1
+                jData = self._decode_l1_packet(pkt_spec, data_len, data)  # Same structure as L1
                 
             # Process the data if valid
             if jData is not None:
                 jData["msgType"] = packet_type
+                logger.info(f"Successfully decoded {packet_type} packet for symbol: {jData.get('symbol', 'unknown')}")
                 
-                # Cache L1 data
-                if packet_type == "L1":
-                    t = jData["symbol"]
-                    if t in self.symbol_map:
-                        _cache_d = self.symbol_map[t]
-                        _cache_d.update(jData)
-                        jData = _cache_d
-                    self.symbol_map[t] = jData
-                    
                 # Process the data based on type
                 if packet_type == "L1":
-                    self._process_quote(jData)
+                    # Update last_quote for get_quotes
+                    with self.lock:
+                        self.last_quote = jData
+                    logger.info(f"Updated last_quote with L1 data for {jData.get('symbol', 'unknown')}")
                 elif packet_type == "L5":
                     self._process_depth(jData)
+                    logger.info(f"Processed L5 depth data for {jData.get('symbol', 'unknown')}")
                 elif packet_type == "OHLC":
                     self._process_ohlc(jData)
+                    logger.info(f"Processed OHLC data for {jData.get('symbol', 'unknown')}")
                 elif packet_type == "auth":
                     self._handle_auth_response(jData)
+                    logger.info("Processed authentication response")
+            else:
+                logger.warning(f"Failed to decode {packet_type} packet")
                     
         except Exception as e:
             logger.error(f"Error processing packet: {str(e)}", exc_info=True)
-            
-    def _decode_l1_packet(self, pkt_spec, data_len, data):
-        """Decode a level 1 quote packet."""
-        jData = {}
-        raw_data = {}
-        exchange_info = None
-        divisor = 100.0
-        precision = 2
-        idx = 3
-        
-        try:
-            while idx < data_len:
-                pkt_key = struct.unpack("B", data[idx: idx + 1])
-                idx += 1
-                
-                if pkt_key[0] not in pkt_spec:
-                    logger.warning(f"Unknown packet key: {pkt_key[0]} in L1 packet")
-                    idx += 1  # Skip to next byte
-                    continue
-                    
-                spec = pkt_spec[pkt_key[0]]
-                framed = self._frame_from_spec(spec, data, idx)
-                
-                if spec["key"] == "exchSeg":
-                    if framed in self.SEG_INFO:
-                        exchange_info = self.SEG_INFO[framed]
-                        precision = exchange_info["precision"]
-                        divisor = exchange_info["divisor"]
-                        jData[spec["key"]] = exchange_info["exchSeg"]
-                    else:
-                        logger.warning(f"Unknown exchange segment: {framed}")
-                        jData[spec["key"]] = f"UNKNOWN_{framed}"
-                elif spec["key"] == "ltt":
-                    jData[spec["key"]] = spec["fmt"](framed) if "fmt" in spec else framed
-                else:
-                    raw_data[spec["key"]] = (spec, framed)
-                
-                idx += spec["len"]
-                
-            if exchange_info is not None:
-                self._format_values(divisor, raw_data, jData)
-            
-            jData["symbol"] = f"{jData['token']}_{jData['exchSeg']}"
-            jData["precision"] = precision
-            
-            return jData
-        except Exception as e:
-            logger.error(f"Error decoding L1 packet: {str(e)}", exc_info=True)
+            logger.error(f"Packet data (hex): {data.hex()}")
             return None
             
     def _decode_l2_packet(self, pkt_spec, data_len, data):
-        """Decode a level 2 market depth packet."""
+        """Decode a level 2 (market depth) packet."""
         exchange_info = None
         raw_data = {}
         divisor = 100.0
@@ -1009,28 +1062,34 @@ class TradejiniWebSocket:
         jData = {}
         idx = 3
         
+        logger.info(f"Decoding L5 market depth packet: length={data_len}")
+        
         try:
             while idx < data_len:
                 pkt_key = struct.unpack("B", data[idx: idx + 1])
                 idx += 1
                 
                 if pkt_key[0] not in pkt_spec:
-                    logger.warning(f"Unknown packet key: {pkt_key[0]} in L2 packet")
+                    logger.warning(f"Unknown packet key: {pkt_key[0]} in L5 packet")
                     idx += 1  # Skip to next byte
                     continue
                     
                 spec = pkt_spec[pkt_key[0]]
                 framed = self._frame_from_spec(spec, data, idx)
                 
+                logger.debug(f"L5 field: key={spec['key']}, value={framed}")
+                
                 if spec["key"] == "nDepth":
                     no_level = framed
                     current_list = bids
+                    logger.info(f"L5 depth levels: {no_level}")
                 elif spec["key"] == "exchSeg":
                     if framed in self.SEG_INFO:
                         exchange_info = self.SEG_INFO[framed]
                         precision = exchange_info["precision"]
                         divisor = exchange_info["divisor"]
                         jData[spec["key"]] = exchange_info["exchSeg"]
+                        logger.info(f"L5 exchange: {exchange_info['exchSeg']}, precision={precision}")
                     else:
                         logger.warning(f"Unknown exchange segment: {framed}")
                         jData[spec["key"]] = f"UNKNOWN_{framed}"
@@ -1046,9 +1105,11 @@ class TradejiniWebSocket:
                 if current_list is not None and level_obj:
                     if len(level_obj) == self.DEFAULT_PKT_INFO["BID_ASK_OBJ_LEN"]:
                         current_list.append(level_obj.copy())
+                        logger.debug(f"Added {len(current_list)}th level to {'bids' if current_list == bids else 'asks'}: {level_obj}")
                         level_obj = {}
                     
                     if len(current_list) == no_level:
+                        logger.debug(f"Switching from bids ({len(bids)} levels) to asks")
                         current_list = asks
                 
                 idx += spec["len"]
@@ -1059,11 +1120,36 @@ class TradejiniWebSocket:
             jData["bid"] = bids
             jData["ask"] = asks
             jData["precision"] = precision
-            jData["symbol"] = f"{jData['token']}_{jData['exchSeg']}"
+            jData["symbol"] = str(jData["token"]) + "_" + jData["exchSeg"]
+            
+            # Log detailed market depth information
+            if bids or asks:
+                symbol = jData.get("symbol", "unknown")
+                logger.info(f"Decoded L5 market depth for {symbol}: {len(bids)} bid levels, {len(asks)} ask levels")
+                
+                # Log bid details
+                if bids:
+                    logger.info(f"Bids for {symbol}:")
+                    for i, bid in enumerate(bids):
+                        logger.info(f"  Level {i+1}: Price: {bid.get('price', 0)}, Quantity: {bid.get('qty', 0)}, Orders: {bid.get('no', 0)}")
+                        
+                # Log ask details
+                if asks:
+                    logger.info(f"Asks for {symbol}:")
+                    for i, ask in enumerate(asks):
+                        logger.info(f"  Level {i+1}: Price: {ask.get('price', 0)}, Quantity: {ask.get('qty', 0)}, Orders: {ask.get('no', 0)}")
+                        
+                # Calculate total quantities
+                total_buy_qty = sum(bid.get('qty', 0) for bid in bids)
+                total_sell_qty = sum(ask.get('qty', 0) for ask in asks)
+                logger.info(f"Total Buy Quantity: {total_buy_qty}, Total Sell Quantity: {total_sell_qty}")
+            else:
+                logger.warning("Decoded L5 packet but no bids or asks found")
             
             return jData
         except Exception as e:
-            logger.error(f"Error decoding L2 packet: {str(e)}", exc_info=True)
+            logger.error(f"Error decoding L5 packet: {str(e)}", exc_info=True)
+            logger.error(f"L5 packet data (hex): {data.hex() if isinstance(data, bytes) else 'not binary'}")
             return None
 
     def _decode_ohlc_packet(self, pkt_spec, data_len, data):
@@ -1375,36 +1461,108 @@ class TradejiniWebSocket:
     def _process_depth(self, data):
         """Process market depth data"""
         try:
-            bids = []
-            asks = []
+            logger.debug(f"Processing L5 market depth data: {json.dumps(data, indent=2) if isinstance(data, dict) else data}")
             
-            # Process bids (up to 5 levels)
-            for i in range(5):
-                if i < len(data.get('bidPrices', [])) and i < len(data.get('bidQtys', [])):
-                    bids.append({
-                        'price': float(data['bidPrices'][i]),
-                        'quantity': int(data['bidQtys'][i])
-                    })
+            # Extract symbol/token information
+            token = data.get('token', '')
+            exchange = data.get('exchSeg', '')
+            symbol = data.get('symbol', f"{token}_{exchange}")
             
-            # Process asks (up to 5 levels)
-            for i in range(5):
-                if i < len(data.get('askPrices', [])) and i < len(data.get('askQtys', [])):
-                    asks.append({
-                        'price': float(data['askPrices'][i]),
-                        'quantity': int(data['askQtys'][i])
-                    })
+            # Process binary depth data directly from TradeJini
+            if 'bid' in data and 'ask' in data:
+                logger.info(f"Received binary L5 depth data for {symbol}")
+                bids = data.get('bid', [])
+                asks = data.get('ask', [])
+                
+                # Log depth levels
+                if bids:
+                    logger.info(f"Bids for {symbol}:")
+                    for i, bid in enumerate(bids):
+                        logger.info(f"  Level {i+1}: Price: {bid.get('price', 0)}, Quantity: {bid.get('qty', 0)}, Orders: {bid.get('no', 0)}")
+                        
+                if asks:
+                    logger.info(f"Asks for {symbol}:")
+                    for i, ask in enumerate(asks):
+                        logger.info(f"  Level {i+1}: Price: {ask.get('price', 0)}, Quantity: {ask.get('qty', 0)}, Orders: {ask.get('no', 0)}")
             
-            with self.lock:
-                self.last_depth = {
-                    'bids': bids,
-                    'asks': asks,
-                    'totalbuyqty': sum(bid['quantity'] for bid in bids),
-                    'totalsellqty': sum(ask['quantity'] for ask in asks),
-                    'ltp': float(data.get('ltp', 0)),
-                    'volume': int(data.get('vol', 0))
-                }
+                # Calculate total buy/sell quantities
+                total_buy_qty = sum(bid.get('qty', 0) for bid in bids)
+                total_sell_qty = sum(ask.get('qty', 0) for ask in asks)
+                
+                logger.info(f"Total Buy Quantity: {total_buy_qty}, Total Sell Quantity: {total_sell_qty}")
+                
+                # Store depth data
+                with self.lock:
+                    self.last_depth = {
+                        'symbol': symbol,
+                        'token': token,
+                        'exchange': exchange,
+                        'bids': bids,
+                        'asks': asks,
+                        'totalbuyqty': total_buy_qty,
+                        'totalsellqty': total_sell_qty,
+                        'precision': data.get('precision', 2),
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                logger.info(f"Updated market depth for {symbol}")
+                
+            # Process older JSON format depth data
+            elif 'bidPrices' in data and 'askPrices' in data:
+                logger.info(f"Received JSON L5 depth data")
+                bids = []
+                asks = []
+                
+                # Process bids (up to 5 levels)
+                for i in range(5):
+                    if i < len(data.get('bidPrices', [])) and i < len(data.get('bidQtys', [])):
+                        bids.append({
+                            'price': float(data['bidPrices'][i]),
+                            'quantity': int(data['bidQtys'][i])
+                        })
+                
+                # Process asks (up to 5 levels)
+                for i in range(5):
+                    if i < len(data.get('askPrices', [])) and i < len(data.get('askQtys', [])):
+                        asks.append({
+                            'price': float(data['askPrices'][i]),
+                            'quantity': int(data['askQtys'][i])
+                        })
+                
+                # Calculate total buy/sell quantities
+                total_buy_qty = sum(bid['quantity'] for bid in bids)
+                total_sell_qty = sum(ask['quantity'] for ask in asks)
+                
+                logger.info(f"Total Buy Quantity: {total_buy_qty}, Total Sell Quantity: {total_sell_qty}")
+                
+                # Store depth data
+                with self.lock:
+                    self.last_depth = {
+                        'bids': bids,
+                        'asks': asks,
+                        'totalbuyqty': total_buy_qty,
+                        'totalsellqty': total_sell_qty,
+                        'ltp': float(data.get('ltp', 0)),
+                        'volume': int(data.get('vol', 0)),
+                        'timestamp': datetime.now().isoformat()
+                    }
+            else:
+                logger.warning(f"Received market depth data in unknown format: {data.keys() if isinstance(data, dict) else type(data)}")
+                
         except Exception as e:
-            logger.error(f"Error processing depth: {e}")
+            logger.error(f"Error processing depth: {str(e)}", exc_info=True)
+
+    def _format_token(self, token, exchange):
+        """Format token according to TradeJini's expected format"""
+        try:
+            # For NSE, BSE, etc. - use token as is
+            if exchange in ['NSE', 'BSE']:
+                return f"{token}_{exchange}"
+            # For F&O, CDS, etc. - use token as is
+            return f"{token}_{exchange}"
+        except Exception as e:
+            logger.error(f"Error formatting token {token} for {exchange}: {str(e)}")
+            return f"{token}_{exchange}"
 
     def subscribe_quotes(self, tokens):
         """
@@ -1419,77 +1577,48 @@ class TradejiniWebSocket:
             
         try:
             # Format tokens for subscription according to TradeJini format
-            formatted_tokens = []
+            token_list = []
             for token in tokens:
                 if isinstance(token, dict) and 'token' in token and 'exchange' in token:
-                    # Format according to TradeJini WebSocket API: append to tokens list with 't' key
-                    token_str = str(token['token'])
-                    exchange = token['exchange']
-                    exchange_token = self._get_exchange_token(token_str, exchange)
-                    formatted_tokens.append({"t": exchange_token})
-                    logger.info(f"Subscribing to {exchange_token} from {token_str} on {exchange}")
+                    token_str = str(token['token']).strip()
+                    token_list.append({"t": token_str})
+                    logger.info(f"Subscribing to token: {token_str}")
                 elif isinstance(token, str):
-                    # Assume format "TOKEN_EXCHANGE" or just TOKEN (default to NSE)
-                    parts = token.split('_')
-                    if len(parts) == 2:
-                        token_str = parts[0].strip()
-                        exchange = parts[1].strip()
-                    else:
-                        token_str = token.strip()
-                        exchange = "NSE"
-                    formatted_tokens.append({"t": token_str, "exch": exchange})
-                    logger.info(f"Subscribing to {token_str} on {exchange}")
+                    token_list.append({"t": token.strip()})
+                    logger.info(f"Subscribing to token: {token.strip()}")
             
-            if not formatted_tokens:
+            if not token_list:
                 logger.error("No valid tokens provided for subscription")
                 return False
                 
-            # Create subscription message
-            request_id = str(int(time.time() * 1000))
-            # Send subscription request in TradeJini format
+            # Create subscription message exactly as in TradeJini sample code
             req = {
                 "type": "L1",
                 "action": "sub",
-                "tokens": formatted_tokens
+                "tokens": token_list
             }
             
-            # Add to pending requests
-            self.pending_requests[request_id] = {
-                'event': threading.Event(),
-                'data': None,
-                'error': None
-            }
+            logger.debug(f"Sending subscription request: {json.dumps(req, indent=2)}")
             
             # Send subscription message
             if not self._send_json(req):
+                logger.error("Failed to send subscription request")
                 return False
-                
-            # Wait for response with timeout
-            if not self.pending_requests[request_id]['event'].wait(5):  # Reduced timeout to 5 seconds
-                logger.warning("Timeout waiting for subscription confirmation")
-                return False
-                
-            # Check for errors
-            if self.pending_requests[request_id].get('error'):
-                logger.error(f"Subscription failed: {self.pending_requests[request_id]['error']}")
-                return False
-                
+            
+            # No need to wait for explicit confirmation - binary packets will start flowing
+            logger.info("Subscription request sent successfully")
             return True
             
         except Exception as e:
             logger.error(f"Error in subscribe_quotes: {str(e)}", exc_info=True)
             return False
-        finally:
-            # Clean up pending request
-            if 'request_id' in locals() and request_id in self.pending_requests:
-                del self.pending_requests[request_id]
 
     def subscribe_ohlc(self, tokens, interval):
         """
         Subscribe to OHLC data for given tokens and interval
         
         Args:
-            tokens: List of dicts with 'token' and 'exchange' or list of token strings
+            tokens: List of token strings or token objects
             interval: Chart interval (1m, 5m, 15m, 30m, 60m, 1d)
         """
         if not self.connected:
@@ -1497,70 +1626,44 @@ class TradejiniWebSocket:
             return False
             
         try:
-            # Format tokens for subscription
-            formatted_tokens = []
+            # Format tokens according to TradeJini's format
+            token_list = []
             for token in tokens:
-                if isinstance(token, dict) and 'token' in token and 'exchange' in token:
-                    token_str = str(token['token'])
-                    exchange = token['exchange']
-                    formatted_tokens.append({"t": token_str, "exch": exchange})
-                    logger.info(f"Subscribing to OHLC {token_str} on {exchange} with interval {interval}")
+                if isinstance(token, dict) and 'token' in token:
+                    token_str = str(token['token']).strip()
+                    token_list.append({"t": token_str})
+                    logger.info(f"Adding OHLC subscription for token: {token_str}")
                 elif isinstance(token, str):
-                    # Assume format "TOKEN:EXCHANGE" or just TOKEN (default to NSE)
-                    parts = token.split(':')
-                    if len(parts) == 2:
-                        token_str = parts[0].strip()
-                        exchange = parts[1].strip()
-                    else:
-                        token_str = token.strip()
-                        exchange = "NSE"
-                    formatted_tokens.append({"t": token_str, "exch": exchange})
-                    logger.info(f"Subscribing to OHLC {token_str} on {exchange} with interval {interval}")
+                    token_list.append({"t": token.strip()})
+                    logger.info(f"Adding OHLC subscription for token: {token.strip()}")
             
-            if not formatted_tokens:
+            if not token_list:
                 logger.error("No valid tokens provided for OHLC subscription")
                 return False
                 
-            # Create subscription message
-            request_id = str(int(time.time() * 1000))
+            # Create subscription message following TradeJini sample code format
             req = {
                 "type": "OHLC",
                 "action": "sub",
-                "tokens": formatted_tokens,
-                "chartInterval": interval,
-                "request_id": request_id
+                "tokens": token_list,
+                "chartInterval": interval
             }
             
-            # Add to pending requests
-            self.pending_requests[request_id] = {
-                'event': threading.Event(),
-                'data': None,
-                'error': None
-            }
+            logger.info(f"Subscribing to OHLC data with interval {interval}")
+            logger.debug(f"Sending OHLC subscription request: {json.dumps(req, indent=2)}")
             
             # Send subscription message
             if not self._send_json(req):
+                logger.error("Failed to send OHLC subscription request")
                 return False
-                
-            # Wait for response with timeout
-            if not self.pending_requests[request_id]['event'].wait(10):
-                logger.warning("Timeout waiting for OHLC subscription confirmation")
-                return False
-                
-            # Check for errors
-            if self.pending_requests[request_id].get('error'):
-                logger.error(f"OHLC subscription failed: {self.pending_requests[request_id]['error']}")
-                return False
-                
+            
+            # No need to wait for explicit confirmation - binary packets will start flowing
+            logger.info("OHLC subscription request sent successfully")
             return True
             
         except Exception as e:
             logger.error(f"Error in subscribe_ohlc: {str(e)}", exc_info=True)
             return False
-        finally:
-            # Clean up pending request
-            if 'request_id' in locals() and request_id in self.pending_requests:
-                del self.pending_requests[request_id]
 
     def unsubscribe_ohlc(self, interval):
         """
@@ -1570,39 +1673,28 @@ class TradejiniWebSocket:
             interval: Chart interval to unsubscribe from (1m, 5m, 15m, 30m, 60m, 1d)
         """
         try:
-            request_id = str(int(time.time() * 1000))
-            unsub_msg = {
+            # Create unsubscription message following TradeJini sample code format
+            req = {
                 "type": "OHLC",
                 "action": "unsub",
-                "chartInterval": interval,
-                "request_id": request_id
+                "chartInterval": interval
             }
             
-            # Add to pending requests
-            self.pending_requests[request_id] = {
-                'event': threading.Event(),
-                'data': None,
-                'error': None
-            }
+            logger.info(f"Unsubscribing from OHLC data with interval {interval}")
+            logger.debug(f"Sending OHLC unsubscription request: {json.dumps(req, indent=2)}")
             
             # Send unsubscribe message
-            if not self._send_json(unsub_msg):
+            if not self._send_json(req):
+                logger.error("Failed to send OHLC unsubscription request")
                 return False
-                
-            # Wait for response with timeout
-            if not self.pending_requests[request_id]['event'].wait(10):
-                logger.warning("Timeout waiting for OHLC unsubscription confirmation")
-                return False
-                
+            
+            # No need to wait for explicit confirmation
+            logger.info("OHLC unsubscription request sent successfully")
             return True
             
         except Exception as e:
             logger.error(f"Error in unsubscribe_ohlc: {str(e)}", exc_info=True)
             return False
-        finally:
-            # Clean up pending request
-            if 'request_id' in locals() and request_id in self.pending_requests:
-                del self.pending_requests[request_id]
 
     def _process_ohlc(self, data):
         """Process OHLC data packet"""
@@ -1674,47 +1766,33 @@ class TradejiniWebSocket:
         return self.subscribe_quotes([{"token": token, "exchange": exchange}])
         
     def subscribe_depth(self, symbol, exchange, token):
-        """Subscribe to market depth"""
+        """Subscribe to market depth using TradeJini's L5 format"""
         try:
-            # Create subscription message
-            request_id = str(int(time.time() * 1000))
-            sub_msg = {
-                "type": "L5",
+            # Create subscription message following TradeJini sample code format
+            token_list = [{"t": str(token)}]  # No need for exch parameter
+            
+            # Create subscription message exactly as in TradeJini sample code
+            req = {
+                "type": "L5",  # L5 for market depth
                 "action": "sub",
-                "tokens": [{"t": str(token), "exch": exchange}],
-                "request_id": request_id
+                "tokens": token_list
             }
             
-            # Add to pending requests
-            self.pending_requests[request_id] = {
-                'event': threading.Event(),
-                'data': None,
-                'error': None
-            }
+            logger.info(f"Subscribing to market depth for {symbol} on {exchange} (token: {token})")
+            logger.debug(f"Sending L5 subscription request: {json.dumps(req, indent=2)}")
             
             # Send subscription message
             if not self._send_json(req):
+                logger.error("Failed to send L5 subscription request")
                 return False
-                
-            # Wait for response with timeout
-            if not self.pending_requests[request_id]['event'].wait(10):
-                logger.warning("Timeout waiting for depth subscription confirmation")
-                return False
-                
-            # Check for errors
-            if self.pending_requests[request_id].get('error'):
-                logger.error(f"Depth subscription failed: {self.pending_requests[request_id]['error']}")
-                return False
-                
+            
+            # No need to wait for explicit confirmation - binary packets will start flowing
+            logger.info("L5 subscription request sent successfully")
             return True
             
         except Exception as e:
             logger.error(f"Error in subscribe_depth: {str(e)}", exc_info=True)
             return False
-        finally:
-            # Clean up pending request
-            if 'request_id' in locals() and request_id in self.pending_requests:
-                del self.pending_requests[request_id]
 
     def request_historical_data(self, token, exchange, interval, from_date, to_date):
         """
@@ -1801,6 +1879,9 @@ class BrokerData:
         self.auth_token = auth_token
         self.ws = TradejiniWebSocket()
         
+        # Initialize pending requests dictionary
+        self.pending_requests = {}
+        
         # Map common timeframe format to Tradejini resolutions
         self.timeframe_map = {
             '1m': '1m',    # 1 minute
@@ -1811,6 +1892,101 @@ class BrokerData:
             'D': '1d'      # Daily
         }
 
+    def _format_quote(self, quote_data: dict, symbol: str, exchange: str) -> dict:
+        """
+        Format quote data from Tradejini to standard format
+        
+        Args:
+            quote_data: Raw quote data from Tradejini
+            symbol: Trading symbol
+            exchange: Exchange
+            
+        Returns:
+            dict: Formatted quote data
+        """
+        try:
+            # Log the raw quote data for debugging
+            logger.debug(f"Raw quote data for {symbol}: {json.dumps(quote_data, indent=2, default=str)}")
+            
+            # Extract values with defaults to handle missing keys
+            ltp = float(quote_data.get('ltp', 0))
+            open_price = float(quote_data.get('open', 0))
+            high = float(quote_data.get('high', 0))
+            low = float(quote_data.get('low', 0))
+            close = float(quote_data.get('close', 0))
+            volume = int(quote_data.get('vol', 0) or 0)
+            change = float(quote_data.get('chng', 0))
+            change_percent = float(quote_data.get('chngPer', 0))
+            last_trade_time = quote_data.get('ltt', '')
+            
+            # Get best bid/ask from the quote data
+            best_bid = float(quote_data.get('bidPrice', 0))
+            best_bid_qty = int(quote_data.get('bidQty', 0) or 0)
+            best_ask = float(quote_data.get('askPrice', 0))
+            best_ask_qty = int(quote_data.get('askQty', 0) or 0)
+            
+            # If bid/ask not in the main quote, check depth if available
+            if (best_bid == 0 or best_ask == 0) and 'depth' in quote_data and quote_data['depth']:
+                depth = quote_data['depth']
+                if depth.get('bids') and len(depth['bids']) > 0:
+                    best_bid = float(depth['bids'][0].get('price', best_bid))
+                    best_bid_qty = int(depth['bids'][0].get('quantity', best_bid_qty))
+                if depth.get('asks') and len(depth['asks']) > 0:
+                    best_ask = float(depth['asks'][0].get('price', best_ask))
+                    best_ask_qty = int(depth['asks'][0].get('quantity', best_ask_qty))
+            
+            # Format the quote with consistent field names
+            formatted_quote = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'token': str(quote_data.get('token', '')),  # Include the token for reference
+                'last_price': ltp,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
+                'volume': volume,
+                'change': change,
+                'change_percent': change_percent,
+                'last_trade_time': last_trade_time,
+                'best_bid': best_bid,
+                'best_bid_qty': best_bid_qty,
+                'best_ask': best_ask,
+                'best_ask_qty': best_ask_qty,
+                'timestamp': datetime.now().isoformat(),
+                'raw_data': quote_data  # Include raw data for debugging
+            }
+            
+            # Log the formatted quote for debugging
+            logger.debug(f"Formatted quote for {symbol}: {json.dumps(formatted_quote, indent=2, default=str)}")
+            
+            return formatted_quote
+            
+        except Exception as e:
+            logger.error(f"Error formatting quote data: {str(e)}\nRaw data: {json.dumps(quote_data, indent=2, default=str)}", exc_info=True)
+            # Return minimal valid quote data with error information
+            return {
+                'symbol': symbol,
+                'exchange': exchange,
+                'token': str(quote_data.get('token', '')),
+                'last_price': 0,
+                'open': 0,
+                'high': 0,
+                'low': 0,
+                'close': 0,
+                'volume': 0,
+                'change': 0,
+                'change_percent': 0,
+                'last_trade_time': '',
+                'best_bid': 0,
+                'best_bid_qty': 0,
+                'best_ask': 0,
+                'best_ask_qty': 0,
+                'timestamp': datetime.now().isoformat(),
+                'error': str(e),
+                'raw_data': quote_data
+            }
+            
     def _get_auth_header(self):
         """
         Get the authentication header in the format used by funds.py
@@ -1923,7 +2099,7 @@ class BrokerData:
                 'BSE_INDEX': 'BSE'
             }
             
-            tradejini_exchange = exchange_map.get(exchange)
+            tradejini_exchange = exchange_map.get(exchange.upper())
             if not tradejini_exchange:
                 error_msg = f"Unsupported exchange: {exchange}"
                 logger.error(error_msg)
@@ -1935,7 +2111,6 @@ class BrokerData:
                 try:
                     if not self.connect_websocket():
                         error_msg = "Failed to connect to WebSocket"
-                        logger.error(error_msg)
                         
                         # Check if we have connection state details
                         if hasattr(self.ws, 'connection_state') and 'last_error' in self.ws.connection_state:
@@ -1955,36 +2130,62 @@ class BrokerData:
             with self.ws.lock:
                 self.ws.last_quote = None
 
-            # Subscribe to quotes
+            # Format the token according to TradeJini's requirements
             logger.info(f"Subscribing to {symbol} on {tradejini_exchange} (token: {token})")
-            if not self.ws.subscribe_quote(symbol, tradejini_exchange, token):
-                error_msg = f"Failed to subscribe to {symbol} on {tradejini_exchange}"
+            
+            # Format subscription request according to TradeJini's format
+            subscription = {
+                "type": "L1",
+                "action": "sub",
+                "tokens": [{"t": str(token)}]
+            }
+            
+            # Log the subscription request
+            logger.info(f"Sending subscription request: {json.dumps(subscription, indent=2)}")
+            
+            # Send the subscription request
+            if not self.ws._send_json(subscription):
+                error_msg = "Failed to send subscription request"
                 logger.error(error_msg)
                 raise ConnectionError(error_msg)
-
-            # Wait for data to arrive with retry logic
-            max_retries = 3
-            retry_delay = 2  # seconds
-            last_quote = None
             
-            for attempt in range(max_retries):
-                logger.info(f"Waiting for quote data (attempt {attempt + 1}/{max_retries})...")
-                timeout = time.time() + 5  # 5 seconds per attempt
-                
-                while time.time() < timeout:
+            # Wait for subscription confirmation
+            logger.info("Waiting for subscription confirmation...")
+            time.sleep(2)  # Give it a moment for subscription to be processed
+            
+            # Wait for the first quote
+            max_retries = 5
+            retry_count = 0
+            last_error = None
+            
+            while retry_count < max_retries:
+                try:
                     with self.ws.lock:
-                        if self.ws.last_quote:
-                            last_quote = self.ws.last_quote
-                            logger.info(f"Received quote data: {last_quote}")
-                            return last_quote
-                    time.sleep(0.1)
+                        if self.ws.last_quote is not None:
+                            # Verify this is the quote we're looking for
+                            quote = self.ws.last_quote
+                            quote_token = str(quote.get('token', ''))
+                            quote_exchange = str(quote.get('exchSeg', '')).upper()
+                            
+                            if quote_token == str(token) and quote_exchange == tradejini_exchange.upper():
+                                logger.info(f"Received quote for {symbol} on {tradejini_exchange}")
+                                return self._format_quote(quote, symbol, exchange)
                     
-                logger.warning(f"No quote data received in attempt {attempt + 1}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-            
+                    # If we get here, either no quote or wrong symbol
+                    logger.debug(f"Waiting for quote data... (retry {retry_count + 1}/{max_retries})")
+                    time.sleep(1)  # Wait for 1 second before next attempt
+                    retry_count += 1
+                    
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(f"Error while waiting for quote: {last_error}", exc_info=True)
+                    time.sleep(1)  # Wait before retry on error
+                    retry_count += 1
+
             # If we get here, all retries failed
-            error_msg = f"Failed to get quote data for {symbol} after {max_retries} attempts"
+            error_msg = f"Failed to get quote data for {symbol} on {tradejini_exchange} after {max_retries} attempts"
+            if last_error:
+                error_msg += f" (Last error: {last_error})"
             logger.error(error_msg)
             raise TimeoutError(error_msg)
             
