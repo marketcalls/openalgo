@@ -472,7 +472,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     depth.append({
                         'price': price,
                         'quantity': level.get('quantity', 0),
-                        'orders': level.get('num_of_orders', 0)
+                        'orders': level.get('no of orders', 0)
                     })
                     
         # Then check for depth_20 data
@@ -490,7 +490,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     depth.append({
                         'price': price,
                         'quantity': level.get('quantity', 0),
-                        'orders': level.get('num_of_orders', 0)
+                        'orders': level.get('no of orders', 0)
                     })
                     
         elif 'depth_20_sell_data' in message and not is_buy:
@@ -507,7 +507,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     depth.append({
                         'price': price,
                         'quantity': level.get('quantity', 0),
-                        'orders': level.get('num_of_orders', 0)
+                        'orders': level.get('no of orders', 0)
                     })
         
         # For MCX, the data might be in a different format, check for best_five_buy/sell_market_data
@@ -524,7 +524,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     depth.append({
                         'price': price,
                         'quantity': level.get('quantity', 0),
-                        'orders': level.get('num_of_orders', 0)
+                        'orders': level.get('no of orders', 0)
                     })
                     
         elif 'best_five_sell_market_data' in message and not is_buy:
@@ -540,7 +540,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     depth.append({
                         'price': price,
                         'quantity': level.get('quantity', 0),
-                        'orders': level.get('num_of_orders', 0)
+                        'orders': level.get('no of orders', 0)
                     })
         
         # If no depth data found, return empty levels as fallback
