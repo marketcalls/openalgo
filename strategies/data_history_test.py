@@ -1,7 +1,7 @@
 from openalgo import api
 
 # Initialize the API client
-client = api(api_key='38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e', host='http://127.0.0.1:5000')
+client = api(api_key='your_openalgo_api_key', host='http://127.0.0.1:5000')
 
 # Fetch historical data for BHEL
 df = client.history(
