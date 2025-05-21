@@ -180,7 +180,8 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "tokens": [token]
         }]
         
-        # Generate correlation ID
+        # Generate unique correlation ID that includes mode to prevent overwriting
+        # This ensures each symbol can be subscribed in multiple modes simultaneously
         correlation_id = f"{symbol}_{exchange}_{mode}"
         if mode == 4:
             correlation_id = f"{correlation_id}_{depth_level}"
@@ -340,11 +341,14 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             exchange = subscription['exchange']
             mode = subscription['mode']
             
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]  # Mode 3 is Snap Quote (includes depth data)
+            # Important: Always use the actual mode from the message rather than the subscription
+            # This ensures data is published with the correct mode identifier
+            actual_msg_mode = message.get('subscription_mode')
+            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[actual_msg_mode]  # Mode 3 is Snap Quote (includes depth data)
             topic = f"{exchange}_{symbol}_{mode_str}"
             
-            # Normalize the data based on mode
-            market_data = self._normalize_market_data(message, mode)
+            # Normalize the data based on the actual message mode, not subscription mode
+            market_data = self._normalize_market_data(message, actual_msg_mode)
             
             # Add metadata
             market_data.update({
