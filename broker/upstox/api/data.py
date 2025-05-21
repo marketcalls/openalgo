@@ -1,6 +1,7 @@
-import http.client
 import json
 import os
+import httpx
+from utils.httpx_client import get_httpx_client
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 import pandas as pd
 from datetime import datetime, timedelta
@@ -8,20 +9,33 @@ import urllib.parse
 import numpy as np
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
-    """Common function to make API calls to Upstox"""
+    """Common function to make API calls to Upstox using httpx with connection pooling"""
     AUTH_TOKEN = auth
     
-    conn = http.client.HTTPSConnection("api.upstox.com")
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Accept': 'application/json',
         'Content-Type': 'application/json'
     }
     
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+    url = f"https://api.upstox.com{endpoint}"
+    
+    if method == "GET":
+        response = client.get(url, headers=headers)
+    elif method == "POST":
+        response = client.post(url, headers=headers, content=payload)
+    elif method == "PUT":
+        response = client.put(url, headers=headers, content=payload)
+    elif method == "DELETE":
+        response = client.delete(url, headers=headers)
+    
+    # Add status attribute for compatibility with existing code that expects http.client response
+    response.status = response.status_code
+    
+    return response.json()
 
 class BrokerData:
     def __init__(self, auth_token):
@@ -112,15 +126,29 @@ class BrokerData:
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
             
-            # Extract depth data
+            # Extract depth data - handle index instruments differently
             depth = quote.get('depth', {})
-            best_bid = depth.get('buy', [{}])[0]
-            best_ask = depth.get('sell', [{}])[0]
+            
+            # Check if this is an index instrument (NSE_INDEX or BSE_INDEX)
+            is_index = 'INDEX' in instrument_key.split('|')[0]
+            
+            if is_index:
+                # For index instruments, don't try to get bid/ask data (no order book)
+                best_bid_price = 0
+                best_ask_price = 0
+            else:
+                # For tradable instruments, extract bid/ask if available
+                buy_orders = depth.get('buy', [])
+                sell_orders = depth.get('sell', [])
+                
+                # Safely get the first bid/ask or default to 0
+                best_bid_price = buy_orders[0].get('price', 0) if buy_orders else 0
+                best_ask_price = sell_orders[0].get('price', 0) if sell_orders else 0
             
             # Return standard quote data format
             return {
-                'ask': best_ask.get('price', 0),
-                'bid': best_bid.get('price', 0),
+                'ask': best_ask_price,
+                'bid': best_bid_price,
                 'high': quote.get('ohlc', {}).get('high', 0),
                 'low': quote.get('ohlc', {}).get('low', 0),
                 'ltp': quote.get('last_price', 0),
@@ -164,6 +192,9 @@ class BrokerData:
             start = datetime.strptime(start_date, '%Y-%m-%d')
             current_date = datetime.now()
             print(f"Date range: {start} to {end}")
+            
+            # Check if end date is today to fetch today's data as well
+            is_today_requested = end.date() == current_date.date()
             
             # Validate date ranges based on interval
             if interval == '1m':
@@ -232,8 +263,37 @@ class BrokerData:
             
             print(f"Total candles: {len(all_candles)}")
             
+            # Special case: If requesting only today's data (start and end dates are the same day and that day is today)
+            today = datetime.now().date()
+            if start.date() == end.date() == today and not all_candles:
+                print("Special case: Requesting only today's data")
+                try:
+                    # Get today's data from quote endpoint
+                    quote = self.get_quotes(symbol, exchange)
+                    if quote and quote.get('ltp', 0) > 0:
+                        # Create today's candle
+                        today_datetime = pd.Timestamp.today().normalize()
+                        
+                        # Create a single candle for today
+                        today_candle = [
+                            today_datetime.strftime('%Y-%m-%dT%H:%M:%S'), 
+                            quote.get('open', quote.get('ltp', 0)),
+                            quote.get('high', quote.get('ltp', 0)),
+                            quote.get('low', quote.get('ltp', 0)),
+                            quote.get('ltp', 0),
+                            quote.get('volume', 0),
+                            0  # OI default
+                        ]
+                        all_candles.append(today_candle)
+                        print("Added today's candle from quote data for single-day request")
+                except Exception as e:
+                    print(f"Could not add today's data for single-day request: {str(e)}")
+            
             if not all_candles:
-                return pd.DataFrame()  # Return empty DataFrame if no data
+                if start.date() == end.date() == today:
+                    # If we still have no data for today, return a meaningful error
+                    raise Exception("No data available for today. Market may not be open yet or quote data is unavailable.")
+                return pd.DataFrame()  # Return empty DataFrame if no data for other date ranges
                 
             # Convert candle data to DataFrame
             # Upstox format: [timestamp, open, high, low, close, volume, oi]
@@ -241,9 +301,64 @@ class BrokerData:
             
             # Convert timestamp to datetime and handle timezone properly
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            # First convert to UTC, then to naive timestamp to avoid timezone issues
+            
+            # Handle timezone - make all timestamps timezone-naive by converting to IST and then removing timezone
             if not df.empty:
-            #    df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                # First convert any timezone-aware timestamps to timezone-naive
+                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                
+            # Handle daily data specifically - fix timestamp to show just the date (remove 18:30:00)
+            if interval == 'D':
+                # For daily timeframe, adjust timestamps to midnight
+                df['timestamp'] = df['timestamp'].dt.normalize()  # Set to midnight
+            
+            # Add today's data if requested and not already in the dataset
+            if is_today_requested and interval == 'D':
+                # Check if today's data is already in the dataset
+                today_date_str = pd.Timestamp.now().strftime('%Y-%m-%d')
+                today_date = pd.to_datetime(today_date_str)
+                
+                # Check if today's date already exists in the dataframe
+                today_exists = False
+                if not df.empty:
+                    # Compare dates after stripping time components
+                    df_dates = df['timestamp'].dt.normalize()
+                    today_exists = any(d.date() == today_date.date() for d in df_dates)
+                    
+                if not today_exists:
+                    # Try to get today's data from quote endpoint
+                    try:
+                        quote = self.get_quotes(symbol, exchange)
+                        if quote and quote.get('ltp', 0) > 0:
+                            # Create today's candle with string timestamp to ensure compatibility
+                            today_candle = pd.DataFrame({
+                                'timestamp': [today_date],  # Use datetime object directly
+                                'open': [quote.get('open', quote.get('ltp', 0))], 
+                                'high': [quote.get('high', quote.get('ltp', 0))],
+                                'low': [quote.get('low', quote.get('ltp', 0))],
+                                'close': [quote.get('ltp', 0)],
+                                'volume': [quote.get('volume', 0)],
+                                'oi': [0]  # Default value
+                            })
+                            
+                            # Append to dataframe
+                            df = pd.concat([df, today_candle], ignore_index=True)
+                            print("Added today's candle from quote data")
+                    except Exception as e:
+                        print(f"Could not add today's data: {str(e)}")
+            
+            # Ensure all timestamps are consistent before converting to Unix epoch
+            if not df.empty:
+                # First make sure all timestamps are normalized for daily data
+                if interval == 'D':
+                    df['timestamp'] = df['timestamp'].dt.normalize()
+                    
+                # Make all timestamps timezone-naive if they aren't already
+                # This is safe to call even if already timezone-naive
+                if hasattr(df['timestamp'].dt, 'tz_localize') and df['timestamp'].dt.tz is not None:
+                    df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                
+                # Convert to Unix epoch
                 df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9
             
             # Drop oi column and reorder columns to match expected format
@@ -306,16 +421,29 @@ class BrokerData:
             # Get depth data
             depth = quote.get('depth', {})
             
+            # Check if this is an index instrument (NSE_INDEX or BSE_INDEX)
+            is_index = 'INDEX' in instrument_key.split('|')[0]
+            
+            # For index instruments, provide empty asks and bids arrays
+            if is_index:
+                asks = []
+                bids = []
+            else:
+                # Extract depth data for tradable instruments
+                asks = [{
+                    'price': order.get('price', 0),
+                    'quantity': order.get('quantity', 0)
+                } for order in depth.get('sell', [])]
+                
+                bids = [{
+                    'price': order.get('price', 0),
+                    'quantity': order.get('quantity', 0)
+                } for order in depth.get('buy', [])]
+            
             # Return standard depth data format
             return {
-                'asks': [{
-                    'price': order.get('price', 0),
-                    'quantity': order.get('quantity', 0)
-                } for order in depth.get('sell', [])],
-                'bids': [{
-                    'price': order.get('price', 0),
-                    'quantity': order.get('quantity', 0)
-                } for order in depth.get('buy', [])],
+                'asks': asks,
+                'bids': bids,
                 'high': quote.get('ohlc', {}).get('high', 0),
                 'low': quote.get('ohlc', {}).get('low', 0),
                 'ltp': quote.get('last_price', 0),

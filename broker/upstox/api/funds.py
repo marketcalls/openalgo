@@ -1,25 +1,31 @@
 # api/funds.py
 
 import os
-import http.client
 import json
+import httpx
+from utils.httpx_client import get_httpx_client
 from broker.upstox.api.order_api import get_positions
 from broker.upstox.mapping.order_data import map_order_data
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Upstox's API using the provided auth token."""
+    """Fetch margin data from Upstox's API using the provided auth token with httpx connection pooling."""
     api_key = os.getenv('BROKER_API_KEY')
-    conn = http.client.HTTPSConnection("api.upstox.com")
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'Authorization': f'Bearer {auth_token}',
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
-    conn.request("GET", "/v2/user/get-funds-and-margin", '', headers)
-
-    res = conn.getresponse()
-    data = res.read()
-    margin_data = json.loads(data.decode("utf-8"))
+    
+    response = client.get("https://api.upstox.com/v2/user/get-funds-and-margin", headers=headers)
+    
+    # Add status attribute for compatibility with existing code that expects http.client response
+    response.status = response.status_code
+    
+    margin_data = response.json()
 
     print(f"Funds Details: {margin_data}")
 

@@ -1,7 +1,7 @@
-import http.client
-import requests
 import json
 import os
+import httpx
+from utils.httpx_client import get_httpx_client
 
 
 
@@ -18,7 +18,9 @@ def authenticate_broker(code):
             'redirect_uri': REDIRECT_URL,
             'grant_type': 'authorization_code',
         }
-        response = requests.post(url, data=data)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        response = client.post(url, data=data)
 
         if response.status_code == 200:
             response_data = response.json()
