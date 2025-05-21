@@ -7,7 +7,7 @@ import time
 
 # Initialize feed client with explicit parameters
 client = api(
-    api_key="your_openalgo_api_key",  # Replace with your API key
+    api_key="918d504f250e6f7d6b533b245a46009d3f3b8cad8e6314c8b45ae8a35b972d8a",  # Replace with your API key
     host="http://127.0.0.1:5000",  # Replace with your API host
     ws_url="ws://127.0.0.1:8765"  # Explicit WebSocket URL (can be different from REST API host)
 )
