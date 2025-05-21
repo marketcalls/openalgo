@@ -168,16 +168,24 @@ class WebSocketProxy:
         if client_id in self.subscriptions:
             subscriptions = self.subscriptions[client_id]
             # Unsubscribe from all subscriptions
-            for sub_info in subscriptions:
-                symbol = sub_info.get('symbol')
-                exchange = sub_info.get('exchange')
-                mode = sub_info.get('mode')
-                
-                # Get the user's broker adapter
-                user_id = self.user_mapping.get(client_id)
-                if user_id and user_id in self.broker_adapters:
-                    adapter = self.broker_adapters[user_id]
-                    adapter.unsubscribe(symbol, exchange, mode)
+            for sub_json in subscriptions:
+                try:
+                    # Parse the JSON string to get the subscription info
+                    sub_info = json.loads(sub_json)
+                    symbol = sub_info.get('symbol')
+                    exchange = sub_info.get('exchange')
+                    mode = sub_info.get('mode')
+                    
+                    # Get the user's broker adapter
+                    user_id = self.user_mapping.get(client_id)
+                    if user_id and user_id in self.broker_adapters:
+                        adapter = self.broker_adapters[user_id]
+                        adapter.unsubscribe(symbol, exchange, mode)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error parsing subscription: {sub_json}, Error: {e}")
+                except Exception as e:
+                    logger.error(f"Error processing subscription: {e}")
+                    continue
             
             del self.subscriptions[client_id]
         
