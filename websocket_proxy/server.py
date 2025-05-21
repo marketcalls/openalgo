@@ -597,9 +597,13 @@ class WebSocketProxy:
                     for sub_json in subscriptions:
                         sub = json.loads(sub_json)
                         
+                        # Improved matching logic to handle both string and integer modes
                         if (sub.get("symbol") == symbol and 
                             sub.get("exchange") == exchange and 
-                            sub.get("mode") == mode):
+                            (sub.get("mode") == mode or 
+                             (mode_str == "LTP" and sub.get("mode") == 1) or
+                             (mode_str == "QUOTE" and sub.get("mode") == 2) or
+                             (mode_str == "DEPTH" and sub.get("mode") == 3))):
                             
                             # Forward data to the client
                             await self.send_message(client_id, {
