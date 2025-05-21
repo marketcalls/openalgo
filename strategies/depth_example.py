@@ -14,7 +14,8 @@ client = api(
 
 # MCX instruments for testing
 instruments_list = [
-    {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"}
+    {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"},
+    {"exchange": "MCX", "symbol": "SILVER04JUL25FUT"}
 ]
 
 def on_data_received(data):
