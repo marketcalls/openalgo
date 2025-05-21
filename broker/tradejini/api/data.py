@@ -10,8 +10,11 @@ import logging
 import pandas as pd
 import websocket
 import re
+import httpx
 from datetime import datetime, timedelta
-from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from typing import Optional, Dict, Any, List, Tuple, Union
+from database.token_db import get_token, get_br_symbol, get_oa_symbol, get_symbol
+from utils.httpx_client import get_httpx_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -440,7 +443,7 @@ class TradejiniWebSocket:
         """Handle incoming WebSocket messages"""
         try:
             self.last_message_time = time.time()
-            
+            print(f'received message: {message}')
             if isinstance(message, bytes):
                 logger.info(f"Received binary message ({len(message)} bytes)")
                 logger.info(f"Binary message first 64 bytes (hex): {message[:64].hex()}")
@@ -1794,68 +1797,318 @@ class TradejiniWebSocket:
             logger.error(f"Error in subscribe_depth: {str(e)}", exc_info=True)
             return False
 
+
+
     def request_historical_data(self, token, exchange, interval, from_date, to_date):
         """
-        Request historical OHLC data
+        Request historical OHLC data from TradeJini's interval chart API
         
         Args:
-            token: Trading symbol token
-            exchange: Exchange (NSE, BSE, etc.)
-            interval: Time interval (1m, 5m, 15m, 30m, 60m, 1d)
-            from_date: Start date (YYYY-MM-DD or timestamp in ms)
-            to_date: End date (YYYY-MM-DD or timestamp in ms)
+            token: Trading symbol token or symbol name
+            exchange: Exchange (NSE, BSE, NFO, etc.)
+            interval: Time interval in minutes (e.g., '1' for 1m, '5' for 5m, etc.)
+            from_date: Start timestamp in milliseconds
+            to_date: End timestamp in milliseconds
             
         Returns:
-            tuple: (success, data_or_error)
+            tuple: (success: bool, data: pd.DataFrame or error message)
         """
         try:
-            # Generate a unique request ID
-            request_id = str(int(time.time() * 1000))
+            import requests
+            from datetime import datetime, timezone
+            import pytz
             
-            # Create event to wait for response
-            self.pending_requests[request_id] = {
-                'event': threading.Event(),
-                'data': None,
-                'error': None
+            # Convert timestamps from milliseconds to seconds for the API
+            from_ts = int(from_date) // 1000 if isinstance(from_date, (int, float)) else int(pd.Timestamp(from_date).timestamp())
+            to_ts = int(to_date) // 1000 if isinstance(to_date, (int, float)) else int(pd.Timestamp(to_date).timestamp())
+            
+            # For TradeJini, we need to use the symbol ID format
+            # Format: EQT_<SYMBOL>_EQ_<EXCHANGE>
+            symbol_id = f"EQT_{token.upper()}_EQ_{exchange.upper()}"
+            
+            # API endpoint
+            url = "https://api.tradejini.com/v2/api/mkt-data/chart/interval-data"
+            
+            # Headers with authentication
+            headers = {
+                'Accept': 'application/json',
+                'Authorization': f'Bearer {self.auth_token}'
             }
             
-            # Prepare historical data request
-            hist_msg = {
-                'type': 'historical',
-                'request_id': request_id,
-                'token': str(token),
-                'exchange': exchange,
-                'interval': interval,
-                'from': from_date,
-                'to': to_date,
-                'expect_response': True
+            # Query parameters
+            params = {
+                'from': from_ts,
+                'to': to_ts,
+                'interval': str(interval).replace('m', '').replace('d', ''),  # Convert '1m' to '1', '1d' to '1'
+                'id': symbol_id
             }
             
-            logger.info(f"Requesting historical data: {hist_msg}")
+            logger.debug(f"Making GET request to {url} with params: {params}")
             
-            # Send the request
-            if not self._send_json(hist_msg):
-                return False, "Failed to send historical data request"
+            # Make the API request using the shared httpx client
+            client = get_httpx_client()
+            response = client.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=30
+            )
+            response.raise_for_status()
             
-            # Wait for response with timeout (30 seconds)
-            if not self.pending_requests[request_id]['event'].wait(30):
-                return False, "Request timed out"
+            data = response.json()
             
-            # Get response data
-            result = self.pending_requests[request_id]
+            if data.get('s') != 'ok' or 'd' not in data or 'bars' not in data['d']:
+                error_msg = data.get('message', 'Invalid response format from TradeJini')
+                logger.error(f"Error in historical data: {error_msg}")
+                return False, error_msg
             
-            if 'error' in result and result['error']:
-                return False, result['error']
+            # Process the bars data
+            bars = data['d']['bars']
+            if not bars or not isinstance(bars, list) or not bars[0]:
+                logger.info(f"No data available for {symbol_id} on {exchange} for the given period")
+                return True, pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Extract the first (and only) list of bars
+            bar_data = bars[0]
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(bar_data)
+            
+            # Convert timestamp from seconds to datetime in IST
+            df['timestamp'] = pd.to_datetime(df['time'], unit='s').dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+            
+            # Ensure columns are in the correct order and named properly
+            df = df.rename(columns={
+                'open': 'open',
+                'high': 'high',
+                'low': 'low',
+                'close': 'close',
+                'volume': 'volume',
+                'minuteOi': 'open_interest'  # Add open interest if available
+            })
+            
+            # Select and reorder columns
+            columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            if 'open_interest' in df.columns:
+                columns.append('open_interest')
                 
-            return True, result.get('data', pd.DataFrame())
+            df = df[columns]
+            
+            # Ensure numeric columns are float
+            for col in ['open', 'high', 'low', 'close', 'volume', 'open_interest']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Sort by timestamp
+            df = df.sort_values('timestamp')
+            
+            # Set timestamp as index
+            df = df.set_index('timestamp')
+            
+            logger.info(f"Successfully retrieved {len(df)} rows of historical data for {symbol_id}")
+            return True, df
             
         except Exception as e:
-            logger.error(f"Error in request_historical_data: {str(e)}", exc_info=True)
-            return False, str(e)
-        finally:
-            # Clean up
-            if 'request_id' in locals() and request_id in self.pending_requests:
-                del self.pending_requests[request_id]
+            error_msg = f"Error in request_historical_data: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
+            
+    def request_historical_data(self, symbol, exchange, interval, from_date, to_date):
+        """
+        Request historical OHLC data from TradeJini's interval chart API
+        
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (NSE, BSE, NFO, etc.)
+            interval: Time interval in minutes (e.g., '1' for 1m, '5' for 5m, etc.)
+            from_date: Start timestamp in seconds or date string (YYYY-MM-DD)
+            to_date: End timestamp in seconds or date string (YYYY-MM-DD)
+            
+        Returns:
+            tuple: (success, data_or_error) where data is a list of OHLCV records
+        """
+        try:
+            # Get broker symbol using get_br_symbol
+            br_symbol = get_br_symbol(symbol, exchange)
+            if not br_symbol:
+                logger.error(f"Broker symbol not found for {symbol} on {exchange}")
+                return False, f"Broker symbol not found for {symbol} on {exchange}"
+                
+            logger.info(f"Fetching historical data for {exchange}:{symbol} (broker symbol: {br_symbol})")
+            import requests
+            from datetime import datetime, timedelta
+            import pandas as pd
+            import time
+            
+            # Convert date strings to datetime objects if needed
+            if isinstance(from_date, str):
+                try:
+                    from_date = datetime.strptime(from_date, "%Y-%m-%d")
+                except ValueError:
+                    logger.error(f"Invalid from_date format: {from_date}. Expected YYYY-MM-DD")
+                    return False, f"Invalid from_date format: {from_date}"
+            else:
+                # Convert from milliseconds to seconds if needed
+                from_date = datetime.fromtimestamp(from_date / 1000 if from_date > 1e12 else from_date)
+            
+            if isinstance(to_date, str):
+                try:
+                    to_date = datetime.strptime(to_date, "%Y-%m-%d")
+                except ValueError:
+                    logger.error(f"Invalid to_date format: {to_date}. Expected YYYY-MM-DD")
+                    return False, f"Invalid to_date format: {to_date}"
+            else:
+                # Convert from milliseconds to seconds if needed
+                to_date = datetime.fromtimestamp(to_date / 1000 if to_date > 1e12 else to_date)
+            
+            # Initialize list to store all candles
+            all_candles = []
+            
+            # Process data in 30-day chunks to avoid hitting API limits
+            current_start = from_date
+            chunk_days = 30
+            
+            while current_start <= to_date:
+                # Calculate chunk end date (chunk_days or remaining period)
+                current_end = min(current_start + timedelta(days=chunk_days-1), to_date)
+                
+                # Format dates for API call (in seconds since epoch)
+                from_ts = int(current_start.timestamp())
+                to_ts = int(current_end.timestamp()) + 86399  # Add 23:59:59 to include full day
+                
+                logger.info(f"Fetching data for {br_symbol} from {current_start.date()} to {current_end.date()}")
+                
+                # Make the API request for this chunk
+                success, result = self._fetch_historical_chunk(br_symbol, exchange, interval, from_ts, to_ts)
+                if not success:
+                    return False, result
+                    
+                # Extend the all_candles list with the new candles
+                all_candles.extend(result)
+                
+                # Move to next chunk
+                current_start = current_end + timedelta(days=1)
+            
+            if not all_candles:
+                return True, []
+                
+            # Convert to DataFrame and sort by timestamp
+            df = pd.DataFrame(all_candles)
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+            
+            return True, df.to_dict('records')
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"API request failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error in request_historical_data: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
+
+    def _fetch_historical_chunk(self, symbol: str, exchange: str, interval: str, from_ts: int, to_ts: int) -> Tuple[bool, Union[List[Dict[str, Any]], str]]:
+        """
+        Fetch a chunk of historical data from TradeJini API using the shared HTTPX client
+        
+        Args:
+            symbol: Broker symbol
+            exchange: Exchange (NSE, BSE, NFO, etc.)
+            interval: Time interval in minutes (e.g., '1' for 1m, '5' for 5m, etc.)
+            from_ts: Start timestamp in seconds
+            to_ts: End timestamp in seconds
+            
+        Returns:
+            tuple: (success, data_or_error) where data is a list of OHLCV records or error message
+        """
+        try:
+            # API endpoint
+            url = "https://api.tradejini.com/v2/api/mkt-data/chart/interval-data"
+            
+            # Get API key from environment
+            api_key = os.getenv('BROKER_API_SECRET')
+            if not api_key:
+                error_msg = "BROKER_API_SECRET environment variable not set"
+                logger.error(error_msg)
+                return False, error_msg
+                
+            # Check if auth_token is available
+            if not self.auth_token:
+                error_msg = "Authentication token is not available. Please authenticate first."
+                logger.error(error_msg)
+                return False, error_msg
+                
+            # Format auth header as in funds.py
+            auth_header = f"{api_key}:{self.auth_token}"
+            headers = {
+                'X-Kite-Version': '3',
+                'Authorization': f'Bearer {auth_header}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            # Prepare request payload
+            payload = {
+                'token': symbol,
+                'exchange': exchange.upper(),
+                'interval': interval,
+                'from': from_ts,
+                'to': to_ts
+            }
+            
+            logger.debug(f"Making historical data request to {url} with payload: {payload}")
+            
+            # Get the shared httpx client
+            client = get_httpx_client()
+            
+            # Make the request using the shared client
+            response = client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if data.get('status') != 'success':
+                error_msg = f"API Error: {data.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                return False, error_msg
+                
+            # Process the response data
+            ohlc_data = []
+            for bar in data.get('data', []):
+                if not isinstance(bar, list) or len(bar) == 0:
+                    continue
+                    
+                bar_data = bar[0]  # Get the first (and only) item in the bar array
+                ohlc_data.append({
+                    'timestamp': bar_data.get('time', 0) * 1000,  # Convert to milliseconds
+                    'open': bar_data.get('open', 0),
+                    'high': bar_data.get('high', 0),
+                    'low': bar_data.get('low', 0),
+                    'close': bar_data.get('close', 0),
+                    'volume': bar_data.get('volume', 0),
+                    'oi': bar_data.get('minuteOi', 0)  # Open Interest for derivatives
+                })
+            
+            logger.info(f"Received {len(ohlc_data)} bars of historical data for {symbol}")
+            return True, ohlc_data
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"HTTP error in _fetch_historical_chunk: {str(e)} - {e.response.text if hasattr(e, 'response') else ''}"
+            logger.error(error_msg)
+            return False, error_msg
+        except httpx.RequestError as e:
+            error_msg = f"Network error in _fetch_historical_chunk: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error in _fetch_historical_chunk: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
 
     def close(self):
         """Close WebSocket connection"""
@@ -1878,6 +2131,8 @@ class BrokerData:
         """Initialize Tradejini data handler with authentication token"""
         self.auth_token = auth_token
         self.ws = TradejiniWebSocket()
+        # Set auth_token in WebSocket instance
+        self.ws.auth_token = auth_token
         
         # Initialize pending requests dictionary
         self.pending_requests = {}
@@ -2149,12 +2404,29 @@ class BrokerData:
                 logger.error(error_msg)
                 raise ConnectionError(error_msg)
             
-            # Wait for subscription confirmation
-            logger.info("Waiting for subscription confirmation...")
-            time.sleep(2)  # Give it a moment for subscription to be processed
+            # No need to wait for explicit confirmation - binary packets will start flowing
+            logger.info("Quote subscription request sent successfully")
             
-            # Wait for the first quote
-            max_retries = 5
+            # Give a moment for any existing quote data to be processed
+            time.sleep(0.5)
+            
+            # Check for existing quote in cache
+            with self.ws.lock:
+                if self.ws.last_quote is not None:
+                    # Verify this is the quote we're looking for
+                    quote = self.ws.last_quote
+                    quote_token = str(quote.get('token', ''))
+                    quote_exchange = str(quote.get('exchSeg', '')).upper()
+                    
+                    if quote_token == str(token) and quote_exchange == tradejini_exchange.upper():
+                        logger.info(f"Found existing quote for {symbol} on {tradejini_exchange}")
+                        return self._format_quote(quote, symbol, exchange)
+            
+            # If not immediately available, wait for a few seconds
+            logger.info(f"Waiting up to 5 seconds for quote data for {symbol}...")
+            
+            # Wait for the first quote with a short timeout
+            max_retries = 10  # More retries but shorter wait time
             retry_count = 0
             last_error = None
             
@@ -2173,21 +2445,40 @@ class BrokerData:
                     
                     # If we get here, either no quote or wrong symbol
                     logger.debug(f"Waiting for quote data... (retry {retry_count + 1}/{max_retries})")
-                    time.sleep(1)  # Wait for 1 second before next attempt
+                    time.sleep(0.5)  # Wait for half a second before next attempt
                     retry_count += 1
                     
                 except Exception as e:
                     last_error = str(e)
                     logger.error(f"Error while waiting for quote: {last_error}", exc_info=True)
-                    time.sleep(1)  # Wait before retry on error
+                    time.sleep(0.5)  # Wait before retry on error
                     retry_count += 1
 
-            # If we get here, all retries failed
-            error_msg = f"Failed to get quote data for {symbol} on {tradejini_exchange} after {max_retries} attempts"
+            # If we get here, retries failed but we'll return a default quote
+            error_msg = f"Did not receive quote data for {symbol} on {tradejini_exchange} after {max_retries} attempts"
             if last_error:
                 error_msg += f" (Last error: {last_error})"
-            logger.error(error_msg)
-            raise TimeoutError(error_msg)
+            logger.warning(error_msg)
+            
+            # Return a default quote rather than raising an exception
+            logger.info(f"Returning default quote for {symbol}")
+            return {
+                'symbol': symbol,
+                'token': token,
+                'exchange': exchange,
+                'ltp': 0.0,
+                'change': 0.0,
+                'change_percent': 0.0,
+                'open': 0.0,
+                'high': 0.0,
+                'low': 0.0,
+                'close': 0.0,
+                'volume': 0,
+                'bid_price': 0.0,
+                'ask_price': 0.0,
+                'last_trade_time': None,
+                'timestamp': datetime.now().isoformat()
+            }
             
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}", exc_info=True)
@@ -2274,9 +2565,153 @@ class BrokerData:
                 'oi': 0
             }
 
+    def _get_historical_data(self, symbol: str, exchange: str, interval: str, from_ts: int, to_ts: int) -> Tuple[bool, Union[List[Dict[str, Any]], str]]:
+        """
+        Fetch historical OHLC data from TradeJini REST API
+        
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (NSE, BSE, NFO, etc.)
+            interval: Time interval (e.g., '1', '5', '15', '30', '60', '1D')
+            from_ts: Start timestamp in seconds
+            to_ts: End timestamp in seconds
+            
+        Returns:
+            tuple: (success, data_or_error) where data is a list of OHLCV records or error message
+        """
+        try:
+            # API endpoint
+            base_url = "https://api.tradejini.com/v2"
+            endpoint = "/api/mkt-data/chart/interval-data"
+            url = f"{base_url}{endpoint}"
+            
+            # Get API key from environment
+            api_key = os.getenv('BROKER_API_SECRET')
+            if not api_key:
+                error_msg = "BROKER_API_SECRET environment variable not set"
+                logger.error(error_msg)
+                return False, error_msg
+                
+            # Check if auth_token is available
+            if not self.auth_token:
+                error_msg = "Authentication token is not available. Please authenticate first."
+                logger.error(error_msg)
+                return False, error_msg
+            
+            # Get broker symbol from database
+            symbol_id = get_br_symbol(symbol, exchange)
+            if not symbol_id:
+                error_msg = f"Broker symbol not found for {symbol} on {exchange}"
+                logger.error(error_msg)
+                return False, error_msg
+            
+            # Prepare query parameters
+            params = {
+                'id': symbol_id,
+                'interval': interval,
+                'from': from_ts,
+                'to': to_ts
+            }
+            
+            # Format auth header as in funds.py
+            auth_header = f"{api_key}:{self.auth_token}"
+            headers = {
+                'Authorization': f'Bearer {auth_header}',
+                'Accept': 'application/json'
+            }
+            
+            logger.debug(f"Making historical data request to {url} with params: {params}")
+            
+            # Get the shared httpx client
+            client = get_httpx_client()
+            
+            # Make the GET request using the shared client
+            logger.debug(f"Sending GET request to {url} with params: {params}")
+            logger.debug(f"Request headers: {headers}")
+            
+            response = client.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=30.0
+            )
+            print(f'response: {response}')    
+            logger.debug(f"Response status: {response.status_code}")
+            logger.debug(f"Response headers: {dict(response.headers)}")
+            
+            # Log response content for debugging
+            response_text = response.text
+            logger.debug(f"Raw response: {response_text}")
+            
+            response.raise_for_status()
+            
+            try:
+                data = response.json()
+                logger.debug(f"Parsed JSON response: {json.dumps(data, indent=2)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                logger.error(f"Response content: {response_text}")
+                return False, f"Invalid JSON response: {str(e)}"
+            
+            # Check if the response is successful
+            if data.get('s') != 'ok':
+                error_msg = f"API Error: Status='{data.get('s')}', Message='{data.get('message', 'No error message')}', Data: {json.dumps(data, indent=2)}"
+                logger.error(error_msg)
+                return False, error_msg
+            
+            # Process the response data
+            ohlc_data = []
+            bars = data.get('d', {}).get('bars', [])
+            logger.debug(f"Processing {len(bars)} bars from response")
+            
+            for bar in bars:
+                if not isinstance(bar, list) or len(bar) < 5:  # At least need [timestamp, open, high, low, close]
+                    logger.warning(f"Skipping invalid bar format: {bar}")
+                    continue
+                    
+                try:
+                    # Parse the bar data
+                    # The timestamp is already in milliseconds in the response
+                    timestamp = int(bar[0])
+                    open_price = float(bar[1])
+                    high = float(bar[2])
+                    low = float(bar[3])
+                    close = float(bar[4])
+                    volume = int(bar[5]) if len(bar) > 5 else 0
+                    
+                    ohlc_data.append({
+                        'timestamp': timestamp,  # Already in milliseconds
+                        'open': open_price,
+                        'high': high,
+                        'low': low,
+                        'close': close,
+                        'volume': volume
+                    })
+                    
+                    logger.debug(f"Processed bar: {pd.Timestamp(timestamp, unit='ms')} - O:{open_price}, H:{high}, L:{low}, C:{close}, V:{volume}")
+                except (IndexError, ValueError, TypeError) as e:
+                    logger.warning(f"Error parsing bar data: {bar}, error: {str(e)}")
+                    continue
+            
+            logger.info(f"Received {len(ohlc_data)} bars of historical data for {symbol_id}")
+            return True, ohlc_data
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"HTTP error in _get_historical_data: {str(e)} - {e.response.text if hasattr(e, 'response') else ''}"
+            logger.error(error_msg)
+            return False, error_msg
+        except httpx.RequestError as e:
+            error_msg = f"Network error in _get_historical_data: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error in _get_historical_data: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return False, error_msg
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
-        Get historical OHLC data for given symbol
+        Get historical OHLC data for given symbol using REST API
 
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE', 'TATASTEEL')
@@ -2289,16 +2724,34 @@ class BrokerData:
             pd.DataFrame: DataFrame with OHLCV data
         """
         try:
-            # Convert dates to timestamp in milliseconds if they're strings
-            if isinstance(start_date, str):
-                start_ts = int(pd.Timestamp(start_date).timestamp() * 1000)
-            else:
-                start_ts = int(start_date)
-
-            if isinstance(end_date, str):
-                end_ts = int(pd.Timestamp(end_date).timestamp() * 1000)
-            else:
-                end_ts = int(end_date)
+            def parse_timestamp(ts, is_start=True):
+                try:
+                    if isinstance(ts, str):
+                        # Parse string date and localize to IST
+                        dt = pd.Timestamp(ts, tz='Asia/Kolkata')
+                    else:
+                        # Convert Unix timestamp (in ms) to IST
+                        dt = pd.Timestamp(ts, unit='ms', tz='Asia/Kolkata')
+                    
+                    # Set time to 09:15:00 for start date, 23:59:59 for end date
+                    if is_start:
+                        dt = dt.replace(hour=9, minute=15, second=0, microsecond=0)
+                    else:
+                        dt = dt.replace(hour=23, minute=59, second=59, microsecond=0)
+                    
+                    # Convert to Unix timestamp (seconds since epoch)
+                    return int(dt.timestamp())
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing timestamp {ts}: {str(e)}", exc_info=True)
+                    raise
+            
+            # Parse timestamps with proper market hours
+            start_ts = parse_timestamp(start_date, is_start=True)
+            end_ts = parse_timestamp(end_date, is_start=False)
+            
+            logger.debug(f"Converted timestamps - Start: {pd.Timestamp(start_ts, unit='s')} ({start_ts}), "
+                        f"End: {pd.Timestamp(end_ts, unit='s')} ({end_ts})")
 
             # Get token for the symbol
             token = get_token(symbol, exchange)
@@ -2306,62 +2759,83 @@ class BrokerData:
                 logger.error(f"Token not found for {symbol} on {exchange}")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-            # Ensure WebSocket is connected
-            if not self.ws.connected:
-                self.ws.connect(self.auth_token)
+            # Map exchange to Tradejini format
+            exchange_map = {
+                'NSE': 'NSE',
+                'BSE': 'BSE',
+                'NFO': 'NFO',
+                'BFO': 'BFO',
+                'CDS': 'CDS',
+                'BCD': 'BCD',
+                'MCD': 'MCD',
+                'MCX': 'MCX',
+                'NCO': 'NCO',
+                'BCO': 'BCO'
+            }
+            exchange = exchange_map.get(exchange, exchange)
 
+            # Get symbol in TradeJini format
+            token_str = get_symbol(token, exchange)
+            
             # Map interval to Tradejini format
             interval_map = {
-                '1m': '1m',
-                '5m': '5m',
-                '15m': '15m',
-                '30m': '30m',
-                '60m': '60m',
-                '1h': '60m',
-                '1d': '1d',
-                'D': '1d'
+                '1m': '1',
+                '5m': '5',
+                '15m': '15',
+                '30m': '30',
+                '60m': '60',
+                '1h': '60',
+                '1d': '1D',
+                'D': '1D'
             }
-
             tj_interval = interval_map.get(interval, interval)
 
-            # Request historical data
-            success, result = self.ws.request_historical_data(
-                token=token,
-                exchange=exchange.upper(),
+            # Fetch historical data using REST API
+            success, result = self._get_historical_data(
+                symbol=token_str,
+                exchange=exchange,
                 interval=tj_interval,
-                from_date=start_ts,
-                to_date=end_ts
+                from_ts=start_ts,
+                to_ts=end_ts
             )
 
-            if not success:
-                logger.error(f"Failed to get historical data: {result}")
+            if not success or not isinstance(result, list):
+                error_msg = f"Failed to fetch historical data: {result if not success else 'Invalid response format'}"
+                logger.error(error_msg)
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
+            if not result:
+                logger.warning(f"No historical data found for {symbol} ({exchange}) in the specified date range")
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            # Convert to DataFrame
+            df = pd.DataFrame(result)
+
             # Ensure we have the required columns
-            if not result.empty:
-                required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                for col in required_cols:
-                    if col not in result.columns:
-                        result[col] = 0.0
+            required_cols = {'timestamp': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}
+            
+            # Add missing columns with default values
+            for col in required_cols:
+                if col not in df.columns:
+                    df[col] = required_cols[col]
 
-                # Ensure timestamp is datetime
-                if not pd.api.types.is_datetime64_any_dtype(result['timestamp']):
-                    result['timestamp'] = pd.to_datetime(result['timestamp'], unit='ms')
-
+            # Convert timestamp to datetime
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                
                 # Sort by timestamp
-                result = result.sort_values('timestamp')
-
+                df = df.sort_values('timestamp')
+                
                 # Set timestamp as index
-                result = result.set_index('timestamp')
+                df = df.set_index('timestamp')
 
-                # Ensure numeric columns are float
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    result[col] = pd.to_numeric(result[col], errors='coerce')
+            # Ensure numeric columns are float
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                logger.info(f"Successfully retrieved {len(result)} rows of historical data for {symbol} ({exchange})")
-                return result
-
-            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            logger.info(f"Successfully retrieved {len(df)} rows of historical data for {symbol} ({exchange})")
+            return df
 
         except Exception as e:
             logger.error(f"Error in get_history: {str(e)}", exc_info=True)
@@ -2445,7 +2919,7 @@ class BrokerData:
     
     def get_ohlc(self, symbol: str, exchange: str, interval: str) -> dict:
         """
-        Get the latest OHLC data for a symbol
+        Get the latest OHLC data for a symbol using REST API
         
         Args:
             symbol: Trading symbol
@@ -2456,15 +2930,13 @@ class BrokerData:
             dict: Latest OHLC data or empty dict if not available
         """
         try:
-            if not hasattr(self, 'ws') or not self.ws.connected:
-                logger.warning("WebSocket not connected")
-                return {}
-                
+            # Get token for the symbol
             token = get_token(symbol, exchange)
             if not token:
                 logger.error(f"Token not found for {symbol} on {exchange}")
                 return {}
                 
+            # Map exchange to Tradejini format
             exchange_map = {
                 'NSE': 'NSE',
                 'BSE': 'BSE',
@@ -2479,13 +2951,50 @@ class BrokerData:
             }
             exchange = exchange_map.get(exchange, exchange)
             
-            symbol_key = f"{token}_{exchange}"
+            # Format token for TradeJini API (assuming equity for now, adjust for other types if needed)
+            token_str = f"EQT_{token}_EQ_{exchange}"
             
-            with self.ws.lock:
-                if hasattr(self.ws, 'ohlc_data') and symbol_key in self.ws.ohlc_data:
-                    return self.ws.ohlc_data[symbol_key].get(interval, {})
+            # Map interval to Tradejini format (remove 'm' or 'h' or 'd' suffix)
+            interval_map = {
+                '1m': '1',
+                '5m': '5',
+                '15m': '15',
+                '30m': '30',
+                '60m': '60',
+                '1h': '60',
+                '1d': '1D',
+                'D': '1D'
+            }
+            tj_interval = interval_map.get(interval, interval.replace('m', '').replace('h', '').replace('d', ''))
+            
+            # Get current timestamp and 1 minute before for the latest candle
+            to_ts = int(time.time())
+            from_ts = to_ts - 60  # 1 minute before
+            
+            # Get the latest candle using REST API
+            success, result = self.ws.request_historical_data(
+                token=token_str,
+                exchange=exchange,
+                interval=tj_interval,
+                from_date=from_ts,
+                to_date=to_ts
+            )
+            
+            if not success or not isinstance(result, list) or not result:
+                logger.error(f"Failed to fetch OHLC data for {symbol} ({exchange})")
+                return {}
                 
-            return {}
+            # Get the latest candle (last in the list)
+            latest_candle = result[-1]
+            
+            return {
+                'open': latest_candle.get('open', 0),
+                'high': latest_candle.get('high', 0),
+                'low': latest_candle.get('low', 0),
+                'close': latest_candle.get('close', 0),
+                'volume': latest_candle.get('volume', 0),
+                'timestamp': latest_candle.get('timestamp', 0)
+            }
             
         except Exception as e:
             logger.error(f"Error in get_ohlc: {str(e)}", exc_info=True)
