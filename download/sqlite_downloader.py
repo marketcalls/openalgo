@@ -2,7 +2,7 @@ import os
 import json
 import time
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, MetaData
 from openalgo import api
 from dotenv import load_dotenv
@@ -76,8 +76,11 @@ def fetch_and_store(symbol):
         print(f"[{symbol}] No new rows after filtering.")
         return
 
+    # Convert timestamps from UTC to IST (subtract 5:30 hours)
+    ist_timestamps = df.index - timedelta(hours=5, minutes=30)
+    
     df['SYMBOL'] = symbol
-    df['DATE'] = df.index.strftime('%Y-%m-%d %H:%M:%S')
+    df['DATE'] = ist_timestamps.strftime('%Y-%m-%d %H:%M:%S')
     df = df[['SYMBOL', 'DATE', 'open', 'high', 'low', 'close', 'volume']]
     df.columns = ['SYMBOL', 'DATE', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']
 
