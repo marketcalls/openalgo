@@ -8,9 +8,9 @@ from datetime import datetime
 
 # Setup OpenAlgo client
 client = api(
-    api_key="fe56eef2184d9102382880b5f055388ce9254cac8b99caaa3f01e5e157ce1279",
-    host="http://127.0.0.1:5000",
-    ws_url="ws://127.0.0.1:8765"
+    api_key="your-openalgo-api-key",  # Replace with your API key
+    host="http://127.0.0.1:5000",  # Replace with your API host
+    ws_url="ws://127.0.0.1:8765"  # Explicit WebSocket URL (can be different from REST API host)
 )
 
 # Strategy details
