@@ -20,6 +20,7 @@ def map_order_data(order_data):
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
+        print(order_data)
         
 
 
@@ -115,7 +116,7 @@ def transform_order_data(orders):
             "exchange": order.get("exchange", ""),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
-            "price": order.get("price", 0.0),
+            "price": order.get("averageprice", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
