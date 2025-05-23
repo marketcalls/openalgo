@@ -2798,45 +2798,58 @@ class BrokerData:
                 from_ts=start_ts,
                 to_ts=end_ts
             )
-
-            if not success or not isinstance(result, list):
-                error_msg = f"Failed to fetch historical data: {result if not success else 'Invalid response format'}"
-                logger.error(error_msg)
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
-            if not result:
-                logger.warning(f"No historical data found for {symbol} ({exchange}) in the specified date range")
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
-            # Convert to DataFrame
-            df = pd.DataFrame(result)
-
-            # Ensure we have the required columns
-            required_cols = {'timestamp': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}
             
-            # Add missing columns with default values
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = required_cols[col]
-
-            # Convert timestamp to datetime
+            if not success:
+                logger.error(f"Failed to fetch historical data: {result}")
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Convert to pandas DataFrame
+            if not result:
+                logger.warning(f"No data returned for {symbol} on {exchange}")
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+            # Convert timestamps to datetime in IST and create DataFrame
+            df = pd.DataFrame(result)
+            
+            # If timestamp is in milliseconds, convert to seconds first
+            if 'timestamp' in df.columns and df['timestamp'].max() > 1e12:
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True).dt.tz_convert('Asia/Kolkata')
+            else:
+                # If no timestamp in response, generate timestamps based on interval
+                start_dt = pd.Timestamp(start_ts, unit='s', tz='Asia/Kolkata')
+                freq = interval.replace('m', 'T').replace('h', 'H').replace('d', 'D')
+                df['datetime'] = pd.date_range(start=start_dt, periods=len(df), freq=freq)
+            
+            # Set datetime as index and sort
+            df.set_index('datetime', inplace=True)
+            df.sort_index(inplace=True)
+            
+            # Convert timestamp to seconds since epoch for backward compatibility
             if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                
-                # Sort by timestamp
-                df = df.sort_values('timestamp')
-                
-                # Set timestamp as index
-                df = df.set_index('timestamp')
-
-            # Ensure numeric columns are float
+                df['timestamp'] = df.index.astype('int64') // 10**9
+            
+            # Ensure all required columns exist
             for col in ['open', 'high', 'low', 'close', 'volume']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-
-            logger.info(f"Successfully retrieved {len(df)} rows of historical data for {symbol} ({exchange})")
-            return df
-
+                if col not in df.columns:
+                    df[col] = 0.0
+                    
+            # Reset index to include datetime as a column
+            df = df.reset_index()
+            
+            # Convert to OpenAlgo format with timestamp in seconds
+            result = []
+            for _, row in df.iterrows():
+                result.append({
+                    'timestamp': int(row['datetime'].timestamp()),
+                    'open': float(row['open']),
+                    'high': float(row['high']),
+                    'low': float(row['low']),
+                    'close': float(row['close']),
+                    'volume': int(row.get('volume', 0))
+                })
+            
+            return pd.DataFrame(result)
+            
         except Exception as e:
             logger.error(f"Error in get_history: {str(e)}", exc_info=True)
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
