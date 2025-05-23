@@ -23,6 +23,7 @@ config.ini
 *.log
 *.tmp
 checkpoint.txt
+checkpoints.json
 
 # CSV Files (except symbols.csv)
 *.csv

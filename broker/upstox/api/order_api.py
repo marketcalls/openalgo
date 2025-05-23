@@ -1,6 +1,7 @@
-import http.client
 import json
 import os
+import httpx
+from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
@@ -12,17 +13,31 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api.upstox.com")
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
       'Authorization': f'Bearer {AUTH_TOKEN}',
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     }
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+    
+    url = f"https://api.upstox.com{endpoint}"
+    
+    if method == "GET":
+        response = client.get(url, headers=headers)
+    elif method == "POST":
+        response = client.post(url, headers=headers, content=payload)
+    elif method == "PUT":
+        response = client.put(url, headers=headers, content=payload)
+    elif method == "DELETE":
+        response = client.delete(url, headers=headers)
+    
+    # Add status attribute for compatibility with existing code that expects http.client response
+    # We only return the JSON data here, so this doesn't matter for this function
+    
+    return response.json()
 
 def get_order_book(auth):
     return get_api_response("/v2/order/retrieve-all",auth)
@@ -78,15 +93,19 @@ def place_order_api(data,auth):
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("POST", "/v2/order/place", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    response = client.post("https://api.upstox.com/v2/order/place", headers=headers, content=payload)
+    response_data = response.json()
+    
+    # Add status attribute for compatibility with existing code that expects http.client response
+    response.status = response.status_code
+    
     if response_data['status'] == 'success':
         orderid = response_data['data']['order_id']
     else:
         orderid = None
-    return res, response_data, orderid
+    return response, response_data, orderid
 
 def place_smartorder_api(data,auth):
 
@@ -236,17 +255,16 @@ def cancel_order(orderid,auth):
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-       
     }
     
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    response = client.delete(f"https://api.upstox.com/v2/order/cancel?order_id={orderid}", headers=headers)
     
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.upstox.com")  # Adjust the URL as necessary
-    conn.request("DELETE", f"/v2/order/cancel?order_id={orderid}", headers=headers)  # Append the order ID to the URL
+    # Add status attribute for compatibility with existing code that expects http.client response
+    response.status = response.status_code
     
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-
+    data = response.json()
     
     # Check if the request was successful
     if data.get("status"):
@@ -254,20 +272,15 @@ def cancel_order(orderid,auth):
         return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, response.status_code
 
 
 def modify_order(data,auth):
-
-    
-
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-
     
     transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
     
-  
     # Set up the request headers
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
@@ -278,15 +291,19 @@ def modify_order(data,auth):
 
     print(payload)
 
-    conn = http.client.HTTPSConnection("api.upstox.com")
-    conn.request("PUT", "/v2/order/modify", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    response = client.put("https://api.upstox.com/v2/order/modify", headers=headers, content=payload)
+    
+    # Add status attribute for compatibility with existing code that expects http.client response
+    response.status = response.status_code
+    
+    data = response.json()
 
     if data.get("status") == "success" or data.get("message") == "SUCCESS":
         return {"status": "success", "orderid": data["data"]["order_id"]}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+        return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status_code
     
 
 def cancel_all_orders_api(data,auth):

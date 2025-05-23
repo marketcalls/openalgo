@@ -27,6 +27,7 @@ dependencies = [
   "decorator==5.2.1",
   "Deprecated==1.2.14",
   "dnspython==2.6.1",
+  "duckdb==1.2.2",
   "email-validator==2.1.1",
   "executing==2.2.0",
   "Flask==3.0.3",
