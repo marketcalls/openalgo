@@ -529,36 +529,164 @@ def get_holdings(auth):
         
     Returns:
         dict: Holdings data in OpenAlgo format
+        {
+            "data": {
+                "holdings": [
+                    {
+                        "exchange": "NSE",
+                        "pnl": 3.27,
+                        "pnlpercent": 13.04,
+                        "product": "CNC",
+                        "quantity": 1,
+                        "symbol": "BSLNIFTY"
+                    }
+                ],
+                "statistics": {
+                    "totalholdingvalue": 36.46,
+                    "totalinvvalue": 32.17,
+                    "totalpnlpercentage": 13.34,
+                    "totalprofitandloss": 4.29
+                }
+            },
+            "status": "success"
+        }
     """
     try:
+        logger.info("=== Starting get_holdings ===")
+        logger.info(f"Auth token received: {bool(auth)}")
         logger.debug("Fetching holdings from Tradejini API")
+        
         # Make API request with symDetails=true to get symbol details
+        logger.info("Making API request to /api/oms/holdings")
         response = get_api_response(
             '/api/oms/holdings',
             auth,
             method="GET",
-            data={"symDetails": "true"}
+            params={"symDetails": "true"}  # Using params for GET request
         )
         
-        logger.debug(f"API Response: {response}")
+        # Log the complete response for debugging
+        logger.info(f"Complete API Response: {response}")
+        logger.info(f"Response type: {type(response)}")
         
-        # Get holdings data from response
-        holdings_data = response.get('d', {}).get('holdings', [])
-        logger.debug(f"Raw holdings data: {holdings_data}")
+        # If response is a dictionary, log all its keys and values
+        if isinstance(response, dict):
+            logger.info("Response dictionary contents:")
+            for key, value in response.items():
+                logger.info(f"  {key}: {value} (type: {type(value)})")
+                
+            # Special handling for 'd' key which might contain the actual data
+            if 'd' in response:
+                d_value = response['d']
+                logger.info(f"Response['d'] type: {type(d_value)}")
+                if isinstance(d_value, dict):
+                    logger.info("Response['d'] contents:")
+                    for k, v in d_value.items():
+                        logger.info(f"    {k}: {v} (type: {type(v)})")
+                else:
+                    logger.info(f"Response['d'] value: {d_value}")
         
-        if not isinstance(holdings_data, list):
-            logger.error("Holdings data is not a list")
-            return {"status": "error", "message": "Invalid holdings data format"}
+        # Try to handle different response formats
+        if isinstance(response, dict):
+            # Standard response format - check for both 's' and 'stat' as status keys
+            status = response.get('s') or response.get('stat')
+            msg = response.get('msg', '')
+            logger.info(f"API Status: {status}, Message: {msg}")
             
-        # Transform data to OpenAlgo format
-        from ..mapping.order_data import transform_holdings_data
-        transformed_data = transform_holdings_data(holdings_data)
+            # Handle 'no-data' response
+            if status == 'no-data' and 'No Data Available' in msg:
+                logger.info("No holdings data available in the account")
+                return {
+                    "status": "success",
+                    "data": {
+                        "holdings": [],
+                        "statistics": {
+                            "totalholdingvalue": 0,
+                            "totalinvvalue": 0,
+                            "totalpnlpercentage": 0,
+                            "totalprofitandloss": 0
+                        }
+                    }
+                }
+                
+            if status in ['Ok', 'ok']:
+                holdings_data = response.get('d', response.get('data', {}))
+                
+                # If holdings data is a string like 'No Holdings'
+                if isinstance(holdings_data, str) and 'No Holdings' in holdings_data:
+                    logger.info("No holdings found in the account")
+                    return {
+                        "status": "success",
+                        "data": {
+                            "holdings": [],
+                            "statistics": {
+                                "totalholdingvalue": 0,
+                                "totalinvvalue": 0,
+                                "totalpnlpercentage": 0,
+                                "totalprofitandloss": 0
+                            }
+                        }
+                    }
+                
+                # If we have a dictionary with holdings
+                if isinstance(holdings_data, dict):
+                    holdings_list = holdings_data.get('holdings', [])
+                    if isinstance(holdings_list, list):
+                        logger.debug(f"Found {len(holdings_list)} holdings")
+                        from ..mapping.order_data import transform_holdings_data
+                        return transform_holdings_data(holdings_list)
+            
+            # If we get here, there was an error or unexpected format
+            error_msg = response.get('message', 'Unknown error in API response')
+            logger.error(f"API Error: {error_msg}")
+            return {
+                "status": "error", 
+                "message": f"API Error: {error_msg}",
+                "response_format": "unexpected"
+            }
         
-        return transformed_data
+        # If response is a string
+        elif isinstance(response, str):
+            if 'No Holdings' in response:
+                logger.info("No holdings found in the account (string response)")
+                return {
+                    "status": "success",
+                    "data": {
+                        "holdings": [],
+                        "statistics": {
+                            "totalholdingvalue": 0,
+                            "totalinvvalue": 0,
+                            "totalpnlpercentage": 0,
+                            "totalprofitandloss": 0
+                        }
+                    }
+                }
+            return {
+                "status": "error",
+                "message": f"Unexpected string response from API: {response}",
+                "response_format": "string"
+            }
         
+        # For any other response type
+        return {
+            "status": "error",
+            "message": f"Unexpected response format: {type(response)}",
+            "response": str(response)[:500]  # Include first 500 chars of response
+        }
+        
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching holdings: {str(e)}")
+        return {"status": "error", "message": f"HTTP error: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return {"status": "error", "message": "Invalid JSON response from server"}
     except Exception as e:
-        logger.error(f"Error fetching holdings: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"Error fetching holdings: {str(e)}", exc_info=True)
+        return {
+            "status": "error", 
+            "message": f"Failed to fetch holdings: {str(e)}",
+            "error_type": type(e).__name__
+        }
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     """

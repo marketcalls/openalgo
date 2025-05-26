@@ -636,24 +636,51 @@ def transform_holdings_data(holdings_data):
         
     Returns:
         dict: Holdings data in OpenAlgo format
+        {
+            "data": {
+                "holdings": [
+                    {
+                        "exchange": "NSE",
+                        "pnl": 3.27,
+                        "pnlpercent": 13.04,
+                        "product": "CNC",
+                        "quantity": 1,
+                        "symbol": "BSLNIFTY"
+                    }
+                ],
+                "statistics": {
+                    "totalholdingvalue": 36.46,
+                    "totalinvvalue": 32.17,
+                    "totalpnlpercentage": 13.34,
+                    "totalprofitandloss": 4.29
+                }
+            },
+            "status": "success"
+        }
     """
     try:
-        print(f"[DEBUG] Transforming holdings data: {holdings_data}")
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Transforming {len(holdings_data) if isinstance(holdings_data, list) else 0} holdings records")
         
-        # Calculate statistics if we have holdings data
-        statistics = {} if not holdings_data else calculate_portfolio_statistics(holdings_data)
+        # Initialize statistics
+        statistics = {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0
+        }
         
         # Transform individual holdings
         transformed_holdings = []
         
         if not isinstance(holdings_data, list):
-            print("[ERROR] Holdings data is not a list")
+            logger.error("Holdings data is not a list")
             return {"status": "error", "message": "Invalid holdings data format"}
             
         for holding in holdings_data:
             try:
                 if not isinstance(holding, dict):
-                    print("[WARNING] Non-dict item in holdings list")
+                    logger.warning("Non-dict item in holdings list")
                     continue
                     
                 # Get symbol details from the sym object
@@ -661,33 +688,64 @@ def transform_holdings_data(holdings_data):
                 
                 # Skip if we don't have basic required data
                 if not sym or not sym.get('tradSymbol'):
-                    print("[WARNING] Missing symbol data")
+                    logger.warning(f"Missing symbol data in holding: {holding}")
                     continue
-                    
+                
+                # Get quantity - use saleable quantity if available, otherwise use total quantity
+                quantity = float(holding.get('saleableQty', holding.get('qty', 0)))
+                avg_price = float(holding.get('avgPrice', 0))
+                ltp = float(sym.get('lastPrice', avg_price))  # Use last price if available, otherwise use avg price
+                
+                # Calculate P&L values
+                pnl = float(holding.get('realizedPnl', 0))
+                pnl_percent = 0.0
+                
+                # Calculate investment value and current value
+                investment_value = quantity * avg_price
+                current_value = quantity * ltp if ltp > 0 else investment_value
+                
+                # Calculate P&L percentage
+                if investment_value > 0:
+                    pnl_percent = ((current_value - investment_value) / investment_value) * 100
+                
+                # Map product type (CNC for delivery, MIS for intraday)
+                product = 'CNC'  # Default to CNC (delivery)
+                if holding.get('product', '').upper() in ['MIS', 'INTRADAY']:
+                    product = 'MIS'
+                
+                # Create the transformed holding
                 transformed_holding = {
-                    "exchange": sym.get('exchange', ''),
-                    "pnl": holding.get('realizedPnl', 0),
-                    "pnlpercent": 0,
-                    "product": map_product_type(holding.get('product', '').lower()),
-                    "quantity": holding.get('qty', 0),
-                    "symbol": sym.get('tradSymbol', '')
+                    "exchange": sym.get('exchange', 'NSE'),  # Default to NSE if not specified
+                    "pnl": round(pnl, 2),
+                    "pnlpercent": round(pnl_percent, 2),
+                    "product": product,
+                    "quantity": int(quantity),
+                    "symbol": sym.get('tradSymbol', '').strip(),
+                    # Additional fields that might be useful
+                    "avgprice": round(avg_price, 2),
+                    "ltp": round(ltp, 2),
+                    "investment": round(investment_value, 2),
+                    "current_value": round(current_value, 2)
                 }
                 
-                # Calculate pnl percentage safely
-                try:
-                    if holding.get('avgPrice', 0) != 0:
-                        total_value = holding.get('avgPrice', 0) * holding.get('qty', 0)
-                        transformed_holding["pnlpercent"] = round((holding.get('realizedPnl', 0) / total_value) * 100, 2)
-                except (ZeroDivisionError, TypeError):
-                    print("[WARNING] Could not calculate P&L percentage")
-                    transformed_holding["pnlpercent"] = 0
-                    
+                # Update statistics
+                statistics['totalholdingvalue'] += current_value
+                statistics['totalinvvalue'] += investment_value
+                statistics['totalprofitandloss'] += (current_value - investment_value)
+                
                 transformed_holdings.append(transformed_holding)
                 
             except Exception as e:
-                print(f"[ERROR] Error transforming holding: {str(e)}")
-                print(f"[DEBUG] Holding data: {holding}")
+                logger.error(f"Error transforming holding: {str(e)}\nHolding data: {holding}", exc_info=True)
                 continue
+        
+        # Calculate final statistics
+        if statistics['totalinvvalue'] > 0:
+            statistics['totalpnlpercentage'] = (statistics['totalprofitandloss'] / statistics['totalinvvalue']) * 100
+        
+        # Round all statistics to 2 decimal places
+        for key in statistics:
+            statistics[key] = round(statistics[key], 2)
         
         return {
             "status": "success",
@@ -698,5 +756,5 @@ def transform_holdings_data(holdings_data):
         }
         
     except Exception as e:
-        print(f"[ERROR] Error in transform_holdings_data: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"Error in transform_holdings_data: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Failed to transform holdings: {str(e)}"}

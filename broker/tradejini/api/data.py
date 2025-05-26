@@ -74,10 +74,10 @@ class TradejiniWebSocket:
                     logger.info(f"Still waiting for connection... ({wait_count}/{max_wait})")
             
             if self.connected:
-                logger.info("✅ Successfully connected to Tradejini WebSocket")
+                logger.info("Successfully connected to Tradejini WebSocket")
                 return True
             else:
-                logger.error("❌ Failed to connect to Tradejini WebSocket within timeout")
+                logger.error("Failed to connect to Tradejini WebSocket within timeout")
                 return False
                 
         except Exception as e:
@@ -92,22 +92,22 @@ class TradejiniWebSocket:
             if event.get('s') == "connected":
                 self.connected = True
                 self.authenticated = True
-                logger.info("✅ WebSocket connected and authenticated")
+                logger.info("WebSocket connected and authenticated")
                 
             elif event.get('s') == "error":
                 self.connected = False
                 self.authenticated = False
-                logger.error(f"❌ WebSocket error: {event.get('reason', 'Unknown error')}")
+                logger.error(f"WebSocket error: {event.get('reason', 'Unknown error')}")
                 
             elif event.get('s') == "closed":
                 self.connected = False
                 self.authenticated = False
                 reason = event.get('reason', 'Unknown reason')
-                logger.warning(f"⚠️ WebSocket closed: {reason}")
+                logger.warning(f"WebSocket closed: {reason}")
                 
                 # Auto-reconnect if not unauthorized
                 if reason != "Unauthorized Access":
-                    logger.info("🔄 Attempting to reconnect...")
+                    logger.info("Attempting to reconnect...")
                     time.sleep(5)
                     if self.nx_stream:
                         self.nx_stream.reconnect()
@@ -131,13 +131,13 @@ class TradejiniWebSocket:
                     # Store quote data exactly like original SDK
                     self.L1_dict[symbol] = data
                     self.last_quote = data
-                    logger.info(f"📈 Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
+                    logger.info(f"Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
                     
                 elif msg_type == 'L5':
                     # Store depth data
                     self.L5_dict[symbol] = data
                     self.last_depth = data
-                    logger.info(f"📊 Updated L5 data for {symbol}")
+                    logger.info(f"Updated L5 data for {symbol}")
                     
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}", exc_info=True)
@@ -163,10 +163,10 @@ class TradejiniWebSocket:
             success = self.nx_stream.subscribeL1(formatted_tokens)
             
             if success:
-                logger.info("✅ L1 subscription successful")
+                logger.info("L1 subscription successful")
                 return True
             else:
-                logger.error("❌ L1 subscription failed")
+                logger.error("L1 subscription failed")
                 return False
                 
         except Exception as e:
@@ -189,10 +189,10 @@ class TradejiniWebSocket:
             success = self.nx_stream.subscribeL2([formatted_token])
             
             if success:
-                logger.info("✅ L5 subscription successful")
+                logger.info("L5 subscription successful")
                 return True
             else:
-                logger.error("❌ L5 subscription failed")
+                logger.error("L5 subscription failed")
                 return False
                 
         except Exception as e:
@@ -242,10 +242,10 @@ class BrokerData:
             success = self.ws.connect(self.auth_token)
             
             if success and self.ws.connected:
-                logger.info("✅ Successfully connected to TradeJini WebSocket")
+                logger.info("Successfully connected to TradeJini WebSocket")
                 return True
             else:
-                error_msg = "❌ Failed to establish WebSocket connection"
+                error_msg = "Failed to establish WebSocket connection"
                 logger.error(error_msg)
                 return False
                 
