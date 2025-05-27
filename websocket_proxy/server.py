@@ -7,7 +7,9 @@ import zmq
 import zmq.asyncio
 import threading
 import time
+import os
 from typing import Dict, Set, Any, Optional
+from dotenv import load_dotenv
 
 from .port_check import is_port_in_use, find_available_port
 
@@ -636,8 +638,15 @@ async def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
+    # Load environment variables
+    load_dotenv()
+    
+    # Get WebSocket configuration from environment variables
+    ws_host = os.getenv('WEBSOCKET_HOST', 'localhost')
+    ws_port = int(os.getenv('WEBSOCKET_PORT', '8765'))
+    
     # Create and start the WebSocket proxy
-    proxy = WebSocketProxy(host="localhost", port=8765)
+    proxy = WebSocketProxy(host=ws_host, port=ws_port)
     
     try:
         await proxy.start()
