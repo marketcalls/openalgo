@@ -4,23 +4,80 @@ import os
 import urllib.parse
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
-from broker.zerodha.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.zerodha.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.httpx_client import get_httpx_client
 
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload=None):
+    """
+    Make an API request to Zerodha's API using shared httpx client with connection pooling.
     
+    Args:
+        endpoint (str): API endpoint (e.g., '/orders')
+        auth (str): Authentication token
+        method (str): HTTP method (GET, POST, etc.)
+        payload (dict/str, optional): Request payload
+        
+    Returns:
+        dict: API response data
+    """
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    base_url = 'https://api.kite.trade'
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
+        'Authorization': f'token {AUTH_TOKEN}'
     }
-
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+    
+    url = f"{base_url}{endpoint}"
+    
+    try:
+        # Handle different HTTP methods
+        if method.upper() == 'GET':
+            response = client.get(
+                url,
+                headers=headers
+            )
+        elif method.upper() == 'POST':
+            if isinstance(payload, str):
+                # For form-urlencoded data
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                response = client.post(
+                    url,
+                    headers=headers,
+                    content=payload
+                )
+            else:
+                # For JSON data
+                headers['Content-Type'] = 'application/json'
+                response = client.post(
+                    url,
+                    headers=headers,
+                    json=payload
+                )
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+            
+        # Parse and return JSON response
+        response.raise_for_status()
+        return response.json()
+        
+    except Exception as e:
+        error_msg = str(e)
+        # Try to extract more error details if available
+        try:
+            if hasattr(e, 'response') and e.response is not None:
+                error_detail = e.response.json()
+                error_msg = error_detail.get('message', error_msg)
+        except:
+            pass
+            
+        print(f"API request failed: {error_msg}")
+        raise
 
 def get_order_book(auth):
     return get_api_response("/orders",auth)
@@ -54,19 +111,14 @@ def get_open_position(tradingsymbol, exchange, product,auth):
     return net_qty
 
 def place_order_api(data,auth):
-    
     AUTH_TOKEN = auth
     
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     #token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)  
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
-    }
-
+    newdata = transform_data(data)
+    
+    # Prepare the payload
     payload = {
         'tradingsymbol': newdata['tradingsymbol'],
         'exchange': newdata['exchange'],
@@ -78,26 +130,45 @@ def place_order_api(data,auth):
         'trigger_price': newdata['trigger_price'],
         'disclosed_quantity': newdata['disclosed_quantity'],
         'validity': newdata['validity'],
-        'tag' : newdata['tag']
+        'tag': newdata['tag']
     }
 
     print(payload)
-
-    payload =  urllib.parse.urlencode(payload)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("POST", "/orders/regular", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-
-
+    
+    # URL-encode the payload
+    payload_encoded = urllib.parse.urlencode(payload)
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
+    headers = {
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+    
+    # Make the request using the shared client
+    response = client.post(
+        'https://api.kite.trade/orders/regular',
+        headers=headers,
+        content=payload_encoded
+    )
+    
+    # Parse the response
+    response_data = response.json()
     print(response_data)
-
+    
+    # Handle the response
     if response_data['status'] == 'success':
         orderid = response_data['data']['order_id']
     else:
         orderid = None
-    return res, response_data, orderid
+        
+    # Add status attribute to maintain backward compatibility with the caller
+    response.status = response.status_code
+    
+    # Return the response object, response data, and order ID
+    return response, response_data, orderid
 
 def place_smartorder_api(data,auth):
 
@@ -218,73 +289,113 @@ def close_all_positions(current_api_key,auth):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid,auth):
-    # Assuming you have a function to get the authentication token
+def cancel_order(orderid, auth):
+    """
+    Cancel an existing order using the shared httpx client with connection pooling.
+    
+    Args:
+        orderid (str): The ID of the order to cancel
+        auth (str): Authentication token
+        
+    Returns:
+        tuple: (response data, status code)
+    """
     AUTH_TOKEN = auth
     
-    # Set up the request headers
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-    }
-    
-    # Prepare the payload
-    payload = ''
-    
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api.kite.trade")  # Adjust the URL as necessary
-    conn.request("DELETE", f"/orders/regular/{orderid}", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-    
-    # Check if the request was successful
-    if data.get("status"):
-        # Return a success response
-        return {"status": "success", "orderid": data['data']['order_id']}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        # Set up the request headers
+        headers = {
+            'X-Kite-Version': '3',
+            'Authorization': f'token {AUTH_TOKEN}'
+        }
+        
+        # Make the DELETE request using the shared client
+        response = client.delete(
+            f'https://api.kite.trade/orders/regular/{orderid}',
+            headers=headers
+        )
+        
+        response.raise_for_status()
+        data = response.json()
+        print(f"Cancel order response: {data}")
+        
+        # Check if the request was successful
+        if data.get("status"):
+            return {"status": "success", "orderid": data['data']['order_id']}, 200
+        else:
+            return {"status": "error", "message": data.get("message", "Failed to cancel order")}, response.status_code
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error canceling order {orderid}: {error_msg}")
+        return {"status": "error", "message": f"Failed to cancel order: {error_msg}"}, 500
 
 
-def modify_order(data,auth):
-
+def modify_order(data, auth):
+    """
+    Modify an existing order using the shared httpx client with connection pooling.
     
-
+    Args:
+        data (dict): Order modification details including orderid
+        auth (str): Authentication token
+        
+    Returns:
+        tuple: (response data, status code)
+    """
     AUTH_TOKEN = auth
     
-    newdata = transform_modify_order_data(data)  # You need to implement this function
-    
-  
-    # Set up the request headers
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-        'Content-Type': 'application/x-www-form-urlencoded' 
-    }
-    payload = {
-        'order_type': newdata['order_type'],
-        'quantity': newdata['quantity'],
-        'price': newdata['price'],
-        'trigger_price': newdata['trigger_price'],
-        'disclosed_quantity': newdata['disclosed_quantity'],
-        'validity': newdata['validity']
-      }
-
-    print(payload)
-
-    payload =  urllib.parse.urlencode(payload)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    conn.request("PUT", f"/orders/regular/{data['orderid']}", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-
-    if data.get("status") == "success" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["order_id"]}, 200
-    else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+    try:
+        # Transform the order data
+        newdata = transform_modify_order_data(data)
+        
+        # Prepare the payload
+        payload = {
+            'order_type': newdata['order_type'],
+            'quantity': newdata['quantity'],
+            'price': newdata['price'],
+            'trigger_price': newdata['trigger_price'],
+            'disclosed_quantity': newdata['disclosed_quantity'],
+            'validity': newdata['validity']
+        }
+        
+        print(f"Modifying order with payload: {payload}")
+        
+        # URL-encode the payload
+        payload_encoded = urllib.parse.urlencode(payload)
+        
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        # Set up the request headers
+        headers = {
+            'X-Kite-Version': '3',
+            'Authorization': f'token {AUTH_TOKEN}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        # Make the PUT request using the shared client
+        response = client.put(
+            f'https://api.kite.trade/orders/regular/{data["orderid"]}',
+            headers=headers,
+            content=payload_encoded
+        )
+        
+        response.raise_for_status()
+        response_data = response.json()
+        print(f"Modify order response: {response_data}")
+        
+        if response_data.get("status") == "success" or response_data.get("message") == "SUCCESS":
+            return {"status": "success", "orderid": response_data["data"]["order_id"]}, 200
+        else:
+            return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, response.status_code
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error modifying order: {error_msg}")
+        return {"status": "error", "message": f"Failed to modify order: {error_msg}"}, 500
     
 
 def cancel_all_orders_api(data,auth):

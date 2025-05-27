@@ -1,6 +1,7 @@
 import os
-import requests
 import hashlib
+import json
+from utils.httpx_client import get_httpx_client
 
 def authenticate_broker(request_token):
     try:
@@ -24,15 +25,23 @@ def authenticate_broker(request_token):
 
 
         
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
         # Setting the headers as specified by Zerodha's documentation
         headers = {
             'X-Kite-Version': '3'
-        }
+            }
         
-        # Performing the POST request
-        response = requests.post(url, headers=headers, data=data)
-        if response.status_code == 200:
-            # Success response from Zerodha
+        try:
+            # Performing the POST request using the shared client
+            response = client.post(
+                url,
+                headers=headers,
+                data=data,
+                )
+            response.raise_for_status()  # Raises an exception for 4XX/5XX responses
+            
             response_data = response.json()
             if 'data' in response_data and 'access_token' in response_data['data']:
                 # Access token found in response data
@@ -40,10 +49,17 @@ def authenticate_broker(request_token):
             else:
                 # Access token not present in the response
                 return None, "Authentication succeeded but no access token was returned. Please check the response."
-        else:
-            # Handling errors from the API
-            error_detail = response.json()
-            error_message = error_detail.get('message', 'Authentication failed. Please try again.')
+                
+        except Exception as e:
+            # Handle HTTP errors and timeouts
+            error_message = str(e)
+            try:
+                if hasattr(e, 'response') and e.response is not None:
+                    error_detail = e.response.json()
+                    error_message = error_detail.get('message', str(e))
+            except:
+                pass
+                
             return None, f"API error: {error_message}"
     except Exception as e:
         # Exception handling
