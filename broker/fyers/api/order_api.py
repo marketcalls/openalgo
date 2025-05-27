@@ -1,26 +1,72 @@
-import http.client
 import json
 import os
+import logging
+import httpx
 from database.token_db import get_br_symbol, get_oa_symbol
-from broker.fyers.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.fyers.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.httpx_client import get_httpx_client
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
+    """
+    Make API requests to Fyers API using shared connection pooling.
     
-    AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    headers = {
-        'Authorization': f'{api_key}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'  # Added if payloads are JSON
-    }
-
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+    Args:
+        endpoint: API endpoint (e.g., /api/v3/orders)
+        auth: Authentication token
+        method: HTTP method (GET, POST, etc.)
+        payload: Request payload as a string or dict
+        
+    Returns:
+        dict: Parsed JSON response from the API
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        api_key = os.getenv('BROKER_API_KEY')
+        
+        url = f"https://api-t1.fyers.in{endpoint}"
+        headers = {
+            'Authorization': f'{api_key}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.debug(f"Making {method} request to Fyers API: {url}")
+        
+        # Make the request
+        if method == "GET":
+            response = client.get(url, headers=headers)
+        elif method == "POST":
+            response = client.post(url, headers=headers, json=payload if isinstance(payload, dict) else json.loads(payload))
+        else:
+            response = client.request(method, url, headers=headers, json=payload if isinstance(payload, dict) else json.loads(payload))
+        
+        # Add status attribute for compatibility
+        response.status = response.status_code
+        
+        # Raise HTTPError for bad responses (4xx, 5xx)
+        response.raise_for_status()
+        
+        # Parse and return the JSON response
+        response_data = response.json()
+        logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
+        return response_data
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during API request: {str(e)}")
+        return {"s": "error", "message": f"HTTP error: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return {"s": "error", "message": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Error during API request: {str(e)}")
+        return {"s": "error", "message": f"General error: {str(e)}"}
 
 def get_order_book(auth):
     return get_api_response("/api/v3/orders",auth)
@@ -54,43 +100,68 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     return net_qty
 
-def place_order_api(data,auth):
+def place_order_api(data, auth):
+    """
+    Place a new order using the Fyers API with shared connection pooling.
     
-    AUTH_TOKEN = auth
-    
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
-    #token = get_token(data['symbol'], data['exchange'])
-
-    headers = {
-        'Authorization': f'{BROKER_API_KEY}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'  # Added if payloads are JSON
-    }
-
-    payload = transform_data(data)  
-
-    print(payload)
-
-    # Convert payload to JSON and then encode to bytes
-    payload_bytes = json.dumps(payload).encode('utf-8')
-
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    conn.request("POST", "/api/v3/orders/sync", payload_bytes, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
-
-
-    #print(response_data)
-
-    if response_data['s'] == 'ok':
-        orderid = response_data['id']
-    elif response_data['s'] == 'error':
-        orderid = response_data.get('id')
-        if not orderid: 
+    Args:
+        data: Order details
+        auth: Authentication token
+        
+    Returns:
+        tuple: (response object, response data, order ID)
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+        data['apikey'] = BROKER_API_KEY
+        
+        url = "https://api-t1.fyers.in/api/v3/orders/sync"
+        headers = {
+            'Authorization': f'{BROKER_API_KEY}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Transform the order data
+        payload = transform_data(data)
+        logger.debug(f"Placing order with payload: {json.dumps(payload, indent=2)}")
+        
+        # Make the POST request
+        response = client.post(url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        # Add status attribute for compatibility
+        response.status = response.status_code
+        
+        # Parse the response
+        if response_data.get('s') == 'ok':
+            orderid = response_data['id']
+        elif response_data.get('s') == 'error':
+            orderid = response_data.get('id')
+            if not orderid:
+                orderid = None
+            logger.warning(f"Order placement failed: {response_data.get('message', 'Unknown error')}")
+        else:
             orderid = None
-    else:
-        orderid = None
-    return res, response_data, orderid
+            logger.warning(f"Unexpected response format: {response_data}")
+            
+        return response, response_data, orderid
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during order placement: {str(e)}")
+        response = type('obj', (object,), {'status_code': 500, 'status': 500})
+        return response, {"s": "error", "message": f"HTTP error: {str(e)}"}, None
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error during order placement: {str(e)}")
+        response = type('obj', (object,), {'status_code': 500, 'status': 500})
+        return response, {"s": "error", "message": f"Invalid JSON response: {str(e)}"}, None
+    except Exception as e:
+        logger.error(f"Error during order placement: {str(e)}")
+        response = type('obj', (object,), {'status_code': 500, 'status': 500})
+        return response, {"s": "error", "message": f"General error: {str(e)}"}, None
 
 def place_smartorder_api(data,auth):
 
@@ -180,102 +251,171 @@ def place_smartorder_api(data,auth):
 
 
 
-def close_all_positions(current_api_key,auth):
-
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-
-    api_key = os.getenv('BROKER_API_KEY')
+def close_all_positions(current_api_key, auth):
+    """
+    Close all open positions using the Fyers API with shared connection pooling.
     
-    # Set up the request headers
-    headers = {
-        'Authorization': f'{api_key}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-    
-    # Prepare the payload with the specific requirement to close all positions
-    payload = json.dumps({"exit_all": 1})  # Match the API expected payload
-    
-    # Establish the connection and send the request to the positions endpoint
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    conn.request("DELETE", "/api/v3/positions", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-    
-    # Check if the request was successful
-    if data.get("s") == "ok":
-        # Return a success response
-        return {"status": "success", "message": "The position is closed"}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to close position")}, res.status
+    Args:
+        current_api_key: The API key (currently unused)
+        auth: Authentication token
+        
+    Returns:
+        tuple: (response data, status code)
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        api_key = os.getenv('BROKER_API_KEY')
+        
+        url = "https://api-t1.fyers.in/api/v3/positions"
+        headers = {
+            'Authorization': f'{api_key}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Prepare the payload to close all positions
+        payload = {"exit_all": 1}
+        logger.debug("Closing all positions")
+        
+        # Make the DELETE request with the payload
+        response = client.request("DELETE", url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        logger.debug(f"Close all positions response: {json.dumps(response_data, indent=2)}")
+        
+        # Check if the request was successful
+        if response_data.get("s") == "ok":
+            return {"status": "success", "message": "All positions closed successfully"}, 200
+        else:
+            error_msg = response_data.get("message", "Failed to close positions")
+            logger.warning(f"Failed to close all positions: {error_msg}")
+            return {"status": "error", "message": error_msg}, response.status_code
+            
+    except httpx.HTTPError as e:
+        error_msg = f"HTTP error during close all positions: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except json.JSONDecodeError as e:
+        error_msg = f"JSON decode error during close all positions: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except Exception as e:
+        error_msg = f"Error during close all positions: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
 
-def cancel_order(orderid,auth):
-    # Assuming you have a function to get the authentication token
-    AUTH_TOKEN = auth
-
-    api_key = os.getenv('BROKER_API_KEY')
+def cancel_order(orderid, auth):
+    """
+    Cancel an order using the Fyers API with shared connection pooling.
     
-    # Set up the request headers
-    headers = {
-        'Authorization': f'{api_key}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'  # Added if payloads are JSON
-    }
+    Args:
+        orderid: ID of the order to cancel
+        auth: Authentication token
+        
+    Returns:
+        tuple: (response data, status code)
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        api_key = os.getenv('BROKER_API_KEY')
+        
+        url = "https://api-t1.fyers.in/api/v3/orders/sync"
+        headers = {
+            'Authorization': f'{api_key}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Prepare the payload with order ID
+        payload = {"id": orderid}
+        logger.debug(f"Cancelling order {orderid} with payload: {payload}")
+        
+        # Make the DELETE request with the order ID in the JSON body
+        response = client.request("DELETE", url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        logger.debug(f"Cancel order response: {json.dumps(response_data, indent=2)}")
+        
+        # Check if the request was successful
+        if response_data.get("s") == "ok":
+            return {"status": "success", "orderid": response_data['id']}, 200
+        else:
+            error_msg = response_data.get("message", "Failed to cancel order")
+            logger.warning(f"Failed to cancel order {orderid}: {error_msg}")
+            return {"status": "error", "message": error_msg}, response.status_code
+            
+    except httpx.HTTPError as e:
+        error_msg = f"HTTP error during order cancellation: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except json.JSONDecodeError as e:
+        error_msg = f"JSON decode error during order cancellation: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except Exception as e:
+        error_msg = f"Error during order cancellation: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+
+
+def modify_order(data, auth):
+    """
+    Modify an existing order using the Fyers API with shared connection pooling.
     
-    # Prepare the payload
-    payload = json.dumps({"id": orderid})  # Use json.dumps to convert the dictionary to a JSON string
-    
-    
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    conn.request("DELETE", "/api/v3/orders/sync", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-    
-    # Check if the request was successful
-    if data.get("s")=="ok":
-        # Return a success response
-        return {"status": "success", "orderid": data['id']}, 200
-    else:
-        # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
-
-
-def modify_order(data,auth):
-
-    
-
-    AUTH_TOKEN = auth
-    
-    api_key = os.getenv('BROKER_API_KEY')
-    
-  
-    # Set up the request headers
-    headers = {
-        'Authorization': f'{api_key}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'  # Added if payloads are JSON
-    }
-
-    payload = transform_modify_order_data(data) 
-
-    print(payload)
-
-    # Convert payload to JSON and then encode to bytes
-    payload_bytes = json.dumps(payload).encode('utf-8')
-
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    conn.request("PATCH", "/api/v3/orders/sync", payload_bytes, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
-    print(data)
-
-    if data.get("s") == "ok" or data.get("s") == "OK":
-        return {"status": "success", "orderid": data["id"]}, 200
-    else:
-        print(data)
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+    Args:
+        data: Order modification details
+        auth: Authentication token
+        
+    Returns:
+        tuple: (response data, status code)
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        api_key = os.getenv('BROKER_API_KEY')
+        
+        url = "https://api-t1.fyers.in/api/v3/orders/sync"
+        headers = {
+            'Authorization': f'{api_key}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Transform the order data
+        payload = transform_modify_order_data(data)
+        logger.debug(f"Modifying order with payload: {json.dumps(payload, indent=2)}")
+        
+        # Make the PATCH request
+        response = client.patch(url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        logger.debug(f"Modify order response: {json.dumps(response_data, indent=2)}")
+        
+        # Check if the request was successful
+        if response_data.get("s") in ["ok", "OK"]:
+            return {"status": "success", "orderid": response_data["id"]}, 200
+        else:
+            error_msg = response_data.get("message", "Failed to modify order")
+            logger.warning(f"Failed to modify order: {error_msg}")
+            return {"status": "error", "message": error_msg}, response.status_code
+            
+    except httpx.HTTPError as e:
+        error_msg = f"HTTP error during order modification: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except json.JSONDecodeError as e:
+        error_msg = f"JSON decode error during order modification: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
+    except Exception as e:
+        error_msg = f"Error during order modification: {str(e)}"
+        logger.error(error_msg)
+        return {"status": "error", "message": error_msg}, 500
     
 
 def cancel_all_orders_api(data,auth):

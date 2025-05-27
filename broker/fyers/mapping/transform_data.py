@@ -38,13 +38,35 @@ def transform_data(data):
 
 
 def transform_modify_order_data(data):
+    """
+    Transforms the order modification data to the format expected by Fyers API.
+    Handles empty strings and None values for price and trigger_price.
+    """
+    # Safely get and convert quantity with validation
+    try:
+        quantity = int(data.get("quantity", 0))
+    except (ValueError, TypeError):
+        quantity = 0
+    
+    # Safely get and convert price with validation
+    try:
+        price = float(data.get("price", 0)) if data.get("price") else 0.0
+    except (ValueError, TypeError):
+        price = 0.0
+    
+    # Safely get and convert trigger_price with validation
+    try:
+        trigger_price = float(data.get("trigger_price", 0)) if data.get("trigger_price") else 0.0
+    except (ValueError, TypeError):
+        trigger_price = 0.0
+    
     return {
-        "id" : data["orderid"],  
-        "qty": int(data["quantity"]),  # Convert quantity to integer
-        "type": map_order_type(data["pricetype"]),  # Assuming map_order_type returns an integer
-        "side": map_action(data["action"]),  # Assuming map_action returns an integer
-        "limitPrice": float(data["price"]),  # Convert price to float
-        "stopPrice": float(data.get("trigger_price", 0))  # Convert trigger_price to float, default is 0
+        "id": data["orderid"],
+        "qty": quantity,
+        "type": map_order_type(data.get("pricetype", "")),  # Default to empty string if not provided
+        "side": map_action(data.get("action", "")),  # Default to empty string if not provided
+        "limitPrice": price,
+        "stopPrice": trigger_price
     }
 
 
