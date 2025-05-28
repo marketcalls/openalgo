@@ -3,14 +3,11 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
-import pandas as pd
-import gzip
 import io
+from utils.httpx_client import get_httpx_client
 
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
@@ -82,28 +79,54 @@ def copy_from_dataframe(df):
 def download_csv_zerodha_data(output_path):
     """
     Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
-    to pandas dataframe
+    to pandas dataframe using shared httpx client with connection pooling.
+    
+    Args:
+        output_path (str): Path where the CSV file will be saved
+        
+    Returns:
+        pd.DataFrame: DataFrame containing the downloaded instrument data
     """
-    login_username = os.getenv('LOGIN_USERNAME')
-    AUTH_TOKEN = get_auth_token(login_username)
-
-    conn = http.client.HTTPSConnection("api.kite.trade")
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {AUTH_TOKEN}',
-    }
-    conn.request("GET", "/instruments", '', headers)
-
-    res = conn.getresponse()
-    if res.status == 200:
-        csv_data = res.read()  # Directly reading CSV data
-        csv_string = csv_data.decode('utf-8')  # Decode bytes to string
-        df = pd.read_csv(io.StringIO(csv_string))  # Convert string to pandas DataFrame
-        df.to_csv(output_path)
-
+    try:
+        login_username = os.getenv('LOGIN_USERNAME')
+        AUTH_TOKEN = get_auth_token(login_username)
+        
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        headers = {
+            'X-Kite-Version': '3',
+            'Authorization': f'token {AUTH_TOKEN}'
+        }
+        
+        # Make the GET request using the shared client
+        response = client.get(
+            'https://api.kite.trade/instruments',
+            headers=headers  # Increased timeout for potentially large file
+        )
+        response.raise_for_status()  # Raises an exception for 4XX/5XX responses
+        
+        # Process the response directly as CSV
+        csv_string = response.text
+        df = pd.read_csv(io.StringIO(csv_string))
+        
+        # Save to output path if needed
+        if output_path:
+            df.to_csv(output_path, index=False)
+            
         return df
-    else:
-        print(f"Failed to download. Status code: {res.status}")
+        
+    except Exception as e:
+        error_message = str(e)
+        try:
+            if hasattr(e, 'response') and e.response is not None:
+                error_detail = e.response.json()
+                error_message = error_detail.get('message', str(e))
+        except:
+            pass
+            
+        print(f"Error downloading Zerodha instruments: {error_message}")
+        raise
 
 
 def reformat_symbol(row):
