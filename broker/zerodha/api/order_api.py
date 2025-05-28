@@ -171,72 +171,75 @@ def place_order_api(data,auth):
     return response, response_data, orderid
 
 def place_smartorder_api(data,auth):
-
     AUTH_TOKEN = auth
 
-    #If no API call is made in this function then res will return None
+    # Initialize default return values
     res = None
+    response_data = {"status": "error", "message": "No action required or invalid parameters"}
+    orderid = None
 
-    # Extract necessary info from data
-    symbol = data.get("symbol")
-    exchange = data.get("exchange")
-    product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
-
-    
-
-    # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
-
-
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
-    
-    # Determine action based on position_size and current_position
-    action = None
-    quantity = 0
-
-
-    
-
-   
-   
-
-    if position_size == 0 and current_position>0 :
-        action = "SELL"
-        quantity = abs(current_position)
-    elif position_size == 0 and current_position<0 :
-        action = "BUY"
-        quantity = abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    else:
-        if position_size > current_position:
-            action = "BUY"
-            quantity = position_size - current_position
-            #print(f"smart buy quantity : {quantity}")
-        elif position_size < current_position:
-            action = "SELL"
-            quantity = current_position - position_size
-            #print(f"smart sell quantity : {quantity}")
-
-
-
-
-    if action:
-        # Prepare data for placing the order
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
-
-        #print(order_data)
-        # Place the order
-        res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
+    try:
+        # Extract necessary info from data
+        symbol = data.get("symbol")
+        exchange = data.get("exchange")
+        product = data.get("product")
         
-        return res , response, orderid
+        if not all([symbol, exchange, product]):
+            print("Missing required parameters in place_smartorder_api")
+            return res, response_data, orderid
+            
+        position_size = int(data.get("position_size", "0"))
+
+        # Get current open position for the symbol
+        current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
+
+        print(f"position_size: {position_size}")
+        print(f"Open Position: {current_position}")
+
+        # Determine action based on position_size and current_position
+        action = None
+        quantity = 0
+
+        if position_size == 0 and current_position > 0:
+            action = "SELL"
+            quantity = abs(current_position)
+        elif position_size == 0 and current_position < 0:
+            action = "BUY"
+            quantity = abs(current_position)
+        elif current_position == 0:
+            action = "BUY" if position_size > 0 else "SELL"
+            quantity = abs(position_size)
+        else:
+            if position_size > current_position:
+                action = "BUY"
+                quantity = position_size - current_position
+            elif position_size < current_position:
+                action = "SELL"
+                quantity = current_position - position_size
+
+        if action and quantity > 0:
+            # Prepare data for placing the order
+            order_data = data.copy()
+            order_data["action"] = action
+            order_data["quantity"] = str(quantity)
+
+
+            # Place the order
+            res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+            return res, response, orderid
+        else:
+            print("No action required or invalid quantity")
+            response_data = {"status": "success", "message": "No action required"}
+            return res, response_data, orderid
+            
+    except Exception as e:
+        error_msg = f"Error in place_smartorder_api: {str(e)}"
+        print(error_msg)
+        response_data = {"status": "error", "message": error_msg}
+        return res, response_data, orderid
+    
+    # Final fallback return (should not be reached due to the returns above)
+    return res, response_data, orderid
     
 
 
@@ -333,69 +336,56 @@ def cancel_order(orderid, auth):
         print(f"Error canceling order {orderid}: {error_msg}")
         return {"status": "error", "message": f"Failed to cancel order: {error_msg}"}, 500
 
-
-def modify_order(data, auth):
-    """
-    Modify an existing order using the shared httpx client with connection pooling.
-    
-    Args:
-        data (dict): Order modification details including orderid
-        auth (str): Authentication token
-        
-    Returns:
-        tuple: (response data, status code)
-    """
+def modify_order(data,auth):
     AUTH_TOKEN = auth
     
-    try:
-        # Transform the order data
-        newdata = transform_modify_order_data(data)
-        
-        # Prepare the payload
-        payload = {
-            'order_type': newdata['order_type'],
-            'quantity': newdata['quantity'],
-            'price': newdata['price'],
-            'trigger_price': newdata['trigger_price'],
-            'disclosed_quantity': newdata['disclosed_quantity'],
-            'validity': newdata['validity']
-        }
-        
-        print(f"Modifying order with payload: {payload}")
-        
-        # URL-encode the payload
-        payload_encoded = urllib.parse.urlencode(payload)
-        
-        # Get the shared httpx client with connection pooling
-        client = get_httpx_client()
-        
-        # Set up the request headers
-        headers = {
-            'X-Kite-Version': '3',
-            'Authorization': f'token {AUTH_TOKEN}',
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        # Make the PUT request using the shared client
-        response = client.put(
-            f'https://api.kite.trade/orders/regular/{data["orderid"]}',
-            headers=headers,
-            content=payload_encoded
-        )
-        
-        response.raise_for_status()
-        response_data = response.json()
-        print(f"Modify order response: {response_data}")
-        
-        if response_data.get("status") == "success" or response_data.get("message") == "SUCCESS":
-            return {"status": "success", "orderid": response_data["data"]["order_id"]}, 200
-        else:
-            return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, response.status_code
-            
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Error modifying order: {error_msg}")
-        return {"status": "error", "message": f"Failed to modify order: {error_msg}"}, 500
+    newdata = transform_modify_order_data(data)  # You need to implement this function
+    
+    # Prepare the payload with proper handling of numeric fields
+    payload = {
+        'order_type': newdata['order_type'],
+        'quantity': str(newdata['quantity']),
+        'price': str(newdata['price']) if newdata['price'] else '0',
+        'disclosed_quantity': str(newdata['disclosed_quantity']) if newdata['disclosed_quantity'] else '0',
+        'validity': newdata['validity']
+    }
+    
+    # Only include trigger_price if it has a value
+    if newdata.get('trigger_price'):
+        payload['trigger_price'] = str(newdata['trigger_price'])
+    
+    print(payload)
+    
+    # URL-encode the payload
+    payload_encoded = urllib.parse.urlencode(payload)
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
+    headers = {
+        'X-Kite-Version': '3',
+        'Authorization': f'token {AUTH_TOKEN}',
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+    
+    # Make the request using the shared client
+    response = client.put(
+        f'https://api.kite.trade/orders/regular/{data["orderid"]}',
+        headers=headers,
+        content=payload_encoded
+    )
+    
+    # Parse the response
+    response_data = response.json()
+    print(response_data)
+    
+    # Add status attribute to maintain backward compatibility
+    response.status = response.status_code
+    
+    if response_data.get("status") == "success" or response_data.get("message") == "SUCCESS":
+        return {"status": "success", "orderid": response_data["data"]["order_id"]}, 200
+    else:
+        return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, response.status_code
     
 
 def cancel_all_orders_api(data,auth):
