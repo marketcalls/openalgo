@@ -103,6 +103,7 @@ tzlocal==5.2
 urllib3==2.2.2
 wcwidth==0.2.13
 websocket-client==1.8.0
+websockets==15.0.1
 logzero==1.7.0
 Werkzeug==3.1.2
 wheel==0.43.0
