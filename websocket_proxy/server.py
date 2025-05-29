@@ -80,13 +80,20 @@ class WebSocketProxy:
             
             # Handle graceful shutdown
             # Windows doesn't support add_signal_handler, so we'll use a simpler approach
+            # Also, when running in a thread on Unix systems, signal handlers can't be set
             loop = asyncio.get_event_loop()
-            try:
-                for sig in (signal.SIGINT, signal.SIGTERM):
-                    loop.add_signal_handler(sig, stop.set_result, None)
-            except NotImplementedError:
-                # On Windows, we'll just rely on the KeyboardInterrupt exception
-                logger.info("Signal handlers not supported on this platform. Using fallback mechanism.")
+            
+            # Check if we're in the main thread
+            if threading.current_thread() is threading.main_thread():
+                try:
+                    for sig in (signal.SIGINT, signal.SIGTERM):
+                        loop.add_signal_handler(sig, stop.set_result, None)
+                    logger.info("Signal handlers registered successfully")
+                except (NotImplementedError, RuntimeError) as e:
+                    # On Windows or when in a non-main thread
+                    logger.info(f"Signal handlers not registered: {e}. Using fallback mechanism.")
+            else:
+                logger.info("Running in a non-main thread. Signal handlers will not be used.")
             
             logger.info(f"Starting WebSocket server on {self.host}:{self.port}")
             
@@ -652,6 +659,15 @@ async def main():
         await proxy.start()
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
+    except RuntimeError as e:
+        if "set_wakeup_fd only works in main thread" in str(e):
+            logger.error(f"Error in start method: {e}")
+            logger.info("Starting ZeroMQ listener without signal handlers")
+            # Continue with ZeroMQ listener even if signal handlers fail
+            await proxy.zmq_listener()
+        else:
+            logger.error(f"Server error: {e}")
+            raise
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
