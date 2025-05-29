@@ -362,6 +362,16 @@ server {
     listen [::]:80;
     server_name $DOMAIN;
 
+    # WebSocket path exceptions to avoid 301 redirect loop
+    location = /ws {
+        return 301 https://\$host\$request_uri;
+    }
+
+    location /ws/ {
+        return 301 https://\$host\$request_uri;
+    }
+
+    # All other HTTP requests get redirected to HTTPS
     location / {
         return 301 https://\$host\$request_uri;
     }
@@ -393,17 +403,66 @@ server {
     add_header X-XSS-Protection "1; mode=block";
     add_header Strict-Transport-Security "max-age=63072000" always;
     
+        # WebSocket without trailing slash
+    location = /ws {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        
+        # Extended timeouts for long-running connections (up to 24 hours)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable proxy buffering for real-time data
+        proxy_buffering off;
+        
+        # WebSocket headers
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Other headers
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    # WebSocket with trailing slash
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8765/;
+        proxy_http_version 1.1;
+        
+        # Extended timeouts for long-running connections (up to 24 hours)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable proxy buffering for real-time data
+        proxy_buffering off;
+        
+        # WebSocket headers
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Other headers
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    # Main app (Gunicorn UDS)
     location / {
         proxy_pass http://unix:$SOCKET_FILE;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_redirect off;
-        
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
     }
 }
 EOL
