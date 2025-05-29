@@ -33,7 +33,10 @@ def load_and_check_env_variables():
         'LOGIN_RATE_LIMIT_HOUR',
         'API_RATE_LIMIT', 
         'SMART_ORDER_DELAY',
-        'SESSION_EXPIRY_TIME'  # Added SESSION_EXPIRY_TIME as it's required for session management
+        'SESSION_EXPIRY_TIME',  # Added SESSION_EXPIRY_TIME as it's required for session management
+        'WEBSOCKET_HOST',  # Host for the WebSocket server
+        'WEBSOCKET_PORT',  # Port for the WebSocket server
+        'WEBSOCKET_URL'   # Full WebSocket URL for clients
     ]
 
     # Check if each required environment variable is set
@@ -65,6 +68,16 @@ def load_and_check_env_variables():
     except ValueError:
         print("\nError: FLASK_PORT must be a valid port number (0-65535)")
         print("Example: FLASK_PORT='5000'")
+        sys.exit(1)
+        
+    # Validate WebSocket port
+    try:
+        ws_port = int(os.getenv('WEBSOCKET_PORT'))
+        if ws_port < 0 or ws_port > 65535:
+            raise ValueError
+    except ValueError:
+        print("\nError: WEBSOCKET_PORT must be a valid port number (0-65535)")
+        print("Example: WEBSOCKET_PORT='8765'")
         sys.exit(1)
 
     # Check REDIRECT_URL configuration
@@ -154,4 +167,11 @@ def load_and_check_env_variables():
     except ValueError:
         print("\nError: SMART_ORDER_DELAY must be a valid positive number")
         print("Example: SMART_ORDER_DELAY='0.5'")
+        sys.exit(1)
+        
+    # Validate WEBSOCKET_URL format
+    websocket_url = os.getenv('WEBSOCKET_URL', '')
+    if not websocket_url.startswith('ws://') and not websocket_url.startswith('wss://'):
+        print("\nError: WEBSOCKET_URL must start with 'ws://' or 'wss://'")
+        print("Example: WEBSOCKET_URL='ws://localhost:8765'")
         sys.exit(1)

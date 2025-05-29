@@ -10,6 +10,8 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+# Import WebSocket proxy server - using relative import to avoid @ symbol issues
+from websocket_proxy.app_integration import start_websocket_proxy
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -137,6 +139,9 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Integrate the WebSocket proxy server with the Flask app
+start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
