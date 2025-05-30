@@ -1,6 +1,6 @@
 # CSRF Audit Report - openalgo Project
 
-**Date:** 2025-05-30
+**Date:** 2025-05-30 (Updated: 2025-05-31)
 **Auditor:** Cascade AI (Google Gemini 2.5 Pro)
 
 ## 1. Executive Summary
@@ -68,23 +68,15 @@ The audit focused on the following areas:
 -   **Status:** Acceptable.
 
 ### 3.7. Logout Functionality
--   **Finding:** The logout route (`/auth/logout` in `blueprints/auth.py`) is a GET request.
-    ```python
-    @auth_bp.route('/logout')
-    def logout():
-        # ... session clearing logic ...
-        return redirect(url_for('auth.login'))
-    ```
--   **Risk:** GET logout endpoints can be triggered by malicious sites using simple image tags or links, leading to unintended logout (CSRF).
--   **Recommendation (Important):**
-    1.  Change the logout route to accept only POST requests: `@auth_bp.route('/logout', methods=['POST'])`.
-    2.  Ensure the logout mechanism in your templates (e.g., a button or link) submits a form via POST and includes the `{{ csrf_token() }}`.
-    Alternatively, if keeping GET, implement a user confirmation step before logging out.
--   **Status:** Needs Improvement.
+-   **Finding (Previous):** The logout route (`/auth/logout` in `blueprints/auth.py`) was a GET request, which posed a CSRF risk.
+-   **Finding (Current - 2025-05-31):** The logout route has been updated to accept only POST requests (`@auth_bp.route('/logout', methods=['POST'])`). With Flask-WTF's CSRF protection enabled globally, this route is now automatically protected and requires a valid CSRF token.
+-   **Risk:** Mitigated.
+-   **Recommendation (Previous):** Change the logout route to accept only POST requests and ensure it's protected by a CSRF token.
+-   **Status:** Fixed. The logout functionality is now secure against CSRF.
 
 ## 4. Conclusion
 
-The `openalgo` project has robust CSRF protection in place for most of its components. The use of Flask-WTF, API key authentication for APIs, and explicit API key authentication for WebSockets are effective measures. The primary recommendation is to secure the logout functionality by changing it to a POST request with CSRF token protection.
+The `openalgo` project has robust CSRF protection in place for most of its components. The use of Flask-WTF, API key authentication for APIs, and explicit API key authentication for WebSockets are effective measures. The previously identified issue with the logout functionality has been addressed by changing it to a POST request, which is now protected by CSRF tokens.
 
 ---
 End of Report
