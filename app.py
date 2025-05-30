@@ -74,9 +74,19 @@ def create_app():
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     
-    # CSRF configuration
-    app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit for CSRF tokens
-    app.config['WTF_CSRF_ENABLED'] = True
+    # CSRF configuration from environment variables
+    csrf_enabled = os.getenv('CSRF_ENABLED', 'TRUE').upper() == 'TRUE'
+    app.config['WTF_CSRF_ENABLED'] = csrf_enabled
+    
+    # Parse CSRF time limit from environment
+    csrf_time_limit = os.getenv('CSRF_TIME_LIMIT', '').strip()
+    if csrf_time_limit:
+        try:
+            app.config['WTF_CSRF_TIME_LIMIT'] = int(csrf_time_limit)
+        except ValueError:
+            app.config['WTF_CSRF_TIME_LIMIT'] = None  # Default to no limit if invalid
+    else:
+        app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit if empty
 
     # Register RESTx API blueprint first
     app.register_blueprint(api_v1_bp)
