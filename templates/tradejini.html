@@ -15,6 +15,7 @@
                     <h2 class="card-title text-2xl font-bold text-center mb-6">Tradejini Login</h2>
                     
                     <form method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">Password</span>

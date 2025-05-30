@@ -3,6 +3,7 @@ from utils.env_check import load_and_check_env_variables  # Import the environme
 load_and_check_env_variables()
 
 from flask import Flask, render_template
+from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
@@ -53,6 +54,12 @@ def create_app():
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
 
+    # Initialize CSRF protection
+    csrf = CSRFProtect(app)
+    
+    # Store csrf instance in app config for use in other modules
+    app.csrf = csrf
+
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
@@ -66,9 +73,16 @@ def create_app():
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+    
+    # CSRF configuration
+    app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit for CSRF tokens
+    app.config['WTF_CSRF_ENABLED'] = True
 
     # Register RESTx API blueprint first
     app.register_blueprint(api_v1_bp)
+    
+    # Exempt API endpoints from CSRF protection (they use API key authentication)
+    csrf.exempt(api_v1_bp)
 
     # Initialize traffic logging middleware after RESTx but before other blueprints
     init_traffic_logging(app)
