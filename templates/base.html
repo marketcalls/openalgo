@@ -214,9 +214,12 @@
                     </li>
                     <div class="divider"></div>
                     <li>
-                        <a href="{{ url_for('auth.logout') }}" class="text-error">
-                            Logout
-                        </a>
+                        <form method="POST" action="{{ url_for('auth.logout') }}" class="m-0">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button type="submit" class="btn btn-ghost btn-sm text-error justify-start w-full">
+                                Logout
+                            </button>
+                        </form>
                     </li>
                 </ul>
             </div>

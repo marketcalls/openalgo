@@ -174,7 +174,7 @@ def change_password():
 
     return render_template('profile.html', username=session['user'])
 
-@auth_bp.route('/logout')
+@auth_bp.route('/logout', methods=['POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
