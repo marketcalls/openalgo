@@ -340,22 +340,12 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             symbol = subscription['symbol']
             exchange = subscription['exchange']
             mode = subscription['mode']
-
-
             
             # Important: Always use the actual mode from the message rather than the subscription
             # This ensures data is published with the correct mode identifier
             actual_msg_mode = message.get('subscription_mode')
             mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[actual_msg_mode]  # Mode 3 is Snap Quote (includes depth data)
-            
-            # Use the original exchange name in the topic
-            # This ensures consistency with client subscriptions
-            # Do NOT map the exchange name here - keep it as NSE_INDEX, BSE_INDEX, etc.
-            
-            # Format the topic using the original exchange name
             topic = f"{exchange}_{symbol}_{mode_str}"
-            
-            self.logger.info(f"Publishing to topic with original exchange name: {topic}")
             
             # Normalize the data based on the actual message mode, not subscription mode
             market_data = self._normalize_market_data(message, actual_msg_mode)
@@ -363,8 +353,8 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Add metadata
             market_data.update({
                 'symbol': symbol,
-                'exchange': original_exchange,  # Use the original exchange name (NSE_INDEX, BSE_INDEX) not the mapped one
-                'mode': message.get('subscription_mode'),
+                'exchange': exchange,
+                'mode': mode,
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
             
