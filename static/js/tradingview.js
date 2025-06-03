@@ -128,7 +128,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             body: JSON.stringify(formData),
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
             }
         })
         .then(response => response.json().then(data => ({status: response.status, data: data})))

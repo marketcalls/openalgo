@@ -31,6 +31,7 @@
                     </div>
 
                     <form action="/kotak/callback" method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <!-- Hidden fields for session data -->
                         <input type="hidden" name="access_token" value="{{ para.access_token }}">
                         <input type="hidden" name="token" value="{{ para.token }}">
