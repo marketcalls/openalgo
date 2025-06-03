@@ -14,6 +14,7 @@
                     </div>
 
                     <form action="/kotak/loginflow" method="POST" class="space-y-4" id="kotakForm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>

@@ -299,7 +299,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-CSRFToken': getCSRFToken()
             },
             body: JSON.stringify(payload)
         })
@@ -347,7 +348,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-CSRFToken': getCSRFToken()
             },
             body: JSON.stringify({
                 symbols: symbols
@@ -404,6 +406,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function deleteSymbol(mappingId, row) {
         fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
             method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
         })
         .then(response => {
             if (response.ok) {

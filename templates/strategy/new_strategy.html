@@ -9,6 +9,7 @@
             <h2 class="card-title mb-6">Create New Strategy</h2>
             
             <form method="POST" class="space-y-6">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <!-- Strategy Name -->
                 <div class="form-control w-full">
                     <label class="label">

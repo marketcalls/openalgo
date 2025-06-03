@@ -178,6 +178,7 @@
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
             },
             body: JSON.stringify({
                 user_id: "{{ login_username }}"

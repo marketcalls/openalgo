@@ -13,6 +13,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="OpenAlgo is your premier open source algorithmic trading platform, offering a robust and secure environment for developing and executing trading strategies.">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>OpenAlgo</title>
 
     <!-- Favicon and touch icons -->
@@ -39,6 +40,23 @@
     <!-- Theme and Mode Scripts -->
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>
+
+    <!-- CSRF Token Helper -->
+    <script>
+        function getCSRFToken() {
+            const token = document.querySelector('meta[name="csrf-token"]');
+            return token ? token.getAttribute('content') : '';
+        }
+        
+        // Helper function to add CSRF token to fetch requests
+        function fetchWithCSRF(url, options = {}) {
+            options.headers = options.headers || {};
+            if (options.method && options.method.toUpperCase() !== 'GET') {
+                options.headers['X-CSRFToken'] = getCSRFToken();
+            }
+            return fetch(url, options);
+        }
+    </script>
 
     <!-- Other Custom Scripts -->
     <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
@@ -196,9 +214,12 @@
                     </li>
                     <div class="divider"></div>
                     <li>
-                        <a href="{{ url_for('auth.logout') }}" class="text-error">
-                            Logout
-                        </a>
+                        <form method="POST" action="{{ url_for('auth.logout') }}" class="m-0">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button type="submit" class="btn btn-ghost btn-sm text-error justify-start w-full">
+                                Logout
+                            </button>
+                        </form>
                     </li>
                 </ul>
             </div>
