@@ -88,7 +88,7 @@ class CSRFTester:
         
         try:
             # Get login page
-            response = self.session.get(urljoin(self.base_url, "/login"))
+            response = self.session.get(urljoin(self.base_url, "/auth/login"))
             if response.status_code != 200:
                 self.log_result("Login page accessible", False, f"Status: {response.status_code}")
                 return False
@@ -128,7 +128,7 @@ class CSRFTester:
             }
             
             response = requests.post(
-                urljoin(self.base_url, "/login"),
+                urljoin(self.base_url, "/auth/login"),
                 data=data,
                 allow_redirects=False
             )
