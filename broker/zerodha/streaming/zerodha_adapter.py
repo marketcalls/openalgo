@@ -283,32 +283,59 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for tick in ticks:
                 transformed_tick = self._transform_tick(tick)
                 if transformed_tick:
-                    # Based on Angel adapter, the topic format should be:
-                    # "{exchange}_{symbol}_{mode_str}" where mode_str is LTP/QUOTE/DEPTH
-                    
                     symbol = transformed_tick['symbol']
                     exchange = transformed_tick['exchange']
-                    mode = transformed_tick.get('mode', 'ltp')
                     
-                    # Map mode to string format like Angel adapter
+                    # CRITICAL FIX: For LTP subscriptions, always use LTP mode
+                    # The issue is that packet size determines mode, but we want
+                    # to use the SUBSCRIPTION mode, not the packet mode
+                    
+                    # Get the subscription info to determine the actual intended mode
+                    token = tick.get('instrument_token')
+                    subscription_mode = 'ltp'  # Default
+                    
+                    # Check what mode this token was subscribed with
+                    with self.lock:
+                        for key, sub_info in self.subscribed_symbols.items():
+                            if sub_info['token'] == token:
+                                # Map OpenAlgo mode to string
+                                mode_num = sub_info['mode']
+                                if mode_num == 1:
+                                    subscription_mode = 'ltp'
+                                elif mode_num == 2:
+                                    subscription_mode = 'quote'
+                                elif mode_num == 3:
+                                    subscription_mode = 'full'
+                                break
+                    
+                    # Override the tick mode with subscription mode
+                    transformed_tick['mode'] = subscription_mode
+                    
+                    # Map mode to string format exactly like Angel adapter
                     mode_str = {
                         'ltp': 'LTP',
                         'quote': 'QUOTE', 
                         'full': 'DEPTH'
-                    }.get(mode, 'LTP')
+                    }.get(subscription_mode, 'LTP')
                     
-                    # Use the same topic format as Angel adapter
-                    topic_key = f"{exchange}_{symbol}_{mode_str}"
+                    # Clean exchange name (remove _INDEX suffix if present)
+                    clean_exchange = exchange.replace('_INDEX', '') if '_INDEX' in exchange else exchange
                     
-                    # Publish to OpenAlgo format using parent class method
-                    self.publish_market_data(topic_key, transformed_tick)
-                    self.logger.debug(f"📊 Published data for topic: {topic_key}")
+                    # Create topic exactly like Angel adapter
+                    topic = f"{clean_exchange}_{symbol}_{mode_str}"
+                    
+                    # Debug log to verify correct topic and data structure
+                    self.logger.info(f"📊 Publishing to topic: {topic}")
+                    self.logger.info(f"📊 Data structure: {transformed_tick}")
+                    
+                    # Publish to ZeroMQ exactly like Angel adapter
+                    self.publish_market_data(topic, transformed_tick)
                     
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
     
     def _transform_tick(self, tick: Dict) -> Optional[Dict]:
-        """Transform Zerodha tick to OpenAlgo format matching Angel adapter structure"""
+        """Transform Zerodha tick to OpenAlgo format with index support"""
         try:
             token = tick.get('instrument_token')
             if not token:
@@ -322,92 +349,172 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             symbol, exchange = symbol_info
             mode = tick.get('mode', 'ltp')
+            is_index = tick.get('is_index', False)
             
-            # Transform based on mode like Angel adapter does
-            if mode == 'ltp':
-                # LTP mode - minimal data like Angel adapter
-                transformed = {
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'mode': mode,
-                    'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
-                    'ltt': tick.get('timestamp', int(time.time() * 1000)),
-                    'timestamp': tick.get('timestamp', int(time.time() * 1000))
-                }
-            
-            elif mode in ['quote', 'full']:
-                # Quote/Full mode - comprehensive data like Angel adapter
-                transformed = {
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'mode': mode,
-                    'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
-                    'ltt': tick.get('timestamp', int(time.time() * 1000)),
-                    'timestamp': tick.get('timestamp', int(time.time() * 1000)),
-                    'volume': tick.get('volume_traded', tick.get('volume', 0)),
-                    'last_quantity': tick.get('last_traded_quantity', 0),
-                    'average_price': tick.get('average_traded_price', tick.get('average_price', 0)),
-                    'total_buy_quantity': tick.get('total_buy_quantity', 0),
-                    'total_sell_quantity': tick.get('total_sell_quantity', 0)
-                }
-                
-                # Add OHLC if available
-                ohlc = tick.get('ohlc')
-                if ohlc:
-                    transformed.update({
-                        'open': ohlc.get('open', 0),
-                        'high': ohlc.get('high', 0),
-                        'low': ohlc.get('low', 0),
-                        'close': ohlc.get('close', 0)
-                    })
-                else:
-                    # Add individual OHLC fields if available
-                    if 'open_price' in tick:
-                        transformed['open'] = tick['open_price']
-                    if 'high_price' in tick:
-                        transformed['high'] = tick['high_price']
-                    if 'low_price' in tick:
-                        transformed['low'] = tick['low_price']
-                    if 'close_price' in tick:
-                        transformed['close'] = tick['close_price']
-                
-                # Add depth data for full mode like Angel adapter
-                if mode == 'full' and 'depth' in tick:
-                    depth = tick['depth']
-                    if 'buy' in depth and 'sell' in depth:
-                        transformed['depth'] = {
-                            'buy': [
-                                {
-                                    'price': level.get('price', 0),
-                                    'quantity': level.get('quantity', 0),
-                                    'orders': level.get('orders', 0)
-                                }
-                                for level in depth['buy'][:5]
-                            ],
-                            'sell': [
-                                {
-                                    'price': level.get('price', 0),
-                                    'quantity': level.get('quantity', 0),
-                                    'orders': level.get('orders', 0)
-                                }
-                                for level in depth['sell'][:5]
-                            ]
-                        }
+            # Transform based on whether it's an index or regular instrument
+            if is_index:
+                transformed = self._transform_index_tick(tick, symbol, exchange, mode)
             else:
-                # Fallback - basic structure
-                transformed = {
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'mode': mode,
-                    'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
-                    'timestamp': tick.get('timestamp', int(time.time() * 1000))
-                }
+                transformed = self._transform_regular_tick(tick, symbol, exchange, mode)
             
             return transformed
             
         except Exception as e:
             self.logger.error(f"Error transforming tick: {e}")
             return None
+    
+    def _transform_index_tick(self, tick: Dict, symbol: str, exchange: str, mode: str) -> Dict:
+        """Transform index tick data to match Angel adapter format exactly"""
+        if mode == 'ltp':
+            # Index LTP mode - match Angel adapter structure exactly
+            # Angel returns: {'ltp': price, 'ltt': timestamp}
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        elif mode in ['quote', 'full']:
+            # Index Quote/Full mode - comprehensive data like Angel adapter
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000)),
+                'volume': tick.get('volume_traded', tick.get('volume', 0)),  # Even if 0 for index
+                'price_change': tick.get('price_change', 0),
+                'price_change_percent': tick.get('price_change_percent', 0)
+            }
+            
+            # Add OHLC for index
+            ohlc = tick.get('ohlc')
+            if ohlc:
+                transformed.update({
+                    'open': ohlc.get('open', 0),
+                    'high': ohlc.get('high', 0),
+                    'low': ohlc.get('low', 0),
+                    'close': ohlc.get('close', 0)
+                })
+            else:
+                # Add individual OHLC fields if available
+                if 'open_price' in tick:
+                    transformed['open'] = tick['open_price']
+                if 'high_price' in tick:
+                    transformed['high'] = tick['high_price']
+                if 'low_price' in tick:
+                    transformed['low'] = tick['low_price']
+                if 'close_price' in tick:
+                    transformed['close'] = tick['close_price']
+            
+            # Add exchange timestamp if available
+            if 'exchange_timestamp' in tick:
+                transformed['exchange_timestamp'] = tick['exchange_timestamp']
+        
+        else:
+            # Fallback for index - minimal like Angel
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        return transformed
+    
+    def _transform_regular_tick(self, tick: Dict, symbol: str, exchange: str, mode: str) -> Dict:
+        """Transform regular instrument tick data to match Angel adapter format exactly"""
+        if mode == 'ltp':
+            # LTP mode - match Angel adapter structure exactly
+            # Angel returns: {'ltp': price, 'ltt': timestamp}
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        elif mode in ['quote', 'full']:
+            # Quote/Full mode - comprehensive data like Angel adapter
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000)),
+                'volume': tick.get('volume_traded', tick.get('volume', 0)),
+                'last_quantity': tick.get('last_traded_quantity', 0),
+                'average_price': tick.get('average_traded_price', tick.get('average_price', 0)),
+                'total_buy_quantity': tick.get('total_buy_quantity', 0),
+                'total_sell_quantity': tick.get('total_sell_quantity', 0)
+            }
+            
+            # Add OHLC if available
+            ohlc = tick.get('ohlc')
+            if ohlc:
+                transformed.update({
+                    'open': ohlc.get('open', 0),
+                    'high': ohlc.get('high', 0),
+                    'low': ohlc.get('low', 0),
+                    'close': ohlc.get('close', 0)
+                })
+            else:
+                # Add individual OHLC fields if available
+                if 'open_price' in tick:
+                    transformed['open'] = tick['open_price']
+                if 'high_price' in tick:
+                    transformed['high'] = tick['high_price']
+                if 'low_price' in tick:
+                    transformed['low'] = tick['low_price']
+                if 'close_price' in tick:
+                    transformed['close'] = tick['close_price']
+            
+            # Add Open Interest for derivatives
+            if 'open_interest' in tick:
+                transformed['oi'] = tick['open_interest']
+                transformed['open_interest'] = tick['open_interest']
+            
+            # Add depth data for full mode
+            if mode == 'full' and 'depth' in tick:
+                depth = tick['depth']
+                if 'buy' in depth and 'sell' in depth:
+                    transformed['depth'] = {
+                        'buy': [
+                            {
+                                'price': level.get('price', 0),
+                                'quantity': level.get('quantity', 0),
+                                'orders': level.get('orders', 0)
+                            }
+                            for level in depth['buy'][:5]
+                        ],
+                        'sell': [
+                            {
+                                'price': level.get('price', 0),
+                                'quantity': level.get('quantity', 0),
+                                'orders': level.get('orders', 0)
+                            }
+                            for level in depth['sell'][:5]
+                        ]
+                    }
+        else:
+            # Fallback - basic structure like Angel
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        return transformed
     
     def _on_connect(self):
         """Handle WebSocket connection"""
