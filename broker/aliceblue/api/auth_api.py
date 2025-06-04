@@ -15,7 +15,7 @@ def authenticate_broker(userid, encKey):
         BROKER_API_KEY = os.environ.get("BROKER_API_KEY")
         BROKER_API_SECRET = os.environ.get("BROKER_API_SECRET")
 
-        if not BROKER_API_KEY or not BROKER_API_SECRET:
+        if not BROKER_API_SECRET or not BROKER_API_KEY:
             logger.error("API keys not found in environment variables")
             return None, "API keys not set in environment variables"
         
@@ -30,8 +30,8 @@ def authenticate_broker(userid, encKey):
         logger.debug(f"Generating checksum for authentication")
         # The AliceBlue API V2 documentation specifies: User ID + API Key + Encryption Key
         # This is the official order specified in their documentation
-        checksum_input = f"{userid}{BROKER_API_KEY}{encKey}"
-        logger.debug(f"Checksum input pattern: userId + apiKey + encKey")
+        checksum_input = f"{userid}{BROKER_API_SECRET}{encKey}"
+        logger.debug(f"Checksum input pattern: userId + apiSecret + encKey")
         checksum = hashlib.sha256(checksum_input.encode()).hexdigest()
         
         # Step 3: Prepare request payload with exact parameters matching their API documentation
