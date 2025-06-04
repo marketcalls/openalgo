@@ -117,12 +117,32 @@ def build_csp_header(csp_config):
     return "; ".join(directives)
 
 
+def get_security_headers():
+    """
+    Get additional security headers configuration from environment variables.
+    """
+    headers = {}
+    
+    # Referrer Policy
+    referrer_policy = os.getenv('REFERRER_POLICY', 'strict-origin-when-cross-origin')
+    if referrer_policy:
+        headers['Referrer-Policy'] = referrer_policy
+    
+    # Permissions Policy
+    permissions_policy = os.getenv('PERMISSIONS_POLICY', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(), web-share=()')
+    if permissions_policy:
+        headers['Permissions-Policy'] = permissions_policy
+    
+    return headers
+
+
 def apply_csp_middleware(app):
     """
-    Apply Content Security Policy middleware to the Flask application.
+    Apply Content Security Policy and other security headers middleware to the Flask application.
     """
     @app.after_request
-    def add_csp_header(response):
+    def add_security_headers(response):
+        # Add CSP header
         csp_config = get_csp_config()
         if csp_config:
             csp_header = build_csp_header(csp_config)
@@ -133,5 +153,10 @@ def apply_csp_middleware(app):
                     header_type = 'Content-Security-Policy-Report-Only'
                 
                 response.headers[header_type] = csp_header
+        
+        # Add other security headers
+        security_headers = get_security_headers()
+        for header_name, header_value in security_headers.items():
+            response.headers[header_name] = header_value
         
         return response

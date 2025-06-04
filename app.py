@@ -74,9 +74,38 @@ def create_app():
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     
+    # Dynamic cookie security configuration based on HOST_SERVER
+    HOST_SERVER = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+    USE_HTTPS = HOST_SERVER.startswith('https://')
+    
+    # Configure session cookie security
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=USE_HTTPS,
+        SESSION_COOKIE_NAME='session'
+        # PERMANENT_SESSION_LIFETIME is dynamically set at login to expire at 3:30 AM IST
+    )
+    
+    # Add cookie prefix for HTTPS environments
+    if USE_HTTPS:
+        app.config['SESSION_COOKIE_NAME'] = '__Secure-session'
+    
     # CSRF configuration from environment variables
     csrf_enabled = os.getenv('CSRF_ENABLED', 'TRUE').upper() == 'TRUE'
     app.config['WTF_CSRF_ENABLED'] = csrf_enabled
+    
+    # Configure CSRF cookie security to match session cookie
+    app.config.update(
+        WTF_CSRF_COOKIE_HTTPONLY=True,
+        WTF_CSRF_COOKIE_SAMESITE='Lax',
+        WTF_CSRF_COOKIE_SECURE=USE_HTTPS,
+        WTF_CSRF_COOKIE_NAME='csrf_token'
+    )
+    
+    # Add cookie prefix for CSRF token in HTTPS environments
+    if USE_HTTPS:
+        app.config['WTF_CSRF_COOKIE_NAME'] = '__Secure-csrf_token'
     
     # Parse CSRF time limit from environment
     csrf_time_limit = os.getenv('CSRF_TIME_LIMIT', '').strip()

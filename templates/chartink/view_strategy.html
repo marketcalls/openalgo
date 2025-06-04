@@ -85,6 +85,7 @@
 
                     <div class="card-actions justify-end mt-4 space-y-2">
                         <form method="POST" action="{{ url_for('chartink_bp.toggle_strategy_route', strategy_id=strategy.id) }}" class="w-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <button type="submit" class="btn btn-primary btn-block">
                                 {{ 'Deactivate' if strategy.is_active else 'Activate' }} Strategy
                             </button>
