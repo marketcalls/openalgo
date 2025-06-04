@@ -1,6 +1,11 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.tradejini.mapping.transform_data import reverse_map_product_type
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def map_order_data(order_data):
     """
@@ -21,15 +26,15 @@ def map_order_data(order_data):
     
     # Get orders from response - they are nested under 'data' field
     orders_data = order_data.get('data', [])
-    print(f"[DEBUG] map_order_data - Found {len(orders_data)} orders in response")
-    print(f"[DEBUG] map_order_data - Orders data: {orders_data}")
+    #print(f"[DEBUG] map_order_data - Found {len(orders_data)} orders in response")
+    #print(f"[DEBUG] map_order_data - Orders data: {orders_data}")
     
     # Process each order
     if orders_data:
         for order in orders_data:
             # Get the actual order data from the nested structure
             order_info = order.get('data', {})
-            print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
+           # print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
             
             # Update fields in place
             order['action'] = "BUY" if order_info.get('side') == 'buy' else "SELL"
@@ -48,7 +53,7 @@ def map_order_data(order_data):
             order['timestamp'] = order_info.get('order_time', '')
             order['trigger_price'] = float(order_info.get('trigPrice', 0))
             
-            print(f"[DEBUG] map_order_data - Updated order: {order}")
+            #print(f"[DEBUG] map_order_data - Updated order: {order}")
     
     return orders_data
 
@@ -64,7 +69,7 @@ def calculate_order_statistics(order_data):
     Returns:
     - Dictionary containing counts of different types of orders
     """
-    print(f"[DEBUG] calculate_order_statistics - Input order_data: {order_data}")
+    #print(f"[DEBUG] calculate_order_statistics - Input order_data: {order_data}")
     
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
@@ -107,7 +112,7 @@ def transform_order_data(orders):
     Returns:
     - Dictionary with orders in OpenAlgo format
     """
-    print(f"[DEBUG] transform_order_data - Input orders: {orders}")
+    #print(f"[DEBUG] transform_order_data - Input orders: {orders}")
     
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
@@ -132,7 +137,7 @@ def transform_order_data(orders):
             "trigger_price": float(order.get('trigger_price', 0))
         }
         transformed_orders.append(transformed_order)
-        print(f"[DEBUG] transform_order_data - Transformed order: {transformed_order}")
+        #print(f"[DEBUG] transform_order_data - Transformed order: {transformed_order}")
     
     return transformed_orders
 
@@ -140,188 +145,376 @@ def transform_order_data(orders):
 
 def map_trade_data(trade_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-    
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
-    
-    Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
-    """
-        # Check if 'data' is None
-    if trade_data is None or (isinstance(trade_data, dict) and (trade_data['stat'] == "Not_Ok")):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        trade_data = trade_data
-        
-
-
-    if trade_data:
-        for order in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order['tsym']
-            exchange = order['exch']
-            
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order['tsym'] = symbol_from_db
-                if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
-                    order['prd'] = 'CNC'
-                               
-                elif order['prd'] == 'I':
-                    order['prd'] = 'MIS'
-                
-                elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
-                    order['prd'] = 'NRML'
-
-                if(order['trantype']=="B"):
-                    order['trantype']="BUY"
-                elif(order['trantype']=="S"):
-                    order['trantype']="SELL"
-                
-                
-            else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
-    return trade_data
-
-
-
-
-def transform_tradebook_data(tradebook_data):
-    """
-    Transforms TradeJini trade book data to OpenAlgo format.
+    Processes and modifies a list of trade dictionaries based on specific conditions.
     
     Args:
-        tradebook_data (list): List of trade records from TradeJini API
+        trade_data: Tradejini API response containing trade information
         
     Returns:
-        list: List of trades in OpenAlgo format
+        The modified trade_data with updated fields
     """
-    transformed_data = []
-    for trade in tradebook_data:
-        # Get symbol details from the sym object
-        symbol = trade.get('sym', {})
+    logger.debug(f"map_trade_data - Input trade_data type: {type(trade_data)}")
+    
+    # Handle already transformed data that might be in different formats
+    
+    # Handle direct array of trades (from get_trade_book)
+    if isinstance(trade_data, list):
+        # If it's already a list of trades, just return it
+        return trade_data
         
-        transformed_trade = {
-            "symbol": symbol.get('symbol', ''),
-            "exchange": symbol.get('exchange', ''),
-            "product": reverse_map_product_type(trade.get('product', '')),
-            "action": trade.get('side', '').upper(),
-            "quantity": trade.get('fillQty', 0),
-            "price": trade.get('fillPrice', 0.0),
-            "value": trade.get('fillValue', 0.0),
-            "order_id": trade.get('orderId', ''),
-            "trade_id": trade.get('fillId', ''),
-            "average_price": trade.get('avgPrice', 0.0),
-            "timestamp": trade.get('time', ''),
-            "exchange_order_id": trade.get('exchOrderId', ''),
-            "remarks": trade.get('remarks', ''),
-            "leg_type": trade.get('legType', ''),
-            "main_leg_order_id": trade.get('mainLegOrderId', ''),
-            "tradingsymbol": symbol.get('tradSymbol', ''),
-            "company_name": symbol.get('companyName', ''),
-            "expiry": symbol.get('expiry', ''),
-            "asset": symbol.get('asset', ''),
-            "lot_size": symbol.get('lot', 0),
-            "instrument_type": symbol.get('instrument', ''),
-            "display_symbol": symbol.get('dispSymbol', ''),
-            "price_tick": symbol.get('priceTick', 0.0)
-        }
-        transformed_data.append(transformed_trade)
-    return transformed_data
+    # Handle OpenAlgo format with status and data fields
+    if isinstance(trade_data, dict) and 'status' in trade_data and trade_data.get('status') == 'success':
+        if 'data' in trade_data and isinstance(trade_data['data'], list):
+            return trade_data['data']
+        return []
+    
+    # Check if it's a TradeJini API response
+    if not isinstance(trade_data, dict) or 's' not in trade_data or trade_data.get('s') != 'ok':
+        # Not a TradeJini API response - log at debug level instead of warning to avoid unnecessary warnings
+        logger.debug(f"map_trade_data - Not a TradeJini API response format")
+        return []
+    
+    # Get trades from response - they are in the 'd' array
+    trades_data = trade_data.get('d', [])
+    logger.debug(f"map_trade_data - Found {len(trades_data)} trades in response")
+    
+    # Process each trade
+    mapped_trades = []
+    if trades_data:
+        for trade in trades_data:
+            # Get symbol details from the sym object
+            symbol = trade.get('sym', {})
+            
+            # Map product types
+            product = trade.get('product', '').lower()
+            if product == 'intraday':
+                product = 'MIS'
+            elif product == 'delivery':
+                product = 'CNC'
+            elif product == 'coverorder':
+                product = 'CO'
+            elif product == 'bracketorder':
+                product = 'BO'
+            else:
+                product = 'NRML'
+            
+            # Map side to action
+            side = trade.get('side', '').lower()
+            action = 'BUY' if side == 'buy' else 'SELL'
+            
+            # Get exchange from sym object
+            exchange = symbol.get('exch', '').upper()
+            
+            # Create mapped trade
+            mapped_trade = {
+                "symbol": symbol.get('trdSym', ''),
+                "exchange": exchange,
+                "product": product,
+                "action": action,
+                "quantity": trade.get('fillQty', 0),
+                "average_price": trade.get('fillPrice', 0.0),
+                "trade_value": trade.get('fillValue', 0.0),
+                "orderid": trade.get('orderId', ''),
+                "timestamp": trade.get('time', ''),
+                "sym_id": symbol.get('id', '') # Store symbol ID for OpenAlgo lookup
+            }
+            
+            # Add optional fields if present
+            if trade.get('exchOrderId'):
+                mapped_trade["exchange_order_id"] = trade.get('exchOrderId', '')
+            
+            if trade.get('remarks'):
+                mapped_trade["remarks"] = trade.get('remarks', '')
+                
+            mapped_trades.append(mapped_trade)
+            
+    return mapped_trades
 
+
+def transform_tradebook_data(trades):
+    """
+    Transforms mapped trade data to OpenAlgo format.
+    
+    Args:
+        trades: List of mapped trade dictionaries or raw API response
+        
+    Returns:
+        dict: Trade book data in OpenAlgo format with {'data': [...], 'status': 'success'}
+    """
+    logger.debug(f"transform_tradebook_data - Input trades type: {type(trades)}")
+    
+    # Check if already in OpenAlgo format
+    if isinstance(trades, dict) and 'status' in trades and 'data' in trades:
+        logger.debug("transform_tradebook_data - Already in OpenAlgo format")
+        # Extract just the data array without the wrapper
+        return trades['data']
+    
+    # Handle empty list case
+    if not trades:
+        logger.debug("transform_tradebook_data - Empty trades list")
+        # Return just the array without any wrapper
+        return []
+    
+    # Check if raw TradeJini API response
+    if isinstance(trades, dict) and 's' in trades and trades.get('s') == 'ok' and 'd' in trades:
+        logger.debug("transform_tradebook_data - Processing raw TradeJini API response")
+        trades = trades.get('d', [])
+    
+    # Directly handling a dictionary assuming it's a single trade
+    if isinstance(trades, dict) and 'action' not in trades and 'orderid' not in trades:
+        # Convert the single dictionary into a list of one dictionary
+        logger.debug("transform_tradebook_data - Converting single dict to list")
+        trades = [trades]
+        
+    if not isinstance(trades, list):
+        logger.error(f"Invalid input data type: Expected list or dict, got {type(trades)}")
+        return {
+            'status': 'error',
+            'data': [],
+            'message': f"Invalid input data type: Expected list or dict, got {type(trades)}"
+        }
+    
+    transformed_trades = []
+    
+    for trade in trades:
+        if not isinstance(trade, dict):
+            logger.warning(f"Skipping invalid trade data: {type(trade)}")
+            continue
+            
+        # Check if this is already transformed
+        if all(key in trade for key in ['action', 'average_price', 'exchange', 'orderid']):
+            transformed_trades.append(trade)
+            continue
+        
+        # Get Symbol details if it exists
+        symbol = trade.get('sym', {})
+        sym_id = ''
+        
+        if isinstance(symbol, dict):
+            sym_id = symbol.get('id', '')
+            exchange = symbol.get('exch', '')
+            trading_symbol = symbol.get('trdSym', '')
+        else:
+            # Use data from trade directly if sym object doesn't exist
+            sym_id = trade.get('sym_id', '')
+            exchange = trade.get('exchange', '')
+            trading_symbol = trade.get('symbol', '')
+        
+        # Get OpenAlgo symbol if possible
+        try:
+            openalgo_symbol = get_oa_symbol(
+                symbol=sym_id, 
+                exchange=exchange
+            )
+        except Exception as e:
+            logger.warning(f"Symbol lookup failed: {str(e)}")
+            openalgo_symbol = None
+            
+        # Map product type if needed
+        if 'product' in trade:
+            product = trade['product']
+            if isinstance(product, str) and product.lower() in ['intraday', 'delivery', 'coverorder', 'bracketorder']:
+                product = trade.get('product', '').lower()
+                if product == 'intraday':
+                    product = 'MIS'
+                elif product == 'delivery':
+                    product = 'CNC'
+                elif product == 'coverorder':
+                    product = 'CO'
+                elif product == 'bracketorder':
+                    product = 'BO'
+                else:
+                    product = 'NRML'
+            else:
+                product = str(product).upper()
+        else:
+            product = 'MIS'  # Default
+            
+        # Map side to action if needed
+        if 'action' in trade:
+            action = trade['action']
+        elif 'side' in trade:
+            side = trade.get('side', '').lower()
+            action = 'BUY' if side == 'buy' else 'SELL'
+        else:
+            action = ''  # Can't determine
+            
+        # Create transformed trade - match OpenAlgo format exactly
+        transformed_trade = {
+            "action": action,
+            "average_price": float(trade.get('fillPrice', trade.get('average_price', 0.0))),
+            "exchange": exchange.upper() if exchange else '',
+            "orderid": str(trade.get('orderId', trade.get('orderid', ''))),
+            "product": product,
+            "quantity": int(trade.get('fillQty', trade.get('quantity', 0))),
+            "symbol": trading_symbol,
+            "timestamp": trade.get('time', trade.get('timestamp', '')),
+            "trade_value": float(trade.get('fillValue', trade.get('trade_value', 0.0)))
+        }
+        
+        # Removed tradingsymbol and exchange_order_id fields as per requirements
+        
+        if 'remarks' in trade:
+            transformed_trade["remarks"] = trade.get('remarks', '')
+        
+        transformed_trades.append(transformed_trade)
+        
+    logger.debug(f"transform_tradebook_data - Transformed {len(transformed_trades)} trades")
+    
+    return transformed_trades
+
+# Position mapping functions have been moved to get_positions function in order_api.py
+# These compatibility functions are kept for backward compatibility
 
 def map_position_data(position_data):
     """
-    Maps TradeJini position data to OpenAlgo format.
-    
-    Args:
-        position_data: List of position dictionaries from TradeJini API
-        
-    Returns:
-        List of mapped position dictionaries
+    Map TradeJini position data to a standardized format.
+    DEPRECATED: This function is kept for backward compatibility only.
+    Position mapping is now done directly in get_positions function.
     """
-    if position_data is None or (isinstance(position_data, dict) and (position_data.get('s') != "ok")):
-        print("No valid position data available.")
+    logger.warning("map_position_data is deprecated - position mapping is now done directly in get_positions")
+    
+    # Check for different response formats
+    if isinstance(position_data, dict):
+        # Handle the case where the entire API response is passed
+        if position_data.get('s') == 'ok' and 'd' in position_data:
+            position_data = position_data.get('d', [])
+        # Handle already processed data with status and data fields
+        elif position_data.get('status') == 'success' and 'data' in position_data:
+            # Data already mapped - return as is
+            return position_data.get('data', [])
+    
+    if not position_data or not isinstance(position_data, list):
+        logger.warning("No valid position data available or invalid format")
         return []
         
     mapped_positions = []
     
     for position in position_data:
-        # Extract position details
-        sym = position.get('sym', {})
-        
-        # Map product type
-        product = position.get('product', '').lower()
-        mapped_product = 'MIS'
-        if product == 'delivery':
-            mapped_product = 'CNC'
-        elif product == 'intraday':
-            mapped_product = 'MIS'
-        elif product == 'margin':
-            mapped_product = 'NRML'
-        
-        # Create mapped position
-        mapped_position = {
-            'tsym': sym.get('symbol', ''),
-            'exch': sym.get('exchange', ''),
-            'prd': mapped_product,
-            'netqty': position.get('netQty', 0),
-            'netavgprc': position.get('netAvgPrice', 0.0),
-            'realizedpnl': position.get('realizedPnl', 0.0),
-            'dayqty': position.get('dayPos', {}).get('dayQty', 0),
-            'dayavg': position.get('dayPos', {}).get('dayAvg', 0.0),
-            'dayrealizedpnl': position.get('dayPos', {}).get('dayRealizedPnl', 0.0)
-        }
-        
-        mapped_positions.append(mapped_position)
+        try:
+            # Skip zero positions
+            net_qty = position.get('netQty', 0)
+            if net_qty == 0:
+                continue
+                
+            # Map product type
+            product_map = {
+                'delivery': 'CNC',
+                'intraday': 'MIS',
+                'margin': 'NRML'
+            }
+            product = product_map.get(position.get('product', '').lower(), 'MIS')
+            
+            sym = position.get('sym', {})
+            exchange_symbol = sym.get('sym', '')
+            tradingsymbol = sym.get('trdSym', '')
+            exchange = sym.get('exch', '')
+            
+            # Get symbol ID from the position data
+            symbol_id = position.get('symId', '')
+            
+            # Log position data for debugging
+            logger.info(f"Position data: symId={symbol_id}, tradingsymbol={tradingsymbol}, exchange={exchange}")
+            
+            # Get OpenAlgo symbol - follow same approach as the main implementation
+            openalgo_symbol = None
+            try:
+                # First try with the symbol ID from sym object
+                symid_from_object = sym.get('id', '') if sym else ''
+                if symid_from_object:
+                    openalgo_symbol = get_oa_symbol(symid_from_object, exchange)
+                    logger.info(f"Symbol lookup with sym.id: {symid_from_object} -> {openalgo_symbol}")
+                
+                # If not found and we have the position symId, try that
+                if not openalgo_symbol and symbol_id:
+                    openalgo_symbol = get_oa_symbol(symbol_id, '')
+                    logger.info(f"Symbol lookup with position.symId: {symbol_id} -> {openalgo_symbol}")
+                    
+                # If still not found, try with exchange symbol
+                if not openalgo_symbol:
+                    openalgo_symbol = get_oa_symbol(exchange_symbol, exchange)
+                    logger.info(f"Symbol lookup with exchange symbol: {exchange_symbol} -> {openalgo_symbol}")
+                    
+            except Exception as e:
+                logger.warning(f"Symbol lookup failed: {str(e)}")
+                openalgo_symbol = None
+            
+            # Determine the final symbol to use
+            final_symbol = ""
+            if openalgo_symbol:
+                final_symbol = openalgo_symbol
+                logger.info(f"Using OpenAlgo symbol: {final_symbol}")
+            else:
+                # Fallback to exchange symbol if OpenAlgo symbol isn't available
+                final_symbol = exchange_symbol
+                logger.info(f"Fallback to exchange symbol: {final_symbol}")
+            
+            # Create mapped position - without tradingsymbol field as requested
+            mapped_position = {
+                'symbol': final_symbol,  # Use final symbol (OpenAlgo or fallback)
+                'exchange': exchange,
+                'product': product,
+                'quantity': int(position.get('netQty', 0)),
+                'average_price': str(round(float(position.get('netAvgPrice', 0.0)), 2)),
+                'pnl': position.get('realizedPnl', 0.0),
+                'day_quantity': position.get('dayPos', {}).get('dayQty', 0),
+                'day_average': position.get('dayPos', {}).get('dayAvg', 0.0),
+                'day_pnl': position.get('dayPos', {}).get('dayRealizedPnl', 0.0)
+            }
+            
+            mapped_positions.append(mapped_position)
+            
+        except Exception as e:
+            logger.error(f"Error mapping position: {e}", exc_info=True)
     
     return mapped_positions
 
 def transform_positions_data(positions_data):
     """
-    Transforms mapped position data to OpenAlgo format.
-    
-    Args:
-        positions_data: List of mapped position dictionaries
-        
-    Returns:
-        List of positions in OpenAlgo format
+    Transform mapped position data to OpenAlgo format.
+    DEPRECATED: This function is kept for backward compatibility only.
+    Position transformation is now done directly in get_positions function.
     """
+    logger.warning("transform_positions_data is deprecated - transformation is now done directly in get_positions")
+    
+    # Handle already processed data with status and data fields
+    if isinstance(positions_data, dict):
+        if positions_data.get('status') == 'success' and 'data' in positions_data:
+            return positions_data.get('data', [])
+    
+    # Check if this is an empty or invalid list
+    if not positions_data or not isinstance(positions_data, list):
+        logger.warning("No valid positions data to transform")
+        return []
+    
     transformed_data = []
+    
     for position in positions_data:
-        # Convert quantities to integers
-        quantity = int(position.get('netqty', 0))
-        day_quantity = int(position.get('dayqty', 0))
-        
-        # Convert prices to strings
-        average_price = str(float(position.get('netavgprc', 0.0)))
-        day_average_price = str(float(position.get('dayavg', 0.0)))
-        
-        # Calculate total P&L
-        total_pnl = float(position.get('realizedpnl', 0.0)) + \
-                   (quantity * (float(position.get('ltp', 0.0)) - float(position.get('netavgprc', 0.0))))
-        
-        transformed_position = {
-            "symbol": position.get('tsym', ''),
-            "exchange": position.get('exch', ''),
-            "product": position.get('prd', ''),
-            "quantity": quantity,
-            "average_price": average_price,
-            "day_quantity": day_quantity,
-            "day_average_price": day_average_price,
-            "total_pnl": str(total_pnl)
-        }
-        
-        transformed_data.append(transformed_position)
+        try:
+            # Check if position data is already in expected format
+            if all(k in position for k in ('symbol', 'exchange', 'product', 'quantity', 'average_price')):
+                # Already transformed, just add to list
+                transformed_data.append(position)
+                continue
+                
+            # Convert quantity to int and skip zero positions
+            quantity = int(position.get('quantity', 0))
+            if quantity == 0:
+                continue
+                
+            # Create transformed position with required fields
+            transformed_position = {
+                'symbol': position.get('symbol', ''),
+                'exchange': position.get('exchange', 'NSE'),
+                'product': position.get('product', 'MIS'),
+                'quantity': quantity,
+                'average_price': str(round(float(position.get('average_price', 0.0)), 2))
+            }
+            
+            transformed_data.append(transformed_position)
+            
+        except Exception as e:
+            logger.error(f"Error transforming position: {e}", exc_info=True)
     
     return transformed_data
 
@@ -443,24 +636,51 @@ def transform_holdings_data(holdings_data):
         
     Returns:
         dict: Holdings data in OpenAlgo format
+        {
+            "data": {
+                "holdings": [
+                    {
+                        "exchange": "NSE",
+                        "pnl": 3.27,
+                        "pnlpercent": 13.04,
+                        "product": "CNC",
+                        "quantity": 1,
+                        "symbol": "BSLNIFTY"
+                    }
+                ],
+                "statistics": {
+                    "totalholdingvalue": 36.46,
+                    "totalinvvalue": 32.17,
+                    "totalpnlpercentage": 13.34,
+                    "totalprofitandloss": 4.29
+                }
+            },
+            "status": "success"
+        }
     """
     try:
-        print(f"[DEBUG] Transforming holdings data: {holdings_data}")
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Transforming {len(holdings_data) if isinstance(holdings_data, list) else 0} holdings records")
         
-        # Calculate statistics if we have holdings data
-        statistics = {} if not holdings_data else calculate_portfolio_statistics(holdings_data)
+        # Initialize statistics
+        statistics = {
+            'totalholdingvalue': 0.0,
+            'totalinvvalue': 0.0,
+            'totalprofitandloss': 0.0,
+            'totalpnlpercentage': 0.0
+        }
         
         # Transform individual holdings
         transformed_holdings = []
         
         if not isinstance(holdings_data, list):
-            print("[ERROR] Holdings data is not a list")
+            logger.error("Holdings data is not a list")
             return {"status": "error", "message": "Invalid holdings data format"}
             
         for holding in holdings_data:
             try:
                 if not isinstance(holding, dict):
-                    print("[WARNING] Non-dict item in holdings list")
+                    logger.warning("Non-dict item in holdings list")
                     continue
                     
                 # Get symbol details from the sym object
@@ -468,33 +688,64 @@ def transform_holdings_data(holdings_data):
                 
                 # Skip if we don't have basic required data
                 if not sym or not sym.get('tradSymbol'):
-                    print("[WARNING] Missing symbol data")
+                    logger.warning(f"Missing symbol data in holding: {holding}")
                     continue
-                    
+                
+                # Get quantity - use saleable quantity if available, otherwise use total quantity
+                quantity = float(holding.get('saleableQty', holding.get('qty', 0)))
+                avg_price = float(holding.get('avgPrice', 0))
+                ltp = float(sym.get('lastPrice', avg_price))  # Use last price if available, otherwise use avg price
+                
+                # Calculate P&L values
+                pnl = float(holding.get('realizedPnl', 0))
+                pnl_percent = 0.0
+                
+                # Calculate investment value and current value
+                investment_value = quantity * avg_price
+                current_value = quantity * ltp if ltp > 0 else investment_value
+                
+                # Calculate P&L percentage
+                if investment_value > 0:
+                    pnl_percent = ((current_value - investment_value) / investment_value) * 100
+                
+                # Map product type (CNC for delivery, MIS for intraday)
+                product = 'CNC'  # Default to CNC (delivery)
+                if holding.get('product', '').upper() in ['MIS', 'INTRADAY']:
+                    product = 'MIS'
+                
+                # Create the transformed holding
                 transformed_holding = {
-                    "exchange": sym.get('exchange', ''),
-                    "pnl": holding.get('realizedPnl', 0),
-                    "pnlpercent": 0,
-                    "product": map_product_type(holding.get('product', '').lower()),
-                    "quantity": holding.get('qty', 0),
-                    "symbol": sym.get('tradSymbol', '')
+                    "exchange": sym.get('exchange', 'NSE'),  # Default to NSE if not specified
+                    "pnl": round(pnl, 2),
+                    "pnlpercent": round(pnl_percent, 2),
+                    "product": product,
+                    "quantity": int(quantity),
+                    "symbol": sym.get('tradSymbol', '').strip(),
+                    # Additional fields that might be useful
+                    "avgprice": round(avg_price, 2),
+                    "ltp": round(ltp, 2),
+                    "investment": round(investment_value, 2),
+                    "current_value": round(current_value, 2)
                 }
                 
-                # Calculate pnl percentage safely
-                try:
-                    if holding.get('avgPrice', 0) != 0:
-                        total_value = holding.get('avgPrice', 0) * holding.get('qty', 0)
-                        transformed_holding["pnlpercent"] = round((holding.get('realizedPnl', 0) / total_value) * 100, 2)
-                except (ZeroDivisionError, TypeError):
-                    print("[WARNING] Could not calculate P&L percentage")
-                    transformed_holding["pnlpercent"] = 0
-                    
+                # Update statistics
+                statistics['totalholdingvalue'] += current_value
+                statistics['totalinvvalue'] += investment_value
+                statistics['totalprofitandloss'] += (current_value - investment_value)
+                
                 transformed_holdings.append(transformed_holding)
                 
             except Exception as e:
-                print(f"[ERROR] Error transforming holding: {str(e)}")
-                print(f"[DEBUG] Holding data: {holding}")
+                logger.error(f"Error transforming holding: {str(e)}\nHolding data: {holding}", exc_info=True)
                 continue
+        
+        # Calculate final statistics
+        if statistics['totalinvvalue'] > 0:
+            statistics['totalpnlpercentage'] = (statistics['totalprofitandloss'] / statistics['totalinvvalue']) * 100
+        
+        # Round all statistics to 2 decimal places
+        for key in statistics:
+            statistics[key] = round(statistics[key], 2)
         
         return {
             "status": "success",
@@ -505,5 +756,5 @@ def transform_holdings_data(holdings_data):
         }
         
     except Exception as e:
-        print(f"[ERROR] Error in transform_holdings_data: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"Error in transform_holdings_data: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Failed to transform holdings: {str(e)}"}

@@ -1,26 +1,73 @@
-import http.client
 import json
 import os
+import logging
+import httpx
 from database.token_db import get_br_symbol, get_oa_symbol
 import pandas as pd
 from datetime import datetime
 import urllib.parse
 import time
+from utils.httpx_client import get_httpx_client
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
-    AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
-
-    conn = http.client.HTTPSConnection("api-t1.fyers.in")
-    headers = {
-        'Authorization': f'{api_key}:{AUTH_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    return json.loads(data.decode("utf-8"))
+    """
+    Make API requests to Fyers API using shared connection pooling.
+    
+    Args:
+        endpoint: API endpoint (e.g., /api/v2/positions)
+        auth: Authentication token
+        method: HTTP method (GET, POST, etc.)
+        payload: Request payload as a string or dict
+        
+    Returns:
+        dict: Parsed JSON response from the API
+    """
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        AUTH_TOKEN = auth
+        api_key = os.getenv('BROKER_API_KEY')
+        
+        url = f"https://api-t1.fyers.in{endpoint}"
+        headers = {
+            'Authorization': f'{api_key}:{AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        logger.debug(f"Making {method} request to Fyers API: {url}")
+        
+        # Make the request
+        if method == "GET":
+            response = client.get(url, headers=headers)
+        elif method == "POST":
+            response = client.post(url, headers=headers, json=payload if isinstance(payload, dict) else json.loads(payload))
+        else:
+            response = client.request(method, url, headers=headers, json=payload if isinstance(payload, dict) else json.loads(payload))
+        
+        # Add status attribute for compatibility
+        response.status = response.status_code
+        
+        # Raise HTTPError for bad responses (4xx, 5xx)
+        response.raise_for_status()
+        
+        # Parse and return the JSON response
+        response_data = response.json()
+        logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
+        return response_data
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error during API request: {str(e)}")
+        return {"s": "error", "message": f"HTTP error: {str(e)}"}
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return {"s": "error", "message": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Error during API request: {str(e)}")
+        return {"s": "error", "message": f"General error: {str(e)}"}
 
 class BrokerData:
     def __init__(self, auth_token):

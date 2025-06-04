@@ -69,6 +69,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         fetch(`/settings/analyze-mode/${mode}`, {
             method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
         })
         .then(response => response.json())
         .then(data => {

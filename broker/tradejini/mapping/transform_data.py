@@ -49,8 +49,13 @@ def transform_modify_order_data(data, token):
     modified_qty = int(data["quantity"])
     total_qty = filled_qty + modified_qty
     
+    # Get the correct br_symbol from the database
+    br_symbol = get_br_symbol(data["symbol"], data["exchange"])
+    if not br_symbol:
+        raise ValueError(f"Could not find br_symbol for {data['symbol']} on {data['exchange']}")
+    
     transformed = {
-        "symId": token,
+        "symId": br_symbol,
         "orderId": data["orderid"],
         "qty": total_qty,
         "type": map_order_type(data["pricetype"]),

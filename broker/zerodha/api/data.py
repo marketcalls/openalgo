@@ -1,4 +1,3 @@
-import http.client
 import json
 import os
 import urllib.parse
@@ -7,6 +6,7 @@ from broker.zerodha.database.master_contract_db import SymToken, db_session
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
+from utils.httpx_client import get_httpx_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,53 +20,112 @@ class ZerodhaAPIError(Exception):
     """Custom exception for other Zerodha API errors"""
     pass
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload=None):
+    """
+    Make an API request to Zerodha's API using shared httpx client with connection pooling.
+    
+    Args:
+        endpoint (str): API endpoint (e.g., '/quote')
+        auth (str): Authentication token
+        method (str): HTTP method (GET, POST, etc.)
+        payload (dict, optional): Request payload for POST requests
+        
+    Returns:
+        dict: API response data
+        
+    Raises:
+        ZerodhaPermissionError: For permission-related errors
+        ZerodhaAPIError: For other API errors
+    """
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.kite.trade")
+    base_url = 'https://api.kite.trade'
+    
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'X-Kite-Version': '3',
         'Authorization': f'token {AUTH_TOKEN}',
         'Content-Type': 'application/json'
     }
-
+    
+    # For GET requests, include params in URL
+    params = {}
+    if method.upper() == 'GET' and '?' in endpoint:
+        # Extract query params from endpoint
+        path, query = endpoint.split('?', 1)
+        params = dict(urllib.parse.parse_qsl(query))
+        endpoint = path
+    
+    url = f"{base_url}{endpoint}"
+    
     try:
         # Log the complete request details for debugging
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://api.kite.trade{endpoint}")
+        logger.info(f"URL: {url}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
-            logger.info(f"Payload: {payload}")
-
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
-
+            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+        if params:
+            logger.info(f"Params: {json.dumps(params, indent=2)}")
+        
+        # Make the request using the shared client
+        if method.upper() == 'GET':
+            response = client.get(
+                url,
+                headers=headers,
+                params=params
+            )
+        elif method.upper() == 'POST':
+            headers['Content-Type'] = 'application/json'
+            response = client.post(
+                url,
+                headers=headers,
+                params=params,
+                json=payload
+            )
+        else:
+            raise ZerodhaAPIError(f"Unsupported HTTP method: {method}")
+            
         # Log the complete response
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
-
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.info(f"Response Body: {response.text}")
+        
+        # Parse JSON response
+        response_data = response.json()
+        
         # Check for permission errors
-        if response.get('status') == 'error':
-            error_type = response.get('error_type')
-            error_message = response.get('message', 'Unknown error')
+        if response_data.get('status') == 'error':
+            error_type = response_data.get('error_type')
+            error_message = response_data.get('message', 'Unknown error')
             
             if error_type == 'PermissionException' or 'permission' in error_message.lower():
                 raise ZerodhaPermissionError(f"API Permission denied: {error_message}.")
             else:
                 raise ZerodhaAPIError(f"API Error: {error_message}")
-
-        return response
+                
+        return response_data
+        
     except ZerodhaPermissionError:
         raise
     except ZerodhaAPIError:
         raise
     except Exception as e:
-        logger.error(f"API request failed: {str(e)}")
-        raise ZerodhaAPIError(f"API request failed: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"API request failed: {error_msg}")
+        
+        # Try to extract more error details if available
+        try:
+            if hasattr(e, 'response') and e.response is not None:
+                error_detail = e.response.json()
+                error_msg = error_detail.get('message', error_msg)
+        except:
+            pass
+            
+        raise ZerodhaAPIError(f"API request failed: {error_msg}")
 
 class BrokerData:
     def __init__(self, auth_token):

@@ -62,6 +62,7 @@
         <div class="card-body">
             <h2 class="card-title">Change Password</h2>
             <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <!-- Old Password -->
                 <div class="form-control">
                     <label class="label">

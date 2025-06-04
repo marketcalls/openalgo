@@ -3,6 +3,7 @@ from utils.env_check import load_and_check_env_variables  # Import the environme
 load_and_check_env_variables()
 
 from flask import Flask, render_template
+from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
@@ -10,6 +11,8 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+# Import WebSocket proxy server - using relative import to avoid @ symbol issues
+from websocket_proxy.app_integration import start_websocket_proxy
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -51,6 +54,12 @@ def create_app():
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
 
+    # Initialize CSRF protection
+    csrf = CSRFProtect(app)
+    
+    # Store csrf instance in app config for use in other modules
+    app.csrf = csrf
+
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
@@ -64,9 +73,55 @@ def create_app():
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+    
+    # Dynamic cookie security configuration based on HOST_SERVER
+    HOST_SERVER = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+    USE_HTTPS = HOST_SERVER.startswith('https://')
+    
+    # Configure session cookie security
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=USE_HTTPS,
+        SESSION_COOKIE_NAME='session'
+        # PERMANENT_SESSION_LIFETIME is dynamically set at login to expire at 3:30 AM IST
+    )
+    
+    # Add cookie prefix for HTTPS environments
+    if USE_HTTPS:
+        app.config['SESSION_COOKIE_NAME'] = '__Secure-session'
+    
+    # CSRF configuration from environment variables
+    csrf_enabled = os.getenv('CSRF_ENABLED', 'TRUE').upper() == 'TRUE'
+    app.config['WTF_CSRF_ENABLED'] = csrf_enabled
+    
+    # Configure CSRF cookie security to match session cookie
+    app.config.update(
+        WTF_CSRF_COOKIE_HTTPONLY=True,
+        WTF_CSRF_COOKIE_SAMESITE='Lax',
+        WTF_CSRF_COOKIE_SECURE=USE_HTTPS,
+        WTF_CSRF_COOKIE_NAME='csrf_token'
+    )
+    
+    # Add cookie prefix for CSRF token in HTTPS environments
+    if USE_HTTPS:
+        app.config['WTF_CSRF_COOKIE_NAME'] = '__Secure-csrf_token'
+    
+    # Parse CSRF time limit from environment
+    csrf_time_limit = os.getenv('CSRF_TIME_LIMIT', '').strip()
+    if csrf_time_limit:
+        try:
+            app.config['WTF_CSRF_TIME_LIMIT'] = int(csrf_time_limit)
+        except ValueError:
+            app.config['WTF_CSRF_TIME_LIMIT'] = None  # Default to no limit if invalid
+    else:
+        app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit if empty
 
     # Register RESTx API blueprint first
     app.register_blueprint(api_v1_bp)
+    
+    # Exempt API endpoints from CSRF protection (they use API key authentication)
+    csrf.exempt(api_v1_bp)
 
     # Initialize traffic logging middleware after RESTx but before other blueprints
     init_traffic_logging(app)
@@ -137,6 +192,9 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Integrate the WebSocket proxy server with the Flask app
+start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
