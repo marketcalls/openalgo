@@ -49,3 +49,8 @@ venv.bak/
 
 # Tailwind CSS output
 # **/output.css
+
+
+# Do NOT ignore specific ones
+!stocks.csv
+!trading_journal.csv
