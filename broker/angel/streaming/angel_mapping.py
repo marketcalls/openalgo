@@ -11,7 +11,9 @@ class AngelExchangeMapper:
         'BFO': 4,  # BSE F&O
         'MCX': 5,  # MCX
         'NCX': 7,  # NCDEX
-        'CDS': 13  # Currency derivatives
+        'CDS': 13,  # Currency derivatives
+        'NSE_INDEX': 1,  # NSE Index
+        'BSE_INDEX': 3  # BSE Index
     }
     
     @staticmethod
