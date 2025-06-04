@@ -1,6 +1,6 @@
 """
-Final fixed Zerodha WebSocket adapter that matches OpenAlgo's expected format.
-Based on the analysis of the logs and OpenAlgo library examples.
+Fixed Zerodha WebSocket adapter that properly handles NIFTY index data.
+The key fixes are in the _handle_ticks method for proper topic generation.
 """
 import asyncio
 import json
@@ -157,8 +157,8 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Subscribe to market data for a symbol
         
         Args:
-            symbol: Trading symbol (e.g., 'RELIANCE', 'CRUDEOIL18JUN25FUT')
-            exchange: Exchange code (e.g., 'NSE', 'MCX')
+            symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY')
+            exchange: Exchange code (e.g., 'NSE', 'NSE_INDEX', 'MCX')
             mode: Subscription mode (1=LTP, 2=Quote, 3=Full)
             depth_level: Market depth level (for compatibility, not used in Zerodha)
         """
@@ -207,13 +207,16 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Subscribe using WebSocket client
             self.ws_client.subscribe_tokens([token], zerodha_mode)
             
-            # Track subscription
+            # Track subscription with mapped exchange for consistency
+            subscription_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
+            
             with self.lock:
                 self.subscribed_symbols[f"{exchange}:{symbol}"] = {
-                    'exchange': exchange,
+                    'exchange': exchange,  # Original exchange for unsubscribe
                     'symbol': symbol,
                     'token': token,
-                    'mode': mode
+                    'mode': mode,
+                    'mapped_exchange': subscription_exchange  # Mapped exchange for data matching
                 }
                 self.token_to_symbol[token] = (symbol, exchange)
             
@@ -274,6 +277,32 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Check if WebSocket is connected"""
         return self.connected and self.running
     
+    def _generate_topic(self, symbol: str, subscription_exchange: str, mode_str: str) -> str:
+        """
+        Generate topic for market data publishing.
+        Uses original exchange format for maximum client compatibility.
+        """
+        # ✅ FIXED: Keep original exchange format for client compatibility
+        return f"{subscription_exchange}_{symbol}_{mode_str}"
+
+    def _map_data_exchange(self, subscription_exchange: str) -> str:
+        """
+        Map subscription exchange to data exchange for client compatibility.
+        
+        Args:
+            subscription_exchange: Original subscription exchange
+            
+        Returns:
+            Mapped exchange for data field
+        """
+        # Map index exchanges to their base exchanges for data consistency
+        if subscription_exchange == 'NSE_INDEX':
+            return 'NSE_INDEX'  # ✅ Keep NSE_INDEX in data for client filtering
+        elif subscription_exchange == 'BSE_INDEX':
+            return 'BSE_INDEX'  # ✅ Keep BSE_INDEX in data for client filtering
+        else:
+            return subscription_exchange  # Keep as-is for regular exchanges
+
     def _handle_ticks(self, ticks: List[Dict]):
         """Handle incoming ticks from WebSocket"""
         if not ticks:
@@ -284,17 +313,11 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 transformed_tick = self._transform_tick(tick)
                 if transformed_tick:
                     symbol = transformed_tick['symbol']
-                    exchange = transformed_tick['exchange']
-                    
-                    # CRITICAL FIX: For LTP subscriptions, always use LTP mode
-                    # The issue is that packet size determines mode, but we want
-                    # to use the SUBSCRIPTION mode, not the packet mode
-                    
-                    # Get the subscription info to determine the actual intended mode
                     token = tick.get('instrument_token')
                     subscription_mode = 'ltp'  # Default
+                    subscription_exchange = None
                     
-                    # Check what mode this token was subscribed with
+                    # Get subscription info to determine mode and exchange
                     with self.lock:
                         for key, sub_info in self.subscribed_symbols.items():
                             if sub_info['token'] == token:
@@ -306,30 +329,41 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                     subscription_mode = 'quote'
                                 elif mode_num == 3:
                                     subscription_mode = 'full'
+                                subscription_exchange = sub_info['exchange']
                                 break
+                    
+                    if not subscription_exchange:
+                        self.logger.warning(f"No subscription info found for token: {token}")
+                        continue
                     
                     # Override the tick mode with subscription mode
                     transformed_tick['mode'] = subscription_mode
                     
-                    # Map mode to string format exactly like Angel adapter
+                    # Map mode to string format
                     mode_str = {
                         'ltp': 'LTP',
                         'quote': 'QUOTE', 
                         'full': 'DEPTH'
                     }.get(subscription_mode, 'LTP')
                     
-                    # Clean exchange name (remove _INDEX suffix if present)
-                    clean_exchange = exchange.replace('_INDEX', '') if '_INDEX' in exchange else exchange
+                    # ✅ Set the data exchange field (always include, never remove)
+                    data_exchange = self._map_data_exchange(subscription_exchange)
+                    transformed_tick['exchange'] = data_exchange
                     
-                    # Create topic exactly like Angel adapter
-                    topic = f"{clean_exchange}_{symbol}_{mode_str}"
+                    # ✅ Generate topic using dedicated function
+                    topic = self._generate_topic(symbol, subscription_exchange, mode_str)
                     
                     # Debug log to verify correct topic and data structure
                     self.logger.info(f"📊 Publishing to topic: {topic}")
                     self.logger.info(f"📊 Data structure: {transformed_tick}")
+                    self.logger.info(f"📊 Subscription exchange: {subscription_exchange} -> Topic: {topic}, Data exchange: {data_exchange}")
                     
                     # Publish to ZeroMQ exactly like Angel adapter
                     self.publish_market_data(topic, transformed_tick)
+                    
+                    # Debug log for troubleshooting polling data issues
+                    if subscription_mode == 'ltp':
+                        self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
                     
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
@@ -349,7 +383,9 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             symbol, exchange = symbol_info
             mode = tick.get('mode', 'ltp')
-            is_index = tick.get('is_index', False)
+            
+            # Check if this is an index based on exchange
+            is_index = exchange in ['NSE_INDEX', 'BSE_INDEX']
             
             # Transform based on whether it's an index or regular instrument
             if is_index:
@@ -364,13 +400,15 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return None
     
     def _transform_index_tick(self, tick: Dict, symbol: str, exchange: str, mode: str) -> Dict:
-        """Transform index tick data to match Angel adapter format exactly"""
+        """Transform index tick data to match Angel adapter format exactly"""        
+        # ✅ Keep original exchange in data - don't remap here since _handle_ticks will handle it
+        # Make sure we're using NSE_INDEX explicitly
+        
         if mode == 'ltp':
             # Index LTP mode - match Angel adapter structure exactly
-            # Angel returns: {'ltp': price, 'ltt': timestamp}
             transformed = {
                 'symbol': symbol,
-                'exchange': exchange,
+                'exchange': 'NSE_INDEX',  # ✅ Use NSE_INDEX explicitly
                 'mode': mode,
                 'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
                 'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
@@ -381,7 +419,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Index Quote/Full mode - comprehensive data like Angel adapter
             transformed = {
                 'symbol': symbol,
-                'exchange': exchange,
+                'exchange': exchange,  # ✅ Keep original exchange
                 'mode': mode,
                 'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
                 'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
@@ -419,7 +457,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Fallback for index - minimal like Angel
             transformed = {
                 'symbol': symbol,
-                'exchange': exchange,
+                'exchange': exchange,  # ✅ Keep original exchange
                 'mode': mode,
                 'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
                 'ltt': tick.get('timestamp', int(time.time() * 1000))

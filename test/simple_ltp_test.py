@@ -40,8 +40,8 @@ class SimpleFeed:
         self.pending_auth = False
         self.message_queue = Queue()
         
-        # Storage for market data
-        self.market_data = {}
+        # Storage for market data - structure will be {'exchange': {'symbol': {'timestamp': ts, 'ltp': value}}}
+        self.market_data = {'ltp': {}}
         self.lock = threading.Lock()
         
         # Callbacks
@@ -169,18 +169,33 @@ class SimpleFeed:
                 exchange = message.get("exchange")
                 symbol = message.get("symbol")
                 if exchange and symbol:
+                    # Special case to fix topic parsing issue in server
+                    # When the server parses NSE_INDEX_NIFTY_LTP, it splits incorrectly,
+                    # setting exchange=INDEX and symbol=NIFTY
+                    if exchange == "INDEX" and "broker" in message and message.get("broker") == "NSE":
+                        exchange = "NSE_INDEX"
+                        
                     symbol_key = f"{exchange}:{symbol}"
                     mode = message.get("mode")
                     market_data = message.get("data", {})
                     
                     if mode == 1 and "ltp" in market_data:  # LTP mode
-                        # Store the LTP value in our cache
-                        with self.lock:
-                            self.market_data[symbol_key] = market_data.get("ltp")
-                        
-                        # Print when LTP data is received
+                        # Store the LTP value in our cache in nested format
                         ltp = market_data.get("ltp")
                         timestamp = market_data.get("timestamp", 0)
+                        
+                        with self.lock:
+                            # Initialize exchange dict if it doesn't exist
+                            if exchange not in self.market_data['ltp']:
+                                self.market_data['ltp'][exchange] = {}
+                                
+                            # Store LTP with timestamp
+                            self.market_data['ltp'][exchange][symbol] = {
+                                'timestamp': timestamp,
+                                'ltp': ltp
+                            }
+                        
+                        # Print when LTP data is received
                         print(f"LTP {symbol_key}: {ltp} | Time: {timestamp}")
                         
                         # Invoke callback if set
@@ -270,13 +285,12 @@ class SimpleFeed:
         return True
         
     def get_ltp(self) -> Dict[str, Any]:
-        """Get the latest LTP data for all symbols"""
-        ltp_data = {}
+        """Get the latest LTP data for all symbols in nested structure"""
         with self.lock:
-            # Our market_data now stores LTP values directly
-            for symbol_key, ltp_value in self.market_data.items():
-                ltp_data[symbol_key] = ltp_value
-        return ltp_data
+            # Return a copy of the nested structure
+            # {'ltp': {'NSE': {'RELIANCE': {'timestamp': ts, 'ltp': value}}}} 
+            return dict(self.market_data)
+
 
 # Example usage
 if __name__ == "__main__":
@@ -315,12 +329,14 @@ if __name__ == "__main__":
     
     # Live data can also be continuously polled using this method
     print("\nReceiving market data for 10 seconds...")
+    poll_count = 1
     for i in range(10):
+        # Get LTP data and print in formatted JSON
         ltp_data = feed.get_ltp()
-        if ltp_data:
-            print(f"Poll {i+1}: {ltp_data}")
+        print(f"Poll {poll_count}:")
+        print(json.dumps(ltp_data, indent=2))
+        poll_count += 1
         time.sleep(1)
-    
     print("Unsubscribing...")
     feed.unsubscribe_ltp(instruments_list)
     time.sleep(1)

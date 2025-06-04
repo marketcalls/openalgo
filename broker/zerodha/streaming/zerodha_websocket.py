@@ -1,6 +1,7 @@
 """
 Fixed Zerodha WebSocket client with proper websockets library usage.
 Addresses the 'ClientConnection' object has no attribute 'closed' error.
+Enhanced to properly handle exchange mapping for INDEX instruments.
 """
 import asyncio
 import json
@@ -17,6 +18,7 @@ class ZerodhaWebSocket:
     """
     Fixed WebSocket client for Zerodha's market data streaming API.
     Addresses connection issues and improves reliability.
+    Enhanced for proper INDEX exchange handling.
     """
     
     # Subscription modes
@@ -41,6 +43,9 @@ class ZerodhaWebSocket:
         self.subscribed_tokens = set()
         self.mode_map = {}
         
+        # ✅ NEW: Exchange mapping for tokens (critical for INDEX handling)
+        self.token_exchange_map = {}  # {token: exchange}
+        
         # Connection management
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 5
@@ -64,6 +69,20 @@ class ZerodhaWebSocket:
         self._stop_event = threading.Event()
         
         self.logger.info("✅ Zerodha WebSocket client initialized")
+    
+    def set_token_exchange_mapping(self, token_exchange_map: Dict[int, str]):
+        """
+        Set the token to exchange mapping.
+        This should be called by the adapter when subscribing to tokens.
+        
+        Args:
+            token_exchange_map: Dictionary mapping tokens to exchanges
+                                e.g., {256265: 'NSE_INDEX', 738561: 'NSE'}
+        """
+        with self.lock:
+            self.token_exchange_map.update(token_exchange_map)
+        
+        self.logger.info(f"✅ Updated token exchange mapping for {len(token_exchange_map)} tokens")
     
     def start(self) -> bool:
         """Start the WebSocket client in a separate thread"""
@@ -291,6 +310,8 @@ class ZerodhaWebSocket:
                 for token in tokens:
                     self.subscribed_tokens.discard(token)
                     self.mode_map.pop(token, None)
+                    # ✅ NEW: Clean up exchange mapping
+                    self.token_exchange_map.pop(token, None)
             
             self.logger.info(f"✅ Unsubscribed from {len(tokens)} tokens")
             return True
@@ -594,7 +615,10 @@ class ZerodhaWebSocket:
             return []
     
     def _parse_packet(self, packet: bytes) -> Optional[Dict]:
-        """Parse individual packet with improved error handling"""
+        """
+        Parse individual packet with improved error handling.
+        ✅ ENHANCED: Adds exchange information to tick data.
+        """
         try:
             if len(packet) < 8:
                 return None
@@ -614,6 +638,11 @@ class ZerodhaWebSocket:
             else:
                 mode = self.mode_map.get(instrument_token, self.MODE_QUOTE)
             
+            # ✅ NEW: Get exchange information for this token
+            exchange = None
+            with self.lock:
+                exchange = self.token_exchange_map.get(instrument_token)
+            
             # Basic tick structure
             tick = {
                 'instrument_token': instrument_token,
@@ -622,6 +651,10 @@ class ZerodhaWebSocket:
                 'mode': mode,
                 'timestamp': int(time.time() * 1000)
             }
+            
+            # ✅ NEW: Add exchange information if available
+            if exchange:
+                tick['source_exchange'] = exchange  # Add source exchange from mapping
             
             # Parse additional fields for quote mode (44 bytes)
             if len(packet) >= 44:
@@ -730,6 +763,11 @@ class ZerodhaWebSocket:
         """Get current subscriptions"""
         with self.lock:
             return self.subscribed_tokens.copy()
+    
+    def get_token_exchange_map(self) -> Dict[int, str]:
+        """Get current token to exchange mapping"""
+        with self.lock:
+            return dict(self.token_exchange_map)
     
     def wait_for_connection(self, timeout: float = 10.0) -> bool:
         """Wait for connection to be established"""

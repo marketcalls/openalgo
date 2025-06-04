@@ -787,10 +787,27 @@ class WebSocketProxy:
                 # Support both formats:
                 # New format: BROKER_EXCHANGE_SYMBOL_MODE (with broker name)
                 # Old format: EXCHANGE_SYMBOL_MODE (without broker name)
+                # Special case: NSE_INDEX_SYMBOL_MODE (exchange contains underscore)
                 parts = topic_str.split('_')
                 
-                if len(parts) >= 4:
-                    # New format with broker name
+                # Special case handling for NSE_INDEX and BSE_INDEX
+                if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
+                    broker_name = "unknown"
+                    exchange = "NSE_INDEX"
+                    symbol = parts[2]
+                    mode_str = parts[3]
+                elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
+                    broker_name = "unknown"
+                    exchange = "BSE_INDEX"
+                    symbol = parts[2]
+                    mode_str = parts[3]
+                elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
+                    broker_name = parts[0]
+                    exchange = f"{parts[1]}_{parts[2]}"
+                    symbol = parts[3]
+                    mode_str = parts[4]
+                elif len(parts) >= 4:
+                    # Standard format with broker name
                     broker_name = parts[0]
                     exchange = parts[1]
                     symbol = parts[2]
