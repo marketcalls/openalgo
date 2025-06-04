@@ -23,7 +23,7 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         url = f"https://ant.aliceblueonline.com{endpoint}"
         
         headers = {
-            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
             'Content-Type': 'application/json'
         }
         
@@ -115,7 +115,7 @@ def place_order_api(data, auth):
         
         # Prepare headers and payload
         headers = {
-            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
             'Content-Type': 'application/json'
         }
         
@@ -132,10 +132,14 @@ def place_order_api(data, auth):
         
         # Process the response
         response_data = response_data[0]
-        
+        print(f"Place order response: {response_data}")
         if response_data['stat'] == 'Ok':
             orderid = response_data['NOrdNo']
         else:
+            # Extract error message if present
+            error_msg = response_data.get('emsg', 'No error message provided by API')
+            logger.error(f"Order placement failed: {error_msg}")
+            print(f"Order placement error: {error_msg}")
             orderid = None
         
         # Add status attribute to response object to match what PlaceOrder endpoint expects
@@ -326,7 +330,7 @@ def cancel_order(orderid, auth):
         
         # Prepare headers and payload
         headers = {
-            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
             'Content-Type': 'application/json'
         }
         
@@ -373,7 +377,7 @@ def modify_order(data, auth):
         
         # Prepare headers
         headers = {
-            'Authorization': f'Bearer {get_broker_api_key()} {AUTH_TOKEN}',
+            'Authorization': f'Bearer {get_broker_api_secret()} {AUTH_TOKEN}',
             'Content-Type': 'application/json'
         }
         
