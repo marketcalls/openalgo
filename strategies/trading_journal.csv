@@ -1,1 +1,0 @@
-TradeID,OpenTimestamp,CloseTimestamp,Symbol,Exchange,PositionType,EntryPrice,ExitPrice,Quantity,Commission,SwapFees,GrossP&L,NetP&L,AlgorithmID,Parameters,SignalName_Exit,ProductType
