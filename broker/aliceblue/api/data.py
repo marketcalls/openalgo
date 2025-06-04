@@ -100,7 +100,7 @@ class BrokerData:
                     logger.warning(f"Error closing existing WebSocket: {str(e)}")
                 
             # Get user ID from environment variable or fallback
-            user_id = os.environ.get("BROKER_API_SECRET", "")
+            user_id = os.environ.get("BROKER_API_KEY", "")
             if not user_id:
                 logger.error("Missing API secret (user ID) for AliceBlue WebSocket")
                 return None
