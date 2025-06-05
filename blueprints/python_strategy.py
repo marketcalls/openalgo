@@ -5,9 +5,11 @@ import glob
 from utils.python_strategy_manager import (
     get_all_strategy_statuses, activate_strategy, deactivate_strategy,
     get_strategy_files, get_strategy_parameters, save_strategy_parameters,
-    get_strategy_stocks, save_strategy_stocks, get_strategy_stocks_csv_path
+    get_strategy_stocks, save_strategy_stocks, get_strategy_stocks_csv_path,
+    read_strategy_log # Add this import
 )
 from werkzeug.utils import secure_filename # For strategy_filename
+from utils.session import check_session_validity, is_session_valid
 
 python_strategy_bp = Blueprint(
     'python_strategy_bp', __name__,
@@ -17,29 +19,35 @@ python_strategy_bp = Blueprint(
 )
 
 @python_strategy_bp.route('/')
+@check_session_validity
 def index():
     statuses = get_all_strategy_statuses()
-    # Ensure all files from get_strategy_files() are represented in statuses
-    # This handles the case where a new file is added but not yet in strategy_states.json
     all_files = get_strategy_files()
     current_strategies_on_page = []
+
     for f_name in all_files:
         status_info = statuses.get(f_name, {'status': 'inactive', 'pid': None})
+
+        # Fetch parameters and description for this strategy
+        # We only need the description here, but get_strategy_parameters gets both params and desc.
+        # If this becomes a performance issue for many strategies, a dedicated get_description func could be made.
+        _, strategy_description, _ = get_strategy_parameters(f_name) # params, desc, error_msg
+
         current_strategies_on_page.append({
             'name': f_name.replace('_live.py', '').replace('_', ' ').title(),
             'file_name': f_name,
-            'status': status_info.get('status', 'inactive'), # Default to inactive
-            'pid': status_info.get('pid')
+            'status': status_info.get('status', 'inactive'),
+            'pid': status_info.get('pid'),
+            'description': strategy_description if strategy_description else "No description available." # Add description
         })
 
-    if not current_strategies_on_page and not get_strategy_files(): # Check if the folder itself is empty or non-existent
-        # The get_strategy_files function in manager now creates the dir if it doesn't exist
-        # So, this flash is more about it being empty.
-        flash("No strategy files ending with '_live.py' found in the 'strategy_live' folder. Please add your strategy scripts there.", "info")
+    if not current_strategies_on_page: # Simplified condition as all_files would be empty too
+        flash("No Python strategy files found in the 'strategy_live' folder or the folder is missing.", "info")
 
-    return render_template('index.html', strategies=current_strategies_on_page)
+    return render_template('py_strat_index.html', strategies=current_strategies_on_page)
 
 @python_strategy_bp.route('/activate/<strategy_filename>', methods=['POST'])
+@check_session_validity
 def activate(strategy_filename):
     # Add security checks here if needed (e.g., user authentication/authorization)
     # For example, ensure the user has permission to manage strategies.
@@ -56,7 +64,30 @@ def activate(strategy_filename):
     return redirect(url_for('python_strategy_bp.index'))
 
 
+@python_strategy_bp.route('/logs/<strategy_filename>')
+@check_session_validity
+def view_strategy_log(strategy_filename):
+    # Sanitize filename (though it's from our system, good practice if ever linked from user input)
+    # However, strategy_filename here comes from a list of files on the server,
+    # so direct secure_filename might be too aggressive if filenames can have unusual but valid chars.
+    # For now, assume strategy_filename is safe as it's derived from os.listdir/glob.
+
+    # Use a reasonable number of lines to display by default to avoid browser slowdown for huge logs
+    # This can be made configurable later if needed.
+    log_content = read_strategy_log(strategy_filename, tail_lines=500)
+
+    strategy_name_display = strategy_filename.replace('_live.py', '').replace('.py', '').replace('_', ' ').title()
+
+    return render_template(
+        'view_log.html',
+        strategy_name=strategy_name_display,
+        log_content=log_content,
+        strategy_filename=strategy_filename # Pass original filename for potential refresh/back links
+    )
+
+
 @python_strategy_bp.route('/details/<strategy_filename>/stock/add', methods=['POST'])
+@check_session_validity
 def add_stock(strategy_filename):
     strategy_filename = secure_filename(strategy_filename) # Basic security
     # Add user authentication/authorization checks if necessary
@@ -102,6 +133,7 @@ def add_stock(strategy_filename):
     return redirect(url_for('python_strategy_bp.details', strategy_filename=strategy_filename))
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/edit/<stock_id>', methods=['POST'])
+@check_session_validity
 def edit_stock(strategy_filename, stock_id):
     strategy_filename = secure_filename(strategy_filename)
     # stock_id is expected to be 'SYMBOL_EXCHANGE'
@@ -158,6 +190,7 @@ def edit_stock(strategy_filename, stock_id):
 
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/delete/<stock_id>', methods=['POST'])
+@check_session_validity
 def delete_stock(strategy_filename, stock_id):
     strategy_filename = secure_filename(strategy_filename)
     # stock_id is 'SYMBOL_EXCHANGE'
@@ -185,6 +218,7 @@ def delete_stock(strategy_filename, stock_id):
 
 
 @python_strategy_bp.route('/details/<strategy_filename>', methods=['GET', 'POST'])
+@check_session_validity
 def details(strategy_filename):
     strategy_name_display = strategy_filename.replace('_live.py', '').replace('_', ' ').title()
 
@@ -274,6 +308,7 @@ def details(strategy_filename):
     )
 
 @python_strategy_bp.route('/deactivate/<strategy_filename>', methods=['POST'])
+@check_session_validity
 def deactivate(strategy_filename):
     # Similar security checks as in activate route
     # from flask_login import current_user, login_required  # Example

@@ -6,7 +6,22 @@
 <div class="container mx-auto px-4 py-8">
     <div class="flex justify-between items-center mb-6">
         <h1 class="text-3xl font-bold">Strategy: {{ strategy_name }}</h1>
-        <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-outline btn-sm">Back to List</a>
+        <div>
+            {# <<< NEW VIEW LOG BUTTON START >>> #}
+            <a href="{{ url_for('python_strategy_bp.view_strategy_log', strategy_filename=strategy_filename) }}" class="btn btn-sm btn-outline btn-info mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                View Log
+            </a>
+            {# <<< NEW VIEW LOG BUTTON END >>> #}
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-sm btn-outline">
+                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                Back to List
+            </a>
+        </div>
     </div>
 
     {# Flash messages #}
@@ -79,11 +94,14 @@
                 <div class="card-body">
                     <h2 class="card-title mb-2">Strategy Description</h2>
                     {% if strategy_description %}
-                        <pre class="whitespace-pre-wrap text-sm p-2 bg-base-100 rounded max-h-60 overflow-y-auto">{{ strategy_description }}</pre>
+                        <pre class="whitespace-pre-wrap text-sm p-2 bg-base-100 rounded mb-3 max-h-60 overflow-y-auto">{{ strategy_description }}</pre>
+                        <p class="text-xs text-gray-500 italic">
+                            This description should ideally include details about the strategy's entry and exit conditions, as provided by the strategy developer in the script's docstring or a manual 'description' parameter.
+                        </p>
                     {% else %}
                         <p class="text-gray-600">No specific description provided or found in the strategy file's docstring.</p>
                         <p class="text-xs text-gray-500 mt-1">
-                            Consider adding a docstring to the main strategy class in <code>{{ strategy_filename }}</code>, or add a 'description' parameter to its configuration file.
+                            Consider adding a docstring to the main strategy class in <code>{{ strategy_filename }}</code> to explain its logic, including entry and exit conditions.
                         </p>
                     {% endif %}
 

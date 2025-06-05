@@ -34,8 +34,10 @@
                 <h2 class="card-title">{{ strategy.name }}</h2>
                 <p class="text-sm text-gray-500">File: {{ strategy.file_name }}</p>
 
-                {# Placeholder for future details - e.g. description from strategy file docstring #}
-                <p class="my-2 text-sm"><i>(Details about the strategy will be shown here in the future)</i></p>
+                {# Display Strategy Description - Truncated #}
+                <p class="my-2 text-sm text-gray-600">
+                    {{ strategy.description | truncate(100, True) if strategy.description else 'No description available.' }}
+                </p>
 
                 <div class="flex justify-between items-center my-2">
                     {% if strategy.status == 'active' %}
@@ -61,8 +63,8 @@
                         <button type="submit" class="btn btn-sm btn-outline btn-primary">Activate</button>
                     </form>
                     {% endif %}
-                    {# The Details button will be implemented later, perhaps linking to logs or a config page #}
                     <a href="{{ url_for('python_strategy_bp.details', strategy_filename=strategy.file_name) }}" class="btn btn-sm btn-secondary">Details</a>
+                    <a href="{{ url_for('python_strategy_bp.view_strategy_log', strategy_filename=strategy.file_name) }}" class="btn btn-sm btn-info">Log</a>
                 </div>
             </div>
         </div>
