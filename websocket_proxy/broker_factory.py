@@ -18,7 +18,7 @@ def register_adapter(broker_name: str, adapter_class: Type[BaseBrokerWebSocketAd
         adapter_class: Class that implements the BaseBrokerWebSocketAdapter interface
     """
     BROKER_ADAPTERS[broker_name.lower()] = adapter_class
-    logger.info(f"Registered adapter for broker: {broker_name}")
+    
 
 def create_broker_adapter(broker_name: str) -> Optional[BaseBrokerWebSocketAdapter]:
     """

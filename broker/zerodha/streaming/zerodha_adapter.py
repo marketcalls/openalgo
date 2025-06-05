@@ -137,19 +137,40 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return {'status': 'error', 'message': str(e)}
     
     def disconnect(self) -> Dict[str, Any]:
-        """Disconnect from WebSocket"""
+        """
+        Disconnect from WebSocket and clean up resources.
+        Ensures proper cleanup of ZMQ ports and WebSocket connections.
+        """
         try:
             with self.lock:
                 if self.ws_client:
+                    # Stop the WebSocket client
                     self.ws_client.stop()
+                    self.ws_client = None  # Clear the reference
+                    
+                    # Update state flags
                     self.running = False
                     self.connected = False
+                    self.reconnect_attempts = 0  # Reset reconnect attempts
+                    
                     self.logger.info("✅ WebSocket disconnected")
                     
-            return {'status': 'success', 'message': 'Disconnected successfully'}
+                    # Reset subscriptions tracking
+                    self.subscribed_symbols.clear()
+                    self.token_to_symbol.clear()
+                
+                # Always clean up ZMQ resources to ensure proper cleanup
+                self.cleanup_zmq()
+                    
+            return {'status': 'success', 'message': 'Disconnected successfully and resources cleaned up'}
             
         except Exception as e:
             self.logger.error(f"Error disconnecting: {e}")
+            # Still try to clean up ZMQ
+            try:
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.error(f"Error cleaning up ZMQ resources during disconnect error: {zmq_err}")
             return {'status': 'error', 'message': str(e)}
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
@@ -568,20 +589,284 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_error(self, error):
         """Handle WebSocket errors"""
         self.logger.error(f"WebSocket error: {error}")
-    
-    def cleanup(self):
-        """Clean up resources"""
+        
+    def _transform_tick(self, tick: Dict) -> Optional[Dict]:
+        """Transform Zerodha tick to OpenAlgo format with index support"""
         try:
-            self.disconnect()
-            if hasattr(super(), 'cleanup'):
-                super().cleanup()
-            self.logger.info("✅ Zerodha adapter cleaned up")
+            token = tick.get('instrument_token')
+            if not token:
+                return None
+            
+            # Get symbol info
+            symbol_info = self.token_to_symbol.get(token)
+            if not symbol_info:
+                self.logger.warning(f"No symbol mapping for token: {token}")
+                return None
+            
+            symbol, exchange = symbol_info
+            mode = tick.get('mode', 'ltp')
+            
+            # Check if this is an index based on exchange
+            is_index = exchange in ['NSE_INDEX', 'BSE_INDEX']
+            
+            # Transform based on whether it's an index or regular instrument
+            if is_index:
+                transformed = self._transform_index_tick(tick, symbol, exchange, mode)
+            else:
+                transformed = self._transform_regular_tick(tick, symbol, exchange, mode)
+            
+            return transformed
+            
+        except Exception as e:
+            self.logger.error(f"Error transforming tick: {e}")
+            return None
+    
+    def _transform_index_tick(self, tick: Dict, symbol: str, exchange: str, mode: str) -> Dict:
+        """Transform index tick data to match Angel adapter format exactly"""        
+        # Keep original exchange in data - don't remap here since _handle_ticks will handle it
+        # Make sure we're using NSE_INDEX explicitly
+        
+        if mode == 'ltp':
+            # Index LTP mode - match Angel adapter structure exactly
+            transformed = {
+            'symbol': symbol,
+            'exchange': 'NSE_INDEX',  # Use NSE_INDEX explicitly
+            'mode': mode,
+            'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+            'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+            'timestamp': tick.get('timestamp', int(time.time() * 1000))
+        }
+    
+        elif mode in ['quote', 'full']:
+            # Index Quote/Full mode - comprehensive data like Angel adapter
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,  # Keep original exchange
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000)),
+                'volume': tick.get('volume_traded', tick.get('volume', 0)),  # Even if 0 for index
+                'price_change': tick.get('price_change', 0),
+                'price_change_percent': tick.get('price_change_percent', 0)
+            }
+        
+            # Add OHLC for index
+            ohlc = tick.get('ohlc')
+            if ohlc:
+                transformed.update({
+                    'open': ohlc.get('open', 0),
+                    'high': ohlc.get('high', 0),
+                    'low': ohlc.get('low', 0),
+                    'close': ohlc.get('close', 0)
+                })
+            else:
+                # Add individual OHLC fields if available
+                if 'open_price' in tick:
+                    transformed['open'] = tick['open_price']
+                if 'high_price' in tick:
+                    transformed['high'] = tick['high_price']
+                if 'low_price' in tick:
+                    transformed['low'] = tick['low_price']
+                if 'close_price' in tick:
+                    transformed['close'] = tick['close_price']
+            
+            # Add exchange timestamp if available
+            if 'exchange_timestamp' in tick:
+                transformed['exchange_timestamp'] = tick['exchange_timestamp']
+    
+        else:
+            # Fallback for index - minimal like Angel
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,  # Keep original exchange
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        return transformed
+
+    def _transform_regular_tick(self, tick: Dict, symbol: str, exchange: str, mode: str) -> Dict:
+        """Transform regular instrument tick data to match Angel adapter format exactly"""
+        if mode == 'ltp':
+            # LTP mode - match Angel adapter structure exactly
+            # Angel returns: {'ltp': price, 'ltt': timestamp}
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000))
+            }
+    
+        elif mode in ['quote', 'full']:
+            # Quote/Full mode - comprehensive data like Angel adapter
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('exchange_timestamp', tick.get('timestamp', int(time.time() * 1000))),
+                'timestamp': tick.get('timestamp', int(time.time() * 1000)),
+                'volume': tick.get('volume_traded', tick.get('volume', 0)),
+                'last_quantity': tick.get('last_traded_quantity', 0),
+                'average_price': tick.get('average_traded_price', tick.get('average_price', 0)),
+                'total_buy_quantity': tick.get('total_buy_quantity', 0),
+                'total_sell_quantity': tick.get('total_sell_quantity', 0)
+            }
+        
+            # Add OHLC if available
+            ohlc = tick.get('ohlc')
+            if ohlc:
+                transformed.update({
+                    'open': ohlc.get('open', 0),
+                    'high': ohlc.get('high', 0),
+                    'low': ohlc.get('low', 0),
+                    'close': ohlc.get('close', 0)
+                })
+            else:
+                # Add individual OHLC fields if available
+                if 'open_price' in tick:
+                    transformed['open'] = tick['open_price']
+                if 'high_price' in tick:
+                    transformed['high'] = tick['high_price']
+                if 'low_price' in tick:
+                    transformed['low'] = tick['low_price']
+                if 'close_price' in tick:
+                    transformed['close'] = tick['close_price']
+        
+            # Add Open Interest for derivatives
+            if 'open_interest' in tick:
+                transformed['oi'] = tick['open_interest']
+                transformed['open_interest'] = tick['open_interest']
+            
+            # Add depth data for full mode
+            if mode == 'full' and 'depth' in tick:
+                depth = tick['depth']
+                if 'buy' in depth and 'sell' in depth:
+                    transformed['depth'] = {
+                        'buy': [
+                            {
+                                'price': level.get('price', 0),
+                                'quantity': level.get('quantity', 0),
+                                'orders': level.get('orders', 0)
+                            }
+                            for level in depth['buy'][:5]
+                        ],
+                        'sell': [
+                            {
+                                'price': level.get('price', 0),
+                                'quantity': level.get('quantity', 0),
+                                'orders': level.get('orders', 0)
+                            }
+                            for level in depth['sell'][:5]
+                        ]
+                    }
+        else:
+            # Fallback - basic structure like Angel
+            transformed = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'ltp': tick.get('last_traded_price', tick.get('last_price', 0)),
+                'ltt': tick.get('timestamp', int(time.time() * 1000))
+            }
+        
+        return transformed
+    
+    def _on_connect(self):
+        """Handle WebSocket connection"""
+        self.connected = True
+        self.reconnect_attempts = 0
+        self.logger.info("✅ WebSocket connected")
+    
+    def _on_disconnect(self):
+        """Handle WebSocket disconnection"""
+        self.connected = False
+        self.logger.warning("❌ WebSocket disconnected")
+
+    def _on_error(self, error):
+        """Handle WebSocket errors"""
+        self.logger.error(f"WebSocket error: {error}")
+    
+    def disconnect(self) -> Dict[str, Any]:
+        """Disconnect from the WebSocket and clean up resources"""
+        try:
+            with self.lock:
+                if self.ws_client:
+                    self.logger.info("Stopping WebSocket client during disconnect...")
+                    self.ws_client.stop()
+                    self.ws_client = None
+                    self.running = False
+                    self.connected = False
+                    self.reconnect_attempts = 0
+                    self.subscribed_symbols.clear()
+                    self.token_to_symbol.clear()
+                    self.logger.info("WebSocket client stopped and references cleared")
+                
+            # Clean up ZeroMQ resources
+            self.cleanup_zmq()
+            
+            return {'status': 'success', 'message': 'Disconnected successfully and resources cleaned up'}
+        except Exception as e:
+            self.logger.error(f"Error disconnecting: {e}")
+            try:
+                # Last attempt to clean up ZMQ resources
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.error(f"Error during ZMQ cleanup after disconnect error: {zmq_err}")
+            
+            return {'status': 'error', 'message': f"Error disconnecting: {e}"}
+        
+    def cleanup(self):
+        """Clean up all resources including WebSocket connection and ZMQ resources"""
+        try:
+            # First disconnect the WebSocket if connected
+            with self.lock:
+                if self.ws_client:
+                    try:
+                        self.ws_client.stop()
+                        self.ws_client = None
+                    except Exception as ws_err:
+                        self.logger.error(f"Error stopping WebSocket client during cleanup: {ws_err}")
+                
+                # Reset adapter state
+                self.running = False
+                self.connected = False
+                self.reconnect_attempts = 0
+                
+                # Clear subscription records
+                self.subscribed_symbols.clear()
+                self.token_to_symbol.clear()
+            
+            # Clean up ZMQ resources using base class method
+            self.cleanup_zmq()
+            
+            self.logger.info("✅ Zerodha adapter cleaned up completely")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
+            # Try one last time to clean up ZMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.error(f"Error cleaning up ZMQ during final cleanup attempt: {zmq_err}")
     
     def __del__(self):
-        """Destructor"""
+        """Destructor - ensures resources are released even when adapter is garbage collected"""
         try:
-            self.cleanup()
+            # During garbage collection, we may not have logger available
+            try:
+                self.cleanup()
+            except Exception:
+                pass
+                
+            # Last resort cleanup
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
         except Exception:
+            # Can't use logger in __del__ reliably
             pass
