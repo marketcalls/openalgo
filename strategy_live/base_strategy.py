@@ -527,7 +527,9 @@ class BaseStrategy:
                         if entry_action.upper() == "BUY":
                             if self.use_stoploss: sl_px = round(fill_px * (1 - self.stoploss_percent / 100), 2)
                             if self.use_target: tp_px = round(fill_px * (1 + self.target_percent / 100), 2)
-                        # TODO: Add short SL/TP logic
+                        elif entry_action.upper() == "SELL":
+                            if self.use_stoploss: sl_px = round(fill_px * (1 + self.stoploss_percent / 100), 2)
+                            if self.use_target: tp_px = round(fill_px * (1 - self.target_percent / 100), 2)
                         journal_base = {"entry_order_id": oid, "symbol": sym, "exchange": exch, "product_type": self.product_type,
                                         "position_type": entry_action, "intended_entry_price": ltp, "actual_entry_price": fill_px,
                                         "placed_quantity": qty, "filled_quantity": fill_qty,
