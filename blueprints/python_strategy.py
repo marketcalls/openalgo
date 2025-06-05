@@ -8,6 +8,7 @@ from utils.python_strategy_manager import (
     get_strategy_stocks, save_strategy_stocks, get_strategy_stocks_csv_path
 )
 from werkzeug.utils import secure_filename # For strategy_filename
+from utils.session import check_session_validity, is_session_valid
 
 python_strategy_bp = Blueprint(
     'python_strategy_bp', __name__,
@@ -17,6 +18,7 @@ python_strategy_bp = Blueprint(
 )
 
 @python_strategy_bp.route('/')
+@check_session_validity
 def index():
     statuses = get_all_strategy_statuses()
     # Ensure all files from get_strategy_files() are represented in statuses
@@ -40,6 +42,7 @@ def index():
     return render_template('index.html', strategies=current_strategies_on_page)
 
 @python_strategy_bp.route('/activate/<strategy_filename>', methods=['POST'])
+@check_session_validity
 def activate(strategy_filename):
     # Add security checks here if needed (e.g., user authentication/authorization)
     # For example, ensure the user has permission to manage strategies.
@@ -57,6 +60,7 @@ def activate(strategy_filename):
 
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/add', methods=['POST'])
+@check_session_validity
 def add_stock(strategy_filename):
     strategy_filename = secure_filename(strategy_filename) # Basic security
     # Add user authentication/authorization checks if necessary
@@ -102,6 +106,7 @@ def add_stock(strategy_filename):
     return redirect(url_for('python_strategy_bp.details', strategy_filename=strategy_filename))
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/edit/<stock_id>', methods=['POST'])
+@check_session_validity
 def edit_stock(strategy_filename, stock_id):
     strategy_filename = secure_filename(strategy_filename)
     # stock_id is expected to be 'SYMBOL_EXCHANGE'
@@ -158,6 +163,7 @@ def edit_stock(strategy_filename, stock_id):
 
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/delete/<stock_id>', methods=['POST'])
+@check_session_validity
 def delete_stock(strategy_filename, stock_id):
     strategy_filename = secure_filename(strategy_filename)
     # stock_id is 'SYMBOL_EXCHANGE'
@@ -185,6 +191,7 @@ def delete_stock(strategy_filename, stock_id):
 
 
 @python_strategy_bp.route('/details/<strategy_filename>', methods=['GET', 'POST'])
+@check_session_validity
 def details(strategy_filename):
     strategy_name_display = strategy_filename.replace('_live.py', '').replace('_', ' ').title()
 
@@ -274,6 +281,7 @@ def details(strategy_filename):
     )
 
 @python_strategy_bp.route('/deactivate/<strategy_filename>', methods=['POST'])
+@check_session_validity
 def deactivate(strategy_filename):
     # Similar security checks as in activate route
     # from flask_login import current_user, login_required  # Example
