@@ -42,6 +42,61 @@ EXIT_LOOKBACK_SPECIFIC = 30
 # ==============================================================================
 
 class PeriodRangeBreakoutStrategy(BaseStrategy):
+    """
+    Implements a breakout trading strategy based on historical price ranges.
+
+    Strategy Logic:
+    ----------------
+    This strategy identifies trading opportunities by observing breakouts from recent
+    price ranges. It is designed to enter positions when the price shows strong
+    momentum by moving beyond a recent high (for long entries) or below a
+    recent low (for short entries, though this example primarily focuses on long).
+
+    Key Parameters from Globals (via strategy_specific_params in BaseStrategy):
+    --------------------------------------------------------------------------
+    - ENTRY_LOOKBACK_SPECIFIC: Integer. The number of previous periods (candles)
+      to look back to determine the highest high for a long entry signal.
+    - EXIT_LOOKBACK_SPECIFIC: Integer. The number of previous periods (candles)
+      to look back to determine the lowest low for a long exit signal.
+
+    Entry Condition (Long):
+    -----------------------
+    A 'BUY' signal is generated if the current closing price (`close_0`) is greater
+    than the maximum high price observed over the last `ENTRY_LOOKBACK_SPECIFIC`
+    periods (excluding the current candle).
+    Formula: close_0 > max(high_[-1], high_[-2], ..., high_[-ENTRY_LOOKBACK_SPECIFIC])
+
+    Exit Condition (Long):
+    ----------------------
+    An exit signal for a long position is generated if the current closing price
+    (`close_0`) is less than the minimum low price observed over the last
+    `EXIT_LOOKBACK_SPECIFIC` periods (excluding the current candle).
+    Formula: close_0 < min(low_[-1], low_[-2], ..., low_[-EXIT_LOOKBACK_SPECIFIC])
+
+    Order Types:
+    ------------
+    - Entry orders are typically placed as Market orders.
+    - Exit orders (due to strategy signal, stop-loss, or target) are also
+      typically Market orders.
+
+    Stop-Loss and Target:
+    ---------------------
+    This strategy utilizes the stop-loss and target mechanisms provided by the
+    BaseStrategy, configured via:
+    - USE_STOPLOSS_SPECIFIC (True/False)
+    - STOPLOSS_PERCENT_SPECIFIC (e.g., 3.0 for 3%)
+    - USE_TARGET_SPECIFIC (True/False)
+    - TARGET_PERCENT_SPECIFIC (e.g., 7.0 for 7%)
+
+    Note on Short Selling:
+    ----------------------
+    The provided `_check_strategy_specific_entry_condition` and
+    `_check_strategy_specific_exit_condition` methods in this example primarily
+    detail the logic for long positions. To enable short selling, these methods
+    would need to be expanded or supplemented with corresponding short entry/exit logic.
+    The BaseStrategy's `trading_mode` parameter would also need to be configured
+    appropriately (e.g., 'SHORT' or 'BOTH').
+    """
     def __init__(self):
         # Collect all strategy-specific parameters into a dictionary
         # These are parameters that the BaseStrategy doesn't have direct attributes for,
