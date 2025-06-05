@@ -56,6 +56,12 @@
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
                     Strategy
                 </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('python_strategy_bp.index') }}"
+                       class="text-base hover:bg-base-200 {{ 'active' if request.endpoint.startswith('python_strategy_bp.') }}">
+                        Python Strategy
+                    </a>
             </li>
             <li>
                 <a href="{{ url_for('analyzer_bp.analyzer') }}" 
