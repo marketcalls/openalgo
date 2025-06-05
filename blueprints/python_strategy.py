@@ -21,23 +21,27 @@ python_strategy_bp = Blueprint(
 @check_session_validity
 def index():
     statuses = get_all_strategy_statuses()
-    # Ensure all files from get_strategy_files() are represented in statuses
-    # This handles the case where a new file is added but not yet in strategy_states.json
     all_files = get_strategy_files()
     current_strategies_on_page = []
+
     for f_name in all_files:
         status_info = statuses.get(f_name, {'status': 'inactive', 'pid': None})
+
+        # Fetch parameters and description for this strategy
+        # We only need the description here, but get_strategy_parameters gets both params and desc.
+        # If this becomes a performance issue for many strategies, a dedicated get_description func could be made.
+        _, strategy_description, _ = get_strategy_parameters(f_name) # params, desc, error_msg
+
         current_strategies_on_page.append({
             'name': f_name.replace('_live.py', '').replace('_', ' ').title(),
             'file_name': f_name,
-            'status': status_info.get('status', 'inactive'), # Default to inactive
-            'pid': status_info.get('pid')
+            'status': status_info.get('status', 'inactive'),
+            'pid': status_info.get('pid'),
+            'description': strategy_description if strategy_description else "No description available." # Add description
         })
 
-    if not current_strategies_on_page and not get_strategy_files(): # Check if the folder itself is empty or non-existent
-        # The get_strategy_files function in manager now creates the dir if it doesn't exist
-        # So, this flash is more about it being empty.
-        flash("No strategy files ending with '_live.py' found in the 'strategy_live' folder. Please add your strategy scripts there.", "info")
+    if not current_strategies_on_page: # Simplified condition as all_files would be empty too
+        flash("No Python strategy files found in the 'strategy_live' folder or the folder is missing.", "info")
 
     return render_template('py_strat_index.html', strategies=current_strategies_on_page)
 

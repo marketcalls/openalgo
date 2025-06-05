@@ -79,11 +79,14 @@
                 <div class="card-body">
                     <h2 class="card-title mb-2">Strategy Description</h2>
                     {% if strategy_description %}
-                        <pre class="whitespace-pre-wrap text-sm p-2 bg-base-100 rounded max-h-60 overflow-y-auto">{{ strategy_description }}</pre>
+                        <pre class="whitespace-pre-wrap text-sm p-2 bg-base-100 rounded mb-3 max-h-60 overflow-y-auto">{{ strategy_description }}</pre>
+                        <p class="text-xs text-gray-500 italic">
+                            This description should ideally include details about the strategy's entry and exit conditions, as provided by the strategy developer in the script's docstring or a manual 'description' parameter.
+                        </p>
                     {% else %}
                         <p class="text-gray-600">No specific description provided or found in the strategy file's docstring.</p>
                         <p class="text-xs text-gray-500 mt-1">
-                            Consider adding a docstring to the main strategy class in <code>{{ strategy_filename }}</code>, or add a 'description' parameter to its configuration file.
+                            Consider adding a docstring to the main strategy class in <code>{{ strategy_filename }}</code> to explain its logic, including entry and exit conditions.
                         </p>
                     {% endif %}
 

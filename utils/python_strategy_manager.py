@@ -168,43 +168,106 @@ def _get_default_params_from_init(strategy_path):
         print(f"Error parsing __init__ for {os.path.basename(strategy_path)}: {e}")
         return {}
 
+def _get_params_from_global_constants(strategy_path):
+    """
+    Parses a Python file and extracts top-level global constants
+    (simple assignments like NAME = value).
+    """
+    constants = {}
+    try:
+        with open(strategy_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        tree = ast.parse(content)
+        for node in tree.body: # Iterate over top-level nodes
+            if isinstance(node, ast.Assign):
+                # We are interested in simple assignments: NAME = literal
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    param_name = node.targets[0].id
+                    try:
+                        # For Python 3.8+, ast.Constant covers str, num, bool, None, bytes
+                        if isinstance(node.value, ast.Constant):
+                            constants[param_name] = node.value.value
+                        # For older Python versions or specific handling if needed:
+                        # elif isinstance(node.value, ast.Str): # Python < 3.8
+                        #     constants[param_name] = node.value.s
+                        # elif isinstance(node.value, ast.Num): # Python < 3.8
+                        #     constants[param_name] = node.value.n
+                        # elif isinstance(node.value, ast.NameConstant): # Python < 3.8 for True, False, None
+                        #     constants[param_name] = node.value.value
+                        else:
+                            # If not a direct literal constant using ast.Constant (e.g. complex expr or var)
+                            # We could try ast.literal_eval on the unparsed segment, but it's risky.
+                            # For now, only direct constants are captured.
+                            pass
+                    except ValueError:
+                        # Could not evaluate the value, skip this one
+                        pass
+    except Exception as e:
+        # Log this error, e.g., print(f"Error parsing global constants from {strategy_path}: {e}")
+        pass # Return what has been collected so far or empty
+    return constants
+
 def get_strategy_config_path(strategy_file):
     return os.path.join(STRATEGY_LIVE_DIR, strategy_file.replace('_live.py', '_config.json'))
 
 def get_strategy_parameters(strategy_file):
     """
     Gets strategy parameters and class docstring.
+    NEW LOGIC:
+    1. Defaults from global constants in the .py file.
+    2. (Optionally, if useful: Defaults from derived class __init__ method, overlaying globals).
+    3. Overridden by parameters from the strategy's JSON config file.
+    4. Class docstring for description.
     """
     strategy_path = os.path.join(STRATEGY_LIVE_DIR, strategy_file)
     if not os.path.exists(strategy_path):
         return None, None, "Strategy file not found."
 
-    params = _get_default_params_from_init(strategy_path)
-    class_docstring = None
-    try:
-        with open(strategy_path, 'r') as f: content = f.read()
-        tree = ast.parse(content)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                if any(isinstance(base, ast.Name) and base.id == 'BaseStrategy' for base in node.bases):
-                    docstring_node = ast.get_docstring(node)
-                    if docstring_node: class_docstring = docstring_node
-                    break
-    except Exception as e:
-        print(f"Error parsing docstring for {strategy_file}: {e}")
+    # 1. Get defaults from global constants in the .py file
+    params = _get_params_from_global_constants(strategy_path)
 
+    # 2. (Optional) Get defaults from __init__ of derived class and overlay.
+    # For the user's case, their __init__ takes no args, so this won't add much for them.
+    # init_params = _get_default_params_from_init(strategy_path)
+    # params.update(init_params) # init_params would override globals if names clash
+
+    # 3. Load saved parameters from JSON config file, overriding current params
     config_path = get_strategy_config_path(strategy_file)
     if os.path.exists(config_path):
         try:
-            with open(config_path, 'r') as f: saved_params = json.load(f)
-            params.update(saved_params)
+            with open(config_path, 'r', encoding='utf-8') as f:
+                saved_params = json.load(f)
+            params.update(saved_params) # Override defaults with saved values
         except (IOError, json.JSONDecodeError) as e:
-            print(f"Error loading config {config_path}: {e}")
+            print(f"Error loading config {config_path}: {e}") # Should probably log this
 
-    description_to_use = params.get("description", class_docstring)
-    if "description" not in params and description_to_use:
-        params["description_from_code"] = description_to_use
-    return params, description_to_use, None
+    # 4. Fetch class docstring for description
+    class_docstring = None
+    try:
+        with open(strategy_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        tree = ast.parse(content)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                is_base_strategy_child = any(isinstance(b, ast.Name) and b.id == 'BaseStrategy' for b in node.bases)
+                if is_base_strategy_child:
+                    docstring_node = ast.get_docstring(node)
+                    if docstring_node:
+                        class_docstring = docstring_node
+                    break
+    except Exception as e:
+        print(f"Error parsing docstring for {strategy_file}: {e}") # Log
+
+    description_to_use = params.get("description", class_docstring) # Prefer 'description' from params (JSON)
+
+    # Remove 'description' from params if it was just set from class_docstring for display consistency
+    # but ensure if 'description' was from JSON, it remains.
+    # The 'description_from_code' logic from before might be redundant if description_to_use handles it.
+    # Let's simplify: the UI will get 'description_to_use'. 'params' will contain what's editable.
+    # If 'description' is in params (from JSON), it's editable. Otherwise, docstring is just displayed.
+
+    return params, description_to_use, None # params, description_string, error_message
 
 def save_strategy_parameters(strategy_file, parameters):
     config_path = get_strategy_config_path(strategy_file)
