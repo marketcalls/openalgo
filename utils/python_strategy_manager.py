@@ -291,17 +291,20 @@ def save_strategy_stocks(strategy_file, stocks_data):
 def get_strategy_log_path(strategy_file):
     """
     Constructs the expected path to a strategy's log file.
+    Example: my_strategy_live.py -> strategy_live/logs/my_strategy_live.log
+             my_strategy.py -> strategy_live/logs/my_strategy.log
     """
     _ensure_strategy_dir_exists() # Ensures strategy_live and strategy_live/logs exist
 
-    if strategy_file.endswith('_live.py'):
-        base_name = strategy_file[:-len('_live.py')]
-    elif strategy_file.endswith('.py'):
-        base_name = strategy_file[:-len('.py')]
+    # Remove .py extension and add .log
+    if strategy_file.endswith(".py"):
+        base_name_with_live_preserved = strategy_file[:-3] # Remove .py
     else:
-        base_name = strategy_file
+        # Should not happen if called with a .py file, but as a fallback
+        base_name_with_live_preserved = strategy_file
 
-    log_file_name = f"{base_name}.log"
+    log_file_name = f"{base_name_with_live_preserved}.log"
+
     return os.path.join(STRATEGY_LIVE_DIR, LOGS_SUBDIR, log_file_name)
 
 def read_strategy_log(strategy_file, tail_lines=200):
