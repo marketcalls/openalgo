@@ -39,7 +39,7 @@ def index():
         # So, this flash is more about it being empty.
         flash("No strategy files ending with '_live.py' found in the 'strategy_live' folder. Please add your strategy scripts there.", "info")
 
-    return render_template('index.html', strategies=current_strategies_on_page)
+    return render_template('py_strat_index.html', strategies=current_strategies_on_page)
 
 @python_strategy_bp.route('/activate/<strategy_filename>', methods=['POST'])
 @check_session_validity
