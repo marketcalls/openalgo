@@ -1,0 +1,10 @@
+{
+  "DefaultStrategy": [
+    {"symbol": "MAZDOCK", "exchange": "NSE", "max_fund": 1000},
+    {"symbol": "APOLLO", "exchange": "NSE", "max_fund": 1000},
+    {"symbol": "GRSE", "exchange": "NSE", "max_fund": 1000},
+    {"symbol": "HUDCO", "exchange": "NSE", "max_fund": 1000},
+    {"symbol": "MOSCHIP", "exchange": "NSE", "max_fund": 1000},
+    {"symbol": "GMDCLTD", "exchange": "NSE", "max_fund": 1000}
+  ]
+}
