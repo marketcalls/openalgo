@@ -9,7 +9,7 @@ from base_strategy import BaseStrategy # Import from the same directory
 STRATEGY_NAME_SPECIFIC = "PeriodRangeBreakout_HL_V1_Short_Configured" # Unique name
 API_KEY_SPECIFIC = 'e63a38807f01fb12d5e71d614f4b236be789f94306d631426686c4cd1a4b8bc7'  # <<< USER: REPLACE THIS!
 HOST_URL_SPECIFIC = 'http://127.0.0.1:5000'
-STOCKS_CSV_NAME_SPECIFIC = "breakout_short_stocks.csv" # Relative to strategies folder
+STOCKS_CSV_NAME_SPECIFIC = "stocks.csv" # Relative to strategies folder
 
 # --- Base Strategy Timing & Operational Parameters ---
 PRODUCT_TYPE_SPECIFIC = "CNC"
