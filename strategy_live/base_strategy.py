@@ -49,13 +49,62 @@ class BaseStrategy:
         
         self.strategy_specific_params = strategy_specific_params if strategy_specific_params else {}
 
+        # --- Parameter Loading Logic ---
+        # Form a base name for config (e.g., "my_strategy_config.json")
+        base_name_for_config = self.strategy_name.replace('_live.py', '')
+        config_file_path = os.path.join(STRATEGIES_DIR, f"{base_name_for_config}_config.json")
+
+        loaded_config_params = {}
+        if os.path.exists(config_file_path):
+            try:
+                with open(config_file_path, 'r') as f:
+                    loaded_config_params = json.load(f)
+                self._log_message(f"Loaded parameters from {config_file_path}")
+            except Exception as e:
+                self._log_message(f"Error loading config {config_file_path}: {e}", level="ERROR")
+
+        # Override default __init__ args with loaded_config_params
+        # Be careful with types if they are not matching. json.load will give Python types.
+        # self.api_key = loaded_config_params.get('api_key', api_key) # api_key might not be user-configurable from UI
+        # self.host_url = loaded_config_params.get('host_url', host_url) # same for host_url
+        # self.ws_url = loaded_config_params.get('ws_url', ws_url) # same for ws_url
+
+        self.stocks_csv_name = loaded_config_params.get('stocks_csv_name', stocks_csv_name)
+        self.product_type = loaded_config_params.get('product_type', product_type)
+        self.timeframe = loaded_config_params.get('timeframe', timeframe)
+        self.strategy_start_time_str = loaded_config_params.get('strategy_start_time_str', strategy_start_time_str)
+        self.strategy_end_time_str = loaded_config_params.get('strategy_end_time_str', strategy_end_time_str)
+        self.journaling_time_str = loaded_config_params.get('journaling_time_str', journaling_time_str)
+        self.re_entry_wait_minutes = loaded_config_params.get('re_entry_wait_minutes', re_entry_wait_minutes)
+        self.use_stoploss = loaded_config_params.get('use_stoploss', use_stoploss)
+        self.stoploss_percent = loaded_config_params.get('stoploss_percent', stoploss_percent)
+        self.use_target = loaded_config_params.get('use_target', use_target)
+        self.target_percent = loaded_config_params.get('target_percent', target_percent)
+        self.history_days_to_fetch = loaded_config_params.get('history_days_to_fetch', history_days_to_fetch)
+        self.loop_sleep_seconds = loaded_config_params.get('loop_sleep_seconds', loop_sleep_seconds)
+        self.order_confirmation_attempts = loaded_config_params.get('order_confirmation_attempts', order_confirmation_attempts)
+        self.order_confirmation_delay_seconds = loaded_config_params.get('order_confirmation_delay_seconds', order_confirmation_delay_seconds)
+
+        # For strategy_specific_params, merge them: config overrides code defaults
+        default_strategy_specific_params = self.strategy_specific_params # Already initialized from __init__ argument
+        loaded_strategy_specific_params = loaded_config_params.get('strategy_specific_params', {})
+        self.strategy_specific_params = {**default_strategy_specific_params, **loaded_strategy_specific_params}
+        # --- End Parameter Loading Logic ---
+
         self.openalgo_client = None
+        # The rest of the __init__ remains the same
+        # self.state_file_path = os.path.join(STRATEGIES_DIR, f"{base_name_for_config}_state.json") # Use base name for state too
         self.open_positions = {}
         self.exited_stocks_cooldown = {}
         self.stock_configs = []
         self.trades_to_journal_today = []
         self.journal_written_today = False
         self.current_trading_day_date = None
+
+        # Ensure state file also uses base_name_for_config if changed above for consistency
+        # Re-assert state_file_path if it was determined by self.strategy_name before loading config
+        # self.state_file_path = os.path.join(STRATEGIES_DIR, f"{base_name_for_config}_state.json")
+
 
         # WebSocket related attributes
         self.subscribed_symbols_ws = set() # ADDED
@@ -115,6 +164,11 @@ class BaseStrategy:
 
     def _load_state(self):
         default_date = datetime.now(IST).date()
+        # Ensure state_file_path is correct if strategy_name was changed by config
+        # This might be redundant if self.strategy_name is not changed by config, but good for safety
+        current_base_name_for_config = self.strategy_name.replace('_live.py', '')
+        self.state_file_path = os.path.join(STRATEGIES_DIR, f"{current_base_name_for_config}_state.json")
+
         if not os.path.exists(self.state_file_path):
             self._log_message("No state file. Starting fresh.")
             self.current_trading_day_date = default_date
@@ -509,6 +563,14 @@ class BaseStrategy:
 
                 self._save_state()
                 self._log_message(f"Processed manual exit for {symbol_key}. Position removed, journaled, and state saved.")
+
+    def get_strategy_description(self):
+        """
+        Returns a human-readable description of the strategy's logic.
+        Derived strategies should override this to provide specific details.
+        Can use Markdown.
+        """
+        return "No specific description provided for this strategy. Entry and exit conditions are defined in its Python code."
 
     # --- Abstract methods for derived classes to implement ---
     def _check_strategy_specific_entry_condition(self, symbol_key, stock_info, hist_df, ltp_at_signal):
