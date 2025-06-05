@@ -312,9 +312,6 @@ def get_strategy_stocks(strategy_file):
         return strategy_specific_stocks, error_message # error_message will be None if stocks were found and no other issues.
 
     except Exception as e:
-        # import traceback
-        # print(f"Error in get_strategy_stocks for {strategy_file}: {str(e)}
-{traceback.format_exc()}")
         return [], f"Error reading stock file {os.path.basename(csv_path)}: {str(e)}"
 
 def save_strategy_stocks(strategy_file, stocks_data_for_current_strategy):
@@ -376,10 +373,6 @@ def save_strategy_stocks(strategy_file, stocks_data_for_current_strategy):
         return True, "Stocks saved successfully."
 
     except Exception as e:
-        # Log the exception traceback for detailed debugging
-        # import traceback
-        # print(f"Error in save_strategy_stocks for {strategy_file}: {str(e)}
-{traceback.format_exc()}")
         return False, f"Error saving stock file {os.path.basename(csv_path)}: {str(e)}"
 
 
