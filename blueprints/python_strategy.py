@@ -117,13 +117,24 @@ def add_stock(strategy_filename):
 
 
     # Check for duplicates
+    # The stocks list here is already strategy-specific due to changes in get_strategy_stocks
     if any(s['symbol'] == symbol and s['exchange'] == exchange for s in stocks):
-        flash(f"Stock {symbol} on {exchange} already exists.", 'error')
+        flash(f"Stock {symbol} on {exchange} already exists for this strategy.", 'error') # Clarified message
         return redirect(url_for('python_strategy_bp.details', strategy_filename=strategy_filename))
 
-    new_stock_entry = {'symbol': symbol, 'exchange': exchange, 'max_fund': max_fund}
+    # Derive strategy_id from strategy_filename
+    current_strategy_key = strategy_filename.replace('_live.py', '').replace('.py', '')
+
+    new_stock_entry = {
+        'symbol': symbol,
+        'exchange': exchange,
+        'max_fund': max_fund,
+        'strategy_id': current_strategy_key  # Add strategy_id
+    }
     stocks.append(new_stock_entry)
 
+    # Now, `stocks` contains the full list for the current strategy, including the new one with its strategy_id
+    # `save_strategy_stocks` will handle merging this with other strategies' stocks in the CSV
     success, save_message = save_strategy_stocks(strategy_filename, stocks)
     if success:
         flash(f"Stock {symbol} added successfully.", 'success')
@@ -162,19 +173,29 @@ def edit_stock(strategy_filename, stock_id):
 
     stock_found = False
     updated_stocks = []
-    for i, stock in enumerate(stocks):
-        current_stock_id = f"{stock['symbol']}_{stock['exchange']}"
-        if current_stock_id == stock_id:
+    # Derive strategy_id from strategy_filename to be used for the edited entry
+    current_strategy_key = strategy_filename.replace('_live.py', '').replace('.py', '')
+
+    for i, stock_from_get in enumerate(stocks): # stock_from_get should have strategy_id if from new get_strategy_stocks
+        current_stock_ui_id = f"{stock_from_get.get('symbol')}_{stock_from_get.get('exchange')}" # Use .get for safety
+        if current_stock_ui_id == stock_id: # stock_id is the ID of the stock being edited
             stock_found = True
-            # Check if the new symbol/exchange combination conflicts with another existing stock
-            if (new_symbol != stock['symbol'] or new_exchange != stock['exchange']) and \
-               any(s['symbol'] == new_symbol and s['exchange'] == new_exchange for idx, s in enumerate(stocks) if idx != i):
-                flash(f"Another stock with symbol {new_symbol} on {new_exchange} already exists. Cannot update.", 'error')
+            # Check if the new symbol/exchange combination conflicts with another existing stock IN THIS STRATEGY'S LIST
+            if (new_symbol != stock_from_get.get('symbol') or new_exchange != stock_from_get.get('exchange')) and \
+               any(s.get('symbol') == new_symbol and s.get('exchange') == new_exchange for idx, s in enumerate(stocks) if idx != i):
+                flash(f"Another stock with symbol {new_symbol} on {new_exchange} already exists for this strategy. Cannot update.", 'error') # Clarified
                 return redirect(url_for('python_strategy_bp.details', strategy_filename=strategy_filename))
 
-            updated_stocks.append({'symbol': new_symbol, 'exchange': new_exchange, 'max_fund': new_max_fund})
+            updated_stocks.append({
+                'symbol': new_symbol,
+                'exchange': new_exchange,
+                'max_fund': new_max_fund,
+                'strategy_id': current_strategy_key  # Add/Ensure correct strategy_id for the edited stock
+            })
         else:
-            updated_stocks.append(stock)
+            # For other stocks not being edited, append them as they are.
+            # They should already have their correct strategy_id from get_strategy_stocks.
+            updated_stocks.append(stock_from_get)
 
     if not stock_found:
         flash(f"Stock with ID {stock_id} not found for editing.", 'error')
