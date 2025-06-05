@@ -16,6 +16,7 @@ class BaseStrategy:
     def __init__(self,
                  strategy_name, # This is the initial name, typically from the script's global constant
                  api_key=None, host_url=None, ws_url=None, # Defaults for BaseStrategy signature
+                 stocks_csv_name="stocks.csv",
                  product_type="CNC", timeframe="5m",
                  strategy_start_time_str="09:20", strategy_end_time_str="15:10",
                  journaling_time_str="15:31",
@@ -50,6 +51,7 @@ class BaseStrategy:
         self.api_key = loaded_config_params.get('api_key', api_key)
         self.host_url = loaded_config_params.get('host_url', host_url)
         self.ws_url = loaded_config_params.get('ws_url', ws_url)
+        self.stocks_csv_name = loaded_config_params.get('stocks_csv_name', stocks_csv_name)
         self.product_type = loaded_config_params.get('product_type', product_type)
         self.timeframe = loaded_config_params.get('timeframe', timeframe)
         self.strategy_start_time_str = loaded_config_params.get('strategy_start_time_str', strategy_start_time_str)
@@ -67,7 +69,7 @@ class BaseStrategy:
 
         # Keys known to BaseStrategy (must match attribute names set above)
         base_param_keys_set = {
-            'strategy_name', 'api_key', 'host_url', 'ws_url',
+            'strategy_name', 'api_key', 'host_url', 'ws_url', 'stocks_csv_name',
             'product_type', 'timeframe', 'strategy_start_time_str', 'strategy_end_time_str',
             'journaling_time_str', 're_entry_wait_minutes', 'use_stoploss',
             'stoploss_percent', 'use_target', 'target_percent', 'history_days_to_fetch',
@@ -89,6 +91,7 @@ class BaseStrategy:
         # Initialize paths based on resolved names
         final_base_name_for_state = self.strategy_name.replace('_live.py', '') # Use final strategy_name
         self.state_file_path = os.path.join(STRATEGIES_DIR, f"{final_base_name_for_state}_state.json")
+        self.stocks_csv_path = os.path.join(STRATEGIES_DIR, self.stocks_csv_name) # Use final stocks_csv_name
 
         # Initialize other instance variables
         self.openalgo_client = None
@@ -326,45 +329,40 @@ class BaseStrategy:
     # --- END WebSocket Management Methods ---
 
     def _load_stock_configurations(self):
-        # Use strategy_name to form the base key for JSON lookup
-        # This logic is similar to how config files are named.
-        base_strategy_key_for_json = self.strategy_name.replace('_live.py', '').replace('.py', '')
-
-        stocks_json_path = os.path.join(STRATEGIES_DIR, "strategy_stocks.json")
-        if not os.path.exists(stocks_json_path):
-            self._log_message(f"Error: Stock JSON file '{stocks_json_path}' not found.", level="ERROR")
-            self.stock_configs = [] # Ensure it's empty
-            return False
-        try:
-            with open(stocks_json_path, 'r', encoding='utf-8') as f:
-                all_strategy_stocks = json.load(f)
-
-            strategy_specific_stocks = all_strategy_stocks.get(base_strategy_key_for_json)
-
-            if strategy_specific_stocks is None:
-                self._log_message(f"Warning: No stock configuration found for strategy key '{base_strategy_key_for_json}' in '{stocks_json_path}'. Using empty stock list.", level="WARNING")
-                self.stock_configs = []
-                # Still return True because the file was loaded, but the strategy had no stocks.
-                return True
-
-            # Basic validation for each stock entry
-            valid_stocks = []
-            for stock_entry in strategy_specific_stocks:
-                if isinstance(stock_entry, dict) and 'symbol' in stock_entry and 'exchange' in stock_entry and 'max_fund' in stock_entry:
-                    valid_stocks.append(stock_entry)
-                else:
-                    self._log_message(f"Warning: Invalid stock entry format for strategy '{base_strategy_key_for_json}': {stock_entry}. Skipping.", level="WARNING")
-
-            self.stock_configs = valid_stocks
-            self._log_message(f"Loaded {len(self.stock_configs)} stock configs for strategy '{base_strategy_key_for_json}' from '{stocks_json_path}'.")
-            return True
-
-        except json.JSONDecodeError as e:
-            self._log_message(f"Error decoding JSON from '{stocks_json_path}': {e}", level="ERROR")
+        if not os.path.exists(self.stocks_csv_path):
+            self._log_message(f"Error: Stock file '{self.stocks_csv_path}' not found.", level="ERROR")
             self.stock_configs = []
             return False
+        try:
+            df = pd.read_csv(self.stocks_csv_path, encoding='utf-8')
+
+            required_columns = {'symbol', 'exchange', 'max_fund', 'strategy_id'}
+            if not required_columns.issubset(df.columns):
+                self._log_message(f"Error: CSV file '{self.stocks_csv_path}' must contain columns: {', '.join(required_columns)}. Found: {', '.join(df.columns)}", level="ERROR")
+                self.stock_configs = []
+                return False
+
+            # Determine the strategy key to filter by, normalizing self.strategy_name
+            current_strategy_filter_key = self.strategy_name.replace('_live.py', '').replace('.py', '')
+
+            # Filter the DataFrame
+            # Ensure strategy_id column is treated as string for comparison, like current_strategy_filter_key
+            filtered_df = df[df['strategy_id'].astype(str) == current_strategy_filter_key]
+
+            self.stock_configs = filtered_df.to_dict('records')
+
+            if not self.stock_configs:
+                self._log_message(f"No stock configurations found for strategy_id '{current_strategy_filter_key}' in '{self.stocks_csv_path}'. Loaded 0 stocks.", level="INFO")
+            else:
+                self._log_message(f"Loaded {len(self.stock_configs)} stock configs for strategy_id '{current_strategy_filter_key}' from '{self.stocks_csv_path}'.")
+            return True
+
+        except pd.errors.EmptyDataError:
+            self._log_message(f"Warning: Stock file '{self.stocks_csv_path}' is empty.", level="WARNING")
+            self.stock_configs = []
+            return True # File exists and is readable, but empty - not a critical error for loading itself.
         except Exception as e:
-            self._log_message(f"Error loading stock configs from '{stocks_json_path}': {e}", level="ERROR")
+            self._log_message(f"Error loading stock configs from '{self.stocks_csv_path}': {e}", level="ERROR")
             self.stock_configs = []
             return False
 
