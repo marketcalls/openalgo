@@ -329,15 +329,42 @@ class BaseStrategy:
     # --- END WebSocket Management Methods ---
 
     def _load_stock_configurations(self):
-        if not os.path.exists(self.stocks_csv_path): # Uses self.stocks_csv_path which is set after param loading
-            self._log_message(f"Error: Stock file '{self.stocks_csv_path}' not found.", level="ERROR"); return False
+        if not os.path.exists(self.stocks_csv_path):
+            self._log_message(f"Error: Stock file '{self.stocks_csv_path}' not found.", level="ERROR")
+            self.stock_configs = []
+            return False
         try:
             df = pd.read_csv(self.stocks_csv_path, encoding='utf-8')
-            if not {'symbol', 'exchange', 'max_fund'}.issubset(df.columns):
-                self._log_message("Error: CSV needs 'symbol', 'exchange', 'max_fund'.", level="ERROR"); return False
-            self.stock_configs = df.to_dict('records')
-            self._log_message(f"Loaded {len(self.stock_configs)} stock configs from '{self.stocks_csv_path}'."); return True
-        except Exception as e: self._log_message(f"Error loading stock configs from '{self.stocks_csv_path}': {e}", level="ERROR"); return False
+
+            required_columns = {'symbol', 'exchange', 'max_fund', 'strategy_id'}
+            if not required_columns.issubset(df.columns):
+                self._log_message(f"Error: CSV file '{self.stocks_csv_path}' must contain columns: {', '.join(required_columns)}. Found: {', '.join(df.columns)}", level="ERROR")
+                self.stock_configs = []
+                return False
+
+            # Determine the strategy key to filter by, normalizing self.strategy_name
+            current_strategy_filter_key = self.strategy_name.replace('_live.py', '').replace('.py', '')
+
+            # Filter the DataFrame
+            # Ensure strategy_id column is treated as string for comparison, like current_strategy_filter_key
+            filtered_df = df[df['strategy_id'].astype(str) == current_strategy_filter_key]
+
+            self.stock_configs = filtered_df.to_dict('records')
+
+            if not self.stock_configs:
+                self._log_message(f"No stock configurations found for strategy_id '{current_strategy_filter_key}' in '{self.stocks_csv_path}'. Loaded 0 stocks.", level="INFO")
+            else:
+                self._log_message(f"Loaded {len(self.stock_configs)} stock configs for strategy_id '{current_strategy_filter_key}' from '{self.stocks_csv_path}'.")
+            return True
+
+        except pd.errors.EmptyDataError:
+            self._log_message(f"Warning: Stock file '{self.stocks_csv_path}' is empty.", level="WARNING")
+            self.stock_configs = []
+            return True # File exists and is readable, but empty - not a critical error for loading itself.
+        except Exception as e:
+            self._log_message(f"Error loading stock configs from '{self.stocks_csv_path}': {e}", level="ERROR")
+            self.stock_configs = []
+            return False
 
     def _get_historical_data(self, symbol, exchange, interval, start_date_str, end_date_str):
         try:

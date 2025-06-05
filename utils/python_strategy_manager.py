@@ -257,33 +257,121 @@ def get_strategy_stocks_csv_path(strategy_file):
     return os.path.join(STRATEGY_LIVE_DIR, os.path.basename(stocks_csv_name))
 
 def get_strategy_stocks(strategy_file):
-    csv_path = get_strategy_stocks_csv_path(strategy_file)
-    stocks = []
+    csv_path = get_strategy_stocks_csv_path(strategy_file) # This should point to shared 'stocks.csv'
+    strategy_specific_stocks = []
+    error_message = None # Initialize error_message
+
     if not os.path.exists(csv_path):
-        return stocks, f"Stock file {os.path.basename(csv_path)} not found."
+        return [], f"Stock file {os.path.basename(csv_path)} not found." # Return empty list and error message
+
     try:
-        with open(csv_path, 'r', newline='', encoding='utf-8') as f: # Added encoding
+        # Derive the strategy_id key from the strategy_file name (e.g., "MyStrategy_live.py" -> "MyStrategy")
+        current_strategy_key = strategy_file.replace('_live.py', '').replace('.py', '')
+
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            if not reader.fieldnames or not {'symbol', 'exchange', 'max_fund'}.issubset(reader.fieldnames):
-                return [], f"Stock file {os.path.basename(csv_path)} has invalid/missing headers."
-            for row in reader:
-                row['id'] = f"{row['symbol']}_{row['exchange']}"
-                stocks.append(row)
-        return stocks, None
+
+            # Define the set of headers that are absolutely required for the function to operate correctly.
+            # 'strategy_id' is crucial for filtering.
+            required_headers = {'symbol', 'exchange', 'max_fund', 'strategy_id'}
+
+            if not reader.fieldnames:
+                # No headers in the CSV (e.g., empty file or just created with no header yet)
+                # This isn't an error for this function's purpose if it's just an empty setup.
+                # The save function should ensure headers are written.
+                # We can inform that no stocks are configured.
+                error_message = f"Stock file {os.path.basename(csv_path)} is empty or has no headers."
+                return [], error_message
+
+            if not required_headers.issubset(reader.fieldnames):
+                # Headers are present, but not all required ones. This is an issue.
+                missing_cols = required_headers - set(reader.fieldnames)
+                error_message = f"Stock file {os.path.basename(csv_path)} is missing required columns: {', '.join(missing_cols)}."
+                return [], error_message
+
+            for row_number, row in enumerate(reader, 1): # Start row count from 1 for messages
+                # Filter: only include rows where 'strategy_id' matches the current_strategy_key
+                if row.get('strategy_id') == current_strategy_key:
+                    # Add the 'id' field used by the UI (e.g., for edit/delete operations)
+                    # Ensure symbol and exchange exist before creating id to prevent None_None
+                    symbol = row.get('symbol')
+                    exchange = row.get('exchange')
+                    if symbol and exchange:
+                        row['id'] = f"{symbol}_{exchange}"
+                    else:
+                        # This row is malformed for the current strategy, skip it or log warning
+                        print(f"Warning: Row {row_number} for strategy {current_strategy_key} in {os.path.basename(csv_path)} is missing symbol or exchange. Skipping.")
+                        continue
+                    strategy_specific_stocks.append(row)
+
+            if not strategy_specific_stocks and not error_message: # Check error_message to avoid overwriting previous file issue messages
+                # This is not an error, but information that no stocks are configured for THIS strategy.
+                error_message = f"No stocks currently configured for strategy '{current_strategy_key}' in {os.path.basename(csv_path)}."
+                # Return empty list and this message. The UI can decide how to display this.
+
+        return strategy_specific_stocks, error_message # error_message will be None if stocks were found and no other issues.
+
     except Exception as e:
         return [], f"Error reading stock file {os.path.basename(csv_path)}: {str(e)}"
 
-def save_strategy_stocks(strategy_file, stocks_data):
-    csv_path = get_strategy_stocks_csv_path(strategy_file)
-    fieldnames = ['symbol', 'exchange', 'max_fund']
+def save_strategy_stocks(strategy_file, stocks_data_for_current_strategy):
+    # stocks_data_for_current_strategy is a list of dicts provided by the UI routes,
+    # representing the desired state for *this specific strategy's* stocks.
+    # The blueprint should ensure that 'strategy_id' is correctly populated on these dicts,
+    # or at least that they are indeed only for the current strategy.
+
+    csv_path = get_strategy_stocks_csv_path(strategy_file) # This should point to the shared 'stocks.csv'
+    # IMPORTANT: Define all columns that should be in the CSV, including 'strategy_id'
+    fieldnames = ['symbol', 'exchange', 'max_fund', 'strategy_id']
+
+    # Derive the strategy_id key from the strategy_file name (e.g., "MyStrategy_live.py" -> "MyStrategy")
+    current_strategy_key = strategy_file.replace('_live.py', '').replace('.py', '')
+
+    all_stocks_from_csv = []
     try:
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f: # Added encoding
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # Step 1: Read all existing stocks from the CSV, if it exists, to preserve other strategies' data.
+        if os.path.exists(csv_path):
+            with open(csv_path, 'r', newline='', encoding='utf-8') as f_read:
+                reader = csv.DictReader(f_read)
+                # Check if headers are present and contain AT LEAST our core fields.
+                # If strategy_id is missing, rows without it won't be associated with any strategy.
+                if reader.fieldnames: # Ensure file is not empty and has headers
+                    for row in reader:
+                        all_stocks_from_csv.append(row)
+                # If the file is empty or headers are missing, all_stocks_from_csv remains empty.
+
+        # Step 2: Filter out any old stocks for the *current* strategy from what we read.
+        # This ensures we are replacing the current strategy's stock list entirely with
+        # the new data passed in `stocks_data_for_current_strategy`.
+        other_strategy_stocks = []
+        for stock in all_stocks_from_csv:
+            # Only keep stocks that DO NOT belong to the current strategy key.
+            # If strategy_id is missing in a row, it's treated as not belonging to current_strategy_key.
+            if stock.get('strategy_id') != current_strategy_key:
+                other_strategy_stocks.append(stock)
+
+        # Step 3: Prepare the stocks for the current strategy, ensuring their strategy_id is correctly set.
+        # The `stocks_data_for_current_strategy` comes from the UI and should represent the full list
+        # of stocks intended for *this* strategy.
+        final_stocks_for_this_strategy = []
+        for stock_entry in stocks_data_for_current_strategy:
+            entry_copy = stock_entry.copy() # Work with a copy
+            entry_copy['strategy_id'] = current_strategy_key # Explicitly set/overwrite strategy_id
+            final_stocks_for_this_strategy.append(entry_copy)
+
+        # Step 4: Combine the preserved stocks from other strategies with the new/updated stocks for the current strategy.
+        combined_stocks_to_write = other_strategy_stocks + final_stocks_for_this_strategy
+
+        # Step 5: Write the combined list back to the CSV. This overwrites the old file.
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True) # Ensure directory exists
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f_write:
+            writer = csv.DictWriter(f_write, fieldnames=fieldnames, extrasaction='ignore') # Ignore extra fields in dicts if any
             writer.writeheader()
-            for stock in stocks_data:
-                writer.writerow({field: stock.get(field) for field in fieldnames})
+            for stock_dict in combined_stocks_to_write:
+                writer.writerow(stock_dict) # Write only fields specified in fieldnames
+
         return True, "Stocks saved successfully."
+
     except Exception as e:
         return False, f"Error saving stock file {os.path.basename(csv_path)}: {str(e)}"
 
