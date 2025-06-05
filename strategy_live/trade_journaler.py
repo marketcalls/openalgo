@@ -74,22 +74,56 @@ def process_and_write_completed_trades_to_csv(openalgo_client, raw_completed_tra
         for raw_trade in raw_completed_trades:
             try:
                 strategy_name = raw_trade.get('strategy_name', 'UnknownStrategy')
+
+                # Fetch entry details (always needed)
                 entry_exec_price, entry_exec_ts, entry_exec_qty = fetch_order_execution_details(
                     openalgo_client, raw_trade['entry_order_id'], strategy_name)
-                exit_exec_price, exit_exec_ts, exit_exec_qty = fetch_order_execution_details(
-                    openalgo_client, raw_trade['exit_order_id'], strategy_name)
 
-                if not all([entry_exec_price, entry_exec_ts, entry_exec_qty, exit_exec_price, exit_exec_ts, exit_exec_qty]):
-                    _log_journaler_message(f"Skipping {raw_trade['symbol']}: missing execution details. EntryOID: {raw_trade['entry_order_id']}, ExitOID: {raw_trade['exit_order_id']}")
+                is_manual_exit = raw_trade.get('exit_order_id') == "MANUAL_EXIT"
+                exit_exec_price, exit_exec_ts, exit_exec_qty = None, None, None
+
+                if is_manual_exit:
+                    _log_journaler_message(f"Processing MANUAL_EXIT for {raw_trade['symbol']} (EntryOID: {raw_trade['entry_order_id']}). Using provided data for exit.")
+                    exit_exec_price = raw_trade.get('intended_exit_price') # LTP at detection or fallback
+                    exit_exec_ts = raw_trade.get('exit_decision_timestamp_ist') # Detection timestamp
+                    exit_exec_qty = raw_trade.get('filled_quantity') # Original filled quantity of the position
+
+                    # Basic validation for manually provided data
+                    if exit_exec_price is None or exit_exec_ts is None or exit_exec_qty is None:
+                        _log_journaler_message(f"Skipping {raw_trade['symbol']} (MANUAL_EXIT): missing critical data (price, ts, or qty) in raw_trade. Data: {raw_trade}")
+                        continue
+                else:
+                    # Fetch exit details from API for regular exits
+                    exit_exec_price, exit_exec_ts, exit_exec_qty = fetch_order_execution_details(
+                        openalgo_client, raw_trade['exit_order_id'], strategy_name)
+
+                # Consolidate validation for all necessary details
+                if not all([
+                    entry_exec_price is not None, entry_exec_ts is not None, entry_exec_qty is not None and entry_exec_qty > 0,
+                    exit_exec_price is not None, exit_exec_ts is not None, exit_exec_qty is not None and exit_exec_qty > 0
+                ]):
+                    _log_journaler_message(f"Skipping {raw_trade['symbol']} (EntryOID: {raw_trade['entry_order_id']}, ExitOID: {raw_trade.get('exit_order_id')}): " +
+                                           f"missing some execution details after fetch/processing. Entry({entry_exec_price}, {entry_exec_ts}, {entry_exec_qty}), " +
+                                           f"Exit({exit_exec_price}, {exit_exec_ts}, {exit_exec_qty})")
                     continue
-
-                quantity = entry_exec_qty
-                if entry_exec_qty != exit_exec_qty:
-                    _log_journaler_message(f"WARNING: Qty mismatch for {raw_trade['symbol']}. Entry: {entry_exec_qty}, Exit: {exit_exec_qty}. Using entry qty.")
-
-                gross_pnl = (exit_exec_price - entry_exec_price) * quantity if raw_trade['position_type'].upper() == "LONG" else \
-                            (entry_exec_price - exit_exec_price) * quantity # For SHORT
                 
+                # Quantity for P&L: use entry quantity. If there's a mismatch, it's usually a partial fill on exit not fully captured,
+                # or for manual exits, exit_exec_qty is the original entry quantity.
+                quantity = entry_exec_qty
+                if not is_manual_exit and entry_exec_qty != exit_exec_qty: # Log mismatch only for non-manual exits if desired
+                    _log_journaler_message(f"WARNING: Qty mismatch for {raw_trade['symbol']} (EntryOID: {raw_trade['entry_order_id']}, ExitOID: {raw_trade['exit_order_id']}). EntryQty: {entry_exec_qty}, ExitQty: {exit_exec_qty}. Using entry qty for P&L.")
+
+                # Determine position type for P&L calculation from raw_trade
+                # Assuming 'BUY' in raw_trade['position_type'] means LONG, 'SELL' means SHORT
+                position_action = raw_trade.get('position_type', '').upper()
+                if position_action == 'BUY': # Long position
+                    gross_pnl = (exit_exec_price - entry_exec_price) * quantity
+                elif position_action == 'SELL': # Short position
+                    gross_pnl = (entry_exec_price - exit_exec_price) * quantity
+                else:
+                    _log_journaler_message(f"Unknown position_type '{raw_trade.get('position_type')}' for {raw_trade['symbol']}. Cannot calculate P&L.")
+                    continue # Skip this trade if P&L cannot be determined
+
                 commission, swap_fees = 0.0, 0.0 # Placeholders
                 net_pnl = gross_pnl - commission - swap_fees
                 trade_id = generate_trade_id(raw_trade['symbol'], entry_exec_ts)
