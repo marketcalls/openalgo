@@ -23,9 +23,13 @@ EXCLUDED_UI_PARAMS = {
     # For now, keeping exclusion list minimal to what's clearly system/identity.
 }
 
+LOGS_SUBDIR = "logs" # Define logs subdirectory name
+
 def _ensure_strategy_dir_exists():
-    """Ensures the strategy_live directory exists."""
+    """Ensure the base strategy directory and logs subdirectory exist."""
     os.makedirs(STRATEGY_LIVE_DIR, exist_ok=True)
+    log_dir = os.path.join(STRATEGY_LIVE_DIR, LOGS_SUBDIR)
+    os.makedirs(log_dir, exist_ok=True)
 
 def _load_strategy_states():
     """Loads strategy states from the JSON file."""
@@ -282,3 +286,46 @@ def save_strategy_stocks(strategy_file, stocks_data):
         return True, "Stocks saved successfully."
     except Exception as e:
         return False, f"Error saving stock file {os.path.basename(csv_path)}: {str(e)}"
+
+
+def get_strategy_log_path(strategy_file):
+    """
+    Constructs the expected path to a strategy's log file.
+    """
+    _ensure_strategy_dir_exists() # Ensures strategy_live and strategy_live/logs exist
+
+    if strategy_file.endswith('_live.py'):
+        base_name = strategy_file[:-len('_live.py')]
+    elif strategy_file.endswith('.py'):
+        base_name = strategy_file[:-len('.py')]
+    else:
+        base_name = strategy_file
+
+    log_file_name = f"{base_name}.log"
+    return os.path.join(STRATEGY_LIVE_DIR, LOGS_SUBDIR, log_file_name)
+
+def read_strategy_log(strategy_file, tail_lines=200):
+    """
+    Reads the last N lines from a strategy's log file.
+    Returns the content as a single string, or an error message.
+    """
+    log_path = get_strategy_log_path(strategy_file)
+
+    if not os.path.exists(log_path):
+        return f"Log file not found at: {log_path}"
+
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        if tail_lines and len(lines) > tail_lines:
+            log_content = "".join(lines[-tail_lines:])
+        else:
+            log_content = "".join(lines)
+
+        if not log_content.strip():
+            return "Log file is empty."
+
+        return log_content
+    except Exception as e:
+        return f"Error reading log file {log_path}: {str(e)}"

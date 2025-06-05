@@ -63,8 +63,10 @@
                         <button type="submit" class="btn btn-sm btn-outline btn-primary">Activate</button>
                     </form>
                     {% endif %}
-                    {# The Details button will be implemented later, perhaps linking to logs or a config page #}
-                    <a href="{{ url_for('python_strategy_bp.details', strategy_filename=strategy.file_name) }}" class="btn btn-sm btn-secondary">Details</a>
+                    <a href="{{ url_for('python_strategy_bp.details', strategy_filename=strategy.file_name) }}" class="btn btn-xs btn-secondary">Details</a>
+                    {# <<< NEW LOG BUTTON START >>> #}
+                    <a href="{{ url_for('python_strategy_bp.view_strategy_log', strategy_filename=strategy.file_name) }}" class="btn btn-xs btn-info">Log</a>
+                    {# <<< NEW LOG BUTTON END >>> #}
                 </div>
             </div>
         </div>

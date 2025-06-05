@@ -5,7 +5,8 @@ import glob
 from utils.python_strategy_manager import (
     get_all_strategy_statuses, activate_strategy, deactivate_strategy,
     get_strategy_files, get_strategy_parameters, save_strategy_parameters,
-    get_strategy_stocks, save_strategy_stocks, get_strategy_stocks_csv_path
+    get_strategy_stocks, save_strategy_stocks, get_strategy_stocks_csv_path,
+    read_strategy_log # Add this import
 )
 from werkzeug.utils import secure_filename # For strategy_filename
 from utils.session import check_session_validity, is_session_valid
@@ -61,6 +62,28 @@ def activate(strategy_filename):
     else:
         flash(message, 'error')
     return redirect(url_for('python_strategy_bp.index'))
+
+
+@python_strategy_bp.route('/logs/<strategy_filename>')
+@check_session_validity
+def view_strategy_log(strategy_filename):
+    # Sanitize filename (though it's from our system, good practice if ever linked from user input)
+    # However, strategy_filename here comes from a list of files on the server,
+    # so direct secure_filename might be too aggressive if filenames can have unusual but valid chars.
+    # For now, assume strategy_filename is safe as it's derived from os.listdir/glob.
+
+    # Use a reasonable number of lines to display by default to avoid browser slowdown for huge logs
+    # This can be made configurable later if needed.
+    log_content = read_strategy_log(strategy_filename, tail_lines=500)
+
+    strategy_name_display = strategy_filename.replace('_live.py', '').replace('.py', '').replace('_', ' ').title()
+
+    return render_template(
+        'view_log.html',
+        strategy_name=strategy_name_display,
+        log_content=log_content,
+        strategy_filename=strategy_filename # Pass original filename for potential refresh/back links
+    )
 
 
 @python_strategy_bp.route('/details/<strategy_filename>/stock/add', methods=['POST'])

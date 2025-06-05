@@ -6,7 +6,22 @@
 <div class="container mx-auto px-4 py-8">
     <div class="flex justify-between items-center mb-6">
         <h1 class="text-3xl font-bold">Strategy: {{ strategy_name }}</h1>
-        <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-outline btn-sm">Back to List</a>
+        <div>
+            {# <<< NEW VIEW LOG BUTTON START >>> #}
+            <a href="{{ url_for('python_strategy_bp.view_strategy_log', strategy_filename=strategy_filename) }}" class="btn btn-sm btn-outline btn-info mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                View Log
+            </a>
+            {# <<< NEW VIEW LOG BUTTON END >>> #}
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-sm btn-outline">
+                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                Back to List
+            </a>
+        </div>
     </div>
 
     {# Flash messages #}
