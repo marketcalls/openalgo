@@ -108,9 +108,9 @@ def activate_strategy(strategy_file):
         log_dir = os.path.join(STRATEGY_LIVE_DIR, 'logs')
         os.makedirs(log_dir, exist_ok=True)
         log_file_path = os.path.join(log_dir, f"{strategy_file.replace('.py', '')}.log")
-        with open(log_file_path, 'ab') as log_file:
+        with open(log_file_path, 'a') as log_file:
             process = subprocess.Popen(
-                [PYTHON_EXECUTABLE, strategy_path], cwd=STRATEGY_LIVE_DIR,
+                [PYTHON_EXECUTABLE, "-u", strategy_path], cwd=STRATEGY_LIVE_DIR,
                 stdout=log_file, stderr=log_file,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
                 start_new_session=True if os.name != 'nt' else False)
@@ -243,8 +243,48 @@ def get_strategy_parameters(strategy_file):
 
 def save_strategy_parameters(strategy_file, parameters):
     config_path = get_strategy_config_path(strategy_file)
+
+    KEY_TRANSFORMATION_MAP = {
+        # BaseStrategy attributes
+        "PRODUCT_TYPE_SPECIFIC": "product_type",
+        "TIMEFRAME_SPECIFIC": "timeframe",
+        "STRATEGY_START_TIME_SPECIFIC": "strategy_start_time_str",
+        "STRATEGY_END_TIME_SPECIFIC": "strategy_end_time_str",
+        "JOURNALING_TIME_SPECIFIC": "journaling_time_str",
+        "RE_ENTRY_WAIT_MINUTES_SPECIFIC": "re_entry_wait_minutes",
+        "HISTORY_DAYS_TO_FETCH_SPECIFIC": "history_days_to_fetch",
+        "LOOP_SLEEP_SECONDS_SPECIFIC": "loop_sleep_seconds",
+        "USE_STOPLOSS_SPECIFIC": "use_stoploss",
+        "STOPLOSS_PERCENT_SPECIFIC": "stoploss_percent",
+        "USE_TARGET_SPECIFIC": "use_target",
+        "TARGET_PERCENT_SPECIFIC": "target_percent",
+        "ORDER_CONFIRMATION_ATTEMPTS_SPECIFIC": "order_confirmation_attempts",
+        "ORDER_CONFIRMATION_DELAY_SECONDS_SPECIFIC": "order_confirmation_delay_seconds",
+        # Strategy-specific parameters (matching .get() calls in derived strategies)
+        "ENTRY_LOOKBACK_SPECIFIC": "ENTRY_LOOKBACK", # As used by breakout_2nd_stage.py
+        "EXIT_LOOKBACK_SPECIFIC": "EXIT_LOOKBACK"   # As used by breakout_2nd_stage.py
+        # Note: The UI form fields in templates/python_strategy/details.html
+        # should ideally have names that result in these "SPECIFIC" keys appearing
+        # in the `parameters` dict received by this function.
+    }
+
+    transformed_parameters = {}
+    for key, value in parameters.items():
+        # Use the mapped key if it exists, otherwise use the original key.
+        # This also handles parameters that don't need transformation (e.g., 'description').
+        new_key = KEY_TRANSFORMATION_MAP.get(key, key)
+        transformed_parameters[new_key] = value
+
+    # Ensure 'description_from_code' is not saved if it was part of params from get_strategy_parameters
+    # The blueprint already tries to remove this, but an extra check here is fine.
+    if 'description_from_code' in transformed_parameters:
+        del transformed_parameters['description_from_code']
+
     try:
-        with open(config_path, 'w', encoding='utf-8') as f: json.dump(parameters, f, indent=4) # Added encoding
+        # Ensure the directory exists (important if a strategy is new and has no config yet)
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(transformed_parameters, f, indent=4)
         return True, "Parameters saved successfully."
     except (IOError, TypeError) as e:
         return False, f"Error saving parameters: {e}"

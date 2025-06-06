@@ -388,7 +388,7 @@ class BaseStrategy:
         try:
             self._log_message(f"Placing {action} order: {symbol} Qty:{quantity} Prod:{product} Type:{price_type}")
             params = {"strategy": self.strategy_name, "symbol": symbol, "action": action.upper(), "exchange": exchange,
-                      "price_type": price_type.upper(), "product": product.upper(), "quantity": str(quantity),
+                      "price_type": price_type.upper(), "product": product.upper(), "quantity": str(int(float(quantity))),
                       "price": str(price) if price_type.upper() == "LIMIT" else "0",
                       "trigger_price": str(trigger_price) if float(trigger_price) > 0 else "0"}
             self._log_message(f"Placing order: {params}")
@@ -432,8 +432,60 @@ class BaseStrategy:
         is_mkt_open = mkt_o <= now_time <= mkt_c
         return {"now_ist": now_ist, "now_time": now_time, "is_mkt_open": is_mkt_open,
                 "is_entry_active": is_mkt_open and strat_s <= now_time < strat_e,
-                "is_mis_sq_off": is_mkt_open and product_type == "MIS" and now_time >= strat_e, # check product_type
+                "is_mis_sq_off": is_mkt_open and self.product_type == "MIS" and now_time >= strat_e, # check product_type
                 "is_journal_time": now_time >= journal_t}
+
+    def _get_next_market_session_times(self, current_dt_ist):
+        # Calculates market open/close for today and the next session's open.
+        # Assumes Mon-Fri are trading days. Does not account for specific holidays.
+        # `current_dt_ist` must be an timezone-aware datetime object (IST).
+
+        # Ensure datetime, dt_time, timedelta are imported from datetime module
+        # Ensure IST is available (pytz.timezone('Asia/Kolkata'))
+
+        market_open_time_obj = datetime.strptime(self.strategy_start_time_str, "%H:%M").time()
+        market_close_time_obj = datetime.strptime(self.strategy_end_time_str, "%H:%M").time()
+
+        today_date = current_dt_ist.date()
+
+        # Combine with today's date and make them timezone-aware (IST)
+        market_open_today_dt = IST.localize(datetime.combine(today_date, market_open_time_obj))
+        market_close_today_dt = IST.localize(datetime.combine(today_date, market_close_time_obj))
+
+        is_trading_day_today = current_dt_ist.weekday() < 5 # Monday=0, ..., Friday=4, Saturday=5, Sunday=6
+
+        # Calculate next_session_open_dt
+        next_session_open_dt_candidate = None
+        if is_trading_day_today and current_dt_ist < market_open_today_dt:
+            # Case 1: Today is a trading day, and current time is before market open.
+            next_session_open_dt_candidate = market_open_today_dt
+        else:
+            # Case 2: Today is a trading day at/after market open, or it's a weekend.
+            # Find the next actual trading day's open.
+            temp_date = today_date
+            if (is_trading_day_today and current_dt_ist >= market_open_today_dt) or not is_trading_day_today:
+                temp_date += timedelta(days=1) # Start search from tomorrow
+
+            # Loop to find the next weekday (Monday-Friday)
+            loop_count = 0 # Safety counter
+            while True:
+                if temp_date.weekday() < 5: # Monday to Friday
+                    next_session_open_dt_candidate = IST.localize(datetime.combine(temp_date, market_open_time_obj))
+                    break
+                temp_date += timedelta(days=1)
+                loop_count += 1
+                if loop_count > 7: # Safety break for unexpected loops (e.g., if date logic had error)
+                    self._log_message("Error finding next trading day within 7 days. Defaulting to next calendar day's open.", level="ERROR")
+                    # Fallback: default to next calendar day (will be re-evaluated in next main loop)
+                    next_session_open_dt_candidate = IST.localize(datetime.combine(today_date + timedelta(days=1), market_open_time_obj))
+                    break
+
+        return {
+            'market_open_today': market_open_today_dt,
+            'market_close_today': market_close_today_dt,
+            'next_session_open_dt': next_session_open_dt_candidate,
+            'is_trading_day_today': is_trading_day_today
+        }
 
     def _attempt_exit_position(self, symbol_key, reason, pos_details_orig):
         pos_details = pos_details_orig.copy()
@@ -465,10 +517,101 @@ class BaseStrategy:
             're_entry_wait_minutes', 'use_stoploss', 'stoploss_percent', 'use_target', 'target_percent']}
         return {**base_params, **self.strategy_specific_params}
 
-    def _check_for_manual_exits(self): # Simplified for brevity in this pass
-        if not self.open_positions: return
-        # ... (existing logic for manual exit check would go here) ...
-        pass # Placeholder
+    def _check_for_manual_exits(self):
+        if not self.open_positions:
+            return
+
+        try:
+            broker_positions_response = self.openalgo_client.positionbook()
+            if not broker_positions_response or broker_positions_response.get('status') != 'success' or 'data' not in broker_positions_response:
+                self._log_message(f"Could not fetch or failed to parse position book for manual exit check. Response: {broker_positions_response}", level="WARNING")
+                return
+
+            live_broker_positions = {}
+            # Example: {'VERANDA_NSE_MIS': -2.0, 'SUNFLAG_NSE_CNC': 1.0}
+            for pos in broker_positions_response['data']:
+                try:
+                    # Ensure quantity is a float, default to 0.0 if not convertible or missing
+                    qty = float(pos.get('quantity', 0.0))
+                    # Normalize symbol and exchange to uppercase to match internal format
+                    symbol = pos.get('symbol', '').upper()
+                    exchange = pos.get('exchange', '').upper()
+                    product = pos.get('product', '').upper() # Product type from broker
+
+                    if not symbol or not exchange or not product: # Skip if essential fields are missing
+                        self._log_message(f"Skipping broker position due to missing symbol/exchange/product: {pos}", level="WARNING")
+                        continue
+
+                    # Key by symbol_exchange_product to uniquely identify positions
+                    broker_pos_key = f"{symbol}_{exchange}_{product}"
+                    live_broker_positions[broker_pos_key] = qty
+                except ValueError:
+                    self._log_message(f"Could not convert quantity to float for broker position: {pos}. Skipping.", level="WARNING")
+                    continue
+                except Exception as inner_e: # Catch any other unexpected error during pos processing
+                    self._log_message(f"Unexpected error processing single broker position {pos}: {inner_e}", level="WARNING")
+                    continue
+
+            state_changed = False
+            # Iterate over a copy of items for safe removal from self.open_positions
+            for internal_pos_key, details in list(self.open_positions.items()):
+                # internal_pos_key is typically 'SYMBOL_EXCHANGE'
+                # details contains 'product', 'quantity', etc.
+
+                internal_symbol, internal_exchange = internal_pos_key.split('_')
+                # Use the product type stored with the position when it was opened by the strategy
+                internal_product = details.get('product', self.product_type).upper()
+
+                # Construct the key to match how live_broker_positions are keyed
+                broker_check_key = f"{internal_symbol}_{internal_exchange}_{internal_product}"
+
+                # Get the quantity from the broker. If the specific key (symbol_exchange_product)
+                # is not found, it means the position for that specific product type is not there, so qty is 0.
+                broker_qty = live_broker_positions.get(broker_check_key, 0.0)
+
+                if broker_qty == 0.0:
+                    # Position exists internally but is reported as zero or missing at broker for that specific product type.
+                    self._log_message(f"Position for {broker_check_key} (Internal Qty: {details.get('quantity')}) found closed/missing at broker (Broker Qty: {broker_qty}). Reconciling as manual exit.", level="INFO")
+
+                    # Prepare journal entry
+                    # Ensure datetime is imported: from datetime import datetime (should be at top of file)
+                    journal_entry_for_exit = {
+                        **(details.get('journal_data', {})), # Carry over entry data
+                        'exit_order_id': 'MANUAL_OR_EXTERNAL_EXIT', # Placeholder for order ID
+                        'exit_decision_timestamp_ist': datetime.now(IST), # Use current time
+                        'exit_reason': 'Position closed externally at broker or quantity became zero',
+                        # Actual exit price from manual closure is unknown here.
+                        # LTP could be fetched, but might not reflect actual exit price.
+                        'intended_exit_price': None # Or details.get('entry_price') as a rough placeholder
+                    }
+                    self.trades_to_journal_today.append(journal_entry_for_exit)
+
+                    # Clean up internal state
+                    if internal_pos_key in self.open_positions: # Check if not already removed by another logic path
+                        del self.open_positions[internal_pos_key]
+
+                    self.exited_stocks_cooldown[internal_pos_key] = datetime.now(IST) # Use the 'SYMBOL_EXCHANGE' key for cooldown
+
+                    # Unsubscribe from WebSocket if needed
+                    if self.ws_connected and hasattr(self, '_unsubscribe_ws'): # Check if method exists
+                        self._unsubscribe_ws([{"exchange": internal_exchange, "symbol": internal_symbol}])
+
+                    state_changed = True
+                # else if details.get('quantity') != broker_qty:
+                    # Optional: Handle partial manual exits if broker_qty is different but not zero.
+                    # self._log_message(f"Position for {broker_check_key} quantity mismatch. Internal: {details.get('quantity')}, Broker: {broker_qty}. Adjusting.", level="INFO")
+                    # self.open_positions[internal_pos_key]['quantity'] = broker_qty # Or handle as per strategy logic
+                    # state_changed = True
+
+
+            if state_changed:
+                self._log_message("Internal state updated due to manual/external position changes.", level="INFO")
+                self._save_state()
+
+        except Exception as e:
+            self._log_message(f"Error in _check_for_manual_exits: {e}", level="ERROR")
+            # import traceback # Optional: for more detailed debugging during development
+            # self._log_message(f"Traceback for _check_for_manual_exits: {traceback.format_exc()}", level="ERROR")
 
     def get_strategy_description(self):
         return "No specific description provided. Defined in code." # Override in derived
@@ -583,34 +726,120 @@ class BaseStrategy:
             if subs: self._log_message(f"WS: Subscribing to {len(subs)} open positions."); self._subscribe_ws(subs)
         try: trade_journaler.initialize_journal()
         except Exception as e: self._log_message(f"Error initializing journaler: {e}.", level="ERROR")
+
         self._log_message(f"Strategy '{self.strategy_name}' started. Params loaded. Journaling: ~{self.journaling_time_str} IST.")
+
+        EOD_PROCESSING_BUFFER_MINUTES = 30 # How long after market_close_today to keep running normal loop
+        PRE_MARKET_WAKEUP_MINUTES = 7    # How many minutes before strategy_start_time to wake up for next session
+
         try:
             while True:
-                ts = self._get_time_status()
-                if self.current_trading_day_date is None or ts["now_ist"].date() != self.current_trading_day_date:
-                    self._log_message(f"New trading day: {ts['now_ist'].date()}. Resetting flags.")
-                    self.journal_written_today = False; self.current_trading_day_date = ts["now_ist"].date(); self._save_state()
-                self._check_for_manual_exits()
-                data_cache = {}
-                active_syms = {s['symbol']+"_"+s['exchange'] for s in self.stock_configs}.union(self.open_positions.keys())
-                if active_syms:
-                    sd = (ts["now_ist"] - timedelta(days=self.history_days_to_fetch)).strftime('%Y-%m-%d')
-                    ed = ts["now_ist"].strftime('%Y-%m-%d')
-                    for sk in active_syms: s,e = sk.split('_'); data_cache[sk] = self._get_historical_data(s,e,self.timeframe,sd,ed)
-                self._manage_open_positions(ts, data_cache)
-                self._evaluate_new_entries(ts, data_cache)
-                if ts["is_journal_time"] and not self.journal_written_today:
-                    if self.trades_to_journal_today:
-                        self._log_message(f"EOD journaling for {len(self.trades_to_journal_today)} trades.")
-                        try:
-                            count = trade_journaler.process_and_write_completed_trades_to_csv(self.openalgo_client, self.trades_to_journal_today)
-                            if count > 0 or len(self.trades_to_journal_today) > 0: self.trades_to_journal_today = []
-                        except Exception as e: self._log_message(f"Critical EOD journaling error: {e}", level="ERROR")
-                    self.journal_written_today = True; self._save_state()
-                if self.open_positions: self._log_message(f"Open Positions ({len(self.open_positions)}): {list(self.open_positions.keys())}", level="DEBUG") # DEBUG level
-                time.sleep(self.loop_sleep_seconds)
-        except KeyboardInterrupt: self._log_message("Strategy stopped by user.")
-        except Exception as e: self._log_message(f"Critical error in main loop: {e}", level="ERROR"); traceback.print_exc()
+                now_ist = datetime.now(IST)
+                session_times = self._get_next_market_session_times(now_ist) # Assumes this method is now part of BaseStrategy
+
+                # Define the window for active trading day operations
+                # Market open today (from strategy_start_time_str)
+                # active_window_start_dt = session_times['market_open_today'] # This is the actual strategy start time
+                # Market close today (from strategy_end_time_str) + buffer
+                active_window_end_dt = session_times['market_close_today'] + timedelta(minutes=EOD_PROCESSING_BUFFER_MINUTES)
+
+                # Determine if we are in the "active period" of a trading day
+                # Active period: from PRE_MARKET_WAKEUP_MINUTES before market_open_today until active_window_end_dt
+                is_active_period = False
+                if session_times['is_trading_day_today']:
+                    # Calculate when to start active processing for today
+                    start_active_processing_dt = session_times['market_open_today'] - timedelta(minutes=PRE_MARKET_WAKEUP_MINUTES)
+                    if now_ist >= start_active_processing_dt and now_ist < active_window_end_dt:
+                        is_active_period = True
+
+                if is_active_period:
+                    # --- ACTIVE TRADING DAY WINDOW ---
+                    ts = self._get_time_status() # Contains now_ist, now_time, is_mkt_open, is_entry_active etc.
+
+                    # Heartbeat log - only if entry window is active, or if positions are open, to reduce noise
+                    if ts.get('is_entry_active') or self.open_positions: # Check if self.open_positions is not empty
+                        self._log_message(f"Main loop iteration. Entry active: {ts.get('is_entry_active', False)}. Open Positions: {len(self.open_positions)}", level="INFO")
+
+                    # Handle new trading day logic
+                    if self.current_trading_day_date is None or now_ist.date() != self.current_trading_day_date:
+                        self._log_message(f"New trading day: {now_ist.date()}. Resetting daily flags.")
+                        self.journal_written_today = False
+                        self.current_trading_day_date = now_ist.date()
+                        # Potentially reset other daily states if necessary (e.g., daily trade counters)
+                        self._save_state()
+
+                    self._check_for_manual_exits()
+
+                    data_cache = {}
+                    active_syms_for_data = {stock_cfg['symbol']+"_"+stock_cfg['exchange'] for stock_cfg in self.stock_configs}
+                    active_syms_for_data.update(self.open_positions.keys())
+
+                    if active_syms_for_data:
+                        hist_start_date_str = (now_ist - timedelta(days=self.history_days_to_fetch)).strftime('%Y-%m-%d')
+                        hist_end_date_str = now_ist.strftime('%Y-%m-%d')
+                        for sym_key in active_syms_for_data:
+                            s, e = sym_key.split('_')
+                            data_cache[sym_key] = self._get_historical_data(s, e, self.timeframe, hist_start_date_str, hist_end_date_str)
+
+                    self._manage_open_positions(ts, data_cache)
+                    self._evaluate_new_entries(ts, data_cache)
+
+                    journaling_time_obj = datetime.strptime(self.journaling_time_str, "%H:%M").time()
+                    if now_ist.time() >= journaling_time_obj and not self.journal_written_today:
+                        if self.trades_to_journal_today:
+                            self._log_message(f"EOD journaling for {len(self.trades_to_journal_today)} trades.")
+                            try:
+                                # Assuming trade_journaler is imported
+                                count_journaled = trade_journaler.process_and_write_completed_trades_to_csv(self.openalgo_client, self.trades_to_journal_today)
+                                # Only clear if journaling was successful or if no error handling implies it.
+                                # For safety, let's assume it processes what it can.
+                                if count_journaled > 0 or not self.trades_to_journal_today : # if some were journaled or list is now empty
+                                     self.trades_to_journal_today = [t for t in self.trades_to_journal_today if not t.get('_journaled_successfully')] # Example if journaler marks them
+                                # A simpler clear if journaler handles its own state:
+                                # self.trades_to_journal_today = []
+                            except Exception as e_journal:
+                                self._log_message(f"EOD journaling error: {e_journal}", level="ERROR")
+                        self.journal_written_today = True # Mark true even if trades_to_journal was empty or failed, to prevent re-attempts this cycle.
+                        self._save_state()
+
+                    if self.open_positions and not ts.get('is_entry_active', False):
+                        self._log_message(f"Open Positions status: {list(self.open_positions.keys())}", level="DEBUG")
+
+                    time.sleep(self.loop_sleep_seconds)
+
+                else:
+                    # --- DEEP SLEEP WINDOW ---
+                    # Target to wake up a bit before the next session's actual strategy_start_time
+                    # next_session_open_dt is the strategy_start_time for the next valid day
+                    wake_up_target_dt = session_times['next_session_open_dt'] - timedelta(minutes=PRE_MARKET_WAKEUP_MINUTES)
+
+                    sleep_duration_seconds = (wake_up_target_dt - now_ist).total_seconds()
+
+                    if sleep_duration_seconds > 0: # Only sleep if target is in the future
+                        # Cap sleep duration at a max reasonable value (e.g., 24 hours) to prevent extremely long sleeps if logic error
+                        max_sleep = 7 * 24 * 60 * 60 # Max sleep capped at 7 days as a safety measure
+                        sleep_duration_seconds = min(sleep_duration_seconds, max_sleep)
+
+                        # Only perform a long sleep if it's significantly longer than the normal loop_sleep_seconds
+                        if sleep_duration_seconds > self.loop_sleep_seconds * 2: # e.g. more than 2 normal cycles
+                            self._log_message(f"Entering deep sleep. Current: {now_ist.strftime('%Y-%m-%d %H:%M:%S')}. Target wake-up: {wake_up_target_dt.strftime('%Y-%m-%d %H:%M:%S')}. Sleeping for {sleep_duration_seconds / 3600:.2f} hours.", level="INFO")
+                            time.sleep(sleep_duration_seconds)
+                        else:
+                            # If calculated sleep is short, just do a normal loop_sleep to re-evaluate soon.
+                            # This handles the period just before wake_up_target_dt.
+                            time.sleep(self.loop_sleep_seconds)
+                    else:
+                        # If sleep_duration_seconds is zero or negative (i.e., wake_up_target_dt is now or in the past),
+                        # do a short sleep to quickly re-enter the loop and transition to active period.
+                        self._log_message(f"Wake-up time reached or past. Current: {now_ist}, Target Wake: {wake_up_target_dt}. Short sleep and re-evaluating.", level="DEBUG")
+                        time.sleep(min(self.loop_sleep_seconds, 5)) # Sleep for a very short time or normal loop, whichever is smaller
+
+        except KeyboardInterrupt:
+            self._log_message("Strategy stopped by user.")
+        except Exception as e:
+            self._log_message(f"Critical error in main loop: {e}", level="ERROR")
+            import traceback # Import here for use
+            self._log_message(f"Traceback: {traceback.format_exc()}", level="ERROR")
         finally:
             self._log_message("Attempting final save state..."); self._save_state()
             if self.ws_url and self.ws_connected: self._disconnect_websocket()
