@@ -587,6 +587,8 @@ class BaseStrategy:
         try:
             while True:
                 ts = self._get_time_status()
+                self._log_message(f"Main loop iteration. Entry active: {ts.get('is_entry_active', False)}", level="INFO") # Added line
+
                 if self.current_trading_day_date is None or ts["now_ist"].date() != self.current_trading_day_date:
                     self._log_message(f"New trading day: {ts['now_ist'].date()}. Resetting flags.")
                     self.journal_written_today = False; self.current_trading_day_date = ts["now_ist"].date(); self._save_state()
