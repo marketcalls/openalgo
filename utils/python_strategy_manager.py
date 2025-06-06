@@ -108,7 +108,7 @@ def activate_strategy(strategy_file):
         log_dir = os.path.join(STRATEGY_LIVE_DIR, 'logs')
         os.makedirs(log_dir, exist_ok=True)
         log_file_path = os.path.join(log_dir, f"{strategy_file.replace('.py', '')}.log")
-        with open(log_file_path, 'ab') as log_file:
+        with open(log_file_path, 'a') as log_file:
             process = subprocess.Popen(
                 [PYTHON_EXECUTABLE, strategy_path], cwd=STRATEGY_LIVE_DIR,
                 stdout=log_file, stderr=log_file,
