@@ -6,7 +6,7 @@ from base_strategy import BaseStrategy # Import from the same directory
 # ==============================================================================
 
 # --- Core Identity & API ---
-STRATEGY_NAME_SPECIFIC = "PeriodRangeBreakout_HL_V1_Short_Configured" # Unique name
+STRATEGY_NAME_SPECIFIC = "breakout_2nd_stage_short" # Unique name
 API_KEY_SPECIFIC = 'e63a38807f01fb12d5e71d614f4b236be789f94306d631426686c4cd1a4b8bc7'  # <<< USER: REPLACE THIS!
 HOST_URL_SPECIFIC = 'http://127.0.0.1:5000'
 STOCKS_CSV_NAME_SPECIFIC = "stocks.csv" # Relative to strategies folder
