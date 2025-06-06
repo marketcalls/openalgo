@@ -730,7 +730,7 @@ class BaseStrategy:
         self._log_message(f"Strategy '{self.strategy_name}' started. Params loaded. Journaling: ~{self.journaling_time_str} IST.")
 
         EOD_PROCESSING_BUFFER_MINUTES = 30 # How long after market_close_today to keep running normal loop
-        PRE_MARKET_WAKEUP_MINUTES = 2    # How many minutes before strategy_start_time to wake up for next session
+        PRE_MARKET_WAKEUP_MINUTES = 7    # How many minutes before strategy_start_time to wake up for next session
 
         try:
             while True:
@@ -817,7 +817,7 @@ class BaseStrategy:
 
                     if sleep_duration_seconds > 0: # Only sleep if target is in the future
                         # Cap sleep duration at a max reasonable value (e.g., 24 hours) to prevent extremely long sleeps if logic error
-                        max_sleep = 24 * 60 * 60
+                        max_sleep = 7 * 24 * 60 * 60 # Max sleep capped at 7 days as a safety measure
                         sleep_duration_seconds = min(sleep_duration_seconds, max_sleep)
 
                         # Only perform a long sleep if it's significantly longer than the normal loop_sleep_seconds
