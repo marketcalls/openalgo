@@ -1,0 +1,18 @@
+{
+    "product_type": "MIS",
+    "timeframe": "5m",
+    "strategy_start_time_str": "09:20",
+    "strategy_end_time_str": "15:10",
+    "journaling_time_str": "15:31",
+    "re_entry_wait_minutes": 30,
+    "history_days_to_fetch": 15,
+    "loop_sleep_seconds": 60,
+    "use_stoploss": true,
+    "stoploss_percent": 1.0,
+    "use_target": true,
+    "target_percent": 1.5,
+    "order_confirmation_attempts": 5,
+    "order_confirmation_delay_seconds": 2,
+    "ENTRY_LOOKBACK": 7,
+    "EXIT_LOOKBACK": 30
+}
