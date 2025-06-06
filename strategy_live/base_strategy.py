@@ -432,7 +432,7 @@ class BaseStrategy:
         is_mkt_open = mkt_o <= now_time <= mkt_c
         return {"now_ist": now_ist, "now_time": now_time, "is_mkt_open": is_mkt_open,
                 "is_entry_active": is_mkt_open and strat_s <= now_time < strat_e,
-                "is_mis_sq_off": is_mkt_open and product_type == "MIS" and now_time >= strat_e, # check product_type
+                "is_mis_sq_off": is_mkt_open and self.product_type == "MIS" and now_time >= strat_e, # check product_type
                 "is_journal_time": now_time >= journal_t}
 
     def _attempt_exit_position(self, symbol_key, reason, pos_details_orig):

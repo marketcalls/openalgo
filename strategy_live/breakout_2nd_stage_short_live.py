@@ -12,7 +12,7 @@ HOST_URL_SPECIFIC = 'http://127.0.0.1:5000'
 STOCKS_CSV_NAME_SPECIFIC = "stocks.csv" # Relative to strategies folder
 
 # --- Base Strategy Timing & Operational Parameters ---
-PRODUCT_TYPE_SPECIFIC = "CNC"
+PRODUCT_TYPE_SPECIFIC = "MIS"
 TIMEFRAME_SPECIFIC = "5m"
 STRATEGY_START_TIME_SPECIFIC = "09:20"
 STRATEGY_END_TIME_SPECIFIC = "15:10" # For MIS square-off & entry window end
