@@ -465,10 +465,103 @@ class BaseStrategy:
             're_entry_wait_minutes', 'use_stoploss', 'stoploss_percent', 'use_target', 'target_percent']}
         return {**base_params, **self.strategy_specific_params}
 
-    def _check_for_manual_exits(self): # Simplified for brevity in this pass
-        if not self.open_positions: return
-        # ... (existing logic for manual exit check would go here) ...
-        pass # Placeholder
+    def _check_for_manual_exits(self):
+        if not self.open_positions:
+            return
+
+        try:
+            broker_positions_response = self.openalgo_client.positionbook()
+            if not broker_positions_response or broker_positions_response.get('status') != 'success' or 'data' not in broker_positions_response:
+                self._log_message(f"Could not fetch or failed to parse position book for manual exit check. Response: {broker_positions_response}", level="WARNING")
+                return
+
+            live_broker_positions = {}
+            # Example: {'VERANDA_NSE_MIS': -2.0, 'SUNFLAG_NSE_CNC': 1.0}
+            for pos in broker_positions_response['data']:
+                try:
+                    # Ensure quantity is a float, default to 0.0 if not convertible or missing
+                    qty = float(pos.get('quantity', 0.0))
+                    # Normalize symbol and exchange to uppercase to match internal format
+                    symbol = pos.get('symbol', '').upper()
+                    exchange = pos.get('exchange', '').upper()
+                    product = pos.get('product', '').upper() # Product type from broker
+
+                    if not symbol or not exchange or not product: # Skip if essential fields are missing
+                        self._log_message(f"Skipping broker position due to missing symbol/exchange/product: {pos}", level="WARNING")
+                        continue
+
+                    # Key by symbol_exchange_product to uniquely identify positions
+                    broker_pos_key = f"{symbol}_{exchange}_{product}"
+                    live_broker_positions[broker_pos_key] = qty
+                except ValueError:
+                    self._log_message(f"Could not convert quantity to float for broker position: {pos}. Skipping.", level="WARNING")
+                    continue
+                except Exception as inner_e: # Catch any other unexpected error during pos processing
+                    self._log_message(f"Unexpected error processing single broker position {pos}: {inner_e}", level="WARNING")
+                    continue
+
+            self._log_message(f"Live broker positions for reconciliation: {live_broker_positions}", level="DEBUG")
+
+            state_changed = False
+            # Iterate over a copy of items for safe removal from self.open_positions
+            for internal_pos_key, details in list(self.open_positions.items()):
+                # internal_pos_key is typically 'SYMBOL_EXCHANGE'
+                # details contains 'product', 'quantity', etc.
+
+                internal_symbol, internal_exchange = internal_pos_key.split('_')
+                # Use the product type stored with the position when it was opened by the strategy
+                internal_product = details.get('product', self.product_type).upper()
+
+                # Construct the key to match how live_broker_positions are keyed
+                broker_check_key = f"{internal_symbol}_{internal_exchange}_{internal_product}"
+
+                # Get the quantity from the broker. If the specific key (symbol_exchange_product)
+                # is not found, it means the position for that specific product type is not there, so qty is 0.
+                broker_qty = live_broker_positions.get(broker_check_key, 0.0)
+
+                if broker_qty == 0.0:
+                    # Position exists internally but is reported as zero or missing at broker for that specific product type.
+                    self._log_message(f"Position for {broker_check_key} (Internal Qty: {details.get('quantity')}) found closed/missing at broker (Broker Qty: {broker_qty}). Reconciling as manual exit.", level="INFO")
+
+                    # Prepare journal entry
+                    # Ensure datetime is imported: from datetime import datetime (should be at top of file)
+                    journal_entry_for_exit = {
+                        **(details.get('journal_data', {})), # Carry over entry data
+                        'exit_order_id': 'MANUAL_OR_EXTERNAL_EXIT', # Placeholder for order ID
+                        'exit_decision_timestamp_ist': datetime.now(IST), # Use current time
+                        'exit_reason': 'Position closed externally at broker or quantity became zero',
+                        # Actual exit price from manual closure is unknown here.
+                        # LTP could be fetched, but might not reflect actual exit price.
+                        'intended_exit_price': None # Or details.get('entry_price') as a rough placeholder
+                    }
+                    self.trades_to_journal_today.append(journal_entry_for_exit)
+
+                    # Clean up internal state
+                    if internal_pos_key in self.open_positions: # Check if not already removed by another logic path
+                        del self.open_positions[internal_pos_key]
+
+                    self.exited_stocks_cooldown[internal_pos_key] = datetime.now(IST) # Use the 'SYMBOL_EXCHANGE' key for cooldown
+
+                    # Unsubscribe from WebSocket if needed
+                    if self.ws_connected and hasattr(self, '_unsubscribe_ws'): # Check if method exists
+                        self._unsubscribe_ws([{"exchange": internal_exchange, "symbol": internal_symbol}])
+
+                    state_changed = True
+                # else if details.get('quantity') != broker_qty:
+                    # Optional: Handle partial manual exits if broker_qty is different but not zero.
+                    # self._log_message(f"Position for {broker_check_key} quantity mismatch. Internal: {details.get('quantity')}, Broker: {broker_qty}. Adjusting.", level="INFO")
+                    # self.open_positions[internal_pos_key]['quantity'] = broker_qty # Or handle as per strategy logic
+                    # state_changed = True
+
+
+            if state_changed:
+                self._log_message("Internal state updated due to manual/external position changes.", level="INFO")
+                self._save_state()
+
+        except Exception as e:
+            self._log_message(f"Error in _check_for_manual_exits: {e}", level="ERROR")
+            # import traceback # Optional: for more detailed debugging during development
+            # self._log_message(f"Traceback for _check_for_manual_exits: {traceback.format_exc()}", level="ERROR")
 
     def get_strategy_description(self):
         return "No specific description provided. Defined in code." # Override in derived
