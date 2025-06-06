@@ -388,7 +388,7 @@ class BaseStrategy:
         try:
             self._log_message(f"Placing {action} order: {symbol} Qty:{quantity} Prod:{product} Type:{price_type}")
             params = {"strategy": self.strategy_name, "symbol": symbol, "action": action.upper(), "exchange": exchange,
-                      "price_type": price_type.upper(), "product": product.upper(), "quantity": str(quantity),
+                      "price_type": price_type.upper(), "product": product.upper(), "quantity": str(int(float(quantity))),
                       "price": str(price) if price_type.upper() == "LIMIT" else "0",
                       "trigger_price": str(trigger_price) if float(trigger_price) > 0 else "0"}
             self._log_message(f"Placing order: {params}")
@@ -499,8 +499,6 @@ class BaseStrategy:
                 except Exception as inner_e: # Catch any other unexpected error during pos processing
                     self._log_message(f"Unexpected error processing single broker position {pos}: {inner_e}", level="WARNING")
                     continue
-
-            self._log_message(f"Live broker positions for reconciliation: {live_broker_positions}", level="DEBUG")
 
             state_changed = False
             # Iterate over a copy of items for safe removal from self.open_positions
