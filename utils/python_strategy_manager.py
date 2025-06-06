@@ -110,7 +110,7 @@ def activate_strategy(strategy_file):
         log_file_path = os.path.join(log_dir, f"{strategy_file.replace('.py', '')}.log")
         with open(log_file_path, 'a') as log_file:
             process = subprocess.Popen(
-                [PYTHON_EXECUTABLE, strategy_path], cwd=STRATEGY_LIVE_DIR,
+                [PYTHON_EXECUTABLE, "-u", strategy_path], cwd=STRATEGY_LIVE_DIR,
                 stdout=log_file, stderr=log_file,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
                 start_new_session=True if os.name != 'nt' else False)
