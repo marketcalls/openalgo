@@ -10,7 +10,7 @@ import time
 import os
 from typing import Dict, Set, Any, Optional
 from dotenv import load_dotenv
-
+from datetime import datetime
 from .port_check import is_port_in_use, find_available_port
 from database.auth_db import get_broker_name
 from sqlalchemy import text
@@ -770,7 +770,8 @@ class WebSocketProxy:
             try:
                 # Receive message from ZeroMQ with a timeout
                 try:
-                    [topic, data] = await aio.wait_for(
+                    # Handle both single-part and multi-part messages
+                    message_parts = await aio.wait_for(
                         self.socket.recv_multipart(),
                         timeout=0.1
                     )
@@ -778,49 +779,140 @@ class WebSocketProxy:
                     # No message received within timeout, continue the loop
                     continue
                 
-                # Parse the message
-                topic_str = topic.decode('utf-8')
-                data_str = data.decode('utf-8')
-                market_data = json.loads(data_str)
-                
-                # Extract topic components
-                # Support both formats:
-                # New format: BROKER_EXCHANGE_SYMBOL_MODE (with broker name)
-                # Old format: EXCHANGE_SYMBOL_MODE (without broker name)
-                # Special case: NSE_INDEX_SYMBOL_MODE (exchange contains underscore)
-                parts = topic_str.split('_')
-                
-                # Special case handling for NSE_INDEX and BSE_INDEX
-                if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "NSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "BSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
-                    broker_name = parts[0]
-                    exchange = f"{parts[1]}_{parts[2]}"
-                    symbol = parts[3]
-                    mode_str = parts[4]
-                elif len(parts) >= 4:
-                    # Standard format with broker name
-                    broker_name = parts[0]
-                    exchange = parts[1]
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 3:
-                    # Old format without broker name
-                    broker_name = "unknown"
-                    exchange = parts[0]
-                    symbol = parts[1] 
-                    mode_str = parts[2]
+                # Handle different message formats
+                if len(message_parts) == 1:
+                    # Single part message - could be a JSON string or other format
+                    try:
+                        # Try to parse as JSON
+                        message_data = json.loads(message_parts[0].decode('utf-8'))
+                        
+                        # Check if this is an order update
+                        if isinstance(message_data, dict) and 'order_id' in message_data:
+                            # This looks like an order update
+                            await self._handle_order_update(message_data)
+                            continue
+                            
+                        # If we get here, we don't recognize the message format
+                        logger.warning(f"Unhandled single-part message format: {message_parts[0]}")
+                        continue
+                        
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received non-JSON single-part message: {message_parts[0]}")
+                        continue
+                        
+                elif len(message_parts) == 2:
+                    # Two-part message - topic and data
+                    topic = message_parts[0].decode('utf-8')
+                    try:
+                        data = json.loads(message_parts[1].decode('utf-8'))
+                    except json.JSONDecodeError:
+                        logger.warning(f"Could not decode message data as JSON: {message_parts[1]}")
+                        continue
+                        
+                    # Handle different topic types
+                    if topic == 'order_updates' or topic.endswith('.orders'):
+                        await self._handle_order_update(data)
+                        continue
+                    elif topic == 'ticks' or topic.endswith('.ticks'):
+                        await self._handle_market_data(topic, data, mode_str='QUOTE')
+                        continue
+                    elif topic == 'depth' or topic.endswith('.depth'):
+                        await self._handle_market_data(topic, data, mode_str='DEPTH')
+                        continue
+                    
+                    # If we get here, handle as a market data message with topic components
+                    await self._handle_market_data_message(topic, data)
+                    
                 else:
-                    logger.warning(f"Invalid topic format: {topic_str}")
+                    logger.warning(f"Received message with {len(message_parts)} parts, expected 1 or 2")
                     continue
+                
+            except Exception as e:
+                logger.error(f"Error in ZeroMQ listener: {e}", exc_info=True)
+                # Continue running despite errors
+                await aio.sleep(1)
+                
+    async def _handle_order_update(self, order_data):
+        """Handle order update messages"""
+        try:
+            # Forward to all authenticated clients
+            for client_id in list(self.clients.keys()):
+                if client_id in self.user_mapping:  # Only send to authenticated clients
+                    try:
+                        await self.send_message(client_id, {
+                            "type": "order_update",
+                            "data": order_data,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Error sending order update to client {client_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error processing order update: {e}", exc_info=True)
+            
+    async def _handle_market_data(self, topic, data, mode_str):
+        """Handle market data messages with explicit mode"""
+        try:
+            # Extract broker name from topic if possible (format: broker.user_id.ticks)
+            broker_name = "unknown"
+            if '.' in topic:
+                broker_name = topic.split('.')[0]
+                
+            # Forward to all authenticated clients
+            for client_id in list(self.clients.keys()):
+                if client_id in self.user_mapping:  # Only send to authenticated clients
+                    try:
+                        await self.send_message(client_id, {
+                            "type": "market_data",
+                            "symbol": data.get('symbol') or data.get('tradingsymbol', ''),
+                            "exchange": data.get('exchange', ''),
+                            "mode": mode_str,
+                            "broker": broker_name,
+                            "data": data,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Error sending market data to client {client_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error processing market data: {e}", exc_info=True)
+            
+    async def _handle_market_data_message(self, topic, data):
+        """Handle market data messages with topic components"""
+        try:
+            topic_str = topic
+            # Extract topic components
+            parts = topic_str.split('_')
+            
+            # Special case handling for NSE_INDEX and BSE_INDEX
+            if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
+                broker_name = "unknown"
+                exchange = "NSE_INDEX"
+                symbol = parts[2]
+                mode_str = parts[3]
+            elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
+                broker_name = "unknown"
+                exchange = "BSE_INDEX"
+                symbol = parts[2]
+                mode_str = parts[3]
+            elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
+                broker_name = parts[0]
+                exchange = f"{parts[1]}_{parts[2]}"
+                symbol = parts[3]
+                mode_str = parts[4]
+            elif len(parts) >= 4:
+                # Standard format with broker name
+                broker_name = parts[0]
+                exchange = parts[1]
+                symbol = parts[2]
+                mode_str = parts[3]
+            elif len(parts) >= 3:
+                # Old format without broker name
+                broker_name = "unknown"
+                exchange = parts[0]
+                symbol = parts[1] 
+                mode_str = parts[2]
+            else:
+                logger.warning(f"Invalid topic format: {topic_str}")
+                return
                 
                 # Map mode string to mode number
                 mode_map = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
@@ -828,7 +920,7 @@ class WebSocketProxy:
                 
                 if not mode:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
-                    continue
+                    return
                 
                 # Find clients subscribed to this data
                 for client_id, subscriptions in self.subscriptions.items():
@@ -854,22 +946,23 @@ class WebSocketProxy:
                                  (mode_str == "DEPTH" and sub.get("mode") == 3))):
                                 
                                 # Forward data to the client
-                                await self.send_message(client_id, {
-                                    "type": "market_data",
-                                    "symbol": symbol,
-                                    "exchange": exchange,
-                                    "mode": mode,
-                                    "broker": broker_name if broker_name != "unknown" else client_broker,
-                                    "data": market_data
-                                })
+                                try:
+                                    await self.send_message(client_id, {
+                                        "type": "market_data",
+                                        "symbol": symbol,
+                                        "exchange": exchange,
+                                        "mode": mode,
+                                        "broker": broker_name if broker_name != "unknown" else client_broker,
+                                        "data": data,
+                                        "timestamp": datetime.now().isoformat()
+                                    })
+                                except Exception as e:
+                                    logger.error(f"Error sending market data to client {client_id}: {e}")
                         except json.JSONDecodeError as e:
                             logger.error(f"Error parsing subscription: {sub_json}, Error: {e}")
                             continue
-            
-            except Exception as e:
-                logger.error(f"Error in ZeroMQ listener: {e}")
-                # Continue running despite errors
-                await aio.sleep(1)
+        except Exception as e:
+            logger.error(f"Error in _handle_market_data_message: {e}", exc_info=True)
 
 # Entry point for running the server standalone
 async def main():

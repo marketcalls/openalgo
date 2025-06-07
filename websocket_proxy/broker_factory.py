@@ -18,6 +18,13 @@ def register_adapter(broker_name: str, adapter_class: Type[BaseBrokerWebSocketAd
         adapter_class: Class that implements the BaseBrokerWebSocketAdapter interface
     """
     BROKER_ADAPTERS[broker_name.lower()] = adapter_class
+
+# --- Register Flattrade Adapter ---
+try:
+    from broker.flattrade.streaming.flattrade_adapter import FlattradeStreamAdapter
+    register_adapter("flattrade", FlattradeStreamAdapter)
+except ImportError as e:
+    logger.warning(f"Could not import FlattradeStreamAdapter: {e}")
     
 
 def create_broker_adapter(broker_name: str) -> Optional[BaseBrokerWebSocketAdapter]:
