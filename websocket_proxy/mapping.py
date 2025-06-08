@@ -1,3 +1,4 @@
+import logging
 from utils.openalgo_logger import get_logger
 from database.token_db import get_token, get_brexchange
 from database.symbol import SymToken
