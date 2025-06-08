@@ -1,6 +1,7 @@
 import os
 import sys
 from dotenv import load_dotenv
+from utils.openalgo_logger import get_logger
 
 def load_and_check_env_variables():
     # Define the path to the .env file in the main application path
@@ -8,8 +9,10 @@ def load_and_check_env_variables():
 
     # Check if the .env file exists
     if not os.path.exists(env_path):
-        print("Error: .env file not found at the expected location.")
-        print("\nSolution: Copy .sample.env to .env and configure your settings")
+        # Use basic logging since our logger system isn't initialized yet
+        logger = get_logger(__name__)
+        logger.error(".env file not found at the expected location")
+        logger.error("Solution: Copy .sample.env to .env and configure your settings")
         sys.exit(1)
 
     # Load environment variables from the .env file with override=True to ensure values are updated
@@ -44,8 +47,10 @@ def load_and_check_env_variables():
 
     if missing_vars:
         missing_list = ', '.join(missing_vars)
-        print(f"Error: The following environment variables are missing: {missing_list}")
-        print("\nSolution: Check .sample.env for the latest configuration format")
+        # Use centralized logging
+        logger = get_logger(__name__)
+        logger.error(f"The following environment variables are missing: {missing_list}")
+        logger.error("Solution: Check .sample.env for the latest configuration format")
         sys.exit(1)
 
     # Validate environment variable values

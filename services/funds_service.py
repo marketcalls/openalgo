@@ -1,12 +1,11 @@
 import importlib
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 from typing import Tuple, Dict, Any, Optional, Union
 from database.auth_db import get_auth_token_broker
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
     """

@@ -2,7 +2,7 @@ from flask_restx import Namespace, Resource, fields
 from flask import request, jsonify, make_response
 from limiter import limiter
 import os
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 
 from services.place_order_service import place_order
@@ -11,8 +11,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('place_order', description='Place Order API')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # All functionality moved to place_order_service.py
 

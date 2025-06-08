@@ -2,6 +2,10 @@
 from utils.env_check import load_and_check_env_variables  # Import the environment check function
 load_and_check_env_variables()
 
+# Initialize logging system early
+from utils.openalgo_logger import get_logger
+logger = get_logger(__name__)
+
 from flask import Flask, render_template
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
@@ -50,6 +54,7 @@ import os
 
 def create_app():
     # Initialize Flask application
+    logger.info("Initializing OpenAlgo Flask application")
     app = Flask(__name__)
 
     # Initialize SocketIO
@@ -156,8 +161,8 @@ def create_app():
     @app.errorhandler(500)
     def internal_server_error(e):
         """Custom handler for 500 Internal Server Error"""
-        # Log the error (optional)
-        app.logger.error(f"Server Error: {e}")
+        # Log the error using centralized logging
+        logger.error(f"Internal server error occurred: {e}", exc_info=True)
 
         # Provide a logout option
         return render_template("500.html"), 500
@@ -169,10 +174,13 @@ def create_app():
     return app
 
 def setup_environment(app):
+    logger.info("Setting up OpenAlgo environment")
     with app.app_context():
         #load broker plugins
+        logger.info("Loading broker plugins")
         app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
+        logger.info("Initializing database tables")
         ensure_auth_tables_exists()
         ensure_user_tables_exists()
         ensure_master_contract_tables_exists()
@@ -183,12 +191,14 @@ def setup_environment(app):
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
         ensure_strategy_tables_exists()
+        logger.info("Database initialization completed")
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
-        print(" * ngrok URL: " + public_url + " *")
+        from utils.openalgo_logger import log_with_context
+        log_with_context(logger, 'info', "ngrok tunnel established", url=public_url)
 
 app = create_app()
 
@@ -196,6 +206,7 @@ app = create_app()
 setup_environment(app)
 
 # Integrate the WebSocket proxy server with the Flask app
+logger.info("Starting WebSocket proxy server")
 start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
@@ -205,4 +216,6 @@ if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
+    from utils.openalgo_logger import log_with_context
+    log_with_context(logger, 'info', "Starting OpenAlgo server", host=host_ip, port=port, debug=debug)
     socketio.run(app, host=host_ip, port=port, debug=debug)

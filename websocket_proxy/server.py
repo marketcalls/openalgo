@@ -1,7 +1,7 @@
 import asyncio as aio
 import websockets
 import json
-import logging
+from utils.openalgo_logger import get_logger
 import signal
 import zmq
 import zmq.asyncio
@@ -19,9 +19,7 @@ from .broker_factory import create_broker_adapter
 from .base_adapter import BaseBrokerWebSocketAdapter
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("websocket_proxy")
+logger = get_logger("websocket_proxy")
 
 class WebSocketProxy:
     """
@@ -875,9 +873,6 @@ class WebSocketProxy:
 async def main():
     """Main entry point for running the WebSocket proxy server"""
     # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
     # Load environment variables

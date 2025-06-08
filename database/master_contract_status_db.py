@@ -3,9 +3,9 @@ from sqlalchemy import create_engine, Column, String, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
-import logging
+from utils.openalgo_logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Get the database path from environment variable or use default
 DB_PATH = os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')

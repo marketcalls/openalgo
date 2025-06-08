@@ -1,6 +1,6 @@
 import asyncio
 import threading
-import logging
+from utils.openalgo_logger import get_logger
 import sys
 import platform
 import os
@@ -15,7 +15,7 @@ if platform.system() == 'Windows':
 # Used to prevent multiple instances in Flask debug mode
 _websocket_server_started = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Check if we're in the Flask child process that should start the WebSocket server
 def should_start_websocket():

@@ -4,7 +4,7 @@ from marshmallow import ValidationError
 from limiter import limiter
 import os
 import traceback
-import logging
+from utils.openalgo_logger import get_logger
 
 from .data_schemas import SymbolSchema
 from services.symbol_service import get_symbol_info
@@ -13,8 +13,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('symbol', description='Symbol information API')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize schema
 symbol_schema = SymbolSchema()

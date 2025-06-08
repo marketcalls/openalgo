@@ -1,5 +1,5 @@
 import importlib
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 import copy
 import time
@@ -20,8 +20,7 @@ from utils.constants import (
 )
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Smart order delay
 SMART_ORDER_DELAY = "0.5"  # Default value, can be overridden by environment variable

@@ -1,4 +1,4 @@
-import logging
+from utils.openalgo_logger import get_logger
 from datetime import datetime, timedelta
 import pytz
 from database.analyzer_db import AnalyzerLog, db_session
@@ -24,7 +24,7 @@ from utils.constants import (
     DEFAULT_DISCLOSED_QUANTITY
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global variable to track order sequence
 _order_sequence = 0

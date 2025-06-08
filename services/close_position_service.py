@@ -1,5 +1,5 @@
 import importlib
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional
@@ -12,8 +12,7 @@ from extensions import socketio
 from utils.api_analyzer import analyze_request
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """

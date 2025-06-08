@@ -6,7 +6,7 @@ from limiter import limiter
 import os
 import importlib
 import traceback
-import logging
+from utils.openalgo_logger import get_logger
 import pandas as pd
 from datetime import datetime, timezone
 import pytz
@@ -17,8 +17,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('ticker', description='Stock Ticker Data API')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize schema
 ticker_schema = TickerSchema()

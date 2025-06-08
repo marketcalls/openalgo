@@ -1,5 +1,5 @@
 import socket
-import logging
+from utils.openalgo_logger import get_logger
 
 logger = logging.getLogger("websocket_proxy")
 

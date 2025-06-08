@@ -3,10 +3,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import os
-import logging
+from utils.openalgo_logger import get_logger
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Use a separate database for latency logs
 LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'

@@ -6,9 +6,9 @@ from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
 from collections import OrderedDict
 import os
-import logging
+from utils.openalgo_logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 host = os.getenv('HOST_SERVER')
 

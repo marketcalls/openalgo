@@ -1,10 +1,10 @@
 import importlib
-import logging
+from utils.openalgo_logger import get_logger
 from typing import Dict, Type, Optional
 
 from .base_adapter import BaseBrokerWebSocketAdapter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Registry of all supported broker adapters
 BROKER_ADAPTERS: Dict[str, Type[BaseBrokerWebSocketAdapter]] = {}

@@ -3,13 +3,13 @@ from database.traffic_db import TrafficLog, logs_session
 from utils.session import check_session_validity
 from limiter import limiter
 from sqlalchemy import func
-import logging
+from utils.openalgo_logger import get_logger
 from datetime import datetime
 import pytz
 import csv
 import io
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 traffic_bp = Blueprint('traffic_bp', __name__, url_prefix='/traffic')
 

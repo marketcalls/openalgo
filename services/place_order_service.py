@@ -1,5 +1,5 @@
 import importlib
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional, List, Union
@@ -19,8 +19,7 @@ from utils.constants import (
 from restx_api.schemas import OrderSchema
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize schema
 order_schema = OrderSchema()

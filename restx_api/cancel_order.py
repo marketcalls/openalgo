@@ -3,7 +3,7 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 
 from restx_api.schemas import CancelOrderSchema
@@ -15,8 +15,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('cancel_order', description='Cancel Order API')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize schema
 cancel_order_schema = CancelOrderSchema()

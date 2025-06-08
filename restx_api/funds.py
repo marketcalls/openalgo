@@ -4,7 +4,7 @@ from marshmallow import ValidationError
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
 import os
-import logging
+from utils.openalgo_logger import get_logger
 import traceback
 
 from .account_schema import FundsSchema
@@ -14,8 +14,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('funds', description='Account Funds API')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize schema
 funds_schema = FundsSchema()

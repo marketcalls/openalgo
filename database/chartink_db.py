@@ -3,9 +3,9 @@ from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 import os
-import logging
+from utils.openalgo_logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
