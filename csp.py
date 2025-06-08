@@ -3,6 +3,9 @@
 from flask import request, current_app
 import os
 from functools import wraps
+from utils.openalgo_logger import get_logger
+
+logger = get_logger(__name__)
 
 def get_csp_config():
     """

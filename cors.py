@@ -2,6 +2,9 @@
 
 from flask_cors import CORS
 import os
+from utils.openalgo_logger import get_logger
+
+logger = get_logger(__name__)
 
 def get_cors_config():
     """

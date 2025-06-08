@@ -8,6 +8,9 @@ import os
 import re
 import glob
 from pathlib import Path
+from utils.openalgo_logger import get_logger
+
+logger = get_logger(__name__)
 
 # Patterns for sensitive data that should be masked or removed
 SENSITIVE_PATTERNS = [
@@ -139,7 +142,7 @@ def process_file(file_path):
         if 'print(' not in content:
             return None
         
-        print(f"Processing: {file_path}")
+        logger.info(f"Processing: {file_path}")
         
         # Add logger import if needed
         content = add_logger_import(file_path)
@@ -158,7 +161,7 @@ def process_file(file_path):
         }
         
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        logger.error(f"Error processing {file_path}: {e}")
         return None
 
 def main():
@@ -167,12 +170,12 @@ def main():
     
     # Find all Python files in broker directory
     python_files = []
-    for root, dirs, files in os.walk(broker_dir):
+    for root, _, files in os.walk(broker_dir):
         for file in files:
             if file.endswith('.py'):
                 python_files.append(os.path.join(root, file))
     
-    print(f"Found {len(python_files)} Python files in broker directory")
+    logger.info(f"Found {len(python_files)} Python files in broker directory")
     
     total_conversions = 0
     processed_files = []
@@ -185,18 +188,18 @@ def main():
             processed_files.append(result)
     
     # Generate summary report
-    print(f"\n=== CONVERSION SUMMARY ===")
-    print(f"Files processed: {len(processed_files)}")
-    print(f"Total conversions: {total_conversions}")
+    logger.info("\n=== CONVERSION SUMMARY ===")
+    logger.info(f"Files processed: {len(processed_files)}")
+    logger.info(f"Total conversions: {total_conversions}")
     
-    # Print detailed log for sensitive data handling
-    print(f"\n=== SENSITIVE DATA HANDLING ===")
+    # Log detailed info for sensitive data handling
+    logger.info("\n=== SENSITIVE DATA HANDLING ===")
     for result in processed_files:
         sensitive_logs = [log for log in result['log'] if log.startswith('SENSITIVE') or log.startswith('REMOVED')]
         if sensitive_logs:
-            print(f"\n{result['file']}:")
+            logger.info(f"\n{result['file']}:")
             for log in sensitive_logs:
-                print(f"  {log}")
+                logger.info(f"  {log}")
 
 if __name__ == "__main__":
     main()
