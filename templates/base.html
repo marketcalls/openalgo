@@ -226,6 +226,110 @@
         </div>
     </div>
 
+    <!-- Master Contract Status Script for Navbar -->
+    <script>
+        // Navbar Master Contract Status Controller
+        class NavbarMasterContractStatus {
+            constructor() {
+                this.led = document.getElementById('navbar-master-contract-led');
+                this.text = document.getElementById('navbar-master-contract-text');
+                this.checkInterval = null;
+                
+                if (this.led) {
+                    this.init();
+                }
+            }
+
+            init() {
+                // Check status immediately
+                this.checkStatus();
+                
+                // Set up periodic checking every 10 seconds (less frequent than dashboard)
+                this.checkInterval = setInterval(() => this.checkStatus(), 10000);
+                
+                // Listen for WebSocket events
+                if (typeof socket !== 'undefined') {
+                    socket.on('master_contract_download', (data) => {
+                        this.checkStatus();
+                    });
+                }
+            }
+
+            async checkStatus() {
+                try {
+                    const response = await fetch('/api/master-contract/status');
+                    const data = await response.json();
+                    this.updateDisplay(data);
+                } catch (error) {
+                    console.error('Error checking master contract status:', error);
+                }
+            }
+
+            updateDisplay(data) {
+                if (!this.led) return;
+                
+                const { status, total_symbols } = data;
+                
+                switch (status) {
+                    case 'success':
+                        this.led.className = 'w-2 h-2 rounded-full bg-green-500';
+                        if (this.text) {
+                            this.text.textContent = 'Ready';
+                            this.text.className = 'text-xs hidden sm:inline text-green-600';
+                        }
+                        // Clear interval once successful
+                        if (this.checkInterval) {
+                            clearInterval(this.checkInterval);
+                            this.checkInterval = null;
+                        }
+                        break;
+                        
+                    case 'downloading':
+                        this.led.className = 'w-2 h-2 rounded-full bg-yellow-500 animate-pulse';
+                        if (this.text) {
+                            this.text.textContent = 'Downloading';
+                            this.text.className = 'text-xs hidden sm:inline text-yellow-600';
+                        }
+                        break;
+                        
+                    case 'error':
+                        this.led.className = 'w-2 h-2 rounded-full bg-red-500';
+                        if (this.text) {
+                            this.text.textContent = 'Error';
+                            this.text.className = 'text-xs hidden sm:inline text-red-600';
+                        }
+                        break;
+                        
+                    case 'pending':
+                        this.led.className = 'w-2 h-2 rounded-full bg-gray-400 animate-pulse';
+                        if (this.text) {
+                            this.text.textContent = 'Pending';
+                            this.text.className = 'text-xs hidden sm:inline text-gray-600';
+                        }
+                        break;
+                        
+                    default:
+                        this.led.className = 'w-2 h-2 rounded-full bg-gray-400';
+                        if (this.text) {
+                            this.text.textContent = 'Unknown';
+                            this.text.className = 'text-xs hidden sm:inline text-gray-600';
+                        }
+                }
+            }
+
+            destroy() {
+                if (this.checkInterval) {
+                    clearInterval(this.checkInterval);
+                }
+            }
+        }
+
+        // Initialize navbar status indicator
+        document.addEventListener('DOMContentLoaded', () => {
+            window.navbarMasterContractStatus = new NavbarMasterContractStatus();
+        });
+    </script>
+
     <!-- Toast notification function -->
     <script>
         function showToast(message, type = 'info') {

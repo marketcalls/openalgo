@@ -29,6 +29,7 @@ from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
 
 from restx_api import api_v1_bp, api
 
@@ -142,6 +143,7 @@ def create_app():
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
     app.register_blueprint(strategy_bp)
+    app.register_blueprint(master_contract_status_bp)
 
     # Initialize latency monitoring (after registering API blueprint)
     with app.app_context():

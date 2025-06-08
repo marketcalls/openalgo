@@ -68,6 +68,14 @@
 
     <!-- Right Side - Mode Toggle, Theme & Profile -->
     <div class="navbar-end">
+        <!-- Master Contract Status Mini Indicator -->
+        <div class="tooltip tooltip-bottom mr-2" data-tip="Master Contract Status">
+            <div class="flex items-center gap-2 bg-base-200 rounded-lg px-3 py-2">
+                <div id="navbar-master-contract-led" class="w-2 h-2 rounded-full bg-gray-400"></div>
+                <span id="navbar-master-contract-text" class="text-xs hidden sm:inline">Checking...</span>
+            </div>
+        </div>
+        
         <!-- Mode Badge and Toggle Container -->
         <div class="mode-controller-container">
             <!-- Mode Badge -->
