@@ -3,21 +3,17 @@ import os
 import pytz
 from datetime import datetime, timedelta
 import pandas as pd
-import logging
+from utils.openalgo_logger import get_logger
 import httpx
 from typing import Dict, List, Any, Union, Optional
 import time
 from utils.httpx_client import get_httpx_client
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
-from datetime import datetime, timedelta
-import pandas as pd
-import pytz
-import logging
 
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 # API endpoints are handled by the Groww SDK
 
 # Exchange constants for Groww API

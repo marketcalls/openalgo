@@ -8,7 +8,10 @@ import shutil
 import json
 import io
 from utils.httpx_client import get_httpx_client
+from utils.openalgo_logger import get_logger
 
+# Set up logger
+logger = get_logger(__name__)
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -44,16 +47,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -68,11 +71,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -125,7 +128,7 @@ def download_csv_zerodha_data(output_path):
         except:
             pass
             
-        print(f"Error downloading Zerodha instruments: {error_message}")
+        logger.error(f"Error downloading Zerodha instruments: {error_message}")
         raise
 
 
@@ -154,7 +157,7 @@ def process_zerodha_csv(path):
     """
     Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Zerodha CSV Data")
+    logger.info("Processing Zerodha CSV Data")
     df = pd.read_csv(path)
 
     # Map exchange names
@@ -238,15 +241,15 @@ def delete_zerodha_temp_data(output_path):
         if os.path.exists(output_path):
             # Delete the file
             os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
+            logger.debug(f"The temporary file {output_path} has been deleted.")
         else:
-            print(f"The temporary file {output_path} does not exist.")
+            logger.warning(f"The temporary file {output_path} does not exist.")
     except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+        logger.error(f"An error occurred while deleting the file: {e}")
 
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp/zerodha.csv'
@@ -265,7 +268,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.error(str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

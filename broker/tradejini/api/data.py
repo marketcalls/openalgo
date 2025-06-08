@@ -2,7 +2,7 @@ import json
 import os
 import time
 import threading
-import logging
+from utils.openalgo_logger import get_logger
 import pandas as pd
 import httpx
 from datetime import datetime, timedelta
@@ -12,8 +12,7 @@ from utils.httpx_client import get_httpx_client
 from broker.tradejini.api.nxtradstream import NxtradStream
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TradejiniWebSocket:
     def __init__(self):

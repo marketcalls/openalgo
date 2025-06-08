@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """

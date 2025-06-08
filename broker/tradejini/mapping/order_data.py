@@ -1,11 +1,10 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.tradejini.mapping.transform_data import reverse_map_product_type
-import logging
+from utils.openalgo_logger import get_logger
 
 # Configure logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """

@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """
@@ -16,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.warning("No order data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
@@ -34,7 +38,7 @@ def map_order_data(order_data):
             if symbol:
                 order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.warning(f"Symbol {symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return order_data
 
@@ -91,7 +95,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         if(order.get("status", "")=="COMPLETE"):
@@ -159,7 +163,7 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.warning("No position data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data['data']['net']
@@ -177,7 +181,7 @@ def map_position_data(position_data):
             if symbol:
                 position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.warning(f"Symbol {symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return position_data
     
@@ -230,7 +234,7 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.warning("No portfolio data available.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['data']
@@ -243,7 +247,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.warning(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 

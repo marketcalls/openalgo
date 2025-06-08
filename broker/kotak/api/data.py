@@ -2,12 +2,11 @@ from .HSWebSocketLib import HSWebSocket
 import json
 import time
 import threading
-import logging
+from utils.openalgo_logger import get_logger
 import pandas as pd
 from database.token_db import get_token
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class KotakWebSocket:
     def __init__(self):

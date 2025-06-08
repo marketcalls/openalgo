@@ -1,13 +1,13 @@
 import os
 import json
 import time
-import logging
 import os
 from datetime import datetime
 import pandas as pd
 import threading
 import httpx
 from typing import Dict, List, Any, Union, Tuple, Optional
+from utils.openalgo_logger import get_logger
 from requests.exceptions import Timeout, HTTPError
 
 # Mock token map for testing
@@ -33,7 +33,8 @@ def get_token(symbol, exchange):
         # but we'll just return None for now if not in our map
         return None
     except Exception as e:
-        logging.error(f"Error getting token: {str(e)}")
+        logger = get_logger(__name__)
+        logger.error(f"Error getting token: {str(e)}")
         return None
 from datetime import datetime, timedelta
 
@@ -42,7 +43,7 @@ from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from .alicebluewebsocket import AliceBlueWebSocket
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # AliceBlue API URLs
 BASE_URL = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/"

@@ -3,14 +3,13 @@ import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.zerodha.database.master_contract_db import SymToken, db_session
-import logging
+from utils.openalgo_logger import get_logger
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ZerodhaPermissionError(Exception):
     """Custom exception for Zerodha API permission errors"""

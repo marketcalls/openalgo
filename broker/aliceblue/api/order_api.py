@@ -1,7 +1,7 @@
 import json
 import os
 import urllib.parse
-import logging
+from utils.openalgo_logger import get_logger
 import httpx
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
@@ -10,7 +10,7 @@ from broker.aliceblue.mapping.transform_data import transform_data , map_product
 from utils.config import get_broker_api_key , get_broker_api_secret
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=None):
@@ -87,7 +87,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            print(f"Error fetching order data: {position_data['emsg']}")
+            logger.error(f"Error fetching order data: {position_data['emsg']}")
             position_data = {}
     else:
         position_data = position_data
@@ -99,7 +99,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
         for position in position_data:
             if position.get('Tsym') == tradingsymbol and position.get('Exchange') == exchange and position.get('Pcode') == product:
                 net_qty = position.get('Netqty', '0')
-                print(f'Net Quantity {net_qty}')
+                logger.debug(f'Net Quantity {net_qty}')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -132,14 +132,14 @@ def place_order_api(data, auth):
         
         # Process the response
         response_data = response_data[0]
-        print(f"Place order response: {response_data}")
+        logger.debug(f"Place order response: {response_data}")
         if response_data['stat'] == 'Ok':
             orderid = response_data['NOrdNo']
         else:
             # Extract error message if present
             error_msg = response_data.get('emsg', 'No error message provided by API')
             logger.error(f"Order placement failed: {error_msg}")
-            print(f"Order placement error: {error_msg}")
+            logger.error(f"Order placement error: {error_msg}")
             orderid = None
         
         # Add status attribute to response object to match what PlaceOrder endpoint expects
@@ -179,8 +179,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    logger.debug(f"position_size : {position_size}") 
+    logger.debug(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -260,7 +260,7 @@ def close_all_positions(current_api_key,auth):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            print(f"Error fetching order data: {positions_response['emsg']}")
+            logger.error(f"Error fetching order data: {positions_response['emsg']}")
             positions_response = {}
     else:
         positions_response = positions_response
@@ -298,12 +298,12 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.debug(f"Closing position with payload: {place_order_payload}")
 
             # Place the order to close the position
             _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
-            print(api_response)
+            logger.debug(f"Close position response: {api_response}")
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -418,7 +418,7 @@ def cancel_all_orders_api(data,auth):
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response
                         if order['Status'] in ['open', 'trigger pending']]
-    print(orders_to_cancel)
+    logger.debug(f"Orders to cancel: {len(orders_to_cancel)} orders")
     canceled_orders = []
     failed_cancellations = []
 

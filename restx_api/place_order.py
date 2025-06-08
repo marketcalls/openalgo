@@ -36,8 +36,8 @@ class PlaceOrder(Resource):
             return make_response(jsonify(response_data), status_code)
             
         except Exception as e:
-            logger.error("An unexpected error occurred in PlaceOrder endpoint.")
-            traceback.print_exc()
+            logger.error(f"An unexpected error occurred in PlaceOrder endpoint: {e}")
+            logger.error(traceback.format_exc())
             error_response = {
                 'status': 'error',
                 'message': 'An unexpected error occurred in the API endpoint'

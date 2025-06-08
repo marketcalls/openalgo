@@ -1,4 +1,3 @@
-import logging
 from utils.openalgo_logger import get_logger
 from database.token_db import get_token, get_brexchange
 from database.symbol import SymToken
@@ -28,7 +27,7 @@ class ExchangeMapper:
 class SymbolMapper:
     """Maps OpenAlgo symbols to broker-specific tokens"""
     
-    logger = logging.getLogger("symbol_mapper")
+    logger = get_logger("symbol_mapper")
     
     @staticmethod
     def get_token_from_symbol(symbol, exchange):

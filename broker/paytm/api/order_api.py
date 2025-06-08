@@ -2,7 +2,7 @@ import json
 import os
 import urllib.parse
 import httpx
-import logging
+from utils.openalgo_logger import get_logger
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -15,15 +15,8 @@ from broker.paytm.mapping.transform_data import (
     reverse_map_order_type
 )
 
-# Configure logging with more detailed format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(name)s] [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-
-# Create a logger for this module
-logger = logging.getLogger('paytm_api')
+# Configure logging
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, retry_delay=2):
     base_url = "https://developer.paytmmoney.com"
@@ -94,7 +87,6 @@ def get_holdings(auth):
     return get_api_response("/holdings/v1/get-user-holdings-data", auth)
 
 
-import logging
 
 def get_open_positionss(tradingsymbol, exchange, product, auth):
     print("##### DEBUG: ENTERING get_open_position FUNCTION #####")

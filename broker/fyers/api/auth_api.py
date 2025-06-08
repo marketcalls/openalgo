@@ -1,12 +1,12 @@
 import os
 import json
-import logging
+from utils.openalgo_logger import get_logger
 import hashlib
 from typing import Dict, Any, Tuple, Optional
 from utils.httpx_client import get_httpx_client
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def authenticate_broker(request_token: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """

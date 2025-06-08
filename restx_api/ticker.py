@@ -176,7 +176,7 @@ class Ticker(Resource):
 
             except Exception as e:
                 logger.error(f"Error in broker_module.get_history: {e}")
-                traceback.print_exc()
+                logger.error(traceback.format_exc())
                 if response_format == 'txt':
                     response = TextResponse(str(e))
                     response.content_type = 'text/plain'
@@ -199,7 +199,7 @@ class Ticker(Resource):
             }), 400)
         except Exception as e:
             logger.error(f"Unexpected error in ticker endpoint: {e}")
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             if response_format == 'txt':
                 response = TextResponse('An unexpected error occurred')
                 response.content_type = 'text/plain'

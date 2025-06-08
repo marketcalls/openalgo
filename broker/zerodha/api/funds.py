@@ -3,6 +3,10 @@
 import os
 import json
 from utils.httpx_client import get_httpx_client
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
@@ -36,14 +40,14 @@ def get_margin_data(auth_token):
         except:
             pass
             
-        print(f"Error fetching margin data: {error_message}")
+        logger.error(f"Error fetching margin data: {error_message}")
         return {}
 
-    print(f"Funds Details: {margin_data}")
+    logger.debug(f"Funds Details received from API")
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
         return {}
 
     try:

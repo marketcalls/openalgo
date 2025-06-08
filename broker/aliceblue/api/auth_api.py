@@ -1,13 +1,13 @@
 import os
 import hashlib
 import json
-import logging
+from utils.openalgo_logger import get_logger
 import base64
 import httpx
 from utils.httpx_client import get_httpx_client
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def authenticate_broker(userid, encKey):
     try:

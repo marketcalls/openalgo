@@ -2,7 +2,7 @@ import websocket
 import json
 import threading
 import time
-import logging
+from utils.openalgo_logger import get_logger
 import hashlib
 import ssl
 import os
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AliceBlueWebSocket:
     """

@@ -1,7 +1,6 @@
 import asyncio as aio
 import websockets
 import json
-import logging
 from utils.openalgo_logger import get_logger
 import signal
 import zmq
@@ -873,8 +872,7 @@ class WebSocketProxy:
 # Entry point for running the server standalone
 async def main():
     """Main entry point for running the WebSocket proxy server"""
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
+    # Configure logging is handled by centralized logger
     
     # Load environment variables
     load_dotenv()

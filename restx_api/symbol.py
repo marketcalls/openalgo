@@ -49,7 +49,7 @@ class Symbol(Resource):
             
         except Exception as e:
             logger.error(f"Unexpected error in symbol endpoint: {e}")
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             return make_response(jsonify({
                 'status': 'error',
                 'message': 'An unexpected error occurred'

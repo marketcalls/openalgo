@@ -1,6 +1,6 @@
 import threading
 import json
-import logging
+from utils.openalgo_logger import get_logger
 import time
 from typing import Dict, Any, Optional, List
 
@@ -23,7 +23,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("angel_websocket")
+        self.logger = get_logger("angel_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "angel"

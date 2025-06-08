@@ -41,7 +41,7 @@ class Positionbook(Resource):
             }), 400)
         except Exception as e:
             logger.error(f"Unexpected error in positionbook endpoint: {e}")
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             return make_response(jsonify({
                 'status': 'error',
                 'message': 'An unexpected error occurred'

@@ -2,13 +2,12 @@ import http.client
 import json
 import urllib.parse
 import os
-import logging
+from utils.openalgo_logger import get_logger
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.kotak.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data, reverse_map_exchange,map_exchange
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth_token, method="GET", payload=''):
 

@@ -1,8 +1,7 @@
 import socket
-import logging
 from utils.openalgo_logger import get_logger
 
-logger = logging.getLogger("websocket_proxy")
+logger = get_logger("websocket_proxy")
 
 def is_port_in_use(host, port):
     """

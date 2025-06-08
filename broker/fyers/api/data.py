@@ -1,6 +1,6 @@
 import json
 import os
-import logging
+from utils.openalgo_logger import get_logger
 import httpx
 from database.token_db import get_br_symbol, get_oa_symbol
 import pandas as pd
@@ -10,7 +10,7 @@ import time
 from utils.httpx_client import get_httpx_client
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """

@@ -6,6 +6,10 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
 from broker.upstox.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 
 
@@ -91,7 +95,7 @@ def place_order_api(data,auth):
         "is_amo": newdata.get('is_amo', 'false')
     })
 
-    print(payload)
+    logger.debug("Order payload prepared")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -125,8 +129,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    logger.debug(f"position_size : {position_size}") 
+    logger.debug(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -234,12 +238,12 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.debug("Closing position payload prepared")
 
             # Place the order to close the position
             _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
-            print(api_response)
+            logger.debug("Close position order executed")
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -289,7 +293,7 @@ def modify_order(data,auth):
     }
     payload = json.dumps(transformed_order_data)
 
-    print(payload)
+    logger.debug("Order payload prepared")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -317,7 +321,7 @@ def cancel_all_orders_api(data,auth):
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['open', 'trigger pending']]
-    print(orders_to_cancel)
+    logger.debug(f"Orders to cancel: {len(orders_to_cancel)} orders")
     canceled_orders = []
     failed_cancellations = []
 

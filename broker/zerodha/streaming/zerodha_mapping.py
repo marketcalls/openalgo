@@ -5,7 +5,7 @@ This module provides utilities for mapping between Zerodha's WebSocket data form
 and OpenAlgo's standard format.
 """
 from typing import Dict, List, Any, Optional, Tuple
-import logging
+from utils.openalgo_logger import get_logger
 from datetime import datetime, timezone
 
 class ZerodhaExchangeMapper:
@@ -97,7 +97,7 @@ class ZerodhaDataTransformer:
     """Transforms data between Zerodha and OpenAlgo formats"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
     
     def transform_tick(self, tick_data: Dict, symbol: str, exchange: str) -> Dict:
         """

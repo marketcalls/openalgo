@@ -1,13 +1,13 @@
 import json
 import os
-import logging
+from utils.openalgo_logger import get_logger
 import httpx
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.fyers.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 

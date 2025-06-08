@@ -5,14 +5,14 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from broker.dhan.mapping.transform_data import map_exchange_type
 import urllib.parse
-import logging
+from utils.openalgo_logger import get_logger
 import jwt
 import httpx
 from utils.httpx_client import get_httpx_client
 from broker.dhan.api.baseurl import get_url
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=''):

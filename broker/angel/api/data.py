@@ -6,6 +6,10 @@ from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
 from utils.httpx_client import get_httpx_client
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """Helper function to make API calls to Angel One"""
@@ -44,14 +48,14 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         response.status = response.status_code
         
         if response.status_code == 403:
-            print(f"Debug - API returned 403 Forbidden. Headers: {headers}")
-            print(f"Debug - Response text: {response.text}")
+            logger.error("Angel API returned 403 Forbidden - Authentication failed")
+            logger.debug("Response text received for debugging")
             raise Exception("Authentication failed. Please check your API key and auth token.")
             
         return json.loads(response.text)
     except json.JSONDecodeError:
-        print(f"Debug - Failed to parse response. Status code: {response.status_code}")
-        print(f"Debug - Response text: {response.text}")
+        logger.error(f"Failed to parse Angel API response - Status: {response.status_code}")
+        logger.debug("Raw response text logged for debugging")
         raise Exception(f"Failed to parse API response (status {response.status_code})")
 
 class BrokerData:  
@@ -156,7 +160,7 @@ class BrokerData:
             
             
             token = get_token(symbol, exchange)
-            print(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
+            logger.debug("Symbol conversion completed for Angel API")
 
             if exchange == 'NSE_INDEX':
                 exchange = 'NSE'
@@ -220,29 +224,29 @@ class BrokerData:
                     "fromdate": current_start.strftime('%Y-%m-%d %H:%M'),
                     "todate": current_end.strftime('%Y-%m-%d %H:%M')
                 }
-                print(f"Debug - Fetching chunk from {current_start} to {current_end}")
-                print(f"Debug - API Payload: {payload}")
+                logger.debug(f"Fetching historical data chunk: {current_start} to {current_end}")
+                logger.debug("API payload prepared for historical data request")
                 
                 try:
                     response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
                                               self.auth_token,
                                               "POST",
                                               payload)
-                    print(f"Debug - API Response Status: {response.get('status')}")
+                    logger.debug(f"Angel API response status: {response.get('status')}")
                     
                     # Check if response is empty or invalid
                     if not response:
-                        print(f"Debug - Empty response for chunk {current_start} to {current_end}")
+                        logger.warning(f"Empty response received for data chunk: {current_start} to {current_end}")
                         current_start = current_end + timedelta(days=1)
                         continue
                     
                     if not response.get('status'):
-                        print(f"Debug - Error response: {response.get('message', 'Unknown error')}")
+                        logger.error(f"Angel API error: {response.get('message', 'Unknown error')}")
                         current_start = current_end + timedelta(days=1)
                         continue
                         
                 except Exception as chunk_error:
-                    print(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
+                    logger.error(f"Error fetching data chunk {current_start} to {current_end}: {str(chunk_error)}")
                     current_start = current_end + timedelta(days=1)
                     continue
                 
@@ -254,16 +258,16 @@ class BrokerData:
                 if data:
                     chunk_df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     dfs.append(chunk_df)
-                    print(f"Debug - Received {len(data)} candles for chunk")
+                    logger.debug(f"Received {len(data)} candles for data chunk")
                 else:
-                    print(f"Debug - No data received for chunk")
+                    logger.warning("No data received for current chunk")
                 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
                 
             # If no data was found, return empty DataFrame
             if not dfs:
-                print("Debug - No data received from API")
+                logger.warning("No data received from Angel API")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             # Combine all chunks
@@ -292,7 +296,7 @@ class BrokerData:
             return df
             
         except Exception as e:
-            print(f"Debug - Error: {str(e)}")
+            logger.error(f"Angel API error: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
 
     def get_depth(self, symbol: str, exchange: str) -> dict:

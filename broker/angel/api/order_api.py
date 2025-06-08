@@ -5,6 +5,10 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
+from utils.openalgo_logger import get_logger
+
+# Set up logger
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -56,7 +60,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
 
-    print(positions_data)
+    logger.debug("Positions data retrieved for smart order calculation")
 
     net_qty = '0'
 
@@ -101,7 +105,7 @@ def place_order_api(data,auth):
         "quantity": newdata['quantity']
     })
 
-    print(payload)
+    logger.debug("Order payload prepared for Angel API")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -145,8 +149,7 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    logger.debug(f"Position calculation - Size: {position_size}, Current: {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -157,11 +160,9 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #print(f"action : {action}")
-        #print(f"Quantity : {quantity}")
+        logger.debug(f"Smart order - Action: {action}, Quantity: {quantity}")
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
+        logger.debug("Order placement completed")
         
         return res , response, orderid
         
@@ -187,11 +188,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #print(f"smart buy quantity : {quantity}")
+            logger.debug(f"Smart buy quantity: {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #print(f"smart sell quantity : {quantity}")
+            logger.debug(f"Smart sell quantity: {quantity}")
 
 
 
@@ -206,8 +207,8 @@ def place_smartorder_api(data,auth):
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
         #print(res)
-        print(response)
-        print(orderid)
+        logger.debug("Angel API response received")
+        logger.debug(f"Order placed with ID: {orderid}")
         
         return res , response, orderid
     
@@ -238,7 +239,7 @@ def close_all_positions(current_api_key,auth):
 
             #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['symboltoken'],position['exchange'])
-            print(f'The Symbol is {symbol}')
+            logger.debug(f'Processing symbol: {symbol}')
 
             # Prepare the order payload
             place_order_payload = {
@@ -252,14 +253,14 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.debug("Order payload prepared")
 
             # Place the order to close the position
             res, response, orderid =   place_order_api(place_order_payload,auth)
 
             # print(res)
-            # print(response)
-            # print(orderid)
+            # logger.debug("Angel API response received")
+            # logger.debug(f"Order placed with ID: {orderid}")
 
 
             
