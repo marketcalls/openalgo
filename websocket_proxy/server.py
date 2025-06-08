@@ -873,7 +873,7 @@ class WebSocketProxy:
 async def main():
     """Main entry point for running the WebSocket proxy server"""
     # Configure logging
-    )
+    logging.basicConfig(level=logging.INFO)
     
     # Load environment variables
     load_dotenv()
