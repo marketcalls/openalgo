@@ -87,6 +87,7 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.zmq_port = self._bind_to_available_port()
         self.logger.info(f"ZeroMQ socket bound to port {self.zmq_port}")
         # Updating used ZMQ_PORT in environment variable.
+        # We must use os.environ (not os.getenv) for setting environment variables
         os.environ["ZMQ_PORT"] = str(self.zmq_port)
         
         # Subscription tracking
@@ -101,18 +102,20 @@ class BaseBrokerWebSocketAdapter(ABC):
             # Try several times to find and bind to an available port
             for attempt in range(5):  # Try up to 5 times
                 try:
-                    if attempt == 0 and 5555 not in BaseBrokerWebSocketAdapter._bound_ports:
+                    # Get default port from environment or fallback to 5555
+                    default_port = int(os.getenv('ZMQ_PORT', '5555'))
+                    if attempt == 0 and default_port not in BaseBrokerWebSocketAdapter._bound_ports:
                         # Try default port first, but wrap in try-except to handle race conditions
                         # where the port appears free but can't be bound
                         try:
-                            if is_port_available(5555):
-                                port = 5555
+                            if is_port_available(default_port):
+                                port = default_port
                                 self.socket.bind(f"tcp://*:{port}")
                                 BaseBrokerWebSocketAdapter._bound_ports.add(port)
-                                self.logger.info(f"Successfully bound to default ZMQ port {port}")
+                                self.logger.info(f"Successfully bound to default ZMQ port {port} from environment")
                                 return port
                         except (zmq.ZMQError, socket.error) as e:
-                            self.logger.warning(f"Default port 5555 appears available but binding failed: {e}")
+                            self.logger.warning(f"Default port {default_port} from environment appears available but binding failed: {e}")
                             # Fall through to random port allocation
                     
                     # Use random port allocation
