@@ -188,6 +188,9 @@ def process_aliceblue_nse_csv(path):
     token_df['instrumenttype'] = 'EQ'
     token_df['tick_size'] = filter_df['Tick Size']
     
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -216,20 +219,23 @@ def process_aliceblue_bse_csv(path):
     token_df['instrumenttype'] = 'EQ'
     token_df['tick_size'] = filtered_df['Tick Size']
     
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
 def process_aliceblue_nfo_csv(path):
     """
-    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the AliceBlue NFO CSV file to fit the existing database schema and performs exchange name mapping.
     """
     print("Processing AliceBlue NFO CSV Data")
     file_path = f'{path}/NFO.csv'
 
     df = pd.read_csv(file_path)
 
-        # Convert 'Expiry Date' column to datetime format
-    df['Expiry Date'] = pd.to_datetime(df['Expiry Date'])
+    # Convert 'Expiry Date' column to datetime format with error handling
+    df['Expiry Date'] = pd.to_datetime(df['Expiry Date'], errors='coerce')  # 'coerce' will set invalid dates to NaT
 
     # Define the function to reformat symbol details
     def reformat_symbol_detail(row):
@@ -237,7 +243,14 @@ def process_aliceblue_nfo_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
@@ -257,8 +270,8 @@ def process_aliceblue_nfo_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -268,6 +281,9 @@ def process_aliceblue_nfo_csv(path):
     })
     token_df['tick_size'] = df['Tick Size'].values
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -289,7 +305,14 @@ def process_aliceblue_cds_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
@@ -309,8 +332,8 @@ def process_aliceblue_cds_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -320,6 +343,9 @@ def process_aliceblue_cds_csv(path):
     })
     token_df['tick_size'] = df['Tick Size'].values
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -356,8 +382,8 @@ def process_aliceblue_bfo_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -370,6 +396,9 @@ def process_aliceblue_bfo_csv(path):
     # Drop rows where 'symbol' is NaN
     token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df_cleaned
 
 
@@ -393,7 +422,14 @@ def process_aliceblue_mcx_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     df.loc[df['Instrument Type'] == 'FUTCOM', 'Option Type'] = 'XX'
     df.loc[df['Instrument Type'] == 'FUTIDX', 'Option Type'] = 'XX'
@@ -416,8 +452,8 @@ def process_aliceblue_mcx_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -430,6 +466,9 @@ def process_aliceblue_mcx_csv(path):
     # Drop rows where 'symbol' is NaN
     # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 def process_aliceblue_bcd_csv(path):
@@ -450,7 +489,14 @@ def process_aliceblue_bcd_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     df.loc[df['Instrument Type'] == 'FUTCUR', 'Option Type'] = 'XX'
     df.loc[df['Instrument Type'] == 'FUTCUR', 'Strike Price'] = 1
@@ -473,8 +519,8 @@ def process_aliceblue_bcd_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -487,6 +533,9 @@ def process_aliceblue_bcd_csv(path):
     # Drop rows where 'symbol' is NaN
     # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -519,6 +568,9 @@ def process_aliceblue_indices_csv(path):
     })
     token_df['tick_size'] = 0.01
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 

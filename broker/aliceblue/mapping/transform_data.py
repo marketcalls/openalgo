@@ -21,6 +21,7 @@ def transform_data(data):
         "qty": data["quantity"],
         "ret": "DAY",
         "symbol_id": token,
+        "trading_symbol": symbol,
         "transtype": data['action'].upper(),
         "trigPrice": data.get("trigger_price", "0"),
         "orderTag": "openalgo",

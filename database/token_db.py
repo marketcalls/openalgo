@@ -98,6 +98,17 @@ def get_oa_symbol_dbquery(symbol, exchange):
         print(f"Error while querying the database: {e}")
         return None
 
+def get_symbol_count():
+    """
+    Get the total count of symbols in the database.
+    """
+    try:
+        count = SymToken.query.count()
+        return count
+    except Exception as e:
+        print(f"Error while counting symbols: {e}")
+        return 0
+
 
 def get_br_symbol(symbol, exchange):
     """

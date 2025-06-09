@@ -247,8 +247,16 @@
 </div>
 
 {% block scripts %}
+{{ csrf_token() }}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const csrfToken = csrfTokenInput ? csrfTokenInput.value : null;
+
+    if (!csrfToken && document.getElementById('confirm_strategy_delete')) {
+        console.error('CSRF token not found! Strategy deletion and other protected actions may fail.');
+        showToast('error', 'Security token missing. Actions may fail.');
+    }
     const deleteModal = document.getElementById('delete_strategy_modal');
     const webhookUrlContainer = document.getElementById('webhookUrl');
     const copyHint = webhookUrlContainer.querySelector('.copy-hint');
@@ -271,7 +279,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-CSRFToken': csrfToken
             }
         })
         .then(response => response.json())
