@@ -87,6 +87,7 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.zmq_port = self._bind_to_available_port()
         self.logger.info(f"ZeroMQ socket bound to port {self.zmq_port}")
         # Updating used ZMQ_PORT in environment variable.
+        # We must use os.environ (not os.getenv) for setting environment variables
         os.environ["ZMQ_PORT"] = str(self.zmq_port)
         
         # Subscription tracking
@@ -102,7 +103,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             for attempt in range(5):  # Try up to 5 times
                 try:
                     # Get default port from environment or fallback to 5555
-                    default_port = int(os.environ.get('ZMQ_PORT', '5555'))
+                    default_port = int(os.getenv('ZMQ_PORT', '5555'))
                     if attempt == 0 and default_port not in BaseBrokerWebSocketAdapter._bound_ports:
                         # Try default port first, but wrap in try-except to handle race conditions
                         # where the port appears free but can't be bound
