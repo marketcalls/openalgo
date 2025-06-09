@@ -4,6 +4,7 @@ import zmq
 import logging
 import random
 import socket
+import os
 from abc import ABC, abstractmethod
 
 def is_port_available(port):
@@ -85,6 +86,8 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.logger = logging.getLogger("broker_adapter")
         self.zmq_port = self._bind_to_available_port()
         self.logger.info(f"ZeroMQ socket bound to port {self.zmq_port}")
+        # Updating used ZMQ_PORT in environment variable.
+        os.environ["ZMQ_PORT"] = str(self.zmq_port)
         
         # Subscription tracking
         self.subscriptions = {}
