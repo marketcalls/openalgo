@@ -209,17 +209,21 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
-
-    if  position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
+    """
+    Processes and modifies a list of position dictionaries based on specific conditions.
+    
+    Parameters:
+    - position_data: A list of dictionaries, where each dictionary represents a position.
+    
+    Returns:
+    - The modified position_data with updated 'tradingsymbol' and 'product' fields.
+    """
+    if position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
         print("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data
-        
-
 
     if position_data:
         for order in position_data:
@@ -241,10 +245,6 @@ def map_position_data(position_data):
                 
                 elif order['exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['prd'] == 'M':
                     order['prd'] = 'NRML'
-
-
-                
-                
             else:
                 print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
@@ -252,17 +252,46 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    """
+    Transforms position data for display in the positions page.
+    
+    Parameters:
+    - positions_data: A list of dictionaries with position data
+    
+    Returns:
+    - A list of transformed position dictionaries with calculated P&L fields
+    """
     transformed_data = []
     for position in positions_data:
+        # Calculate P&L using broker-provided values
+        realized_pnl = float(position.get('rpnl', 0))
+        unrealized_pnl = float(position.get('urmtom', 0))
+        
+        # Fallback calculation if broker values aren't available
+        if unrealized_pnl == 0 and float(position.get('netqty', 0)) != 0:
+            price_factor = float(position.get('prcftr', 1))
+            ltp = float(position.get('lp', 0))
+            avg_price = float(position.get('netavgprc', 0))
+            quantity = float(position.get('netqty', 0))
+            unrealized_pnl = (ltp - avg_price) * quantity * price_factor
+        
+        # Calculate total P&L (realized + unrealized)        
+        total_pnl = realized_pnl + unrealized_pnl
+        
         transformed_position = {
             "symbol": position.get('tsym', ''),
             "exchange": position.get('exch', ''),
             "product": position.get('prd', ''),
             "quantity": position.get('netqty', 0),
             "average_price": position.get('netavgprc', 0.0),
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "ltp": position.get('lp', 0.0),
+            "pnl": round(total_pnl, 2),  # Combined P&L for display in positions table
         }
         transformed_data.append(transformed_position)
     return transformed_data
+
 
 def map_portfolio_data(portfolio_data):
     """

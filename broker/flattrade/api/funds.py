@@ -4,8 +4,15 @@ import json
 
 def calculate_pnl(entry):
     """Calculate realized and unrealized PnL for a given entry."""
-    unrealized_pnl = (float(entry.get("lp", 0)) - float(entry.get("netavgprc", 0))) * float(entry.get("netqty", 0))
-    realized_pnl = (float(entry.get("daysellavgprc", 0)) - float(entry.get("daybuyavgprc", 0))) * float(entry.get("daysellqty", 0))
+    # Use broker-provided values directly for more accurate calculation
+    unrealized_pnl = float(entry.get("urmtom", 0))
+    realized_pnl = float(entry.get("rpnl", 0))
+    
+    # Fallback calculation if broker values aren't available
+    if unrealized_pnl == 0 and float(entry.get("netqty", 0)) != 0:
+        price_factor = float(entry.get("prcftr", 1))
+        unrealized_pnl = (float(entry.get("lp", 0)) - float(entry.get("netavgprc", 0))) * float(entry.get("netqty", 0)) * price_factor
+    
     return realized_pnl, unrealized_pnl
 
 def fetch_data(endpoint, payload, headers, conn):
