@@ -461,20 +461,24 @@ def close_position():
         # Call the broker API directly
         res, response, orderid = place_smartorder_api(order_data, auth_token)
         
-        # Format the response
-        if response.get('status') == 'success':
+        # Format the response based on presence of orderid and broker's response
+        if orderid:
             response_data = {
                 'status': 'success',
-                'message': 'Position closed successfully',
+                'message': response.get('message') if response and 'message' in response else 'Position close order placed successfully.',
                 'orderid': orderid
             }
             status_code = 200
         else:
+            # No orderid, definite error
             response_data = {
                 'status': 'error',
-                'message': response.get('message', 'Failed to close position')
+                'message': response.get('message') if response and 'message' in response else 'Failed to close position (broker did not return order ID).'
             }
-            status_code = res.status if res and hasattr(res, 'status') else 400
+            if res and hasattr(res, 'status') and isinstance(res.status, int) and res.status >= 400:
+                status_code = res.status  # Use broker's HTTP error code if available
+            else:
+                status_code = 400 # Default to Bad Request
         
         return jsonify(response_data), status_code
         
