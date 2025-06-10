@@ -834,7 +834,11 @@ class WebSocketProxy:
                     continue
                 
                 # Find clients subscribed to this data
-                for client_id, subscriptions in self.subscriptions.items():
+                # Create a snapshot of the subscriptions before iteration to avoid
+                # 'dictionary changed size during iteration' errors
+                subscriptions_snapshot = list(self.subscriptions.items())
+                
+                for client_id, subscriptions in subscriptions_snapshot:
                     user_id = self.user_mapping.get(client_id)
                     if not user_id:
                         continue
@@ -844,7 +848,9 @@ class WebSocketProxy:
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
                         continue  # Skip if broker doesn't match
                     
-                    for sub_json in subscriptions:
+                    # Create a snapshot of the subscription set before iteration
+                    subscriptions_list = list(subscriptions)
+                    for sub_json in subscriptions_list:
                         try:
                             sub = json.loads(sub_json)
                             
