@@ -199,10 +199,12 @@ document.addEventListener('DOMContentLoaded', function() {
 // Position management functions
 function exitPosition(symbol, exchange, product) {
     // Call the close_position endpoint directly without confirmation
+    const csrfToken = getCSRFToken(); // Get CSRF token from base.html helper
     fetch('/close_position', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken // Add CSRF token to headers
         },
         body: JSON.stringify({
             symbol: symbol,
@@ -239,6 +241,7 @@ function closeAllPositions() {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
         },
         body: JSON.stringify({})
     })
