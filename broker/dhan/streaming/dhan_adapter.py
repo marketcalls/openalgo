@@ -1,942 +1,815 @@
 """
-Dhan websocket adapter implementation for OpenAlgo websocket proxy
+Fixed Dhan WebSocket adapter for OpenAlgo.
+Implements the broker-specific WebSocket adapter for Dhan with proper mode mapping.
 """
-import os
-import json
-import time
-import struct  # For binary data processing
 import logging
-import threading
-from typing import Dict, Any, List, Optional, Tuple, Union
-
-from broker.dhan.streaming.dhan_websocket import DhanWebSocket
-from database.auth_db import get_auth_token
-from database.token_db import get_token
-
-import sys
 import os
-
-# Add parent directory to path to allow imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+import threading
+import time
+from typing import Dict, List, Optional, Any, Set
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
-from websocket_proxy.mapping import SymbolMapper
-from .dhan_mapping import DhanExchangeMapper, DhanCapabilityRegistry
+from database.token_db import get_token
+from database.auth_db import get_auth_token
 
-# Try to import symbol token lookup function
-try:
-    from ...lookup import get_symbol_from_token
-except ImportError:
-    # Define a fallback function for get_symbol_from_token if it can't be imported
-    def get_symbol_from_token(token: str, exchange: str) -> Optional[str]:
-        logging.getLogger(__name__).warning(f"get_symbol_from_token not available, can't lookup token {token} on {exchange}")
-        return None
+# Import the WebSocket client
+from .dhan_websocket import DhanWebSocket
+from .dhan_mapping import get_dhan_exchange, get_openalgo_exchange
 
 class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Dhan-specific implementation of the WebSocket adapter"""
+    """
+    Dhan-specific implementation of the WebSocket adapter.
+    Implements OpenAlgo WebSocket proxy interface with proper mode mapping.
+    """
+    
+    # Fallback token mappings for common symbols when database lookup fails
+    FALLBACK_TOKENS = {
+        "NSE:RELIANCE": 2885,
+        "NSE_EQ:RELIANCE": 2885,
+        "NSE:INFY": 1594,
+        "NSE_EQ:INFY": 1594,
+        "NSE:HDFCBANK": 1333,
+        "NSE_EQ:HDFCBANK": 1333,
+        "NSE:ICICIBANK": 4963,
+        "NSE_EQ:ICICIBANK": 4963,
+        "NSE:TCS": 11536,
+        "NSE_EQ:TCS": 11536,
+        "NSE_INDEX:NIFTY": 26000,
+        "NSE_INDEX:BANKNIFTY": 26001,
+        "BSE_INDEX:SENSEX": 1,
+        "BSE:RELIANCE": 500325
+    }
     
     def __init__(self):
-        """Initialize the Dhan WebSocket adapter"""
+        """Initialize the WebSocket adapter"""
         super().__init__()
+        # Set a default logger name, will be updated in initialize()
+        self.logger = logging.getLogger("websocket_adapter")
         self.ws_client = None
-        self.broker_name = "dhan"
         self.user_id = None
+        # broker_name will be set in initialize()
         self.running = False
-        self.lock = threading.RLock()
+        self.connected = False
+        self.lock = threading.Lock()
+        self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
+        self.token_to_symbol = {}  # {token: (symbol, exchange)}
         
-        # Connection and reconnection settings
-        self.max_retries = 10  # Maximum number of connection attempts
-        self.connect_timeout = 10  # Connection timeout in seconds
-        self.reconnect_delay = 1  # Initial reconnect delay in seconds
-        self.max_reconnect_delay = 60  # Maximum reconnect delay in seconds
-        self.max_reconnect_attempts = 10  # Maximum number of reconnect attempts
+        # Authentication
+        self.client_id = None
+        self.access_token = None
+        
+        # Connection management
         self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 5
+        self.reconnect_delay = 5
         
-        # Subscription tracking
-        self.mode_subscriptions = {}  # Keep track of subscriptions by mode
-    
-    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
-        """
-        Initialize connection with Dhan WebSocket API
-        
-        Args:
-            broker_name: Name of the broker (always 'dhan' in this case)
-            user_id: Client ID/user ID
-            auth_data: If provided, use these credentials instead of fetching from DB
-        
-        Raises:
-            ValueError: If required authentication tokens are not found
-        """
-        self.user_id = user_id
-        self.broker_name = broker_name
-        
-        # Get access token and client ID from environment variables or auth_data
-        if not auth_data:
-            self.logger.info("Auth data not provided, fetching from environment variables")
-            access_token = os.getenv("BROKER_API_SECRET")
-            client_id = os.getenv("BROKER_API_KEY")
-            
-            if not access_token:
-                self.logger.error("Missing BROKER_API_SECRET environment variable for Dhan access token")
-                raise ValueError("Missing access token for Dhan")
-                
-            if not client_id:
-                self.logger.error("Missing BROKER_API_KEY environment variable for Dhan client ID")
-                raise ValueError("Missing client ID for Dhan")
-                
-            self.logger.debug("Successfully retrieved access token and client ID from environment variables")
-        else:
-            self.logger.info("Using provided auth data for authentication")
-            access_token = auth_data.get("access_token")
-            client_id = auth_data.get("client_id")
-            
-            if not access_token:
-                self.logger.error("Missing access_token in auth_data")
-                raise ValueError("Missing access token in auth_data")
-                
-            if not client_id:
-                self.logger.error("Missing client_id in auth_data")
-                raise ValueError("Missing client ID in auth_data")
-                
-            self.logger.debug("Successfully retrieved access token and client ID from auth data")
-        
-        # Create DhanWebSocket instance
-        self.logger.info(f"Creating DhanWebSocket client with client ID {client_id}")
-        self.ws_client = DhanWebSocket(
-            client_id=client_id,
-            access_token=access_token,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-            reconnect_attempts=self.max_reconnect_attempts,
-            reconnect_delay=self.reconnect_delay
-        )
-        
-        self.running = True
-        
-    def connect(self) -> Dict[str, Any]:
-        """Connect to Dhan WebSocket with retry logic"""
-        if not self.ws_client:
-            self.logger.error("WebSocket client not initialized, cannot connect")
-            return {'success': False, 'error': 'WebSocket client not initialized'}
-            
-        self.running = True
-        retry_count = 0
-        delay = 1  # Initial delay in seconds
-        max_delay = 60  # Maximum delay in seconds
-        
-        self.logger.info(f"Attempting to connect to Dhan WebSocket with {self.max_retries} max retries")
-        
-        while self.running and retry_count < self.max_retries:
-            try:
-                # Attempt to connect
-                self.logger.info(f"Connection attempt {retry_count + 1} of {self.max_retries}")
-                self.ws_client.connect()
-                
-                # Wait for connection to be established
-                start_time = time.time()
-                self.logger.debug(f"Waiting up to {self.connect_timeout}s for connection to be established")
-                while time.time() - start_time < self.connect_timeout and not self.ws_client.connected:
-                    time.sleep(0.1)
-                
-                # If connected, we're done
-                if self.ws_client.connected:
-                    self.logger.info("Successfully connected to Dhan WebSocket")
-                    
-                    # Resubscribe to previously subscribed symbols
-                    subscription_count = self._resubscribe_all()
-                    self.logger.info(f"Resubscribed to {subscription_count} symbols")
-                    
-                    return {'success': True, 'message': 'Successfully connected to Dhan WebSocket'}
-                    
-                # If not connected, try again
-                retry_count += 1
-                self.logger.warning(f"Failed to connect to Dhan WebSocket, attempt {retry_count} of {self.max_retries}")
-                
-                # Exponential backoff
-                if retry_count < self.max_retries:
-                    self.logger.info(f"Retrying in {delay} seconds (exponential backoff)")
-                    time.sleep(delay)
-                    delay = min(delay * 2, max_delay)  # Exponential backoff with cap
-            
-            except Exception as e:
-                retry_count += 1
-                self.logger.error(f"Error connecting to WebSocket: {e}")
-                
-                # Exponential backoff
-                if retry_count < self.max_retries:
-                    self.logger.info(f"Retrying in {delay} seconds (exponential backoff)")
-                    time.sleep(delay)
-                    delay = min(delay * 2, max_delay)  # Exponential backoff with cap
-        
-        # If we've exhausted retries
-        self.logger.error("Failed to connect to Dhan WebSocket after maximum retries")
-        return {'success': False, 'error': 'Failed to connect after maximum retries'}
-        
-    def _resubscribe_all(self) -> int:
-        """Resubscribe to all previously subscribed symbols"""
-        subscription_count = 0
-        self.logger.info("Attempting to resubscribe to all previous symbols")
-        
-        for mode, subscriptions in self.mode_subscriptions.items():
-            mode_count = 0
-            self.logger.debug(f"Resubscribing to {len(subscriptions)} symbols for mode {mode}")
-            
-            for key, symbol_data in subscriptions.items():
-                try:
-                    success = self._subscribe_symbol(
-                        symbol_data["symbol"],
-                        symbol_data["exchange"],
-                        mode,
-                        symbol_data["depth_level"],
-                        symbol_data["token"]
-                    )
-                    
-                    if success:
-                        subscription_count += 1
-                        mode_count += 1
-                        self.logger.debug(f"Successfully resubscribed to {symbol_data['symbol']} on {symbol_data['exchange']}")
-                    else:
-                        self.logger.warning(f"Failed to resubscribe to {symbol_data['symbol']} on {symbol_data['exchange']}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error resubscribing to {symbol_data['symbol']}: {e}")
-            
-            self.logger.info(f"Resubscribed to {mode_count}/{len(subscriptions)} symbols for mode {mode}")
-        
-        self.logger.info(f"Completed resubscription with {subscription_count} total successful resubscriptions")
-        return subscription_count
-        
-    def publish_status_update(self, status: str, **kwargs) -> None:
-        """Publish status update to ZeroMQ socket
-        
-        Args:
-            status: Status string (connected, disconnected, etc.)
-            **kwargs: Additional status data (message, etc.)
-        """
-        try:
-            if not hasattr(self, 'socket') or not self.socket:
-                self.logger.warning("ZeroMQ socket not available, cannot publish status update")
-                return
-            
-            status_data = {
-                "type": "status",
-                "broker": self.broker_name,
-                "user_id": self.user_id,
-                "status": status
-            }
-            
-            # Add any additional keyword arguments
-            for key, value in kwargs.items():
-                status_data[key] = value
-                
-            self.socket.send_string(json.dumps(status_data))
-        except Exception as e:
-            self.logger.error(f"Error publishing status update: {e}", exc_info=True)
-            # Do not re-raise; this is not a critical error
-    
-    def disconnect(self) -> None:
-        """Disconnect from Dhan WebSocket"""
-        self.running = False
-        if self.ws_client:
-            self.ws_client.disconnect()
-            self.logger.info("Disconnected from Dhan WebSocket")
-            
-    def _on_open(self, ws):
-        """Callback for when WebSocket connection is established"""
-        self.logger.info("Dhan WebSocket connection established")
-        try:
-            # Call publish_status_update with keyword arguments to avoid TypeError
-            self.publish_status_update("connected", message="WebSocket connection established")
-        except Exception as e:
-            self.logger.error(f"Error in open handler: {e}", exc_info=True)
-            
-    def _on_message(self, ws, message):
-        """Callback for incoming WebSocket messages"""
-        try:
-            # Check if the message is binary data (market data) or text (control messages)
-            if isinstance(message, bytes):
-                self.logger.info(f"Received binary market data of length {len(message)}, first few bytes: {message[:16].hex()}")
-                # Process binary market data (this contains the actual price updates)
-                self._process_binary_message(message)
-            else:
-                # Process JSON text message (control messages, subscription responses)
-                self.logger.info(f"Received text message: {message[:200]}..." if len(message) > 200 else f"Received text message: {message}")
-                self._process_message(message)
-                
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in WebSocket message: {e}")
-        except Exception as e:
-            self.logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
-            
-    def _process_message(self, message):
-        """Process a text message from WebSocket"""
-        try:
-            # Parse the message as JSON
-            data = json.loads(message)
-            
-            # Check if this is a control message (e.g. successful subscription)
-            if 'success' in data or 'status' in data:
-                self.logger.info(f"Received control message: {data}")
-                
-                # Check for subscription response
-                if data.get('success') is False and data.get('type') == 'subscription':
-                    self.logger.error(f"Subscription failed: {data.get('message', 'No error message')}")
-                    # If error details in separate field, log it
-                    if 'error' in data:
-                        self.logger.error(f"Subscription error details: {data['error']}")
-                
-                # If it's any other type of control or status message, log it for troubleshooting
-                
-            else:
-                # Process market data in JSON format if present
-                processed_data = self._process_market_data(data)
-                
-                # Publish the processed data to ZeroMQ
-                if processed_data:
-                    self.publish_market_data(processed_data)
-                    
-        except Exception as e:
-            self.logger.error(f"Error processing text message: {e}")
-            
-    def _process_binary_message(self, binary_data):
-        """Process binary market data from Dhan WebSocket"""
-        try:
-            # First 8 bytes are the header according to Dhan docs
-            if len(binary_data) < 8:
-                self.logger.warning(f"Binary message too short: {len(binary_data)} bytes")
-                return
-                
-            # Extract header information
-            feed_response_code = binary_data[0]
-            message_length = int.from_bytes(binary_data[1:3], byteorder='big')
-            exchange_segment = binary_data[3]
-            security_id = int.from_bytes(binary_data[4:8], byteorder='big')
-            
-            # Log raw header for debugging with hexadecimal representation
-            self.logger.info(f"Binary header: Code={feed_response_code}, Length={message_length}, Exchange={exchange_segment}, Security ID={security_id}, HexBytes={binary_data[:16].hex()}")
-            
-            # Convert numeric exchange segment to string code according to Dhan API documentation
-            exchange_map = {
-                0: 'IDX_I',        # Index - Index Value
-                1: 'NSE_EQ',       # NSE - Equity Cash
-                2: 'NSE_FNO',      # NSE - Futures & Options
-                3: 'NSE_CURRENCY', # NSE - Currency
-                4: 'BSE_EQ',       # BSE - Equity Cash
-                5: 'MCX_COMM',     # MCX - Commodity
-                7: 'BSE_CURRENCY', # BSE - Currency
-                8: 'BSE_FNO'       # BSE - Futures & Options
-            }
-            
-            # Get string exchange code
-            dhan_exchange = exchange_map.get(exchange_segment, f"UNKNOWN_{exchange_segment}")
-            oa_exchange = DhanExchangeMapper.from_dhan_exchange(dhan_exchange)
-            
-            if not oa_exchange:
-                self.logger.warning(f"Could not map Dhan exchange {dhan_exchange} to OpenAlgo exchange")
-                return
-            
-            # First try to find symbol using internal tracking
-            symbol_info = None
-            security_id_str = str(security_id)
-            lookup_key = f"{dhan_exchange}:{security_id_str}"
-            
-            # Debug what we're looking up
-            self.logger.debug(f"Looking up symbol with key: {lookup_key}")
-            
-            # Check in our mode subscriptions (mode 1 is LTP)
-            if 1 in self.mode_subscriptions and lookup_key in self.mode_subscriptions[1]:
-                symbol_info = self.mode_subscriptions[1][lookup_key]
-                self.logger.info(f"Found symbol in subscriptions: {symbol_info['symbol']} for {lookup_key}")
-                
-            # For MCX tokens, also try with normalized token
-            if not symbol_info and dhan_exchange == 'MCX_FO' and security_id > 100000:
-                # Try with normalized token for MCX
-                normalized_id = security_id % 1000000
-                alt_lookup_key = f"{dhan_exchange}:{normalized_id}"
-                self.logger.debug(f"Trying normalized MCX token: {alt_lookup_key}")
-                
-                if 1 in self.mode_subscriptions and alt_lookup_key in self.mode_subscriptions[1]:
-                    symbol_info = self.mode_subscriptions[1][alt_lookup_key]
-                    self.logger.info(f"Found symbol with normalized token: {symbol_info['symbol']} for {alt_lookup_key}")
-            
-            # If not found in our subscriptions, try to get from token database
-            if not symbol_info:
-                # Try to find symbol using the token database
-                try:
-                    self.logger.debug(f"Looking up symbol for token {security_id_str} on exchange {dhan_exchange}")
-                    symbol = get_symbol_from_token(security_id_str, dhan_exchange)
-                    
-                    # For MCX tokens, also try with normalized token
-                    if not symbol and dhan_exchange == 'MCX_FO' and security_id > 100000:
-                        normalized_id = security_id % 1000000
-                        self.logger.debug(f"Trying normalized MCX token: {normalized_id}")
-                        symbol = get_symbol_from_token(str(normalized_id), dhan_exchange)
-                    
-                    if symbol:
-                        symbol_info = {
-                            'symbol': symbol,
-                            'exchange': oa_exchange,
-                            'token': security_id_str
-                        }
-                        self.logger.info(f"Found symbol {symbol} for token {security_id_str} on exchange {dhan_exchange}")
-                except Exception as e:
-                    self.logger.error(f"Error looking up symbol for token {security_id_str}: {e}")
-            
-            # Identify the binary feed packet type from the Feed Response Code
-            feed_type_map = {
-                1: "Index Packet",
-                2: "Ticker/LTP Packet",
-                4: "Quote Packet",
-                5: "OI Packet",
-                6: "Prev Close Packet",
-                7: "Market Status Packet",
-                8: "Full Packet",
-                50: "Feed Disconnect"
-            }
-            feed_type = feed_type_map.get(feed_response_code, f"Unknown Feed Type ({feed_response_code})")
-            self.logger.info(f"Processing binary {feed_type} from Dhan for exchange {dhan_exchange}, security ID {security_id}")
-            
-            # Process based on feed response code and if we have a symbol
-            if symbol_info:
-                # Ticker/LTP packet - Contains LTP and timestamp (minimal data)
-                if feed_response_code == 2:  
-                    # Must have 16 bytes (8 header + 4 LTP + 4 timestamp)
-                    if len(binary_data) >= 16:
-                        try:
-                            # Parse according to Dhan API docs
-                            ltp = struct.unpack('>f', binary_data[8:12])[0]  # float32, big-endian
-                            timestamp = int.from_bytes(binary_data[12:16], byteorder='big')  # int32
-                            
-                            # Log successful data extraction with detailed formatting
-                            self.logger.info(f"Received LTP data for {symbol_info['symbol']} on {symbol_info['exchange']}: LTP={ltp:.2f} at timestamp {timestamp}")
-                            
-                            # Create market data in OpenAlgo format
-                            symbol_key = f"{symbol_info['exchange']}:{symbol_info['symbol']}"
-                            
-                            market_data = {
-                                "ltp": {
-                                    symbol_key: {
-                                        "ltp": ltp,
-                                        "ltt": timestamp
-                                    }
-                                },
-                                "broker": self.broker_name,
-                                "timestamp": int(time.time() * 1000)
-                            }
-                            
-                            # Log what we're publishing
-                            self.logger.info(f"Publishing market data for {symbol_key}: LTP={ltp:.2f}")
-                            
-                            # Publish to ZeroMQ
-                            self.publish_market_data(market_data)
-                        except Exception as e:
-                            self.logger.error(f"Error processing LTP data: {e}", exc_info=True)
-                    else:
-                        self.logger.warning(f"LTP packet too short: {len(binary_data)} bytes for {symbol_info['symbol']}")
-                            
-                elif feed_response_code == 4:  # Quote packet
-                    self.logger.debug(f"Quote packet received for {symbol_info['symbol']}, implementation pending")
-                    # More complex with market depth data - implementation pending
-                    pass
-                    
-                elif feed_response_code == 8:  # Full packet with market depth
-                    self.logger.debug(f"Full market depth packet received for {symbol_info['symbol']}, implementation pending")
-                    # Implementation pending
-                    pass
-                    
-                else:
-                    self.logger.debug(f"Unhandled feed response code: {feed_response_code} for {symbol_info['symbol']}")
-            else:
-                self.logger.warning(f"Could not identify symbol for security ID {security_id} on exchange {dhan_exchange}")
-                    
-        except Exception as e:
-            self.logger.error(f"Error processing binary message: {e}", exc_info=True)
-            
-    def publish_market_data(self, market_data: Dict[str, Any]) -> None:
-        """Publish market data to ZeroMQ socket
-        
-        Args:
-            market_data: Market data in OpenAlgo format
-        """
-        try:
-            if not hasattr(self, 'socket') or not self.socket:
-                self.logger.warning("ZeroMQ socket not available, cannot publish market data")
-                return
-                
-            # Verify market data has proper format before publishing
-            if not market_data:
-                self.logger.warning("Empty market data, not publishing")
-                return
-                
-            # Ensure we have LTP data in the expected format
-            if 'ltp' not in market_data or not market_data['ltp']:
-                self.logger.warning("No LTP data in market_data, not publishing")
-                return
-                
-            # Log what we're publishing (before sending to ZMQ)
-            self.logger.info(f"Publishing market data: {json.dumps(market_data)}")
-                
-            # Send JSON data to ZeroMQ socket
-            self.socket.send_string(json.dumps(market_data))
-            self.logger.info("Market data sent to ZMQ socket successfully")
-        except Exception as e:
-            self.logger.error(f"Error publishing market data: {e}", exc_info=True)
-    
-    def _find_symbol_by_token(self, token: str, exchange_segment: int) -> Optional[Dict[str, str]]:
-        """Find subscribed symbol information based on token and exchange segment"""
-        # Convert numeric exchange segment to string exchange code
-        exchange_map = {
-            1: 'NSE_EQ',  # NSE Equity
-            2: 'BSE_EQ',  # BSE Equity
-            3: 'NSE_FO',  # NSE F&O
-            4: 'BSE_FO',  # BSE F&O
-            5: 'MCX_FO',  # MCX F&O
-            7: 'CDS',     # Currency derivatives
-            13: 'NCDEX_FO' # NCDEX F&O
+        # Extended mode mapping to handle all possible modes
+        self.mode_map = {
+            1: DhanWebSocket.MODE_LTP,    # LTP -> "ltp"
+            2: DhanWebSocket.MODE_QUOTE,  # Quote -> "marketdata"  
+            3: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
+            4: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
+            5: DhanWebSocket.MODE_LTP,    # LTP -> "ltp" (using LTP mode for mode=5)
+            6: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
+            7: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
+            8: DhanWebSocket.MODE_FULL    # Full/Depth -> "depth"
         }
         
-        dhan_exchange = exchange_map.get(exchange_segment, str(exchange_segment))
-        oa_exchange = DhanExchangeMapper.to_oa_exchange(dhan_exchange)
-        
-        # Search in all mode subscriptions
-        for mode, subscriptions in self.mode_subscriptions.items():
-            for key, symbol_data in subscriptions.items():
-                if symbol_data.get('token') == token and symbol_data.get('exchange') == oa_exchange:
-                    return {
-                        'symbol': symbol_data['symbol'],
-                        'exchange': oa_exchange
-                    }
-        
-        # If not found, return None
-        return None
-    
-    def _on_error(self, ws, error):
-        """Handle WebSocket errors"""
-        self.logger.error(f"WebSocket error: {error}")
-        # Publish error status update
-        try:
-            self.publish_status_update("error", f"WebSocket error: {error}")
-        except Exception as e:
-            self.logger.error(f"Error publishing status update: {e}")
-    
-    def _on_close(self, ws, close_status_code, close_msg):
-        """Callback when WebSocket connection closes"""
-        self.logger.info(f"Dhan WebSocket closed: {close_status_code} - {close_msg}")
-        self.publish_status_update("disconnected", f"WebSocket closed: {close_msg}")
-        
-    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
-        """Subscribe to market data with the specified mode and depth level"""
-        # Check if the mode is supported
-        if not DhanCapabilityRegistry.is_mode_supported(mode):
-            return {
-                "status": "error",
-                "error": f"Unsupported subscription mode: {mode}",
-                "symbol": symbol,
-                "exchange": exchange
-            }
-        
-        # Get token for the symbol
-        token = get_token(symbol, exchange)
-        if not token:
-            return {
-                "status": "error",
-                "error": f"Token not found for {symbol} on {exchange}",
-                "symbol": symbol,
-                "exchange": exchange
-            }
-            
-        # Translate exchange code
-        dhan_exchange = DhanExchangeMapper.to_dhan_exchange(exchange)
-        
-        try:
-            # Call internal subscription method
-            success = self._subscribe_symbol(symbol, dhan_exchange, mode, depth_level, token)
-            
-            if success:
-                return {
-                    "status": "success",
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "mode": mode,
-                    "depth_level": depth_level,
-                    "capabilities": DhanCapabilityRegistry.get_mode_fields(mode)
-                }
-            else:
-                return {
-                    "status": "error",
-                    "error": "Failed to subscribe",
-                    "symbol": symbol,
-                    "exchange": exchange
-                }
-        except Exception as e:
-            self.logger.error(f"Error subscribing to {symbol} on {exchange}: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "symbol": symbol,
-                "exchange": exchange
-            }
-            
-    def _subscribe_symbol(self, symbol: str, exchange: str, mode: int, depth_level: int = 5, token: str = None) -> bool:
-        """Internal method to subscribe to a symbol
+    def initialize(self, broker_name: str, user_id: str, **kwargs):
+        """
+        Initialize the adapter with user credentials and settings.
         
         Args:
-            symbol: Symbol to subscribe to
-            exchange: Exchange code
-            mode: Subscription mode (1=LTP, 2=Quote, 3=Full)
-            depth_level: Market depth level (usually 5 or 10)
-            token: Optional token to use (if not provided, will look up)
+            broker_name (str): Broker identifier (e.g., 'dhan')
+            user_id (str): User identifier
+            **kwargs: Additional arguments (optional)
+        """
+        self.broker_name = broker_name.lower()  # Store broker name for later use
+        # Update logger name based on broker name
+        self.logger = logging.getLogger(f"{self.broker_name}_websocket_adapter")
+        self.logger.info(f"Initializing {self.broker_name} WebSocket adapter")
+        self.user_id = user_id
+        
+        # Load authentication tokens
+        try:
+            # Use BROKER_API_KEY as client_id
+            self.client_id = os.getenv("BROKER_API_KEY")
+            self.logger.info(f"Retrieved API KEY: {self.client_id[:5]}... (length: {len(self.client_id) if self.client_id else 0})")
+            if not self.client_id:
+                error_msg = f"No BROKER_API_KEY available for {self.broker_name} authentication"
+                self.logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+                
+            # Use BROKER_API_SECRET as access_token
+            self.access_token = os.getenv("BROKER_API_SECRET")
+            self.logger.info(f"Retrieved API SECRET: {self.access_token[:5]}... (length: {len(self.access_token) if self.access_token else 0})")
+            if not self.access_token:
+                error_msg = f"No BROKER_API_SECRET available for {self.broker_name} authentication"
+                self.logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+                
+            self.logger.info(f"{self.broker_name} WebSocket adapter initialized")
+            return {"status": "success", "message": f"{self.broker_name} WebSocket adapter initialized"}
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing {self.broker_name} adapter: {e}")
+            return {"status": "error", "message": f"Error initializing {self.broker_name} adapter: {e}"}
+    
+    def connect(self):
+        """
+        Connect to the Dhan WebSocket server.
+        
+        Returns:
+            dict: Connection status
+        """
+        self.logger.info(f"Connecting to {self.broker_name} WebSocket server")
+        
+        try:
+            # Initialize WebSocket client if not already done
+            if not self.ws_client:
+                self.ws_client = DhanWebSocket(
+                    client_id=self.client_id,
+                    access_token=self.access_token,
+                    version='v2',  # Use v2 by default
+                    on_connect=self._on_connect,
+                    on_disconnect=self._on_disconnect,
+                    on_error=self._on_error,
+                    on_ticks=self._on_ticks
+                )
+            
+            # Start WebSocket connection
+            self.ws_client.start()
+            
+            # Wait for connection
+            connected = self.ws_client.wait_for_connection(timeout=10.0)
+            if not connected:
+                self.logger.error(f"Failed to connect to {self.broker_name} WebSocket server")
+                return {"status": "error", "message": f"Failed to connect to {self.broker_name} WebSocket server"}
+                
+            self.connected = True
+            self.running = True
+            self.logger.info(f"Connected to {self.broker_name} WebSocket server")
+            
+            # Resubscribe to symbols if reconnection
+            self._resubscribe()
+            
+            return {"status": "success", "message": f"Connected to {self.broker_name} WebSocket server"}
+            
+        except Exception as e:
+            self.logger.error(f"Error connecting to {self.broker_name} WebSocket: {e}")
+            return {"status": "error", "message": f"Error connecting to {self.broker_name} WebSocket: {e}"}
+    
+    def disconnect(self):
+        """
+        Disconnect from the Dhan WebSocket server.
+        
+        Returns:
+            dict: Disconnection status
+        """
+        self.logger.info(f"Disconnecting from {self.broker_name} WebSocket server")
+        
+        try:
+            if self.ws_client:
+                self.ws_client.stop()
+                self.ws_client = None
+                
+            self.connected = False
+            self.running = False
+            self.logger.info(f"Disconnected from {self.broker_name} WebSocket server")
+            return {"status": "success", "message": f"Disconnected from {self.broker_name} WebSocket server"}
+            
+        except Exception as e:
+            self.logger.error(f"Error disconnecting from {self.broker_name} WebSocket: {e}")
+            return {"status": "error", "message": f"Error disconnecting from {self.broker_name} WebSocket: {e}"}
+    
+    def resolve_token(self, symbol: str, exchange: str, token: int = None):
+        """
+        Resolve the correct token for a symbol using multiple methods:
+        1. Use the provided token if valid (not None and not 1)
+        2. Look up in the database
+        3. Check the fallback mapping dictionary
+        4. Use placeholder token as a last resort
+        
+        Args:
+            symbol (str): Symbol name
+            exchange (str): Exchange name
+            token (int, optional): Token provided by caller
             
         Returns:
-            bool: True if subscription was successful, False otherwise
+            int: Resolved token or placeholder (1) if not found
         """
-        # Initialize subscription tracking if needed
-        if mode not in self.mode_subscriptions:
-            self.mode_subscriptions[mode] = {}
+        # Use the provided token if valid
+        if token is not None and token != 1:
+            self.logger.info(f"Using provided token {token} for {exchange}:{symbol}")
+            return token
             
-        if not token:
-            self.logger.error(f"Token not found for {symbol} on {exchange}")
-            return False
-                
-        # Make sure token is a string
-        token = str(token)
+        # Try to look up in database
+        try:
+            db_token = get_token(symbol, exchange)
+            if db_token is not None:
+                self.logger.info(f"Using database token {db_token} for {exchange}:{symbol}")
+                return db_token
+        except Exception as e:
+            self.logger.warning(f"Database lookup failed for {exchange}:{symbol}: {e}")
         
-        self.logger.info(f"Using token {token} for {symbol} on {exchange}")
-        
-        # Special handling for MCX futures
-        if exchange == 'MCX':
-            self.logger.info(f"Processing MCX futures symbol: {symbol} with token: {token}")
+        # Check fallback dictionary
+        fallback_key = f"{exchange}:{symbol}"
+        if fallback_key in self.FALLBACK_TOKENS:
+            fallback_token = self.FALLBACK_TOKENS[fallback_key]
+            self.logger.info(f"Using fallback token {fallback_token} for {exchange}:{symbol}")
+            return fallback_token
             
-            # For GOLDPETAL specific handling
-            if 'GOLDPETAL' in symbol.upper():
-                # Special handling for GOLDPETAL
-                self.logger.info(f"Special handling for GOLDPETAL symbol: {symbol}")
-                # For GOLDPETAL, use a different approach entirely
-                # Try using strategic token formats known to work
-                if token.isdigit() and int(token) > 100000:
-                    # If token is large numeric ID, try using a normalized version
-                    token = str(int(token) % 100000)
-                    self.logger.info(f"Using normalized token for GOLDPETAL: {token}")
-                    
-            # MCX futures often need specific formatting
-            # Check if this is an MCX symbol known to fail with regular format
-            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'CRUDEOIL', 'SILVER']):
-                # Some brokers require specific token format for MCX futures
-                # Try stripping leading zeros if any
-                if token.startswith('0'):
-                    token = token.lstrip('0')
-                    self.logger.info(f"Stripped leading zeros from MCX token: now {token}")
+        # Use the provided placeholder token or default to 1
+        placeholder = token if token is not None else 1
+        self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder {placeholder}")
+        return placeholder
                 
-                # Ensure token is numeric for MCX
-                try:
-                    token = str(int(token))
-                    self.logger.info(f"Converted MCX token to numeric format: {token}")
-                except ValueError:
-                    self.logger.warning(f"Could not convert MCX token to numeric format: {token}")
-                    
-                # Log the exchange code we'll be using
-        # Set up subscription tracking
-        exchange_code = DhanExchangeMapper.to_dhan_exchange(exchange)
-        subscription_key = f"{exchange_code}:{token}"
+    def subscribe(self, symbol: str, exchange: str, token: int = None, mode: int = 1):
+        """
+        Subscribe to market data for a symbol.
         
-        # Store in mode_subscriptions for later lookup during binary data processing
-        symbol_data = {
-            'symbol': symbol,
-            'exchange': exchange,
-            'dhan_exchange': exchange_code,
-            'token': token,
-            'mode': mode,
-            'depth_level': depth_level,
-            'subscription_time': int(time.time())
-        }
+        Args:
+            symbol (str): Symbol identifier (e.g., 'RELIANCE')
+            exchange (str): Exchange (e.g., 'NSE', 'BSE', 'NFO')
+            token (int, optional): Instrument token. If None, will be looked up
+            mode (int): Mode - 1:LTP, 2:QUOTE, 3:FULL, 4-8:FULL
+            
+        Returns:
+            dict: Subscription status
+        """
+        # Convert exchange code to Dhan format
+        dhan_exchange = get_dhan_exchange(exchange)
         
-        # Save in both directions for easy lookup
-        self.mode_subscriptions[mode][subscription_key] = symbol_data
-        # Also save by symbol and exchange for reverse lookup
-        symbol_key = f"{exchange}:{symbol}"
-        self.mode_subscriptions[mode][symbol_key] = symbol_data
-        
-        # Log what we're tracking
-        self.logger.info(f"Added subscription tracking for {symbol_key} with token {token}")
-        
-        # Log available methods for debugging
-        self.logger.info(f"WebSocket client attributes: {dir(self.ws_client)}")
-        self.logger.info(f"WebSocket client type: {type(self.ws_client).__name__}")
+        self.logger.info(f"Processing subscription for {exchange}:{symbol} with initial token={token} and mode={mode}")
         
         try:
-            # Since we're having module caching issues, send the subscription directly
-            if not hasattr(self.ws_client, 'ws') or not self.ws_client.ws:
-                self.logger.error("WebSocket connection not available")
-                return False
+            # Resolve the token using our multi-step resolution method
+            actual_token = self.resolve_token(symbol, exchange, token)
                 
-            # Map exchange code to Dhan's expected format
-            dhan_exchange = DhanExchangeMapper.to_dhan_exchange(exchange)
-            self.logger.info(f"Mapped exchange code {exchange} to Dhan exchange code {dhan_exchange}")
+            if not self.connected or not self.ws_client:
+                self.logger.warning(f"Cannot subscribe - not connected to {self.broker_name} WebSocket")
+                return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
+                
+            # Map OpenAlgo mode to Dhan mode
+            dhan_mode = self.mode_map.get(mode, DhanWebSocket.MODE_FULL)
+            self.logger.info(f"Mapped OpenAlgo mode {mode} to Dhan mode '{dhan_mode}'")
             
-            # Create subscription request according to Dhan's API docs
-            instrument_data = {
-                "ExchangeSegment": dhan_exchange,
-                "SecurityId": token
+            # Add symbol to subscription tracking
+            with self.lock:
+                self.subscribed_symbols[symbol] = {
+                    "exchange": exchange,  # Store original OpenAlgo exchange
+                    "dhan_exchange": dhan_exchange,  # Store Dhan exchange
+                    "token": actual_token,
+                    "mode": mode
+                }
+                self.token_to_symbol[actual_token] = (symbol, exchange)
+            
+            # Map OpenAlgo exchange to Dhan exchange code
+            exchange_code = 1  # Default to NSE_EQ
+            if exchange == "NSE":
+                exchange_code = 1  # NSE_EQ
+            elif exchange == "BSE":
+                exchange_code = 4  # BSE_EQ
+            elif exchange == "NFO":
+                exchange_code = 2  # NSE_FNO
+            elif exchange == "BFO":
+                exchange_code = 8  # BSE_FNO  
+            elif exchange == "MCX":
+                exchange_code = 5  # MCX_COMM
+            elif exchange == "CDS" or exchange == "NSE_CDS":
+                exchange_code = 3  # NSE_CURRENCY
+            elif exchange == "BSE_CDS":
+                exchange_code = 7  # BSE_CURRENCY
+            # Special handling for index instruments
+            elif exchange == "INDICES" or exchange == "NSE_INDICES" or exchange == "NSE_INDEX":
+                exchange_code = 0  # IDX_I
+            elif exchange == "BSE_INDICES" or exchange == "BSE_INDEX":
+                exchange_code = 0  # IDX_I (Dhan treats all indices as IDX_I)
+                
+            self.logger.info(f"Exchange {exchange} mapped to Dhan exchange code {exchange_code}")
+                
+            # Subscribe to token with Dhan WebSocket, passing exchange code
+            self.logger.info(f"Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
+            self.ws_client.subscribe_tokens([actual_token], dhan_mode, exchange_codes={actual_token: exchange_code})
+            
+            self.logger.info(f"Subscribed to {exchange}:{symbol}")
+            return {"status": "success", "message": f"Subscribed to {exchange}:{symbol}"}
+            
+        except Exception as e:
+            self.logger.error(f"Error subscribing to {symbol}: {e}")
+            return {"status": "error", "message": f"Error subscribing to {symbol}: {e}"}
+    
+    def unsubscribe(self, symbol: str, exchange: str, token: int = None):
+        """
+        Unsubscribe from market data for a symbol.
+        
+        Args:
+            symbol (str): Symbol identifier
+            exchange (str): Exchange identifier
+            token (int, optional): Instrument token. If None, will be looked up
+            
+        Returns:
+            dict: Unsubscription status
+        """
+        self.logger.info(f"Processing unsubscribe for {exchange}:{symbol} with token={token}")
+        
+        try:
+            # First, check if we already have this symbol in our subscription tracking
+            # as that token would be most accurate for unsubscription
+            stored_token = None
+            with self.lock:
+                if symbol in self.subscribed_symbols:
+                    sub_info = self.subscribed_symbols[symbol]
+                    stored_token = sub_info.get('token')
+                    if stored_token:
+                        self.logger.info(f"Using stored token {stored_token} from subscription record for {exchange}:{symbol}")
+            
+            # If we don't have a stored token, resolve it using our helper
+            if stored_token is None:
+                actual_token = self.resolve_token(symbol, exchange, token)
+            else:
+                actual_token = stored_token
+                        
+            if not self.connected or not self.ws_client:
+                self.logger.warning(f"Cannot unsubscribe - not connected to {self.broker_name} WebSocket")
+                return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
+                
+            self.logger.info(f"Unsubscribing from token {actual_token} ({exchange}:{symbol})")
+            # Unsubscribe from token with Dhan WebSocket
+            self.ws_client.unsubscribe(actual_token)
+            
+            # Remove from subscription tracking
+            with self.lock:
+                if symbol in self.subscribed_symbols:
+                    if self.token_to_symbol.get(actual_token) == (symbol, exchange):
+                        del self.token_to_symbol[actual_token]
+                    del self.subscribed_symbols[symbol]
+            
+            self.logger.info(f"Unsubscribed from {exchange}:{symbol}")
+            return {"status": "success", "message": f"Unsubscribed from {exchange}:{symbol}"}
+            
+        except Exception as e:
+            self.logger.error(f"Error unsubscribing from {symbol}: {e}")
+            return {"status": "error", "message": f"Error unsubscribing from {symbol}: {e}"}
+    
+    def _resubscribe(self):
+        """
+        Re-subscribe to all previously subscribed symbols after reconnection.
+        """
+        if not self.connected or not self.ws_client:
+            return
+            
+        self.logger.info("Resubscribing to previously subscribed symbols")
+        
+        with self.lock:
+            # Group tokens by mode for bulk subscription
+            mode_tokens = {}
+            
+            for symbol, data in self.subscribed_symbols.items():
+                token = data["token"]
+                mode = data["mode"]
+                
+                dhan_mode = self.mode_map.get(mode, DhanWebSocket.MODE_FULL)
+                
+                if dhan_mode not in mode_tokens:
+                    mode_tokens[dhan_mode] = []
+                    
+                mode_tokens[dhan_mode].append(token)
+            
+            # Subscribe mode by mode
+            for mode, tokens in mode_tokens.items():
+                if tokens:
+                    self.ws_client.subscribe_tokens(tokens, mode)
+                    self.logger.info(f"Resubscribed {len(tokens)} symbols in mode '{mode}'")
+        
+        self.logger.info("Resubscription complete")
+    
+    def _on_connect(self):
+        """
+        Callback handler for WebSocket connection event.
+        """
+        self.logger.info("WebSocket connected callback")
+        self.connected = True
+        
+    def _on_disconnect(self):
+        """
+        Callback handler for WebSocket disconnection event.
+        Attempts to reconnect if needed.
+        """
+        self.logger.warning("WebSocket disconnected callback")
+        self.connected = False
+        
+        # Attempt to reconnect if we're still running
+        if self.running:
+            self._try_reconnect()
+            
+    def _on_error(self, error):
+        """
+        Callback handler for WebSocket error event.
+        
+        Args:
+            error: Error object or message from WebSocket
+        """
+        self.logger.error(f"WebSocket error: {error}")
+        
+        # Attempt to reconnect on error if still running
+        if self.running and self.ws_client:
+            if not self.ws_client.is_connected():
+                self._try_reconnect()
+    
+    def _on_ticks(self, ticks: List[Dict[str, Any]]):
+        """
+        Callback handler for tick data from WebSocket.
+        Processes and publishes tick data to ZeroMQ.
+        
+        Args:
+            ticks (List[Dict]): List of tick data dictionaries
+        """
+        try:
+            if not ticks:
+                return
+                
+            self.logger.info(f"Received {len(ticks)} ticks from Dhan WebSocket")
+            
+            # Process each tick
+            for tick in ticks:
+                token = tick.get("instrument_token") or tick.get("token")
+                if not token:
+                    self.logger.warning(f"Tick missing token: {tick}")
+                    continue
+                    
+                # Find symbol from token
+                with self.lock:
+                    # Try direct lookup with both string and int formats for robustness
+                    symbol_exchange = self.token_to_symbol.get(str(token)) or self.token_to_symbol.get(int(token))
+                    
+                    # Enhanced debug info for token mapping
+                    token_keys = list(self.token_to_symbol.keys())
+                    token_types = [(k, type(k).__name__) for k in token_keys]
+                    
+                    if not symbol_exchange:
+                        self.logger.warning(f"TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found")
+                        self.logger.warning(f"Available tokens: {token_types}")
+                        
+                        # Try more aggressive lookup methods
+                        for k, v in self.token_to_symbol.items():
+                            try:
+                                if int(k) == int(token):
+                                    self.logger.info(f"Found match using int conversion: {k} -> {v}")
+                                    symbol_exchange = v
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        if not symbol_exchange:
+                            continue  # Still no match, skip this tick
+                        
+                symbol, exchange = symbol_exchange
+                
+                # Add symbol and exchange to tick data
+                tick["symbol"] = symbol
+                
+                # Store Dhan's exchange code
+                dhan_exchange = tick.get("exchange")
+                
+                # Get original subscription exchange for topic generation
+                subscription_exchange = exchange
+                
+                # Convert to OpenAlgo format for data field
+                data_exchange = self._map_data_exchange(subscription_exchange)
+                
+                # Set the data exchange field in the tick
+                tick["exchange"] = data_exchange
+                
+                self.logger.info(f"Processing tick for {symbol}: price={tick.get('last_price')}, token={token}, exchange={subscription_exchange}")
+                
+                # Normalize tick format to OpenAlgo standard
+                normalized_tick = self._normalize_tick(tick)
+                
+                # Get mode from tick data or default to LTP
+                mode = normalized_tick.get('mode', 'ltp')
+                
+                # Map mode to uppercase string format for topic
+                mode_str = {
+                    'ltp': 'LTP',
+                    'quote': 'QUOTE',
+                    'full': 'DEPTH',
+                    'depth': 'DEPTH'
+                }.get(mode.lower(), 'LTP')
+                
+                # Generate topics using both formats for maximum compatibility
+                # Format 1: With broker name (for WebSocket server with broker filtering)
+                broker_topic = self._generate_topic(symbol, subscription_exchange, mode_str)
+                
+                # Format 2: Without broker name (for polling compatibility)
+                legacy_topic = f"{subscription_exchange}_{symbol}_{mode_str}"
+                
+                # Debug log to verify correct topic and data structure
+                self.logger.info(f"Publishing to topic: {broker_topic}")
+                self.logger.info(f"Publishing to legacy topic: {legacy_topic}")
+                self.logger.info(f"Data structure: {normalized_tick}")
+                self.logger.info(f"Subscription exchange: {subscription_exchange} -> Topic: {broker_topic}, Data exchange: {data_exchange}")
+                
+                # Publish to both topic formats for maximum compatibility
+                # Topic with broker name for filtering in WebSocket server
+                self.publish_market_data(broker_topic, normalized_tick)
+                # Legacy topic format for polling compatibility
+                self.publish_market_data(legacy_topic, normalized_tick)
+                
+                # Debug log for troubleshooting polling data issues
+                if mode.lower() == 'ltp':
+                    self.logger.debug(f"LTP Data should be available for polling: {subscription_exchange}:{symbol}")
+                
+        except Exception as e:
+            self.logger.error(f"Error processing ticks: {e}")
+    
+    def _generate_topic(self, symbol: str, subscription_exchange: str, mode_str: str) -> str:
+        """
+        Generate topic for market data publishing.
+        Uses the newer format including broker name for maximum client compatibility.
+        
+        Args:
+            symbol: The trading symbol
+            subscription_exchange: The exchange code in OpenAlgo format
+            mode_str: The subscription mode (LTP, QUOTE, DEPTH)
+            
+        Returns:
+            str: Properly formatted topic string
+        """
+        # Use new format with broker name: BROKER_EXCHANGE_SYMBOL_MODE
+        return f"{self.broker_name}_{subscription_exchange}_{symbol}_{mode_str}"
+    
+    def _map_data_exchange(self, subscription_exchange: str) -> str:
+        """
+        Map subscription exchange to data exchange for client compatibility.
+        
+        Args:
+            subscription_exchange: Original subscription exchange
+            
+        Returns:
+            str: Data exchange code for consistent mapping
+        """
+        # Map NSE_INDEX/BSE_INDEX to NSE/BSE for data compatibility
+        if subscription_exchange == "NSE_INDEX":
+            return "NSE"
+        elif subscription_exchange == "BSE_INDEX":
+            return "BSE"
+        return subscription_exchange
+    
+    def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize Dhan tick data to OpenAlgo format.
+        
+        Args:
+            tick (Dict): Dhan tick data
+            
+        Returns:
+            Dict: Normalized tick data
+        """
+        try:
+            # Ensure exchange is in OpenAlgo format
+            exchange = tick.get("exchange")
+            if exchange:
+                openalgo_exchange = get_openalgo_exchange(exchange)
+            else:
+                openalgo_exchange = exchange
+                
+            normalized = {
+                "symbol": tick.get("symbol"),
+                "exchange": openalgo_exchange,
+                "token": tick.get("token") or tick.get("instrument_token"),
+                "timestamp": tick.get("timestamp"),
+                "last_price": tick.get("last_price")
             }
             
-            # Use the appropriate request code based on mode
-            request_code = 15  # Default to full market data
-            if mode == 1:      # LTP mode
-                request_code = 2  # Ticker/LTP data
-            elif mode == 2:    # Quote mode
-                request_code = 4  # Quote data per Dhan's API docs
+            # Add OHLC if available
+            if "ohlc" in tick:
+                normalized["ohlc"] = tick["ohlc"]
+            
+            # Add volume if available
+            if "volume" in tick:
+                normalized["volume"] = tick["volume"]
                 
-            subscription_request = {
-                "RequestCode": request_code,
-                "InstrumentCount": 1,
-                "InstrumentList": [instrument_data]
+            # Add bid/ask if available
+            if "buy_price" in tick and "sell_price" in tick:
+                normalized["bid"] = tick.get("buy_price")
+                normalized["ask"] = tick.get("sell_price")
+                normalized["bid_qty"] = tick.get("buy_quantity")
+                normalized["ask_qty"] = tick.get("sell_quantity")
+                
+            # Add market depth if available
+            if "depth" in tick:
+                normalized["depth"] = tick["depth"]
+                
+            # Add open interest if available
+            if "open_interest" in tick:
+                normalized["oi"] = tick["open_interest"]
+                
+            return normalized
+            
+        except Exception as e:
+            self.logger.error(f"Error normalizing tick data: {e}")
+            return tick  # Return original tick if normalization fails
+    
+    def _try_reconnect(self):
+        """
+        Try to reconnect to WebSocket server with exponential backoff.
+        """
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.logger.error("Maximum reconnection attempts reached")
+            self.disconnect()  # Give up and disconnect completely
+            return
+            
+        # Calculate delay with exponential backoff
+        delay = self.reconnect_delay * (2 ** self.reconnect_attempts)
+        self.reconnect_attempts += 1
+        
+        self.logger.info(f"Attempting to reconnect in {delay} seconds (attempt {self.reconnect_attempts})")
+        
+        # Wait and reconnect
+        time.sleep(delay)
+        
+        # Try to reconnect
+        if self.ws_client:
+            self.ws_client.stop()
+            self.ws_client = None
+            
+        connection_result = self.connect()
+        
+        # Reset reconnect attempts if successful
+        if connection_result.get("status") == "success":
+            self.reconnect_attempts = 0
+    
+    def is_connected(self):
+        """
+        Check if adapter is connected to WebSocket.
+        
+        Returns:
+            bool: True if connected, False otherwise.
+        """
+        if not self.ws_client:
+            return False
+            
+        return self.ws_client.is_connected() and self.connected
+    
+    def validate_tick_parsing(self, ticker_symbols=None, timeout=30):
+        """
+        Validate that tick parsing is working correctly for different modes.
+        
+        This method subscribes to the provided symbols in different modes,
+        then logs the first few ticks received for each mode to validate parsing.
+        
+        Args:
+            ticker_symbols: List of symbols to test with (e.g. ['NSE:RELIANCE', 'NSE:INFY'])
+                           If None, uses a default set of common symbols
+            timeout: Time in seconds to wait for ticks
+            
+        Returns:
+            Dict with validation results
+        """
+        try:
+            self.logger.info("Starting tick parsing validation...")
+            
+            # Use some default symbols if none provided
+            if not ticker_symbols:
+                ticker_symbols = [
+                    'NSE:RELIANCE', 'NSE:INFY', 'NSE:TCS', 
+                    'NSE:SBIN', 'NSE:HDFCBANK'
+                ]
+            
+            results = {
+                'subscription_success': False,
+                'modes_received': set(),
+                'ticks_received': 0,
+                'errors': []
             }
             
-            self.logger.info(f"Sending direct subscription request for {symbol} with code {request_code}")
+            # Create a collector for validation
+            received_ticks = []
             
-            # Log the full subscription message for debugging
-            self.logger.info(f"Subscription request: {json.dumps(subscription_request)}")
-                
-            # Send the subscription message directly
+            def validation_callback(tick):
+                received_ticks.append(tick)
+                mode = tick.get('mode', 'unknown')
+                results['modes_received'].add(mode)
+                results['ticks_received'] += 1
+                self.logger.info(f"Validation tick received: mode={mode}, token={tick.get('token')}, ltp={tick.get('last_price')}")
+            
+            # Backup original callbacks
+            original_callbacks = {}
+            for mode in [1, 2, 3, 4, 5]:  # OpenAlgo modes
+                if mode in self.callbacks:
+                    original_callbacks[mode] = self.callbacks[mode].copy()
+                else:
+                    original_callbacks[mode] = []
+                # Set validation callback
+                self.callbacks[mode] = [validation_callback]
+            
             try:
-                self.ws_client.ws.send(json.dumps(subscription_request))
-                self.logger.info("WebSocket message sent successfully")
-            except Exception as e:
-                self.logger.error(f"Failed to send WebSocket message: {e}")
-                return False
-            
-            # Store subscription for tracking
-            key = f"{exchange}:{token}:{symbol}"
-            
-            # Initialize mode dict if it doesn't exist
-            if mode not in self.mode_subscriptions:
-                self.mode_subscriptions[mode] = {}
+                # Try subscribing in different modes
+                self.logger.info(f"Subscribing to {ticker_symbols} for validation...")
                 
-            # Store subscription
-            self.mode_subscriptions[mode][key] = {
-                "symbol": symbol,
-                "exchange": exchange,
-                "token": token,
-                "depth_level": depth_level,
-                "timestamp": int(time.time())
-            }
-            
-            self.logger.info(f"Successfully sent subscription request for {symbol} on {exchange} with mode {mode}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error subscribing to {symbol} on {exchange}: {e}")
-            return False
-
-            
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
-        """Unsubscribe from market data"""
-        # Get token for the symbol
-        token = get_token(symbol, exchange)
-        if not token:
-            return {
-                "status": "error",
-                "error": f"Token not found for {symbol} on {exchange}",
-                "symbol": symbol,
-                "exchange": exchange
-            }
-            
-        # Translate exchange code
-        dhan_exchange = DhanExchangeMapper.to_dhan_exchange(exchange)
-        
-        try:
-            # Send unsubscription request directly via WebSocket
-            if not self.ws_client or not hasattr(self.ws_client, 'ws') or not self.ws_client.ws:
-                self.logger.error("Cannot unsubscribe: WebSocket connection not available")
-                return {
-                    "status": "error",
-                    "error": "WebSocket connection not available",
-                    "symbol": symbol,
-                    "exchange": exchange
-                }
+                # Test each mode separately
+                for mode in [1, 2, 3, 4]:  # Test ltp, quote, depth, full
+                    try:
+                        self.logger.info(f"Testing mode: {mode}")
+                        # Subscribe to symbols in this mode
+                        for symbol in ticker_symbols:
+                            self.subscribe(symbol, mode=mode)
+                        
+                        # Wait for some ticks
+                        start_time = time.time()
+                        while time.time() - start_time < timeout/4:  # Divide timeout by modes
+                            if results['ticks_received'] > 0:
+                                self.logger.info(f"Received {results['ticks_received']} ticks for mode {mode}")
+                                break
+                            time.sleep(0.1)
+                        
+                        # Unsubscribe after test
+                        for symbol in ticker_symbols:
+                            self.unsubscribe(symbol, mode=mode)
+                            
+                        time.sleep(1)  # Give time for unsubscribe to complete
+                        
+                    except Exception as e:
+                        error_msg = f"Error testing mode {mode}: {str(e)}"
+                        results['errors'].append(error_msg)
+                        self.logger.error(error_msg)
                 
-            # Create instrument data for unsubscription
-            instrument_data = {
-                "ExchangeSegment": dhan_exchange,
-                "SecurityId": token
-            }
-            
-            # Create unsubscription request according to Dhan's API docs
-            unsubscription_request = {
-                "RequestCode": 16,  # Unsubscribe code
-                "InstrumentCount": 1,
-                "InstrumentList": [instrument_data]
-            }
-            
-            self.logger.info(f"Sending direct unsubscription request for {symbol} on {exchange}")
-            
-            # Send the unsubscription message directly
-            self.ws_client.ws.send(json.dumps(unsubscription_request))
-            
-            # Remove from subscription tracking
-            key = f"{dhan_exchange}:{token}:{symbol}"
-            for mode_dict in self.mode_subscriptions.values():
-                if key in mode_dict:
-                    del mode_dict[key]
+                results['subscription_success'] = True
+                
+            finally:
+                # Restore original callbacks
+                for mode, callbacks in original_callbacks.items():
+                    if mode in self.callbacks:
+                        self.callbacks[mode] = callbacks
                     
-            return {
-                "status": "success",
-                "symbol": symbol,
-                "exchange": exchange
-            }
+                # Try to unsubscribe from everything just in case
+                try:
+                    for mode in [1, 2, 3, 4, 5]:
+                        for symbol in ticker_symbols:
+                            self.unsubscribe(symbol, mode=mode)
+                except Exception as e:
+                    self.logger.error(f"Error during cleanup: {e}")
+            
+            # Summarize results
+            self.logger.info(f"Tick validation complete. Received {results['ticks_received']} ticks")
+            self.logger.info(f"Modes received: {results['modes_received']}")
+            
+            # Include sample ticks in result
+            if received_ticks:
+                # Group by mode
+                sample_ticks = {}
+                for tick in received_ticks[:10]:  # Get first 10 ticks max
+                    mode = tick.get('mode', 'unknown')
+                    if mode not in sample_ticks:
+                        sample_ticks[mode] = []
+                    sample_ticks[mode].append(tick)
+                
+                results['sample_ticks'] = sample_ticks
+            
+            return results
             
         except Exception as e:
-            self.logger.error(f"Error unsubscribing from {symbol} on {exchange}: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "symbol": symbol,
-                "exchange": exchange
-            }
-            
-    def _unsubscribe_symbol(self, symbol: str, exchange: str, mode: int, token: str = None) -> bool:
-        """Internal method to unsubscribe from a symbol"""
-        if not self.ws_client or not self.ws_client.connected:
-            self.logger.error("Cannot unsubscribe: Not connected to WebSocket")
-            return False
-            
-        # If token not provided, get it from database
-        if not token:
-            token = get_token(symbol, exchange)
-            if not token:
-                self.logger.error(f"Token not found for {symbol} on {exchange}")
-                return False
-        
-        # Prepare unsubscription data
-        symbol_data = {
-            "exchange": exchange,
-            "token": token,
-            "symbol": symbol
-        }
-        
-        # Unsubscribe using the Dhan WebSocket client
-        success = self.ws_client.unsubscribe([symbol_data])
-        
-        if success:
-            # Remove from subscription tracking
-            key = f"{exchange}:{token}:{symbol}"
-            
-            # Remove from mode subscriptions
-            if mode in self.mode_subscriptions and key in self.mode_subscriptions[mode]:
-                del self.mode_subscriptions[mode][key]
-                
-            self.logger.info(f"Successfully unsubscribed from {symbol} on {exchange} with mode {mode}")
-            return True
-        else:
-            self.logger.error(f"Failed to unsubscribe from {symbol} on {exchange}")
-            return False
+            self.logger.error(f"Error in validate_tick_parsing: {e}")
+            return {'success': False, 'error': str(e)}
     
-    def _process_market_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process market data from Dhan WebSocket and transform to OpenAlgo format"""
-        try:
-            # Check if data contains error information
-            if "error" in data:
-                self.logger.error(f"Error in market data: {data['error']}")
-                return None
-                
-            # Skip non-market data messages (e.g. subscription status)
-            if "action" in data or not "symbol" in data:
-                return None
-            
-            # Extract the exchange and token
-            exchange = data.get("exchange")
-            token = data.get("token")
-            symbol = data.get("symbol")
-            
-            if not exchange or not token or not symbol:
-                self.logger.warning("Missing exchange, token, or symbol in market data")
-                return None
-                
-            # Convert exchange code back to OpenAlgo format
-            oa_exchange = DhanExchangeMapper.to_oa_exchange(exchange)
-            
-            # Get OpenAlgo symbol if available, otherwise use the provided symbol
-            oa_symbol = SymbolMapper.to_oa_symbol(symbol, oa_exchange) or symbol
-            
-            # Build base structure with common fields
-            processed_data = {
-                "symbol": oa_symbol,
-                "exchange": oa_exchange,
-                "token": token,
-                "timestamp": int(time.time() * 1000),  # Dhan might not provide timestamp
-                "ltp": data.get("lastTradedPrice", 0),
-                "ltq": data.get("lastTradedQty", 0),
-                "volume": data.get("totalTradedQty", 0),
-                "open": data.get("openPrice", 0),
-                "high": data.get("highPrice", 0),
-                "low": data.get("lowPrice", 0),
-                "close": data.get("closePrice", 0),
-                "change": data.get("change", 0),
-                "change_percent": data.get("changePerc", 0)
-            }
-            
-            # Check if market depth data is available
-            if "bids" in data and "asks" in data:
-                processed_data["depth"] = {
-                    "buy": [],
-                    "sell": []
-                }
-                
-                # Process buy orders (bids)
-                for bid in data.get("bids", [])[:5]:  # Limit to 5 levels
-                    processed_data["depth"]["buy"].append({
-                        "price": bid.get("price", 0),
-                        "quantity": bid.get("quantity", 0),
-                        "orders": bid.get("orders", 1)  # Default to 1 if not provided
-                    })
-                    
-                # Process sell orders (asks)
-                for ask in data.get("asks", [])[:5]:  # Limit to 5 levels
-                    processed_data["depth"]["sell"].append({
-                        "price": ask.get("price", 0),
-                        "quantity": ask.get("quantity", 0),
-                        "orders": ask.get("orders", 1)  # Default to 1 if not provided
-                    })
-                
-                # If we have depth, add top of the book data
-                if processed_data["depth"]["buy"] and processed_data["depth"]["sell"]:
-                    processed_data["bid"] = processed_data["depth"]["buy"][0]["price"]
-                    processed_data["ask"] = processed_data["depth"]["sell"][0]["price"]
-                    processed_data["bid_qty"] = processed_data["depth"]["buy"][0]["quantity"]
-                    processed_data["ask_qty"] = processed_data["depth"]["sell"][0]["quantity"]
-            
-            # Add basic bid/ask if available but no depth
-            elif "bestBid" in data and "bestAsk" in data:
-                processed_data["bid"] = data.get("bestBid", 0)
-                processed_data["ask"] = data.get("bestAsk", 0)
-                processed_data["bid_qty"] = data.get("bestBidQty", 0)
-                processed_data["ask_qty"] = data.get("bestAskQty", 0)
-            
-            return processed_data
-            
-        except Exception as e:
-            self.logger.error(f"Error processing market data: {e}")
-            return None
-    
-    def get_capabilities(self) -> Dict[str, Any]:
-        """Return adapter capabilities"""
-        return DhanCapabilityRegistry.get_capabilities()
+    def _generate_topic(self, symbol: str, exchange: str, mode_str: str) -> str:
+        """
+        Generate topic for market data publishing.
+        Uses original exchange format for maximum client compatibility.
         
-    def publish_status_update(self, status_data: Dict[str, Any]) -> None:
-        """Publish status updates to ZeroMQ socket"""
-        try:
-            if self.zmq_socket:
-                message = {
-                    "type": "status",
-                    "data": status_data,
-                    "broker": self.broker_name,
-                    "user_id": self.user_id,
-                    "timestamp": int(time.time() * 1000)
-                }
-                self.zmq_socket.send_json(message)
-                self.logger.debug(f"Published status update: {status_data['status']}")
-        except Exception as e:
-            self.logger.error(f"Error publishing status update: {e}")
+        Args:
+            symbol: Symbol name
+            exchange: Exchange code
+            mode_str: Mode string (LTP, QUOTE, DEPTH)
+            
+        Returns:
+            Properly formatted ZeroMQ topic string
+        """
+        # Format topic string as EXCHANGE_SYMBOL_MODE (all uppercase)
+        return f"{exchange}_{symbol}_{mode_str}".upper()
 
+    def _map_data_exchange(self, exchange: str) -> str:
+        """
+        Map exchange code to appropriate data exchange for client compatibility.
+        
+        Args:
+            exchange: Original exchange code
+            
+        Returns:
+            Mapped exchange for data field
+        """
+        # Ensure index exchanges are properly formatted
+        if exchange in ['NSE_INDEX', 'BSE_INDEX', 'IDX_I']:
+            if 'NSE' in exchange:
+                return 'NSE_INDEX'  # Standardize NSE index
+            elif 'BSE' in exchange:
+                return 'BSE_INDEX'  # Standardize BSE index
+        return exchange  # Return original for non-index exchanges
+    
+    def __del__(self):
+        """Destructor to ensure proper cleanup."""
+        try:
+            self.disconnect()
+        except:
+            pass
