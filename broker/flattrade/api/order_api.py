@@ -21,7 +21,10 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
 
     conn = http.client.HTTPSConnection("piconnect.flattrade.in")
-    headers = {'Content-Type': 'application/json'}
+    if endpoint == "/PiConnectTP/Holdings":
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    else:
+        headers = {'Content-Type': 'application/json'}
 
     conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()

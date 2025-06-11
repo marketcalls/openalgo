@@ -327,7 +327,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
+                print(f"Flattrade Portfolio - Product Value for {symbol} Not Found or Changed.")
     
     return portfolio_data
 
@@ -360,7 +360,8 @@ def calculate_portfolio_statistics(holdings_data):
             continue  # Skip if no NSE entry is found
 
         # Process only the NSE entry
-        quantity = float(holding.get('holdqty', 0)) + max(float(holding.get('npoadt1qty', 0)) , float(holding.get('dpqty', 0)))
+        # Using npoadqty as per Flattrade documentation for Non Poa display quantity
+        quantity = float(holding.get('holdqty', 0)) + max(float(holding.get('npoadqty', 0)) , float(holding.get('dpqty', 0)))
         upload_price = float(holding.get('upldprc', 0))
         market_price = float(nse_entry.get('upldprc', 0))  # Assuming 'pp' is the market price for NSE
 
@@ -375,20 +376,30 @@ def calculate_portfolio_statistics(holdings_data):
         totalinvvalue += inv_value
         totalprofitandloss += profit_and_loss
 
-        # Valuation formula from API
+        # Valuation formula from API, using upload_price (cost price) as LTP is not available from this endpoint.
+        # This calculates the cost valuation of these quantities.
         holdqty = float(holding.get('holdqty', 0))
         btstqty = float(holding.get('btstqty', 0))
         brkcolqty = float(holding.get('brkcolqty', 0))
         unplgdqty = float(holding.get('unplgdqty', 0))
         benqty = float(holding.get('benqty', 0))
-        npoadqty = float(holding.get('npoadt1qty', 0))
+        # Using npoadqty as per Flattrade documentation
+        npoadqty_val = float(holding.get('npoadqty', 0)) # Renamed to avoid conflict with loop variable if any
         dpqty = float(holding.get('dpqty', 0))
         usedqty = float(holding.get('usedqty', 0))
 
-        # Valuation formula from API
-        valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        print("test valuation :"+str(npoadqty))
-        print("test valuation :"+str(upload_price))
+        # Current P&L calculation uses upload_price for both cost and current value, resulting in 0 P&L.
+        # True P&L requires LTP (Last Traded Price).
+        # inv_value = quantity * upload_price (already calculated)
+        # current_market_value_of_holding = quantity * LTP (LTP is missing)
+        # profit_and_loss = current_market_value_of_holding - inv_value
+
+        # The existing profit_and_loss calculation (holding_value - inv_value) where both use upload_price correctly results in 0.
+        # This is a cost-based P&L, which is 0 until sold or if current price differs.
+
+        valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty_val, dpqty)) - usedqty) * upload_price
+        # print("test valuation :"+str(npoadqty_val))
+        # print("test valuation :"+str(upload_price))
         # Accumulate total valuation
         totalholdingvalue += valuation
 
@@ -412,10 +423,14 @@ def transform_holdings_data(holdings_data):
                 transformed_position = {
                     "symbol": exch_tsym.get('tsym', ''),
                     "exchange": exch_tsym.get('exch', ''),
-                    "quantity": int(holding.get('holdqty', 0)) + max(int(holding.get('npoadt1qty', 0)) , int(holding.get('dpqty', 0))),
+                    # Using npoadqty as per Flattrade documentation
+                    "quantity": int(holding.get('holdqty', 0)) + max(int(holding.get('npoadqty', 0)) , int(holding.get('dpqty', 0))),
                     "product": exch_tsym.get('product', 'CNC'),
-                    "pnl": holding.get('profitandloss', 0.0),
-                    "pnlpercent": holding.get('pnlpercentage', 0.0)
+                    # P&L calculation here will be 0 as LTP is not available.
+                    # Using upload_price as a placeholder for current price for this calculation.
+                    "avg_price": float(holding.get('upldprc', 0.0)),
+                    "pnl": 0.0, # (LTP - avg_price) * quantity; LTP is missing, so P&L is effectively 0 for now
+                    "pnlpercent": 0.0 # (pnl / (avg_price * quantity)) * 100 if avg_price and quantity are not 0
                 }
                 transformed_data.append(transformed_position)
     return transformed_data
