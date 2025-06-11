@@ -2,14 +2,12 @@
 
 import logging
 import threading
-import time
 import os
 from datetime import datetime
 import json # For ZMQ publishing
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, Optional
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
-from database.token_db import get_token # May need for instrument token resolution
 # For direct DB query for session token:
 from database.auth_db import Auth, decrypt_token, DATABASE_URL 
 from sqlalchemy import create_engine
@@ -23,14 +21,14 @@ logger = logging.getLogger(__name__)
 class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
     """
     Adapter for Flattrade WebSocket, providing a consistent interface
-    for the OpenAlgo system.
+    for OpenAlgo.
     """
     # OpenAlgo common subscription modes
     MODE_LTP = 1
     MODE_QUOTE = 2
     MODE_FULL = 3
-    MODE_ORDER_UPDATES = 4  # New mode for order updates
-    
+    MODE_ORDER_UPDATES = 4
+
     # Mode mapping to Flattrade specific modes
     MODE_TO_FLATTRADE = {
         MODE_LTP: "touchline",
@@ -38,13 +36,12 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         MODE_FULL: "depth",
         MODE_ORDER_UPDATES: "order_updates"
     }
-
+    
     def __init__(self):
         super().__init__() # Call parent constructor for ZMQ setup
         self.logger = logging.getLogger("FlattradeStreamAdapter") # Use self.logger from base or re-init
         self.ws_client: Optional[FlattradeWebSocketClient] = None
         self.user_id: Optional[str] = None
-        self.account_id: Optional[str] = None # Flattrade specific
         self.api_key: Optional[str] = None # Flattrade specific API key part
         self.session_token: Optional[str] = None # Flattrade susertoken
         
@@ -64,7 +61,6 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         self.is_active = False
         self._connection_acknowledged = False
         self._connection_lock = threading.Lock()
-        self._pending_subscriptions = []  # Store pending subscriptions until connection is ready
         
         # Initialize callback attributes
         self.on_tick_callback = None
@@ -78,8 +74,8 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
 
         self.logger.info("FlattradeStreamAdapter initialized (inheriting from BaseBrokerWebSocketAdapter).")
 
-    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        self.logger.info(f"Initializing FlattradeStreamAdapter for user: {user_id}, broker: {broker_name}")
+    def initialize(self, broker_name: str, user_id: str) -> Dict[str, Any]:
+        self.logger.info(f"Initializing adapter for user: {user_id}")
         if broker_name != self.broker_name:
             return {'status': 'error', 'message': f'Invalid broker name: {broker_name}'}
 
@@ -150,12 +146,13 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             )
             logger.info(f"Initialized WebSocket client with user_id: {self.user_id}, account_id: {self.user_id}")
             
+            # Set callbacks directly
             self.ws_client.set_on_open_callback(self._on_ws_open)
             self.ws_client.set_on_message_callback(self._on_ws_message)
             self.ws_client.set_on_error_callback(self._on_ws_error)
             self.ws_client.set_on_close_callback(self._on_ws_close)
 
-            self.logger.info("FlattradeWebSocketClient instance created and callbacks set.")
+            self.logger.info("WebSocket client created and callbacks set")
             return {'status': 'success', 'message': 'Adapter initialized successfully.'}
         except Exception as e:
             self.logger.error(f"Error initializing Flattrade adapter: {e}", exc_info=True)
@@ -170,11 +167,11 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         """
         with self._connection_lock:
             if self.is_active:
-                self.logger.warning("Adapter is already connected")
+                self.logger.warning("Already connected")
                 return {'status': 'success', 'message': 'Already connected'}
                 
             if not self.ws_client:
-                msg = "WebSocket client not initialized"
+                msg = "WebSocket client not initialized."
                 self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
             
@@ -185,14 +182,15 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
                 # Connect the WebSocket client
                 if self.ws_client.connect():
                     self.is_active = True
-                    self.logger.info("WebSocket connection established successfully")
+                    self.logger.info("WebSocket connection established")
+                    
                     return {'status': 'success', 'message': 'Connection established'}
                 else:
                     self.logger.error("Failed to establish WebSocket connection")
                     return {'status': 'error', 'message': 'Failed to connect'}
                     
             except Exception as e:
-                self.logger.error(f"Error connecting to Flattrade WebSocket: {e}", exc_info=True)
+                self.logger.error(f"Connection error: {e}", exc_info=True)
                 self.is_active = False
                 return {'status': 'error', 'message': str(e)}
 
@@ -202,7 +200,7 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         """
         with self._connection_lock:
             if not self.is_active:
-                self.logger.warning("Adapter is not connected")
+                self.logger.warning("Not connected")
                 return {'status': 'success', 'message': 'Not connected'}
                 
             self.logger.info("Adapter attempting to disconnect...")
@@ -213,11 +211,11 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             
             try:
                 self.ws_client.close()
-                self.logger.info("WebSocket connection closed successfully")
+                self.logger.info("Disconnected")
                 return {'status': 'success', 'message': 'Disconnected successfully'}
                 
             except Exception as e:
-                self.logger.error(f"Error during Flattrade disconnect: {e}", exc_info=True)
+                self.logger.error(f"Disconnect error: {e}", exc_info=True)
                 return {'status': 'error', 'message': str(e)}
             
             finally:
@@ -442,7 +440,7 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Unsupported exchange: {exchange} for symbol {symbol}")
             return None
 
-    def subscribe(self, symbol_or_info=None, exchange: str = None, mode: int = 2, depth_level: int = 1, account_id: str = None):
+    def subscribe(self, symbol_or_info=None, exchange: str = None, mode: int = 2, depth_level: int = 1, account_id: str = None) -> Dict[str, Any]:
         """
         Subscribe to market data or order updates using OpenAlgo common modes.
         
@@ -465,31 +463,27 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         """
         # Handle order updates (mode 4)
         if mode == self.MODE_ORDER_UPDATES:
-            # Use the account_id from the WebSocket client if not provided
-            account_id = account_id or (self.ws_client.account_id if self.ws_client else None)
-            
+            # Use the adapter's internal account_id if not provided
+            account_id = account_id or (self.ws_client.account_id if self.ws_client else None) or self.user_id
             if not account_id:
-                error_msg = "account_id is required for order updates. Please provide it or ensure the WebSocket client is properly initialized."
-                self.logger.error(error_msg)
-                return {'status': 'error', 'message': error_msg}
-                
+                msg = "account_id required for order updates."
+                self.logger.error(msg)
+                return {'status': 'error', 'message': msg}
             try:
                 self.logger.info(f"Subscribing to order updates for account: {account_id}")
                 self.ws_client.subscribe_order_updates(account_id)
                 self._subscriptions.add(f"order_updates|{account_id}")
-                msg = f"Successfully subscribed to order updates for account {account_id}"
-                self.logger.info(msg)
-                return {'status': 'success', 'message': msg}
+                return {'status': 'success', 'message': f"Subscribed to order updates for account {account_id}"}
             except Exception as e:
-                error_msg = f"Failed to subscribe to order updates: {str(e)}"
-                self.logger.error(error_msg, exc_info=True)
-                return {'status': 'error', 'message': error_msg}
+                msg = f"Order update subscription failed: {e}"
+                self.logger.error(msg, exc_info=True)
+                return {'status': 'error', 'message': msg}
         
         # Handle market data subscriptions (modes 1-3)
         if not symbol_or_info:
-            error_msg = "symbol_or_info is required for market data subscriptions"
-            self.logger.error(error_msg)
-            return {'status': 'error', 'message': error_msg}
+            msg = "symbol_or_info is required for market data subscriptions"
+            self.logger.error(msg)
+            return {'status': 'error', 'message': msg}
             
         # Handle different parameter formats for market data
         if isinstance(symbol_or_info, dict):
@@ -499,44 +493,44 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             symbol_info = {"symbol": symbol_or_info, "exchange": exchange}
             
         # Validate market data mode
-        if mode not in [1, 2, 3]:
-            error_msg = f"Unsupported subscription mode: {mode}. Must be one of: 1 (LTP), 2 (Quote), 3 (Full/Depth), 4 (Order Updates)"
-            self.logger.error(error_msg)
-            return {'status': 'error', 'message': error_msg}
+        if mode not in [self.MODE_LTP, self.MODE_QUOTE, self.MODE_FULL]:
+            msg = f"Unsupported mode: {mode}"
+            self.logger.error(msg)
+            return {'status': 'error', 'message': msg}
             
         # Map to Flattrade specific mode
-        flattrade_mode = {1: "touchline", 2: "touchline", 3: "depth"}.get(mode, "touchline")
+        flattrade_mode = self.MODE_TO_FLATTRADE.get(mode, "touchline")
             
         # Resolve the symbol info
         symbol_info = self._resolve_symbol_info(symbol_or_info, exchange)
         
         if not self.ws_client:
-            error_msg = "WebSocket client not initialized"
-            self.logger.error(error_msg)
-            return {'status': 'error', 'message': error_msg, 'symbol': symbol_info, 'mode': mode}
+            msg = "WebSocket client not initialized"
+            self.logger.error(msg)
+            return {'status': 'error', 'message': msg, 'symbol': symbol_info, 'mode': mode}
             
-        # If not connected or connection not yet acknowledged, queue the subscription
-        if not self.is_active or not self._connection_acknowledged:
-            self.logger.info(f"Connection not ready. Queueing subscription for {symbol_info['symbol']} ({symbol_info['exchange']}) in {mode} mode")
-            self._pending_subscriptions.append((symbol_info, mode, depth_level))
-            return {'status': 'queued', 'message': 'Subscription queued, will be processed when connection is ready', 'symbol': symbol_info, 'mode': mode}
-
         with self.lock:
             # Check connection state
             if not hasattr(self, 'is_active') or not self.is_active:
                 msg = "WebSocket client not connected. Call connect() first."
-                self.logger.error(f"Subscribe failed: {msg} Symbol: {symbol_info}, Mode: {mode}")
+                self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
                 
-            flattrade_token = self._resolve_symbol_to_flattrade_token(symbol_info)
+            token = self._resolve_symbol_to_flattrade_token(symbol_info)
 
-            if not flattrade_token:
-                msg = f"Failed to resolve symbol info to Flattrade token: {symbol_info}"
+            if not token:
+                msg = f"Failed to resolve token for {symbol_info}"
                 self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
 
+            sub_key = f"{token}|{mode}"
+            if sub_key in self._subscriptions:
+                msg = f"Already subscribed to {token} mode {mode}"
+                self.logger.info(msg)
+                return {'status': 'success', 'message': msg}
+
             # Handle order updates subscription
-            if flattrade_token == "ORDERS_PSEUDO_TOKEN":
+            if token == "ORDERS_PSEUDO_TOKEN":
                 if "ORDERS" not in self._subscriptions:
                     self.logger.info("Subscribing to order updates.")
                     self.ws_client.subscribe_order_updates()
@@ -547,32 +541,24 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
                     return {'status': 'success', 'message': 'Already subscribed to order updates.'}
 
             # Handle instrument subscriptions (touchline, depth)
-            # Construct a unique key for _subscriptions that includes mode
-            subscription_key = f"{flattrade_token}|{mode}"
-            if subscription_key in self._subscriptions:
-                msg = f"Already subscribed to {flattrade_token} with mode {mode}."
-                self.logger.info(msg)
-                return {'status': 'success', 'message': msg}
-
             try:
-                if mode == 1 or mode == 2:
-                    self.logger.info(f"Subscribing to touchline for {flattrade_token}")
-                    self.ws_client.subscribe_touchline([flattrade_token])
-                elif mode == 3:
-                    self.logger.info(f"Subscribing to depth for {flattrade_token}")
-                    self.ws_client.subscribe_depth([flattrade_token])
+                if flattrade_mode in ["touchline"]:
+                    self.logger.info(f"Subscribing to touchline for {token}")
+                    self.ws_client.subscribe_touchline([token])
+                elif flattrade_mode == "depth":
+                    self.logger.info(f"Subscribing to depth for {token}")
+                    self.ws_client.subscribe_depth([token])
                 else:
                     msg = f"Unsupported subscription mode: {mode}"
                     self.logger.error(msg)
                     return {'status': 'error', 'message': msg}
                 
-                # Store the original mode in the subscription key for tracking
-                self._subscriptions.add(f"{flattrade_token}|{mode}")
-                msg = f"Subscription request sent for {flattrade_token}, mode {mode}."
+                self._subscriptions.add(f"{token}|{mode}")
+                msg = f"Subscription sent for {token}, mode {mode}"
                 self.logger.info(msg)
                 return {'status': 'success', 'message': msg}
             except Exception as e:
-                msg = f"Error subscribing to {flattrade_token}, mode {mode}: {e}"
+                msg = f"Error subscribing to {token}, mode {mode}: {e}"
                 self.logger.error(msg, exc_info=True)
                 return {'status': 'error', 'message': msg}
 
@@ -599,9 +585,9 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         # Handle order updates unsubscription (mode 4)
         if mode == self.MODE_ORDER_UPDATES:
             if not account_id:
-                error_msg = "account_id is required for unsubscribing from order updates"
-                self.logger.error(error_msg)
-                return {'status': 'error', 'message': error_msg}
+                msg = "account_id is required for unsubscribing from order updates"
+                self.logger.error(msg)
+                return {'status': 'error', 'message': msg}
                 
             try:
                 self.ws_client.unsubscribe_order_updates(account_id)
@@ -610,15 +596,15 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(msg)
                 return {'status': 'success', 'message': msg}
             except Exception as e:
-                error_msg = f"Failed to unsubscribe from order updates: {str(e)}"
-                self.logger.error(error_msg, exc_info=True)
-                return {'status': 'error', 'message': error_msg}
+                msg = f"Failed to unsubscribe from order updates: {str(e)}"
+                self.logger.error(msg, exc_info=True)
+                return {'status': 'error', 'message': msg}
         
         # Handle market data unsubscriptions (modes 1-3)
         if not symbol_or_info:
-            error_msg = "symbol_or_info is required for market data unsubscriptions"
-            self.logger.error(error_msg)
-            return {'status': 'error', 'message': error_msg}
+            msg = "symbol_or_info is required for market data unsubscriptions"
+            self.logger.error(msg)
+            return {'status': 'error', 'message': msg}
             
         # Handle different parameter formats for market data
         if isinstance(symbol_or_info, dict):
@@ -628,13 +614,13 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             symbol_info = {"symbol": symbol_or_info, "exchange": exchange}
             
         # Validate market data mode
-        if mode not in [1, 2, 3]:
-            error_msg = f"Unsupported unsubscription mode: {mode}. Must be one of: 1 (LTP), 2 (Quote), 3 (Full/Depth), 4 (Order Updates)"
-            self.logger.error(error_msg)
-            return {'status': 'error', 'message': error_msg}
+        if mode not in [self.MODE_LTP, self.MODE_QUOTE, self.MODE_FULL]:
+            msg = f"Unsupported unsubscription mode: {mode}. Must be one of: {self.MODE_LTP} (LTP), {self.MODE_QUOTE} (Quote), {self.MODE_FULL} (Full/Depth)"
+            self.logger.error(msg)
+            return {'status': 'error', 'message': msg}
             
         # Map to Flattrade specific mode
-        flattrade_mode = {1: "touchline", 2: "touchline", 3: "depth"}.get(mode, "touchline")
+        flattrade_mode = self.MODE_TO_FLATTRADE.get(mode, "touchline")
             
         # Handle both calling patterns
         if isinstance(symbol_or_info, dict):
@@ -650,23 +636,23 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             # Check connection state
             if not hasattr(self, 'is_active') or not self.is_active:
                 msg = "WebSocket client not connected. Call connect() first."
-                self.logger.error(f"Unsubscribe failed: {msg} Symbol: {symbol_info}, Mode: {mode}")
+                self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
                 
             if not self.ws_client:
                 msg = "WebSocket client not initialized."
-                self.logger.error(f"Unsubscribe failed: {msg} Symbol: {symbol_info}, Mode: {mode}")
+                self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
 
-            flattrade_token = self._resolve_symbol_to_flattrade_token(symbol_info)
+            token = self._resolve_symbol_to_flattrade_token(symbol_info)
 
-            if not flattrade_token:
-                msg = f"Failed to resolve symbol info to Flattrade token for unsubscribe: {symbol_info}"
+            if not token:
+                msg = f"Failed to resolve token for symbol info for unsubscribe: {symbol_info}"
                 self.logger.error(msg)
                 return {'status': 'error', 'message': msg}
 
             # Handle order updates unsubscription
-            if flattrade_token == "ORDERS_PSEUDO_TOKEN":
+            if token == "ORDERS_PSEUDO_TOKEN":
                 if "ORDERS" in self._subscriptions:
                     self.logger.info("Unsubscribing from order updates.")
                     self.ws_client.unsubscribe_order_updates()
@@ -678,21 +664,21 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
 
             # Handle instrument unsubscriptions
             # Check both the mapped mode and the original mode if this was a 'quote' subscription
-            subscription_key = f"{flattrade_token}|{mode}"
+            subscription_key = f"{token}|{mode}"
             
             # Check if either the original or mapped subscription exists
             if subscription_key not in self._subscriptions:
-                msg = f"Not currently subscribed to {flattrade_token} with mode {mode}."
+                msg = f"Not currently subscribed to {token} with mode {mode}."
                 self.logger.info(msg)
                 return {'status': 'success', 'message': msg}
 
             try:
                 if mode == 1 or mode == 2:
-                    self.logger.info(f"Unsubscribing from touchline for {flattrade_token}")
-                    self.ws_client.unsubscribe_touchline([flattrade_token])
+                    self.logger.info(f"Unsubscribing from touchline for {token}")
+                    self.ws_client.unsubscribe_touchline([token])
                 elif mode == 3:
-                    self.logger.info(f"Unsubscribing from depth for {flattrade_token}")
-                    self.ws_client.unsubscribe_depth([flattrade_token])
+                    self.logger.info(f"Unsubscribing from depth for {token}")
+                    self.ws_client.unsubscribe_depth([token])
                 else:
                     msg = f"Unsupported unsubscription mode: {mode}"
                     self.logger.error(msg)
@@ -701,93 +687,36 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
                 # Remove both original and mapped subscription keys if they exist
                 if subscription_key in self._subscriptions:
                     self._subscriptions.remove(subscription_key)
-                msg = f"Unsubscribed from {flattrade_token}, mode {mode}."
-                msg = f"Unsubscribed from {flattrade_token}, mode {original_mode if 'original_mode' in locals() else mode}."
+                msg = f"Unsubscribed from {token}, mode {mode}"
                 self.logger.info(msg)
                 return {'status': 'success', 'message': msg}
             except Exception as e:
-                msg = f"Error unsubscribing from {flattrade_token}, mode {mode}: {e}"
+                msg = f"Error unsubscribing from {token}, mode {mode}: {e}"
                 self.logger.error(msg, exc_info=True)
                 return {'status': 'error', 'message': msg}
 
-    def _resolve_symbol_info(self, symbol_or_info, exchange: str = None) -> Dict[str, str]:
-        """
-        Resolve symbol input to a standardized symbol info dictionary.
-        
-        Args:
-            symbol_or_info: Either a symbol string or a dictionary containing symbol info
-            exchange: Exchange code (required if symbol_or_info is a string)
-            
-        Returns:
-            Dict[str, str]: Standardized symbol info with keys: symbol, exchange, instrument_type
-        """
-        if isinstance(symbol_or_info, dict):
-            # Already in dictionary format, ensure required fields exist
-            symbol_info = symbol_or_info.copy()
-            if 'symbol' not in symbol_info:
-                raise ValueError("Symbol dictionary must contain 'symbol' key")
-            if 'exchange' not in symbol_info and exchange:
-                symbol_info['exchange'] = exchange
-            if 'instrument_type' not in symbol_info:
-                # Default to EQUITY if not specified
-                symbol_info['instrument_type'] = 'EQUITY'
-            return symbol_info
-        else:
-            # Convert string symbol to standardized dict
-            if not exchange:
-                raise ValueError("Exchange must be provided when symbol is a string")
-            return {
-                'symbol': str(symbol_or_info),
-                'exchange': exchange,
-                'instrument_type': 'EQUITY'  # Default type
-            }
-            
-    def _process_pending_subscriptions(self) -> None:
-        """
-        Process any subscriptions that were queued while the connection was being established.
-        This method is called after the WebSocket connection is fully established and authenticated.
-        """
-        if not self._pending_subscriptions:
-            return
-            
-        self.logger.info(f"Processing {len(self._pending_subscriptions)} pending subscriptions")
-        
-        # Process each queued subscription
-        for symbol_info, mode, depth_level in self._pending_subscriptions:
-            try:
-                self.logger.info(f"Processing queued subscription: {symbol_info} in {mode} mode")
-                result = self.subscribe(symbol_info, mode=mode, depth_level=depth_level)
-                if result.get('status') != 'success':
-                    self.logger.error(f"Failed to process queued subscription for {symbol_info}: {result.get('message')}")
-            except Exception as e:
-                self.logger.error(f"Error processing queued subscription {symbol_info}: {str(e)}", exc_info=True)
-        
-        # Clear the queue after processing
-        self._pending_subscriptions.clear()
-        self.logger.info("Finished processing pending subscriptions")
-    
     # --- Internal WebSocket Event Handlers ---
-    def _on_ws_open(self, ws_client_instance):
+    def _on_ws_open(self, _ws_client_instance):
         """
         Callback when WebSocket connection is opened.
         """
-        self.logger.info("Adapter: WebSocket connection opened by client.")
+        self.logger.info("WebSocket opened")
         # Reset connection state
         self._connection_acknowledged = False
 
-    def _on_ws_message(self, ws_client_instance, message: Dict[str, Any]):
+    def _on_ws_message(self, _ws_client_instance, message: Dict[str, Any]):
         """
         Callback when a message is received from the WebSocket.
         
         Args:
-            ws_client_instance: The WebSocket client instance
+            _ws_client_instance: The WebSocket client instance (unused)
             message: The received message as a dictionary
         """
         if not message or not isinstance(message, dict):
             self.logger.warning("Received invalid message (not a dict)")
             return
             
-        self.logger.debug(f"Adapter received message: {message}")
+        self.logger.info(f"Received message: {message}")
         msg_type = message.get('t')
         
         try:
@@ -846,20 +775,16 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             self._connection_acknowledged = True
             self.is_active = True
             
-            # Process any pending subscriptions
-            self._process_pending_subscriptions()
+            # Removed pending subscription processing since we no longer queue subscriptions
             
-            # Resubscribe to any instruments that were subscribed before reconnection
             self._resubscribe_all()
             
-            # Notify that the adapter is now fully connected
             if self.on_adapter_connect_callback:
                 try:
                     self.on_adapter_connect_callback()
                 except Exception as e:
                     self.logger.error(f"Error in on_adapter_connect_callback: {e}", exc_info=True)
             
-            # Publish connection status via ZMQ if available
             self._publish_connection_status(True)
             
         else:
@@ -867,8 +792,6 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(error_msg)
             if self.on_adapter_error_callback:
                 self.on_adapter_error_callback(error_msg)
-            
-            # Publish connection error
             self._publish_error(error_msg)
     
     def _publish_connection_status(self, is_connected: bool) -> None:
@@ -1023,8 +946,6 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(f"Successfully subscribed to touchline: {message.get('k')}")
             elif sub_type == 'd':
                 self.logger.info(f"Successfully subscribed to depth: {message.get('k')}")
-            elif sub_type == 'o':
-                self.logger.info(f"Successfully subscribed to order updates for account: {message.get('actid')}")
                 
         except Exception as e:
             self.logger.error(f"Error processing subscription ack: {e}", exc_info=True)
@@ -1282,9 +1203,9 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             # Handle unsubscription success
             pass
 
-    def _on_ws_error(self, ws_client_instance, error):
-        logger.error(f"Adapter: WebSocket error: {error}", exc_info=isinstance(error, Exception))
-        self.connected = False # Update base class connected status
+    def _on_ws_error(self, _ws_client_instance, error):
+        logger.error(f"WebSocket error: {error}", exc_info=isinstance(error, Exception))
+        self.connected = False
         self.connection_acknowledged = False
         # No direct on_adapter_error_callback; proxy manager handles/logs errors.
         # Publish an error event via ZMQ if desired
@@ -1293,8 +1214,8 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
         # Consider if disconnect should be called or if FlattradeWebSocketClient handles it.
         # If it's a connection-breaking error, _on_ws_close will likely be called too.
 
-    def _on_ws_close(self, ws_client_instance, status_code, reason):
-        logger.info(f"Adapter: WebSocket connection closed. Status: {status_code}, Reason: {reason}")
+    def _on_ws_close(self, _ws_client_instance, status_code, reason):
+        logger.info(f"WebSocket connection closed. Status: {status_code}, Reason: {reason}")
         
         # Update connection state under lock and clear subscriptions
         was_connected = False
@@ -1327,7 +1248,7 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 logger.error(f"Error publishing disconnection status: {e}", exc_info=True)
         
-        logger.info("Adapter: WebSocket connection cleanup complete.")
+        logger.info("WebSocket connection cleanup complete.")
         
         # Reset subscriptions state for clarity, actual resubscribe on next connect
         # self.subscribed_scrips.clear()
@@ -1383,100 +1304,13 @@ class FlattradeStreamAdapter(BaseBrokerWebSocketAdapter):
     def set_on_adapter_error_callback(self, callback: Callable[[str], None]):
         self.on_adapter_error_callback = callback
 
-# Example usage when run directly
-if __name__ == "__main__":
-    import sys
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler()
-        ]
-    )
-    
-    logger = logging.getLogger("FlattradeAdapterTest")
-    
-    # Create an instance of the adapter
-    adapter = FlattradeStreamAdapter()
-    
-    # Define test callbacks
-    def my_test_tick_handler(tick_data: Dict[str, Any]):
-        logger.info(f"TICK: {tick_data}")
-    
-    def my_test_order_handler(order_data: Dict[str, Any]):
-        logger.info(f"ORDER UPDATE: {order_data}")
-    
-    def my_adapter_connect_handler():
-        logger.info("MAIN_TEST_CONNECT_HANDLER: Adapter connected and acknowledged by server!")
-        logger.info("Attempting to subscribe to market data and order updates...")
-        
-        # Example subscription - adjust as needed
-        symbol_info = {
-            'symbol': 'NIFTY',
-            'exchange': 'NSE_INDEX',
-            'instrument_type': 'INDEX'
-        }
-        
-        # Subscribe to market data
-        sub_market_status = adapter.subscribe(symbol_info, mode="touchline")
-        if sub_market_status.get('status') == 'success':
-            logger.info(f"Market data subscription request sent.")
-        else:
-            logger.error(f"Market data subscription failed: {sub_market_status.get('message')}")
-    
-    def my_adapter_disconnect_handler():
-        logger.info("MAIN_TEST_DISCONNECT_HANDLER: Adapter disconnected.")
-    
-    def my_adapter_error_handler(error_message: str):
-        logger.error(f"MAIN_TEST_ERROR_HANDLER: Adapter reported error: {error_message}")
-    
-    # Set up callbacks
-    adapter.set_on_tick_callback(my_test_tick_handler)
-    adapter.set_on_order_update_callback(my_test_order_handler)
-    adapter.set_on_adapter_connect_callback(my_adapter_connect_handler)
-    adapter.set_on_adapter_disconnect_callback(my_adapter_disconnect_handler)
-    adapter.set_on_adapter_error_callback(my_adapter_error_handler)
-    
-    # Initialize the adapter
-    init_status = adapter.initialize(
-        broker_name="flattrade",
-        user_id=os.getenv("USER_ID"),
-        auth_data={
-            # Add any required auth data here
-        }
-    )
-    
-    if init_status.get('status') != 'success':
-        logger.critical(f"Adapter initialization failed: {init_status.get('message')}")
-        sys.exit(1)
-    
-    # Connect and run
-    try:
-        connect_status = adapter.connect()
-        if connect_status.get('status') != 'success':
-            logger.critical(f"Adapter connection failed: {connect_status.get('message')}")
-            sys.exit(1)
-        
-        logger.info("Adapter connect() called. Waiting for events... Press Ctrl+C to exit.")
-        
-        while True:
-            time.sleep(1)
-    
-    except KeyboardInterrupt:
-        logger.info("Ctrl+C received. Shutting down...")
-    except Exception as e:
-        logger.critical(f"An unexpected error occurred: {e}", exc_info=True)
-    finally:
-        logger.info("Disconnecting adapter...")
-        if hasattr(adapter, 'ws_client') and adapter.ws_client:
-            disconnect_status = adapter.disconnect()
-            if disconnect_status.get('status') == 'success':
-                logger.info("Adapter disconnected successfully.")
-            else:
-                logger.error(f"Adapter disconnection failed: {disconnect_status.get('message')}")
-        else:
-            logger.warning("Adapter or ws_client not available for disconnection.")
-        logger.info("Flattrade WebSocket Adapter test script finished.")
+    # Add helper method to resolve symbol info
+    def _resolve_symbol_info(self, symbol_or_info, exchange: str = None) -> dict:
+        # If already a dict, assume it has necessary keys
+        if isinstance(symbol_or_info, dict):
+            return symbol_or_info
+        # Else, require that the exchange is provided
+        if not exchange:
+            raise ValueError("Exchange must be provided when symbol is given as a string")
+        return {"symbol": symbol_or_info, "exchange": exchange}
 

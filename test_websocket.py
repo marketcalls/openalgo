@@ -7,15 +7,13 @@ import websockets
 
 # Configuration
 WS_URL = "ws://localhost:8765"  # Update if your server is on a different host/port
-API_KEY = "5d6fc9aa26e147554f253a5336e6cefd662eb960af55c231600fa75e068feab0"  # Your OpenAlgo API key
+API_KEY = "598279d805ee05b5988b22a363c64061434d7230228aacc7ced25cbb9a0a410a"  # Your OpenAlgo API key
 
 # Test symbols
 RELIANCE_NSE = {"exchange": "NSE", "symbol": "RELIANCE"}
 IDEA_NSE = {"exchange": "NSE", "symbol": "IDEA"}
 NHPC_NSE = {"exchange": "NSE", "symbol": "NHPC"}
 NATURALGAS_MCX = {"exchange": "MCX", "symbol": "NATURALGAS23JUN25325CE"}
-
-
 
 # OpenAlgo common subscription modes
 MODE_LTP = 1    # Last Traded Price (maps to touchline)
@@ -28,11 +26,11 @@ async def connect_and_authenticate(url, api_key):
     try:
         print(f"Attempting to connect to WebSocket server at {url}...")
         
-        # Add connection timeout
+        # Increase connection timeout from 10 to 15 seconds
         try:
             websocket = await asyncio.wait_for(
                 websockets.connect(url, ping_interval=30, ping_timeout=10, close_timeout=5),
-                timeout=10.0
+                timeout=15.0
             )
             print("✓ WebSocket connection established")
         except asyncio.TimeoutError:
@@ -56,9 +54,9 @@ async def connect_and_authenticate(url, api_key):
             await websocket.send(json.dumps(auth_message))
             print("✓ Authentication request sent")
             
-            # Wait for authentication response with timeout
+            # Increase authentication response timeout from 15 to 30 seconds
             try:
-                response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+                response = await asyncio.wait_for(websocket.recv(), timeout=30.0)
                 print("✓ Received authentication response")
                 print(f"Raw response: {response}")
                 
@@ -97,107 +95,60 @@ async def connect_and_authenticate(url, api_key):
         traceback.print_exc()
         return None
 
-async def subscribe_to_data(websocket, symbols=None, mode=MODE_QUOTE, account_id=None):
-    """
-    Subscribe to market data or order updates
-    
-    Args:
-        websocket: WebSocket connection
-        symbols: List of symbol info dicts (for market data)
-        mode: Subscription mode (1=LTP, 2=Quote, 3=Full/Depth, 4=Order Updates)
-        account_id: Required for order updates (mode=4)
-    """
+async def subscribe_market_data(websocket, symbol_info, mode):
+    """Subscribe to market data for a specific symbol"""
     if not websocket:
         print("Error: WebSocket connection is not established")
         return False
         
     try:
-        if mode == MODE_ORDER_UPDATES:
-            if not account_id:
-                error_msg = "Error: account_id is required for order updates"
-                print(error_msg)
-                return False
-            
-            # For order updates, we don't need symbols as we subscribe to all order updates for the account
-            print(f"\nPreparing to subscribe to order updates for account: {account_id}")
-            
-            # Create order update subscription message in the format expected by the WebSocket server
-            # The server expects an 'action' field and handles the Flattrade protocol internally
-            subscribe_message = {
-                "action": "subscribe",
-                "mode": mode,  # MODE_ORDER_UPDATES = 4
-                "account_id": account_id,
-                "symbols": [
-                    {
-                        "symbol": "ORDER_UPDATES",  # Dummy symbol for order updates
-                        "exchange": "NSE"
-                    }
-                ]
-            }
-            
-            print(f"Sending subscription message: {json.dumps(subscribe_message, indent=2)}")
-            
-            try:
-                await websocket.send(json.dumps(subscribe_message))
-                print("Subscription message sent. Waiting for acknowledgment...")
-                
-                # Wait for subscription acknowledgment with a timeout
-                try:
-                    response = await asyncio.wait_for(websocket.recv(), timeout=10)
-                    print(f"Received response: {response}")
-                    
-                    try:
-                        response_data = json.loads(response)
-                        print(f"Parsed response: {json.dumps(response_data, indent=2)}")
-                        
-                        if response_data.get('status') == 'success':
-                            print(f"✓ Successfully subscribed to order updates for account: {account_id}")
-                            return True
-                        else:
-                            error_msg = response_data.get('emsg', 'Unknown error')
-                            print(f"✗ Failed to subscribe to order updates: {error_msg}")
-                            return False
-                            
-                    except json.JSONDecodeError as je:
-                        print(f"✗ Failed to parse JSON response: {je}")
-                        print(f"Raw response: {response}")
-                        return False
-                        
-                except asyncio.TimeoutError:
-                    print("✗ Timeout waiting for subscription acknowledgment")
-                    return False
-                    
-            except Exception as send_error:
-                print(f"✗ Error sending subscription message: {send_error}")
-                return False
-                
-            return True
-            
-        # Handle market data subscriptions (modes 1-3)
-        if not symbols:
-            print("Error: symbols are required for market data subscriptions")
-            return False
-            
-        # Send individual subscription for each symbol
-        for symbol_info in symbols:
-            # Map mode to string for logging
-            mode_str = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
-                
-            subscribe_message = {
-                "action": "subscribe",
-                "symbol": symbol_info["symbol"],
-                "exchange": symbol_info["exchange"],
-                "mode": mode,  # Send numeric mode
-                "depth": 5  # Default depth level
-            }
-            
-            await websocket.send(json.dumps(subscribe_message))
-            response = await websocket.recv()
-            subscribe_response = json.loads(response)
-            
-            print(f"Subscription response for {symbol_info['symbol']} mode {mode}: {subscribe_response}")
+        # Build a subscription message for market data
+        sub_message = {
+            "action": "subscribe",
+            "symbol": symbol_info["symbol"],
+            "exchange": symbol_info["exchange"],
+            "mode": mode,
+            "depth": 5
+        }
+        print(f"Sending subscription for {symbol_info['symbol']} (mode {mode}): {json.dumps(sub_message, indent=2)}")
         
-        # Return after processing all symbols
+        await websocket.send(json.dumps(sub_message))
+        response = await websocket.recv()
+        subscribe_response = json.loads(response)
+        
+        print(f"Subscription response for {symbol_info['symbol']} mode {mode}: {subscribe_response}")
+        
+        return True
+    except Exception as e:
+        print(f"Subscription error: {e}")
+        return False
+
+async def subscribe_order_updates(websocket, account_id=None):
+    """Subscribe to order updates"""
+    if not websocket:
+        print("Error: WebSocket connection is not established")
+        return False
+        
+    try:
+        # Build the order updates subscription message.
+        sub_message = {
+            "action": "subscribe",
+            "mode": MODE_ORDER_UPDATES,
+            "symbols": [
+                {"symbol": "ORDER_UPDATES", "exchange": "NSE"}
+            ]
+        }
+        if account_id:
+            sub_message["account_id"] = account_id
+            print(f"Subscribing to order updates for account: {account_id}")
+        else:
+            print("Subscribing to order updates using internal account id")
+        
+        print(f"Sending order update subscription: {json.dumps(sub_message, indent=2)}")
+        await websocket.send(json.dumps(sub_message))
+        response = await websocket.recv()
+        print(f"Order update subscription response: {response}")
+        
         return True
     except Exception as e:
         print(f"Subscription error: {e}")
@@ -303,18 +254,11 @@ async def receive_and_print_data(websocket, duration=30):
     finally:
         print("\nFinished receiving data")
 
-async def run_test_suite(account_id=None):
+async def run_test_suite():
     """
     Run all subscription tests with a single WebSocket connection
-    
-    Args:
-        account_id: Optional account ID for testing order updates. If None, will try to get from BROKER_API_KEY
     """
     websocket = None
-    
-    # If account_id is not provided but we're not in a specific test mode, try to get from env
-    if account_id is None and len(sys.argv) <= 1:  # Only for full test suite
-        account_id = get_account_id()
     
     try:
         # Connect once at the start
@@ -327,48 +271,36 @@ async def run_test_suite(account_id=None):
         print("\n" + "="*50)
         print("TESTING LTP SUBSCRIPTION (MODE 1)")
         print("="*50)
-        success = await subscribe_to_data(websocket, [RELIANCE_NSE, IDEA_NSE, NATURALGAS_MCX], 
-                                        mode=MODE_LTP)
-        if success:
-            await receive_and_print_data(websocket, duration=5)
+        for symbol_info in [RELIANCE_NSE, IDEA_NSE, NATURALGAS_MCX]:
+            await subscribe_market_data(websocket, symbol_info, MODE_LTP)
+        await receive_and_print_data(websocket, duration=5)
         
         # Test Quote subscription (mode 2)
         print("\n" + "="*50)
         print("TESTING QUOTE SUBSCRIPTION (MODE 2)")
         print("="*50)
-        success = await subscribe_to_data(websocket, [RELIANCE_NSE, NHPC_NSE, NATURALGAS_MCX], 
-                                        mode=MODE_QUOTE)
-        if success:
-            await receive_and_print_data(websocket, duration=5)
+        for symbol_info in [RELIANCE_NSE, NHPC_NSE, NATURALGAS_MCX]:
+            await subscribe_market_data(websocket, symbol_info, MODE_QUOTE)
+        await receive_and_print_data(websocket, duration=5)
         
         # Test Depth subscription (mode 3)
         print("\n" + "="*50)
         print("TESTING DEPTH SUBSCRIPTION (MODE 3)")
         print("="*50)
-        success = await subscribe_to_data(websocket, [RELIANCE_NSE, NATURALGAS_MCX], 
-                                        mode=MODE_FULL)
-        if success:
-            await receive_and_print_data(websocket, duration=5)
+        for symbol_info in [RELIANCE_NSE, NATURALGAS_MCX]:
+            await subscribe_market_data(websocket, symbol_info, MODE_FULL)
+        await receive_and_print_data(websocket, duration=5)
             
-        # Test Order Updates subscription (mode 4) if account_id is available
-        if account_id:
-            print("\n" + "="*50)
-            print(f"TESTING ORDER UPDATES SUBSCRIPTION (MODE 4) for account: {account_id}")
-            print("="*50)
-            success = await subscribe_to_data(websocket, mode=MODE_ORDER_UPDATES, 
-                                            account_id=account_id)
-            if success:
-                print("Successfully subscribed to order updates. Waiting for order events...")
-                print("Place/cancel orders in your Flattrade account to see updates here.")
-                print("Press Ctrl+C to stop.")
-                await receive_and_print_data(websocket, duration=300)  # 5 minutes for order updates
-        else:
-            print("\n" + "-"*50)
-            print("Skipping order updates test - no account_id provided")
-            print("To test order updates, make sure BROKER_API_KEY is set in your .env file")
-            print("with format: BROKER_API_KEY=your_api_key|your_account_id")
-            print("-"*50)
-            
+        # Test Order Updates subscription (mode 4) without an external account id
+        print("\n" + "="*50)
+        print("TESTING ORDER UPDATES SUBSCRIPTION (MODE 4)")
+        print("="*50)
+        await subscribe_order_updates(websocket)  # account_id omitted so internal id is used
+        print("Successfully subscribed to order updates. Waiting for order events...")
+        print("Place/cancel orders in your Flattrade account to see updates here.")
+        print("Press Ctrl+C to stop.")
+        await receive_and_print_data(websocket, duration=30)
+        
     except Exception as e:
         print(f"\nError during test suite: {e}")
         import traceback
@@ -379,24 +311,66 @@ async def run_test_suite(account_id=None):
             await websocket.close()
             print("\nClosed WebSocket connection")
 
-def get_account_id():
-    """Get account ID from BROKER_API_KEY environment variable"""
-    broker_api_key = os.getenv('BROKER_API_KEY')
-    if not broker_api_key:
-        print("\n" + "!"*60)
-        print("ERROR: BROKER_API_KEY environment variable not set")
-        print("Please set BROKER_API_KEY in your .env file")
-        print("Example: BROKER_API_KEY=your_api_key|your_account_id")
-        print("!"*60 + "\n")
-        return None
-    # Extract account ID from BROKER_API_KEY (format: api_key|account_id)
-    parts = broker_api_key.split('|')
-    if len(parts) >= 2:
-        return parts[1]  # Return the account ID part
-    return parts[0]  # Fallback to the whole key if no pipe separator
+async def run_single_test(test_type):
+    websocket = await connect_and_authenticate(WS_URL, API_KEY)
+    if not websocket:
+        print("Failed to establish WebSocket connection")
+        return
+    try:
+        if test_type in ["1", "ltp"]:
+            print("\n" + "="*50)
+            print("TESTING LTP SUBSCRIPTION (MODE 1)")
+            print("="*50)
+            for symbol_info in [RELIANCE_NSE, IDEA_NSE]:
+                await subscribe_market_data(websocket, symbol_info, MODE_LTP)
+            await receive_and_print_data(websocket, duration=30)
+        elif test_type in ["2", "quote"]:
+            print("\n" + "="*50)
+            print("TESTING QUOTE SUBSCRIPTION (MODE 2)")
+            print("="*50)
+            for symbol_info in [RELIANCE_NSE, NHPC_NSE]:
+                await subscribe_market_data(websocket, symbol_info, MODE_QUOTE)
+            await receive_and_print_data(websocket, duration=30)
+        elif test_type in ["3", "depth", "full"]:
+            print("\n" + "="*50)
+            print("TESTING DEPTH SUBSCRIPTION (MODE 3)")
+            print("="*50)
+            for symbol_info in [RELIANCE_NSE, NATURALGAS_MCX]:
+                await subscribe_market_data(websocket, symbol_info, MODE_FULL)
+            await receive_and_print_data(websocket, duration=30)
+        elif test_type in ["4", "orders"]:
+            print("\n" + "="*50)
+            print("TESTING ORDER UPDATES SUBSCRIPTION (MODE 4)")
+            print("="*50)
+            await subscribe_order_updates(websocket)
+            print("\n" + "-"*50)
+            print("Successfully subscribed to order updates. Waiting for order events...")
+            print("Place/cancel orders in your Flattrade account to see updates here.")
+            print("Press Ctrl+C to stop.")
+            print("-"*50 + "\n")
+            await receive_and_print_data(websocket, duration=30)
+        else:
+            print("\n" + "!"*60)
+            print(f"ERROR: Unknown test type: {test_type}")
+            print("\nAvailable test types:")
+            print("  1/ltp      - LTP subscription")
+            print("  2/quote    - Quote subscription")
+            print("  3/depth    - Market depth subscription")
+            print("  4/orders   - Order updates (uses internal account id)")
+            print("  (no args)  - Run all market data tests")
+            print("\nExample: python test_websocket.py 4")
+            print("!"*60 + "\n")
+            return
+    except asyncio.CancelledError:
+        print("\nTest cancelled by user")
+    except Exception as e:
+        print(f"\nError during test: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        await websocket.close()
 
 def main():
-    """Main function to run the WebSocket tests"""
     print("="*60)
     print("OpenAlgo WebSocket Client Test")
     print("-"*60)
@@ -404,85 +378,21 @@ def main():
     print(f"API Key: {API_KEY[:8]}...{API_KEY[-8:]}")
     print("="*60 + "\n")
     
-
-
-    # Check if we're running a specific test or all tests
     if len(sys.argv) > 1:
         test_type = sys.argv[1].lower()
-        
-        # Get account ID from environment variables for order updates
-        account_id = get_account_id() if test_type in ["4", "orders"] else None
-        
-        async def run_single_test():
-            websocket = await connect_and_authenticate(WS_URL, API_KEY)
-            if not websocket:
-                print("Failed to establish WebSocket connection")
-                return
-                
-            try:
-                if test_type == "1" or test_type == "ltp":
-                    print("\n" + "="*50)
-                    print("TESTING LTP SUBSCRIPTION (MODE 1)")
-                    print("="*50)
-                    await subscribe_to_data(websocket, [RELIANCE_NSE, IDEA_NSE], MODE_LTP)
-                    await receive_and_print_data(websocket, duration=30)
-                elif test_type == "2" or test_type == "quote":
-                    print("\n" + "="*50)
-                    print("TESTING QUOTE SUBSCRIPTION (MODE 2)")
-                    print("="*50)
-                    await subscribe_to_data(websocket, [RELIANCE_NSE, NHPC_NSE], MODE_QUOTE)
-                    await receive_and_print_data(websocket, duration=30)
-                elif test_type == "3" or test_type == "depth" or test_type == "full":
-                    print("\n" + "="*50)
-                    print("TESTING DEPTH SUBSCRIPTION (MODE 3)")
-                    print("="*50)
-                    await subscribe_to_data(websocket, [RELIANCE_NSE, NATURALGAS_MCX], MODE_FULL)
-                    await receive_and_print_data(websocket, duration=30)
-                elif test_type == "4" or test_type == "orders":
-                    print("\n" + "="*50)
-                    print(f"TESTING ORDER UPDATES SUBSCRIPTION (MODE 4)")
-                    print(f"Using account ID from BROKER_API_KEY: {account_id}")
-                    print("="*50)
-                    await subscribe_to_data(websocket, mode=MODE_ORDER_UPDATES, account_id=account_id)
-                    print("\n" + "-"*50)
-                    print("Successfully subscribed to order updates. Waiting for order events...")
-                    print("Place/cancel orders in your Flattrade account to see updates here.")
-                    print("Press Ctrl+C to stop.")
-                    print("-"*50 + "\n")
-                    await receive_and_print_data(websocket, duration=300)  # 5 minutes for order updates
-                else:
-                    print("\n" + "!"*60)
-                    print(f"ERROR: Unknown test type: {test_type}")
-                    print("\nAvailable test types:")
-                    print("  1/ltp      - LTP subscription")
-                    print("  2/quote    - Quote subscription")
-                    print("  3/depth    - Market depth subscription")
-                    print("  4/orders   - Order updates (uses BROKER_API_KEY)")
-                    print("  (no args)  - Run all market data tests")
-                    print("\nExample: python test_websocket.py 4")
-                    print("!"*60 + "\n")
-                    return
-            except asyncio.CancelledError:
-                print("\nTest cancelled by user")
-            except Exception as e:
-                print(f"\nError during test: {e}")
-                import traceback
-                traceback.print_exc()
-            finally:
-                await websocket.close()
-                
-        asyncio.run(run_single_test())
+        async def run_single():
+            await run_single_test(test_type)
+        try:
+            asyncio.run(asyncio.wait_for(run_single(), timeout=60))
+        except asyncio.TimeoutError:
+            print("\nTest timed out after 60 seconds, exiting.")
     else:
-        # Run all tests if no specific test is specified
-        print("\n" + "="*50)
-        print("RUNNING ALL MARKET DATA TESTS")
-        print("="*50)
-        print("Note: To test order updates, run: python test_websocket.py 4")
-        print("      Make sure BROKER_API_KEY is set in your .env file")
-        print("      Format: BROKER_API_KEY=your_api_key|your_account_id")
-        print("      The account ID will be automatically extracted from BROKER_API_KEY")
-        print("="*50 + "\n")
-        asyncio.run(run_test_suite())
+        async def run_all():
+            await run_test_suite()
+        try:
+            asyncio.run(asyncio.wait_for(run_all(), timeout=60))
+        except asyncio.TimeoutError:
+            print("\nTest suite timed out after 60 seconds, exiting.")
 
 if __name__ == "__main__":
     main()
