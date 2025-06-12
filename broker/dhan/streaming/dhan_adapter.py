@@ -22,23 +22,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     Implements OpenAlgo WebSocket proxy interface with proper mode mapping.
     """
     
-    # Fallback token mappings for common symbols when database lookup fails
-    FALLBACK_TOKENS = {
-        "NSE:RELIANCE": 2885,
-        "NSE_EQ:RELIANCE": 2885,
-        "NSE:INFY": 1594,
-        "NSE_EQ:INFY": 1594,
-        "NSE:HDFCBANK": 1333,
-        "NSE_EQ:HDFCBANK": 1333,
-        "NSE:ICICIBANK": 4963,
-        "NSE_EQ:ICICIBANK": 4963,
-        "NSE:TCS": 11536,
-        "NSE_EQ:TCS": 11536,
-        "NSE_INDEX:NIFTY": 26000,
-        "NSE_INDEX:BANKNIFTY": 26001,
-        "BSE_INDEX:SENSEX": 1,
-        "BSE:RELIANCE": 500325
-    }
+    # No fallback token mappings - using database lookups only
     
     def __init__(self):
         """Initialize the WebSocket adapter"""
@@ -67,12 +51,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.mode_map = {
             1: DhanWebSocket.MODE_LTP,    # LTP -> "ltp"
             2: DhanWebSocket.MODE_QUOTE,  # Quote -> "marketdata"  
-            3: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
-            4: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
-            5: DhanWebSocket.MODE_LTP,    # LTP -> "ltp" (using LTP mode for mode=5)
-            6: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
-            7: DhanWebSocket.MODE_FULL,   # Full/Depth -> "depth"
-            8: DhanWebSocket.MODE_FULL    # Full/Depth -> "depth"
+            3: DhanWebSocket.MODE_FULL   # Full/Depth -> "depth"
         }
         
     def initialize(self, broker_name: str, user_id: str, **kwargs):
@@ -184,11 +163,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def resolve_token(self, symbol: str, exchange: str, token: int = None):
         """
-        Resolve the correct token for a symbol using multiple methods:
+        Resolve the correct token for a symbol using database lookup:
         1. Use the provided token if valid (not None and not 1)
         2. Look up in the database
-        3. Check the fallback mapping dictionary
-        4. Use placeholder token as a last resort
+        3. Use placeholder token as a last resort
         
         Args:
             symbol (str): Symbol name
@@ -212,13 +190,6 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.warning(f"Database lookup failed for {exchange}:{symbol}: {e}")
         
-        # Check fallback dictionary
-        fallback_key = f"{exchange}:{symbol}"
-        if fallback_key in self.FALLBACK_TOKENS:
-            fallback_token = self.FALLBACK_TOKENS[fallback_key]
-            self.logger.info(f"Using fallback token {fallback_token} for {exchange}:{symbol}")
-            return fallback_token
-            
         # Use the provided placeholder token or default to 1
         placeholder = token if token is not None else 1
         self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder {placeholder}")
@@ -574,12 +545,17 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             else:
                 openalgo_exchange = exchange
                 
+            # Get the last price and round to 2 decimal places for cleaner display
+            last_price = tick.get("last_price")
+            if last_price is not None:
+                last_price = round(float(last_price), 2)
+                
             normalized = {
                 "symbol": tick.get("symbol"),
                 "exchange": openalgo_exchange,
                 "token": tick.get("token") or tick.get("instrument_token"),
                 "timestamp": tick.get("timestamp"),
-                "last_price": tick.get("last_price")
+                "ltp": last_price  # Use 'ltp' key for compatibility with get_ltp(), rounded to 2 decimals
             }
             
             # Add OHLC if available
