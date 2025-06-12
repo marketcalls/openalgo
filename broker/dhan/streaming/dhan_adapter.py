@@ -47,11 +47,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 5
         self.reconnect_delay = 5
         
-        # Extended mode mapping to handle all possible modes
+        # Extended mode mapping to handle all possible OpenAlgo modes
         self.mode_map = {
+            # Standard OpenAlgo modes
             1: DhanWebSocket.MODE_LTP,    # LTP -> "ltp"
             2: DhanWebSocket.MODE_QUOTE,  # Quote -> "marketdata"  
-            3: DhanWebSocket.MODE_FULL   # Full/Depth -> "depth"
+            3: DhanWebSocket.MODE_FULL # Map mode 8 to FULL
         }
         
     def initialize(self, broker_name: str, user_id: str, **kwargs):
@@ -195,25 +196,35 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder {placeholder}")
         return placeholder
                 
-    def subscribe(self, symbol: str, exchange: str, token: int = None, mode: int = 1):
+    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
         Subscribe to market data for a symbol.
         
         Args:
             symbol (str): Symbol identifier (e.g., 'RELIANCE')
             exchange (str): Exchange (e.g., 'NSE', 'BSE', 'NFO')
-            token (int, optional): Instrument token. If None, will be looked up
-            mode (int): Mode - 1:LTP, 2:QUOTE, 3:FULL, 4-8:FULL
+            mode (int): Mode - 1:LTP, 2:QUOTE, 3:DEPTH, 4-8:DEPTH
+            depth_level (int): Depth levels for market depth data
             
         Returns:
             dict: Subscription status
+            
+        Note:
+            This method signature was standardized to match Angel/Zerodha adapters.
+            The previous signature was: 
+                subscribe(symbol, exchange, token=None, mode=1)
+            which caused parameter mismatch when called from the WebSocket proxy.
+            The proxy was passing mode=3 as token and depth_level=5 as mode,
+            resulting in mode=5 being received for DEPTH subscriptions.
         """
         # Convert exchange code to Dhan format
         dhan_exchange = get_dhan_exchange(exchange)
-        
-        self.logger.info(f"Processing subscription for {exchange}:{symbol} with initial token={token} and mode={mode}")
+        self.logger.info(f"Processing subscription for {exchange}:{symbol} with mode={mode}, depth_level={depth_level}")
         
         try:
+            # IMPORTANT: Token was previously a parameter, now handled internally
+            token = None  # Will be resolved using the resolve_token method
+            
             # Resolve the token using our multi-step resolution method
             actual_token = self.resolve_token(symbol, exchange, token)
                 
@@ -221,9 +232,33 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Cannot subscribe - not connected to {self.broker_name} WebSocket")
                 return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
                 
-            # Map OpenAlgo mode to Dhan mode
-            dhan_mode = self.mode_map.get(mode, DhanWebSocket.MODE_FULL)
-            self.logger.info(f"Mapped OpenAlgo mode {mode} to Dhan mode '{dhan_mode}'")
+            # Debug info - print mode type and value
+            self.logger.info(f"DEBUG: Mode value received: {mode}, Type: {type(mode)}")
+            
+            # CRITICAL: Force convert mode to integer for comparison
+            try:
+                mode = int(mode)
+                self.logger.info(f"DEBUG: Mode converted to int: {mode}")
+            except (ValueError, TypeError):
+                self.logger.warning(f"DEBUG: Could not convert mode {mode} to int, using as is")
+            
+            # Map OpenAlgo mode to Dhan mode with explicit handling of all possible modes
+            if mode == 1:
+                # Standard LTP mode
+                dhan_mode = DhanWebSocket.MODE_LTP
+                self.logger.info(f"Mapped OpenAlgo mode {mode} (LTP) to Dhan mode '{dhan_mode}'")
+            elif mode == 2:
+                # Standard QUOTE mode
+                dhan_mode = DhanWebSocket.MODE_QUOTE
+                self.logger.info(f"Mapped OpenAlgo mode {mode} (QUOTE) to Dhan mode '{dhan_mode}'")
+            elif mode == 3:
+                # Standard DEPTH mode
+                dhan_mode = DhanWebSocket.MODE_FULL
+                self.logger.info(f"Mapped OpenAlgo mode {mode} (DEPTH) to Dhan mode '{dhan_mode}'")
+            else:
+                # All other modes (4-8) map to FULL/DEPTH
+                dhan_mode = DhanWebSocket.MODE_FULL
+                self.logger.info(f"Mapped OpenAlgo mode {mode} (DEPTH/FULL) to Dhan mode '{dhan_mode}'")
             
             # Add symbol to subscription tracking
             with self.lock:
@@ -231,7 +266,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "exchange": exchange,  # Store original OpenAlgo exchange
                     "dhan_exchange": dhan_exchange,  # Store Dhan exchange
                     "token": actual_token,
-                    "mode": mode
+                    "mode": mode,
+                    "depth_level": depth_level  # Store depth_level for future reference
                 }
                 self.token_to_symbol[actual_token] = (symbol, exchange)
             
@@ -270,19 +306,25 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error subscribing to {symbol}: {e}")
             return {"status": "error", "message": f"Error subscribing to {symbol}: {e}"}
     
-    def unsubscribe(self, symbol: str, exchange: str, token: int = None):
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = None) -> Dict[str, Any]:
         """
         Unsubscribe from market data for a symbol.
         
         Args:
             symbol (str): Symbol identifier
             exchange (str): Exchange identifier
-            token (int, optional): Instrument token. If None, will be looked up
+            mode (int, optional): The mode to unsubscribe from. If None, will unsubscribe from all modes.
             
         Returns:
             dict: Unsubscription status
+            
+        Note:
+            This method signature was standardized to match Angel/Zerodha adapters.
+            The previous signature was: 
+                unsubscribe(symbol, exchange, token=None)
+            The token parameter is now handled internally using the subscription tracking mechanism.
         """
-        self.logger.info(f"Processing unsubscribe for {exchange}:{symbol} with token={token}")
+        self.logger.info(f"Processing unsubscribe for {exchange}:{symbol} with mode={mode}")
         
         try:
             # First, check if we already have this symbol in our subscription tracking
@@ -290,17 +332,19 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             stored_token = None
             with self.lock:
                 if symbol in self.subscribed_symbols:
-                    sub_info = self.subscribed_symbols[symbol]
-                    stored_token = sub_info.get('token')
-                    if stored_token:
-                        self.logger.info(f"Using stored token {stored_token} from subscription record for {exchange}:{symbol}")
-            
-            # If we don't have a stored token, resolve it using our helper
-            if stored_token is None:
-                actual_token = self.resolve_token(symbol, exchange, token)
-            else:
-                actual_token = stored_token
+                    stored_data = self.subscribed_symbols[symbol]
+                    if stored_data["exchange"] == exchange:  # Make sure we match exchange too
+                        stored_token = stored_data["token"]
                         
+            # If we found the stored token, use that. Otherwise resolve it.
+            # IMPORTANT: token parameter was previously a method parameter, now handled internally
+            actual_token = stored_token if stored_token is not None else self.resolve_token(symbol, exchange, None)
+            
+            # Handle case where we still couldn't resolve a token
+            if actual_token is None:
+                self.logger.warning(f"Could not resolve token for {exchange}:{symbol}")
+                return {"status": "error", "message": f"Could not resolve token for {exchange}:{symbol}"}
+                
             if not self.connected or not self.ws_client:
                 self.logger.warning(f"Cannot unsubscribe - not connected to {self.broker_name} WebSocket")
                 return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}

@@ -40,6 +40,12 @@ class DhanWebSocket:
     MODE_QUOTE = "marketdata"    # Quote mode (includes price, volume, OHLC)
     MODE_FULL = "depth"          # Full/Depth mode (includes market depth)
     
+    # Request code constants for Dhan API (from marketfeed_dhan.txt)
+    REQUEST_CODE_TICKER = 15  # For LTP
+    REQUEST_CODE_QUOTE = 17   # For Quote/marketdata
+    REQUEST_CODE_DEPTH = 19   # For Depth
+    REQUEST_CODE_FULL = 21    # For Full market data
+    
     # Heartbeat interval in seconds
     HEARTBEAT_INTERVAL = 15
     
@@ -985,7 +991,7 @@ class DhanWebSocket:
                 
             self.instruments[key] = {
                 "token": instrument_token,
-                "mode": mode,
+                "mode": mode,  # Store the actual mode provided
                 "exchange": exchange,
                 "symbol": symbol
             }
@@ -995,6 +1001,7 @@ class DhanWebSocket:
                 return False
                 
             try:
+                # Ensure we use the mode parameter passed to this method
                 packet = self._create_subscription_packet(instrument_token, mode=mode)
                 logger.info(f"Sending subscription request for {key} with token {instrument_token} in mode {mode}")
                 asyncio.run_coroutine_threadsafe(self._send_packet(packet), self.loop)
@@ -1008,9 +1015,9 @@ class DhanWebSocket:
         
         Args:
             tokens (list or int): Token ID(s) to subscribe to
-            mode (int): Subscription mode
+            mode (str): Subscription mode - one of the MODE_* constants (MODE_LTP, MODE_QUOTE, MODE_FULL)
             exchange_codes (dict, optional): Dictionary mapping token -> exchange_code
-                                           e.g., {2885: 1, 26000: 2, 26009: 0}
+                                            e.g., {2885: 1, 26000: 2, 26009: 0}
         """
         success = True
         if not isinstance(tokens, list):
@@ -1018,6 +1025,16 @@ class DhanWebSocket:
             
         if exchange_codes is None:
             exchange_codes = {}
+            
+        # Log which mode is being used for subscription
+        if mode == self.MODE_LTP:
+            logger.info(f"Subscribing to {len(tokens)} token(s) in LTP mode")
+        elif mode == self.MODE_QUOTE:
+            logger.info(f"Subscribing to {len(tokens)} token(s) in QUOTE mode")
+        elif mode == self.MODE_FULL:
+            logger.info(f"Subscribing to {len(tokens)} token(s) in FULL/DEPTH mode")
+        else:
+            logger.warning(f"Unknown mode {mode}, defaulting to FULL mode")
             
         for token in tokens:
             try:
@@ -1029,14 +1046,16 @@ class DhanWebSocket:
                 if key not in self.instruments:
                     self.instruments[key] = {}
                 self.instruments[key]['exchange_code'] = exchange_code
+                self.instruments[key]['mode'] = mode  # Store the mode for this token
                 
                 # Display in logs
                 exchange_segment = self.get_exchange_segment(exchange_code)
-                logger.info(f"Token {token} assigned exchange code {exchange_code} ({exchange_segment})")
+                logger.info(f"Token {token} assigned exchange code {exchange_code} ({exchange_segment}) with mode '{mode}'")
                 
                 exchange = "UNKNOWN"  # Still kept for backward compatibility
                 symbol = f"TOKEN_{token}"
-                result = self.subscribe(token, exchange, symbol, mode)
+                # Pass the mode parameter to the subscribe method
+                result = self.subscribe(token, exchange, symbol, mode=mode)
                 if not result:
                     success = False
             except Exception as e:
@@ -1108,10 +1127,29 @@ class DhanWebSocket:
             logger.info(f"Using exchange segment {exchange_segment} for token {token}")
         else:
             logger.warning(f"No exchange info for token {token}, defaulting to NSE_EQ")
+        
+        # Map mode to request code based on Dhan's API documentation
+        request_code = self.REQUEST_CODE_TICKER  # Default to ticker (LTP)
+        
+        if mode == self.MODE_LTP:
+            # For LTP mode, use Ticker request code (15)
+            request_code = self.REQUEST_CODE_TICKER
+            logger.info(f"Using LTP/Ticker mode (code {request_code}) for token {token}")
+        elif mode == self.MODE_QUOTE:
+            # For Quote mode, use Quote request code (17)
+            request_code = self.REQUEST_CODE_QUOTE
+            logger.info(f"Using QUOTE mode (code {request_code}) for token {token}")
+        elif mode == self.MODE_FULL:
+            # For Full/Depth mode, use Depth request code (19)
+            # Note: Using DEPTH, not FULL (21) as that might be for a different purpose
+            request_code = self.REQUEST_CODE_DEPTH
+            logger.info(f"Using DEPTH mode (code {request_code}) for token {token}")
+        else:
+            logger.warning(f"Unknown mode {mode}, defaulting to LTP/Ticker subscription (code {request_code})")
             
-        # Dhan V2 subscription format (corrected based on documentation)
+        # Dhan V2 subscription format with correct request code
         packet = {
-            "RequestCode": 15,
+            "RequestCode": request_code,  # Use the request code based on mode
             "InstrumentCount": 1,
             "InstrumentList": [
                 {
