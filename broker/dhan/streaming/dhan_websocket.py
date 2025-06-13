@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import struct
+from datetime import datetime
 import websockets
 import os
 import time
@@ -25,12 +26,12 @@ class DhanWebSocket:
     Bridges the async implementation with OpenAlgo's threading model.
     """
     # Message type constants (based on Dhan binary packet first byte)
-    TYPE_TICKER = 2      # Ticker data
-    TYPE_QUOTE = 6       # Market quote data
-    TYPE_DEPTH = 7       # Market depth data
+    TYPE_DISCONNECT = 0   # Disconnect notification
+    TYPE_TICKER = 15     # LTP data (matches REQUEST_CODE_TICKER)
+    TYPE_QUOTE = 17      # Quote data (matches REQUEST_CODE_QUOTE)
+    TYPE_DEPTH = 21      # Full market depth (matches REQUEST_CODE_FULL)
     TYPE_OI = 9          # Open Interest data
     TYPE_PREV_CLOSE = 10  # Previous day close price
-    TYPE_DISCONNECT = 0   # Disconnect notification
     
     # WebSocket URL constants
     MARKET_FEED_WSS = "wss://api-feed.dhan.co"
@@ -41,10 +42,9 @@ class DhanWebSocket:
     MODE_FULL = "depth"          # Full/Depth mode (includes market depth)
     
     # Request code constants for Dhan API (from marketfeed_dhan.txt)
-    REQUEST_CODE_TICKER = 15  # For LTP
-    REQUEST_CODE_QUOTE = 17   # For Quote/marketdata
-    REQUEST_CODE_DEPTH = 19   # For Depth
-    REQUEST_CODE_FULL = 21    # For Full market data
+    REQUEST_CODE_TICKER = TYPE_TICKER  # 15 - LTP
+    REQUEST_CODE_QUOTE = TYPE_QUOTE    # 17 - Quote/marketdata
+    REQUEST_CODE_FULL = TYPE_DEPTH     # 21 - Full market data
     
     # Heartbeat interval in seconds
     HEARTBEAT_INTERVAL = 15
@@ -382,17 +382,17 @@ class DhanWebSocket:
             
             while offset + 8 <= len(packet_data):  # Need at least header (8 bytes)
                 # Extract header information
-                msg_type = packet_data[offset]  # Feed Response Code
+                msg_type, msg_length, exchange_code, token = struct.unpack('<BHBI', packet_data[offset:offset+8])
                 
-                # Extract message length from bytes 2-3
-                msg_length = struct.unpack('<H', packet_data[offset+1:offset+3])[0]  # Message Length (2 bytes)
+                # Debug header fields
+                logger.debug(f"Binary packet header: type={msg_type}, length={msg_length}, exchange={exchange_code}, token={token} (0x{token:04x})")
                 
-                # Extract exchange segment and token
-                exchange_segment = packet_data[offset+3]  # Exchange Segment
-                token = struct.unpack('<I', packet_data[offset+4:offset+8])[0]  # Security ID/token (4 bytes)
-                
-                # Debug token extraction
-                logger.info(f"TICK TOKEN DEBUG: Extracted token={token} (0x{token:x}), exchange_code={exchange_segment}")
+                # Validate message length
+                if msg_type == 8:  # Full data packet
+                    expected_length = 162  # Full data packet size
+                    if msg_length != expected_length:
+                        logger.warning(f"Invalid message length for type 8: got {msg_length}, expected {expected_length}")
+                        msg_length = expected_length  # Force correct length
                 
                 # Validate message length
                 if msg_length < 8:  # Header must be at least 8 bytes
@@ -407,24 +407,53 @@ class DhanWebSocket:
                 message = packet_data[offset:offset+msg_length]
                 
                 # Process the message based on type
-                if msg_type == self.TYPE_TICKER:
-                    logger.info(f"TICK TOKEN DEBUG: Raw token={token}, origin=unknown, payload_size={len(message)} bytes")
+                logger.debug(f"Processing message type {msg_type} for token {token}")
+                
+                if msg_type == self.TYPE_TICKER:  # 15 - LTP data
                     ticks = self._parse_ticker_data(message)
                     if ticks and self.on_ticks:
-                        token_info = []
-                        for tick in ticks:
-                            if 'token' in tick:
-                                token_info.append(f"{tick['token']} ({type(tick['token']).__name__})")
-                        logger.info(f"Parsed ticker packet: {len(ticks)} ticks with tokens: {token_info}")
+                        logger.info(f"Parsed LTP data for token {token}")
                         self.on_ticks(ticks)
-                elif msg_type == 7:  # ACK packet - likely culprit for previous TOKEN MAPPING FAILURE warnings
-                    logger.debug(f"Received ACK packet for token {token}, exchange {exchange_segment}")
-                    # Skip processing these as ticks; they contain acknowledgments, not market data
+                        
+                elif msg_type == self.TYPE_QUOTE:  # 17 - Quote/marketdata
+                    tick = self._parse_quote_data(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed quote data for token {token}")
+                        self.on_ticks([tick])
+                        
+                elif msg_type == self.TYPE_DEPTH:  # 21 - Full market depth
+                    tick = self._parse_market_depth(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed market depth for token {token}")
+                        self.on_ticks([tick])
+                        
+                elif msg_type == self.TYPE_OI:  # 9 - Open Interest
+                    tick = self._parse_oi_data(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed OI data for token {token}")
+                        self.on_ticks([tick])
+                        
+                elif msg_type == self.TYPE_PREV_CLOSE:  # 10 - Previous close
+                    tick = self._parse_prev_close(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed prev close for token {token}")
+                        self.on_ticks([tick])
+                        
+                elif msg_type == 8:  # Full data (ticker + depth)
+                    tick = self._parse_full_data(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed full data for token {token}")
+                        self.on_ticks([tick])
+                        
+                elif msg_type == self.TYPE_DISCONNECT:  # 0 - Disconnect
+                    logger.warning(f"Received disconnect message for token {token}")
+                    self._parse_disconnect(message)
+                    
                 else:
-                    # Use the general parser for other message types
+                    logger.warning(f"Unknown message type {msg_type} for token {token}")
+                    # Try general parser as fallback
                     tick = self._parse_dhan_binary_packet(message)
                     if tick:
-                        # Convert to list if not already
                         ticks = [tick] if not isinstance(tick, list) else tick
                         if self.on_ticks and ticks:
                             self.on_ticks(ticks)
@@ -445,11 +474,11 @@ class DhanWebSocket:
     
 
     def _parse_ticker_data(self, packet_data):
-        """Parse ticker data (message type 2) - Based on official Dhan implementation"""
+        """Parse ticker/LTP data (message type TYPE_TICKER = 15) - Based on official Dhan implementation"""
         try:
             # Check if we have enough data for the ticker format
             if len(packet_data) < 16:  # Minimum length per official client
-                logger.warning(f"Ticker data packet too small: {len(packet_data)} bytes")
+                logger.warning(f"LTP data packet too small: {len(packet_data)} bytes")
                 return []
                 
             # Unpack according to official Dhan client format: <BHBIfI>
@@ -531,44 +560,36 @@ class DhanWebSocket:
             logger.warning("Empty packet received")
             return None
             
-        packet_type = packet_data[0]
+        msg_type = struct.unpack('>B', packet_data[0:1])[0]
         
         # Log the binary packet for debugging
-        logger.debug(f"Binary packet received: type={packet_type}, size={len(packet_data)}, hex={packet_data.hex()}")
+        logger.debug(f"Binary packet received: type={msg_type}, size={len(packet_data)}, hex={packet_data.hex()}")
         
         try:
-            if packet_type == 2:  # Ticker data (LTP)
+            if msg_type == 2:  # Ticker data
                 return self._parse_ticker_data(packet_data)
-                
-            elif packet_type == 3:  # Market depth
-                return self._parse_market_depth(packet_data)
-                
-            elif packet_type == 4:  # Quote data (OHLC)
-                return self._parse_quote_data(packet_data)
-                
-            elif packet_type == 5:  # OI data
-                return self._parse_oi_data(packet_data)
-                
-            elif packet_type == 6:  # Previous close
+            elif msg_type == 6:  # Previous close data
                 return self._parse_prev_close(packet_data)
-                
-            elif packet_type == 7:  # Status message
-                return self._parse_status(packet_data)
-                
-            elif packet_type == 8:  # Full data (ticker + depth)
+            elif msg_type == self.TYPE_TICKER:  # 15 - LTP
+                return self._parse_ticker_data(packet_data)
+            elif msg_type == self.TYPE_QUOTE:  # 17 - Quote
+                return self._parse_quote_data(packet_data)
+            elif msg_type == self.TYPE_DEPTH:  # 21 - Full market depth
+                return self._parse_market_depth(packet_data)
+            elif msg_type == self.TYPE_OI:  # 9 - Open Interest
+                return self._parse_oi_data(packet_data)
+            elif msg_type == self.TYPE_PREV_CLOSE:  # 10 - Previous close
+                return self._parse_prev_close(packet_data)
+            elif msg_type == 8:  # Full data (ticker + depth)
                 return self._parse_full_data(packet_data)
-                
-            elif packet_type == 50:  # Disconnect message
+            elif msg_type == 50:  # Disconnect
                 return self._parse_disconnect(packet_data)
-                
             else:
-                logger.warning(f"Unknown packet type: {packet_type} in packet: {packet_data.hex()}")
+                logger.warning(f"Unknown message type {msg_type} in packet: {packet_data.hex()}")
                 return None
-                
         except Exception as e:
-            logger.warning(f"No ticks parsed from binary packet: {e}")
+            logger.error(f"Error parsing binary packet: {e}, packet data: {packet_data.hex()}")
             return None
-            
     def _parse_ticker_payload(self, payload):
         """Legacy parsing method - redirects to _parse_ticker_data"""
         try:
@@ -659,9 +680,9 @@ class DhanWebSocket:
             return None
             
     def _parse_quote_data(self, packet_data):
-        """Parse quote data (message type 4)"""
+        """Parse quote data (message type TYPE_QUOTE = 17)"""
         try:
-            # Based on official Dhan client, first byte is message type, the rest is structured data
+            # Based on official Dhan client, first byte is message type (17), the rest is structured data
             if len(packet_data) < 112:  # Expected minimum length for quote data
                 logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 112")
                 return None
@@ -732,44 +753,151 @@ class DhanWebSocket:
         """Legacy parsing method - redirects to _parse_quote_data"""
         try:
             # Convert the payload to a proper packet by adding message type byte
-            packet = bytes([4]) + payload
+            packet = bytes([self.TYPE_QUOTE]) + payload  # TYPE_QUOTE = 17
             return self._parse_quote_data(packet)
         except Exception as e:
             logger.error(f"Error in legacy quote payload parsing: {e}")
             return None
-    
+    def _get_price_scale(self, exchange_code: int) -> float:
+        """Get price scaling factor for an exchange"""
+        # NSE Equity and F&O use 100 as price scale
+        if exchange_code in [1, 2]:  # NSE_EQ, NSE_FNO
+            return 100.0
+        # MCX uses 100 for most commodities
+        elif exchange_code == 5:  # MCX_COMM
+            return 100.0
+        # NSE Currency uses 10000
+        elif exchange_code == 3:  # NSE_CURRENCY
+            return 10000.0
+        # NSE Indices use 100
+        elif exchange_code == 0:  # IDX_I
+            return 100.0
+        # Default to 100 for unknown exchanges
+        return 100.0
+
+    def _is_valid_price(self, price: float, exchange_code: int) -> bool:
+        """Check if a price level is valid for an exchange"""
+        # For indices, 0 is a valid price (market closed)
+        if exchange_code == 0:  # IDX_I
+            return True
+        # For all other exchanges, price must be > 0
+        return price > 0
+
     def _parse_full_data(self, packet_data):
-        """Parse full data (message type 8)"""
+        """Parse message type 8: Full data (combination of ticker + depth)
+        Format: <BHBIfHIfIIIIIIffff100s> from Dhan marketfeed documentation
+        """
+        # Debug the binary packet
+        logger.debug(f"Full data packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
+        
+        # Full packet must be exactly 162 bytes
+        if len(packet_data) != 162:
+            logger.warning(f"Full data packet wrong size: {len(packet_data)} bytes, expected 162")
+            return None
+            
         try:
-            # Based on official Dhan client, this combines ticker, depth, and additional data
-            if len(packet_data) < 162:  # Combined expected length
-                logger.warning(f"Full data too short: {len(packet_data)} bytes, need at least 162")
-                return None
-                
-            # First parse the market depth (it contains most fields anyway)
-            depth_tick = self._parse_market_depth(bytes([3]) + packet_data[1:])  # Change first byte to 3 for depth
-            if not depth_tick:
-                return None
-                
-            # Then parse additional fields from the ticker format
-            ticker_tick = self._parse_ticker_data(bytes([2]) + packet_data[1:])  # Change first byte to 2 for ticker
+            # Unpack the entire packet according to Dhan's format
+            # Format: <BHBIIHIIIIIIIIIIIIII100s>
+            # B: message type (1)
+            # H: message length (2)
+            # B: exchange code (1)
+            # I: token (4)
+            # I: ltp (4)
+            # H: ltq (2)
+            # I: timestamp (4)
+            # I: atp (4)
+            # I: total buy qty (4)
+            # I: total sell qty (4)
+            # I: oi value (4)
+            # I: oi high (4)
+            # I: oi low (4)
+            # I: open price (4)
+            # I: close price (4)
+            # I: high price (4)
+            # I: low price (4)
+            # 100s: market depth data (100)
+            (
+                msg_type, msg_len, exchange_code, token, ltp, ltq, timestamp, atp, \
+                total_buy_qty, total_sell_qty, oi_val, oi_high, oi_low, \
+                open_price, close_price, high_price, low_price, depth_data
+            ) = struct.unpack('>BHBIIIIIIIIIIIIIIII100s', packet_data)
             
-            # Combine both ticks into one comprehensive tick
-            if ticker_tick:
-                depth_tick.update({
-                    'last_price': ticker_tick.get('last_price'),
-                    'last_quantity': ticker_tick.get('last_quantity'),
-                    'average_price': ticker_tick.get('average_price'),
-                    'volume': ticker_tick.get('volume'),
-                    'ohlc': ticker_tick.get('ohlc'),
-                    'mode': 'full',
-                    'packet_type': 'full'
-                })
+            # Debug timestamp
+            logger.info(f"Raw timestamp bytes: {timestamp:08x}")
+            ts = datetime.utcfromtimestamp(timestamp)
+            logger.info(f"Converted timestamp: {ts}")
             
-            logger.debug(f"Parsed full data for token {depth_tick['instrument_token']}")
-            return depth_tick
+            # Get price scale for this exchange
+            price_scale = self._get_price_scale(exchange_code)
+            
+            # Parse market depth from the 100-byte depth_data
+            depth = {
+                'buy': [],
+                'sell': []
+            }
+            
+            # Each depth level is 20 bytes: bid_qty(4) + ask_qty(4) + bid_orders(2) + ask_orders(2) + bid_price(4) + ask_price(4)
+            # Note: All prices are integers, scaled by price_scale
+            packet_format = '>IIHHII'
+            packet_size = struct.calcsize(packet_format)
+            
+            # Debug raw values
+            logger.info(f"Raw LTP: {ltp}, ATP: {atp}, Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
+            
+            # Process all 5 depth levels
+            for i in range(5):
+                start_idx = i * packet_size
+                end_idx = start_idx + packet_size
+                
+                # Unpack one level of depth data
+                bid_qty, ask_qty, bid_orders, ask_orders, bid_price, ask_price = struct.unpack(
+                    packet_format, 
+                    depth_data[start_idx:end_idx]
+                )
+                
+                # Add bid level if valid
+                if self._is_valid_price(bid_price, exchange_code):
+                    depth['buy'].append({
+                        'price': bid_price / price_scale,  # Apply exchange-specific scaling
+                        'quantity': bid_qty,
+                        'orders': bid_orders
+                    })
+                
+                # Add ask level if valid
+                if self._is_valid_price(ask_price, exchange_code):
+                    depth['sell'].append({
+                        'price': ask_price / price_scale,  # Apply exchange-specific scaling
+                        'quantity': ask_qty,
+                        'orders': ask_orders
+                    })
+            
+            tick = {
+                'instrument_token': token,
+                'exchange': self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ'),
+                'last_price': ltp / price_scale,  # Apply exchange-specific scaling
+                'last_quantity': ltq,
+                'average_price': atp / price_scale,  # Apply exchange-specific scaling
+                'volume': total_buy_qty + total_sell_qty,
+                'oi': oi_val,
+                'ohlc': {
+                    'open': open_price / price_scale,  # Apply exchange-specific scaling
+                    'high': high_price / price_scale,  # Apply exchange-specific scaling
+                    'low': low_price / price_scale,  # Apply exchange-specific scaling
+                    'close': close_price / price_scale  # Apply exchange-specific scaling
+                },
+                'depth': depth,
+                'total_buy_quantity': total_buy_qty,
+                'total_sell_quantity': total_sell_qty,
+                'timestamp': datetime.fromtimestamp(timestamp).isoformat(),
+                'mode': 'depth'
+            }
+            
+            logger.debug(f"Parsed full data for token {tick['instrument_token']}: {len(depth['buy'])} buy levels, {len(depth['sell'])} sell levels")
+            return tick
+            
         except Exception as e:
             logger.error(f"Error parsing full data: {e}")
+            logger.error(f"Packet data (hex): {packet_data.hex()}")
             return None
     
     def _parse_full_payload(self, payload):
@@ -782,621 +910,48 @@ class DhanWebSocket:
             logger.error(f"Error in legacy full payload parsing: {e}")
             return None
     
-    def _parse_oi_data(self, packet_data):
-        """Parse open interest data (message type 5)"""
-        try:
-            # Based on official Dhan client format
-            if len(packet_data) < 16:  # Basic length for OI data
-                logger.warning(f"OI data too short: {len(packet_data)} bytes, need at least 16")
-                return None
-                
-            # Skip the first byte (message type)
-            data = packet_data[1:]
-            
-            token = struct.unpack('<I', data[0:4])[0]
-            exchange_id = data[4]
-            if exchange_id == 1:
-                exchange = "NSE"
-            elif exchange_id == 2:
-                exchange = "BSE"
-            elif exchange_id == 3:
-                exchange = "NFO"
-            elif exchange_id == 4:
-                exchange = "CDS"
-            elif exchange_id == 5:
-                exchange = "MCX"
-            else:
-                exchange = f"UNK_{exchange_id}"
-                
-            oi = struct.unpack('<I', data[7:11])[0]
-            
-            tick = {
-                'token': token,
-                'instrument_token': token,
-                'exchange': exchange,
-                'oi': oi,
-                'mode': 'oi',
-                'packet_type': 'open_interest'
-            }
-            
-            logger.debug(f"Parsed OI data for token {token}: OI={oi}")
-            return tick
-        except Exception as e:
-            logger.error(f"Error parsing OI data: {e}")
-            return None
-    
-    def _parse_prev_close(self, packet_data):
-        """Parse previous close data (message type 6)"""
-        try:
-            # Based on official Dhan client format
-            if len(packet_data) < 16:  # Basic length for prev close data
-                logger.warning(f"Previous close data too short: {len(packet_data)} bytes")
-                return None
-                
-            # Skip the first byte (message type)
-            data = packet_data[1:]
-            
-            token = struct.unpack('<I', data[0:4])[0]
-            exchange_id = data[4]
-            if exchange_id == 1:
-                exchange = "NSE"
-            elif exchange_id == 2:
-                exchange = "BSE"
-            elif exchange_id == 3:
-                exchange = "NFO"
-            elif exchange_id == 4:
-                exchange = "CDS"
-            elif exchange_id == 5:
-                exchange = "MCX"
-            else:
-                exchange = f"UNK_{exchange_id}"
-                
-            prev_close = struct.unpack('<f', data[7:11])[0]
-            
-            tick = {
-                'token': token,
-                'instrument_token': token,
-                'exchange': exchange,
-                'ohlc': {
-                    'close': prev_close
-                },
-                'mode': 'prev_close',
-                'packet_type': 'prev_close'
-            }
-            
-            logger.debug(f"Parsed previous close data for token {token}: prev_close={prev_close}")
-            return tick
-        except Exception as e:
-            logger.error(f"Error parsing previous close data: {e}")
-            return None
-    
-    def _parse_status(self, packet_data):
-        """Parse status data (message type 7)"""
-        try:
-            # This message type indicates status information
-            if len(packet_data) < 8:  # Minimum expected length
-                logger.warning(f"Status data too short: {len(packet_data)} bytes")
-                return None
-                
-            # Skip the first byte (message type)
-            data = packet_data[1:]
-            
-            token = struct.unpack('<I', data[0:4])[0]
-            status = data[4]
-            
-            tick = {
-                'token': token,
-                'instrument_token': token,
-                'status': status,
-                'mode': 'status',
-                'packet_type': 'status'
-            }
-            
-            logger.debug(f"Parsed status data for token {token}: status={status}")
-            return tick
-        except Exception as e:
-            logger.error(f"Error parsing status data: {e}")
-            return None
-    
-    def _parse_disconnect(self, packet_data):
-        """Parse disconnect message (message type 50)"""
-        try:
-            # This message type indicates a disconnect request from server
-            logger.warning("Received disconnect signal from Dhan server")
-            
-            # Return a special tick to indicate disconnect
-            tick = {
-                'mode': 'disconnect',
-                'packet_type': 'disconnect',
-                'message': 'Server requested disconnect'
-            }
-            
-            # Trigger reconnection process
-            asyncio.create_task(self._reconnect())
-            
-            return tick
-        except Exception as e:
-            logger.error(f"Error parsing disconnect message: {e}")
-            return None
-            
-    def _parse_generic_payload(self, payload):
-        """Parse generic payload when format is unknown"""
-        try:
-            if len(payload) < 8:
-                return None
-            
-            # Try to extract basic fields
-            token = struct.unpack_from('<I', payload, 0)[0]
-            
-            # Try to find a price value
-            price = 0.0
-            if len(payload) >= 8:
-                try:
-                    price = struct.unpack_from('<f', payload, 4)[0]
-                except:
-                    price = 0.0
-            
-            tick = {
-                'token': token,
-                'instrument_token': token,
-                'last_price': price,
-                'timestamp': int(time.time()),
-                'packet_type': 'generic',
-                'raw_length': len(payload)
-            }
-            
-            logger.debug(f"Parsed generic: token={token}, price={price}")
-            return tick
-            
-        except Exception as e:
-            logger.error(f"Error parsing generic payload: {e}")
-            return None
-    
-    async def _resubscribe(self):
-        """Resubscribe to all instruments after reconnection"""
-        try:
-            for key, details in self.instruments.items():
-                logger.debug(f"Resubscribing to {key}")
-                packet = self._create_subscription_packet(
-                    details["token"], 
-                    mode=details.get("mode", self.MODE_FULL)
-                )
-                await self._send_packet(packet)
-        except Exception as e:
-            logger.error(f"Error resubscribing: {e}")
-            return False
-        return True
-        
-    async def _send_packet(self, packet):
-        """Send a packet to the WebSocket server"""
-        if not self.ws or not self.connected:
-            logger.error("Cannot send packet: WebSocket not connected")
-            return False
-            
-        try:
-            await self.ws.send(packet)
-            logger.debug(f"Sent packet: {packet}")
-            return True
-        except Exception as e:
-            logger.error(f"Error sending packet: {e}")
-            return False
-            
-    def subscribe(self, instrument_token, exchange, symbol, mode=MODE_FULL):
-        """Subscribe to a symbol"""
-        with self.lock:
-            key = f"{exchange}:{symbol}"
-            if key in self.instruments:
-                logger.debug(f"Already subscribed to {key}")
-                return True
-                
-            self.instruments[key] = {
-                "token": instrument_token,
-                "mode": mode,  # Store the actual mode provided
-                "exchange": exchange,
-                "symbol": symbol
-            }
-            
-            if not self.connected:
-                logger.warning(f"Not connected to dhan WebSocket, {key} added to subscription queue")
-                return False
-                
-            try:
-                # Ensure we use the mode parameter passed to this method
-                packet = self._create_subscription_packet(instrument_token, mode=mode)
-                logger.info(f"Sending subscription request for {key} with token {instrument_token} in mode {mode}")
-                asyncio.run_coroutine_threadsafe(self._send_packet(packet), self.loop)
-                return True
-            except Exception as e:
-                logger.error(f"Error subscribing to {key}: {e}")
-                return False
-    
-    def subscribe_tokens(self, tokens, mode=MODE_FULL, exchange_codes=None):
-        """Subscribe to a list of token IDs
-        
-        Args:
-            tokens (list or int): Token ID(s) to subscribe to
-            mode (str): Subscription mode - one of the MODE_* constants (MODE_LTP, MODE_QUOTE, MODE_FULL)
-            exchange_codes (dict, optional): Dictionary mapping token -> exchange_code
-                                            e.g., {2885: 1, 26000: 2, 26009: 0}
-        """
-        success = True
-        if not isinstance(tokens, list):
-            tokens = [tokens]
-            
-        if exchange_codes is None:
-            exchange_codes = {}
-            
-        # Log which mode is being used for subscription
-        if mode == self.MODE_LTP:
-            logger.info(f"Subscribing to {len(tokens)} token(s) in LTP mode")
-        elif mode == self.MODE_QUOTE:
-            logger.info(f"Subscribing to {len(tokens)} token(s) in QUOTE mode")
-        elif mode == self.MODE_FULL:
-            logger.info(f"Subscribing to {len(tokens)} token(s) in FULL/DEPTH mode")
-        else:
-            logger.warning(f"Unknown mode {mode}, defaulting to FULL mode")
-            
-        for token in tokens:
-            try:
-                # Get exchange code if available, default to NSE_EQ (code 1)
-                exchange_code = exchange_codes.get(token, 1)
-                
-                # Store exchange code information with the token
-                key = str(token)
-                if key not in self.instruments:
-                    self.instruments[key] = {}
-                self.instruments[key]['exchange_code'] = exchange_code
-                self.instruments[key]['mode'] = mode  # Store the mode for this token
-                
-                # Display in logs
-                exchange_segment = self.get_exchange_segment(exchange_code)
-                logger.info(f"Token {token} assigned exchange code {exchange_code} ({exchange_segment}) with mode '{mode}'")
-                
-                exchange = "UNKNOWN"  # Still kept for backward compatibility
-                symbol = f"TOKEN_{token}"
-                # Pass the mode parameter to the subscribe method
-                result = self.subscribe(token, exchange, symbol, mode=mode)
-                if not result:
-                    success = False
-            except Exception as e:
-                logger.error(f"Error subscribing to token {token}: {e}")
-                success = False
-                
-        return success
-    
-    def unsubscribe(self, instrument_token, exchange=None, symbol=None):
-        """Unsubscribe from a symbol"""
-        with self.lock:
-            if exchange and symbol:
-                key = f"{exchange}:{symbol}"
-                if key not in self.instruments:
-                    logger.debug(f"Not subscribed to {key}")
-                    return True
-                    
-                try:
-                    packet = self._create_unsubscription_packet(instrument_token)
-                    logger.debug(f"Sending unsubscription request for {key}")
-                    asyncio.run_coroutine_threadsafe(self._send_packet(packet), self.loop)
-                    del self.instruments[key]
-                    return True
-                except Exception as e:
-                    logger.error(f"Error unsubscribing from {key}: {e}")
-                    return False
-            else:
-                try:
-                    packet = self._create_unsubscription_packet(instrument_token)
-                    logger.debug(f"Sending unsubscription request for token {instrument_token}")
-                    asyncio.run_coroutine_threadsafe(self._send_packet(packet), self.loop)
-                    
-                    keys_to_remove = []
-                    for key, details in self.instruments.items():
-                        if details.get("token") == instrument_token:
-                            keys_to_remove.append(key)
-                    
-                    for key in keys_to_remove:
-                        del self.instruments[key]
-                        
-                    return True
-                except Exception as e:
-                    logger.error(f"Error unsubscribing from token {instrument_token}: {e}")
-                    return False
-    
-    def get_exchange_segment(self, exchange_code):
-        """Convert numeric exchange code to string representation as per Dhan's marketfeed client"""
-        exchange_map = {
-            0: "IDX_I",
-            1: "NSE_EQ", 
-            2: "NSE_FNO",
-            3: "NSE_CURRENCY",
-            4: "BSE_EQ",
-            5: "MCX_COMM",
-            7: "BSE_CURRENCY", 
-            8: "BSE_FNO"
-        }
-        return exchange_map.get(exchange_code, str(exchange_code))
-        
     def _create_subscription_packet(self, token, mode=MODE_FULL):
         """Create a subscription packet for Dhan V2 API"""
-        # Get exchange segment from token mapping if available
-        exchange_segment = "NSE_EQ"  # Default
-        
-        # Check if this token is in the instruments dictionary
-        if str(token) in self.instruments:
-            exchange_code = self.instruments[str(token)].get('exchange_code', 1)  # Default to NSE_EQ (code 1)
-            exchange_segment = self.get_exchange_segment(exchange_code)
-            logger.info(f"Using exchange segment {exchange_segment} for token {token}")
-        else:
-            logger.warning(f"No exchange info for token {token}, defaulting to NSE_EQ")
-        
-        # Map mode to request code based on Dhan's API documentation
-        request_code = self.REQUEST_CODE_TICKER  # Default to ticker (LTP)
-        
-        if mode == self.MODE_LTP:
-            # For LTP mode, use Ticker request code (15)
-            request_code = self.REQUEST_CODE_TICKER
-            logger.info(f"Using LTP/Ticker mode (code {request_code}) for token {token}")
-        elif mode == self.MODE_QUOTE:
-            # For Quote mode, use Quote request code (17)
-            request_code = self.REQUEST_CODE_QUOTE
-            logger.info(f"Using QUOTE mode (code {request_code}) for token {token}")
-        elif mode == self.MODE_FULL:
-            # For Full/Depth mode, use Depth request code (19)
-            # Note: Using DEPTH, not FULL (21) as that might be for a different purpose
-            request_code = self.REQUEST_CODE_DEPTH
-            logger.info(f"Using DEPTH mode (code {request_code}) for token {token}")
-        else:
-            logger.warning(f"Unknown mode {mode}, defaulting to LTP/Ticker subscription (code {request_code})")
-            
-        # Dhan V2 subscription format with correct request code
-        packet = {
-            "RequestCode": request_code,  # Use the request code based on mode
-            "InstrumentCount": 1,
-            "InstrumentList": [
-                {
-                    "ExchangeSegment": exchange_segment,
-                    "SecurityId": str(token)
-                }
-            ]
-        }
-        return json.dumps(packet)
-        
-    def _create_unsubscription_packet(self, token):
-        """Create an unsubscription packet for Dhan V2 API"""
-        # Get exchange segment from token mapping if available
-        exchange_segment = "NSE_EQ"  # Default
-        
-        # Check if this token is in the instruments dictionary
-        if str(token) in self.instruments:
-            exchange_code = self.instruments[str(token)].get('exchange_code', 1)  # Default to NSE_EQ (code 1)
-            exchange_segment = self.get_exchange_segment(exchange_code)
-            logger.info(f"Using exchange segment {exchange_segment} for unsubscribe token {token}")
-        else:
-            logger.warning(f"No exchange info for unsubscribe token {token}, defaulting to NSE_EQ")
-            
-        packet = {
-            "RequestCode": 16,
-            "InstrumentCount": 1,
-            "InstrumentList": [
-                {
-                    "ExchangeSegment": exchange_segment,
-                    "SecurityId": str(token)
-                }
-            ]
-        }
-        return json.dumps(packet)
-    
-    def stop(self):
-        """Stop the WebSocket client"""
-        logger.info("Stopping WebSocket client")
-        self.running = False
-        
-        if hasattr(self, 'loop') and self.loop and self.loop.is_running():
-            try:
-                asyncio.run_coroutine_threadsafe(self._close_connection(), self.loop)
-            except Exception as e:
-                logger.error(f"Error signaling loop to stop: {e}")
-            
-        if self.thread and self.thread.is_alive():
-            try:
-                self.thread.join(timeout=5.0)
-                if self.thread.is_alive():
-                    logger.warning("WebSocket thread still alive after timeout")
-            except Exception as e:
-                logger.error(f"Error stopping WebSocket client: {e}")
-        
-        self.connected = False
-        logger.info("WebSocket client stopped")
-        
-    def _parse_ticker_data(self, packet_data):
-        """
-        Parse message type 2: Ticker data (LTP)
-        Format based on Dhan's marketfeed client
-        """
-        # Debug the binary packet in hex format for analysis
-        logger.debug(f"Ticker data packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
-        
-        # Adjust minimum size check - we're getting 16-byte packets
-        if len(packet_data) < 16:
-            logger.warning(f"Ticker data packet too small: {len(packet_data)} bytes")
-            return None
-            
         try:
-            # Extract each byte individually for detailed debug
-            msg_type = packet_data[0]  # Message type is first byte
-            byte_msg = f"Bytes breakdown: msg_type={msg_type} (0x{msg_type:02x})"
-            
-            # The correct interpretation based on Dhan V2 API format:
-            # After msg_type (1 byte), there's a reserved byte, then 2-byte exchange code,
-            # followed by 4-byte instrument token (not 8 bytes as we were processing)
-            
-            # Correct byte extraction based on Dhan's format
-            reserved = packet_data[1]  # Reserved byte
-            exchange_bytes = packet_data[2:4]  # 2 bytes for exchange
-            token_bytes = packet_data[4:8]  # 4 bytes for token
-            
-            byte_msg += f", reserved=0x{reserved:02x}, exchange={exchange_bytes.hex()}"
-            byte_msg += f", token_bytes={token_bytes.hex()}"
-            logger.debug(byte_msg)
-            
-            # Extract token correctly (bytes 4-8)
-            token = int.from_bytes(token_bytes, byteorder='little')
-            
-            # Extract exchange bytes for detailed logging
-            exchange_code = int.from_bytes(exchange_bytes, byteorder='little')
-            logger.info(f"TICK TOKEN DEBUG: Extracted token={token} (0x{token:x}), exchange_code={exchange_code}")
-            
-            # Extract LTP (bytes 8-12)
-            ltp_bytes = packet_data[8:12]
-            ltp = int.from_bytes(ltp_bytes, byteorder='little')
-            
-            # Try multiple decoding strategies for price
-            ltp_float = struct.unpack('<f', ltp_bytes)[0]  # Try as float
-            logger.debug(f"LTP byte values: hex={ltp_bytes.hex()}, as int={ltp}, as float={ltp_float}")
-            
-            # Extract timestamp if available (typically bytes 12-16)
-            timestamp_bytes = packet_data[12:16] if len(packet_data) >= 16 else None
-            timestamp = int.from_bytes(timestamp_bytes, byteorder='little') if timestamp_bytes else int(time.time() * 1000)
-            
-            # Volume is usually not available in LTP mode
-            volume = 0
-            
-            # Try using the float value directly instead of the int value with divisor
-            # Create tick dictionary with parsed values
-            tick = {
-                'token': token,  # Correctly extracted 4-byte token
-                'last_price': ltp_float,  # Use the direct float value from struct.unpack
-                'volume': volume,
-                'timestamp': datetime.fromtimestamp(time.time()).isoformat(),  # Use current time for now
-                'exchange_code': int.from_bytes(exchange_bytes, byteorder='little'),
-                'mode': self.MODE_LTP  # This is LTP mode
-            }
-            
-            # Debug full tick data including all price representations
-            logger.debug(f"Price comparisons: int_bytes={ltp}, float_value={ltp_float}, scaled={ltp/100000.0}")
-            
-            # Add token origin debug info to catch potential mapping issues
-            token_origin = "unknown"
-            if token == 2885:
-                token_origin = "RELIANCE"
-            elif token == 1594:
-                token_origin = "INFY"
-            elif token == 26000:
-                token_origin = "NIFTY"
-            elif token == 1: 
-                token_origin = "SENSEX"
-            
-            logger.info(f"TICK TOKEN DEBUG: Raw token={token}, origin={token_origin}, payload_size={len(packet_data)} bytes")
-            
-            logger.debug(f"Parsed ticker data: {tick}")
-            # Return a list containing the single tick to match what _process_binary_packet expects
-            return [tick]
-            
-        except Exception as e:
-            logger.error(f"Error parsing ticker data: {e}")
-            return None
-
-    def _parse_market_depth(self, packet_data):
-        """
-        Parse message type 3: Market depth data (top 5 levels)
-        Format based on Dhan's marketfeed client
-        """
-        # Debug the binary packet
-        logger.debug(f"Market depth packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
-        
-        # Adjust minimum size depending on what data we need
-        if len(packet_data) < 13:  # At minimum we need type(1) + token(4) + at least some depth data
-            logger.warning(f"Market depth packet too small: {len(packet_data)} bytes")
-            return None
-            
-        try:
-            # First parse the header with instrument token
-            msg_type, token = struct.unpack('<BL', packet_data[:5])
-            
-            # Create depth data structure
-            depth = {
-                'buy': [],
-                'sell': []
-            }
-            
-            # Parse buy side (5 levels)
-            offset = 5
-            for i in range(5):
-                price, quantity, orders = struct.unpack('<LLL', packet_data[offset:offset+12])
-                depth['buy'].append({
-                    'price': price / 100.0,
-                    'quantity': quantity,
-                    'orders': orders
-                })
-                offset += 12
+            # Get exchange code for this token
+            exchange_code = None
+            for token_info in self.instruments.values():
+                if token_info['token'] == token:
+                    exchange_code = token_info['exchange_code']
+                    break
+                    
+            if exchange_code is None:
+                logger.warning(f"No exchange code found for token {token}, using default 1 (NSE_EQ)")
+                exchange_code = 1  # Default to NSE_EQ
                 
-            # Parse sell side (5 levels)
-            for i in range(5):
-                price, quantity, orders = struct.unpack('<LLL', packet_data[offset:offset+12])
-                depth['sell'].append({
-                    'price': price / 100.0,
-                    'quantity': quantity,
-                    'orders': orders
-                })
-                offset += 12
+            # Map subscription mode to request code
+            if mode == self.MODE_LTP:
+                request_code = self.TYPE_TICKER      # 15 - LTP data
+            elif mode == self.MODE_QUOTE:
+                request_code = self.TYPE_QUOTE       # 17 - Quote/marketdata
+            elif mode == self.MODE_FULL:
+                request_code = self.TYPE_DEPTH       # 21 - Full market depth
+            else:
+                logger.error(f"Invalid subscription mode: {mode}")
+                return None
                 
-            # Parse timestamp
-            timestamp, = struct.unpack('<Q', packet_data[offset:offset+8])
-            
-            tick = {
-                'token': token,
-                'depth': depth,
-                'timestamp': datetime.fromtimestamp(timestamp / 1000).isoformat(),
-                'mode': self.MODE_DEPTH
+            # Create subscription packet according to Dhan V2 format
+            packet = {
+                "RequestCode": request_code,
+                "InstrumentCount": 1,
+                "InstrumentList": [
+                    {
+                        "ExchangeSegment": self.get_exchange_segment(exchange_code),
+                        "SecurityId": str(token)
+                    }
+                ]
             }
             
-            # Return a list containing the single tick to match what _process_binary_packet expects
-            return [tick]
+            logger.debug(f"Created subscription packet: {packet}")
+            return packet
             
         except Exception as e:
-            logger.error(f"Error parsing market depth: {e}")
-            return None
-
-    def _parse_quote_data(self, packet_data):
-        """
-        Parse message type 4: Quote data (OHLC, volume, etc.)
-        Format based on Dhan's marketfeed client
-        """
-        # Debug the binary packet
-        logger.debug(f"Quote data packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
-        
-        # Adjust minimum size
-        if len(packet_data) < 13:  # At minimum we need type(1) + token(4) + some price data
-            logger.warning(f"Quote data packet too small: {len(packet_data)} bytes")
-            return None
-            
-        try:
-            # Unpack binary data - format will depend on Dhan's specification
-            # Format: type(1) + instrument_token(4) + ltp(4) + open(4) + high(4) + low(4) + close(4) + ...
-            msg_type, token, ltp, open_price, high, low, close, volume = struct.unpack('<BLLLLLLQ', packet_data[:33])
-            
-            # Parse timestamp at the end
-            timestamp_offset = 33
-            timestamp, = struct.unpack('<Q', packet_data[timestamp_offset:timestamp_offset+8])
-            
-            tick = {
-                'token': token,
-                'last_price': ltp / 100.0,
-                'ohlc': {
-                    'open': open_price / 100.0,
-                    'high': high / 100.0,
-                    'low': low / 100.0,
-                    'close': close / 100.0
-                },
-                'volume': volume,
-                'timestamp': datetime.fromtimestamp(timestamp / 1000).isoformat(),
-                'mode': self.MODE_QUOTE
-            }
-            
-            # Return a list containing the single tick to match what _process_binary_packet expects
-            return [tick]
-            
-        except Exception as e:
-            logger.error(f"Error parsing quote data: {e}")
+            logger.error(f"Error creating subscription packet: {e}")
             return None
         
     def _parse_oi_data(self, packet_data):
@@ -1429,6 +984,92 @@ class DhanWebSocket:
             logger.error(f"Error parsing OI data: {e}")
             return None
 
+    def subscribe_tokens(self, tokens: List[int], mode: str = MODE_FULL, exchange_codes: Optional[Dict[int, int]] = None) -> bool:
+        """
+        Subscribe to a list of tokens with specified mode and exchange codes.
+        
+        Args:
+            tokens (List[int]): List of tokens to subscribe to
+            mode (str): Subscription mode - 'ltp', 'marketdata', or 'depth'
+            exchange_codes (Dict[int, int], optional): Map of token to exchange code.
+                If not provided, defaults to NSE_EQ (1)
+                
+        Returns:
+            bool: True if subscription was successful, False otherwise
+        """
+        if not self.connected or not self.ws:
+            logger.error("Cannot subscribe - WebSocket not connected")
+            return False
+            
+        try:
+            # Validate mode
+            if mode not in [self.MODE_LTP, self.MODE_QUOTE, self.MODE_FULL]:
+                logger.error(f"Invalid mode {mode}")
+                return False
+                
+            # Map mode to request code
+            if mode == self.MODE_LTP:
+                request_code = self.REQUEST_CODE_TICKER
+            elif mode == self.MODE_QUOTE:
+                request_code = self.REQUEST_CODE_QUOTE
+            else:  # MODE_FULL/depth
+                request_code = self.REQUEST_CODE_FULL
+                
+            # Create instrument list with exchange codes
+            instrument_list = []
+            for token in tokens:
+                # Get exchange code from map or default to NSE_EQ (1)
+                exchange_code = exchange_codes.get(token, 1) if exchange_codes else 1
+                exchange_segment = self.get_exchange_segment(exchange_code)
+                
+                # Log subscription details for each token
+                logger.info(f"Subscribing token {token} with exchange_code {exchange_code} ({exchange_segment}) in mode {mode}")
+                
+                instrument_list.append({
+                    "ExchangeSegment": exchange_segment,
+                    "SecurityId": str(token)
+                })
+                
+                # Track subscribed instruments
+                with self.lock:
+                    self.instruments[token] = {
+                        "mode": mode,
+                        "exchange_code": exchange_code,
+                        "exchange_segment": exchange_segment
+                    }
+            
+            # Create subscription packet
+            packet = {
+                "RequestCode": request_code,
+                "InstrumentCount": len(tokens),
+                "InstrumentList": instrument_list
+            }
+            
+            # Send subscription request
+            if self.ws and self.connected:
+                # Log full subscription packet for debugging
+                logger.debug(f"Sending subscription packet: {json.dumps(packet, indent=2)}")
+                
+                asyncio.run_coroutine_threadsafe(
+                    self.ws.send(json.dumps(packet)),
+                    self.loop
+                )
+                
+                # Log subscription summary
+                exchange_summary = {}
+                for instr in instrument_list:
+                    exch = instr['ExchangeSegment']
+                    exchange_summary[exch] = exchange_summary.get(exch, 0) + 1
+                logger.info(f"Subscribed to {len(tokens)} tokens in mode {mode}. Exchange distribution: {exchange_summary}")
+                return True
+            else:
+                logger.error("WebSocket not connected for subscription")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error subscribing to tokens: {e}")
+            return False
+            
     def _parse_prev_close(self, packet_data):
         """
         Parse message type 6: Previous close
@@ -1496,38 +1137,6 @@ class DhanWebSocket:
             logger.error(f"Error parsing status message: {e}")
             return None
 
-    def _parse_full_data(self, packet_data):
-        """
-        Parse message type 8: Full data (combination of ticker + depth)
-        Format based on Dhan's marketfeed client
-        """
-        if len(packet_data) < 200:  # Full data packets are quite large
-            logger.warning(f"Full data packet too small: {len(packet_data)} bytes")
-            return None
-            
-        try:
-            # First parse the main data fields
-            tick_data = self._parse_ticker_data(packet_data)
-            depth_data = self._parse_market_depth(packet_data)
-            
-            if tick_data and depth_data:
-                # Merge the two data structures
-                combined = {**tick_data, **depth_data}
-                combined['mode'] = self.MODE_FULL
-                return combined
-            elif tick_data:
-                tick_data['mode'] = self.MODE_FULL
-                return tick_data
-            elif depth_data:
-                depth_data['mode'] = self.MODE_FULL
-                return depth_data
-            else:
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error parsing full data: {e}")
-            return None
-
     def _parse_disconnect(self, packet_data):
         """
         Parse message type 50: Disconnect message from server
@@ -1546,3 +1155,57 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error handling disconnect message: {e}")
             return None
+
+    def get_exchange_segment(self, exchange_code):
+        """Get exchange segment string from code"""
+        return self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ')
+        
+    def unsubscribe(self, token, exchange_code=1):
+        """Unsubscribe from a token"""
+        try:
+            if not self.connected or not self.ws:
+                logger.error("Cannot unsubscribe - WebSocket not connected")
+                return False
+                
+            # Create unsubscribe packet
+            packet = {
+                "RequestCode": 0,  # 0 = Unsubscribe
+                "InstrumentCount": 1,
+                "InstrumentList": [
+                    {
+                        "ExchangeSegment": self.get_exchange_segment(exchange_code),
+                        "SecurityId": str(token)
+                    }
+                ]
+            }
+            
+            # Send unsubscribe request
+            asyncio.run_coroutine_threadsafe(
+                self.ws.send(json.dumps(packet)),
+                self.loop
+            )
+            
+            # Remove from instruments dict
+            with self.lock:
+                if token in self.instruments:
+                    del self.instruments[token]
+                    
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error unsubscribing from token {token}: {e}")
+            return False
+            
+    def stop(self):
+        """Stop the WebSocket client"""
+        try:
+            self.running = False
+            if self.ws:
+                asyncio.run_coroutine_threadsafe(
+                    self.ws.close(),
+                    self.loop
+                )
+            if self.thread:
+                self.thread.join()
+        except Exception as e:
+            logger.error(f"Error stopping WebSocket client: {e}")

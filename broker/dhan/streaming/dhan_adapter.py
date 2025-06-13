@@ -179,22 +179,33 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         # Use the provided token if valid
         if token is not None and token != 1:
-            self.logger.info(f"Using provided token {token} for {exchange}:{symbol}")
-            return token
+            try:
+                # Convert token to int if it's a string
+                resolved_token = int(str(token))
+                if resolved_token != 1:
+                    self.logger.info(f"Using provided token {resolved_token} for {exchange}:{symbol}")
+                    return resolved_token
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid token format provided for {exchange}:{symbol}: {token}")
             
         # Try to look up in database
         try:
             db_token = get_token(symbol, exchange)
             if db_token is not None:
-                self.logger.info(f"Using database token {db_token} for {exchange}:{symbol}")
-                return db_token
+                try:
+                    # Convert database token to int if it's a string
+                    resolved_token = int(str(db_token))
+                    if resolved_token != 1:
+                        self.logger.info(f"Using database token {resolved_token} for {exchange}:{symbol}")
+                        return resolved_token
+                except (ValueError, TypeError):
+                    self.logger.warning(f"Invalid token format from database for {exchange}:{symbol}: {db_token}")
         except Exception as e:
             self.logger.warning(f"Database lookup failed for {exchange}:{symbol}: {e}")
         
-        # Use the provided placeholder token or default to 1
-        placeholder = token if token is not None else 1
-        self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder {placeholder}")
-        return placeholder
+        # Use placeholder token (1) as last resort
+        self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder 1")
+        return 1
                 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
