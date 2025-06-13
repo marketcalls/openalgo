@@ -364,11 +364,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Unsubscribe from token with Dhan WebSocket
             self.ws_client.unsubscribe(actual_token)
             
-            # Remove from subscription tracking
+            # Remove from subscription tracking but keep token mapping for in-flight messages
             with self.lock:
                 if symbol in self.subscribed_symbols:
-                    if self.token_to_symbol.get(actual_token) == (symbol, exchange):
-                        del self.token_to_symbol[actual_token]
+                    # Keep token mapping for a short while to handle in-flight messages
+                    # The mapping will be cleaned up by the message handler when it sees
+                    # the subscription is gone
                     del self.subscribed_symbols[symbol]
             
             self.logger.info(f"Unsubscribed from {exchange}:{symbol}")
@@ -464,16 +465,15 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.warning(f"Tick missing token: {tick}")
                     continue
                     
-                # Find symbol from token
+                # Find symbol from token and handle cleanup
                 with self.lock:
                     # Try direct lookup with both string and int formats for robustness
                     symbol_exchange = self.token_to_symbol.get(str(token)) or self.token_to_symbol.get(int(token))
                     
-                    # Enhanced debug info for token mapping
-                    token_keys = list(self.token_to_symbol.keys())
-                    token_types = [(k, type(k).__name__) for k in token_keys]
-                    
                     if not symbol_exchange:
+                        # Enhanced debug info for token mapping
+                        token_keys = list(self.token_to_symbol.keys())
+                        token_types = [(k, type(k).__name__) for k in token_keys]
                         self.logger.warning(f"TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found")
                         self.logger.warning(f"Available tokens: {token_types}")
                         
@@ -489,6 +489,21 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         
                         if not symbol_exchange:
                             continue  # Still no match, skip this tick
+                    
+                    # Check if this symbol is still subscribed
+                    symbol, exchange = symbol_exchange
+                    if symbol not in self.subscribed_symbols:
+                        # Symbol is no longer subscribed, clean up token mapping
+                        self.logger.info(f"Cleaning up token mapping for unsubscribed symbol {symbol}")
+                        try:
+                            del self.token_to_symbol[str(token)]
+                        except KeyError:
+                            pass
+                        try:
+                            del self.token_to_symbol[int(token)]
+                        except KeyError:
+                            pass
+                        continue  # Skip processing this tick
                         
                 symbol, exchange = symbol_exchange
                 
@@ -509,19 +524,29 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 self.logger.info(f"Processing tick for {symbol}: price={tick.get('last_price')}, token={token}, exchange={subscription_exchange}")
                 
+                # Get mode from subscriptions or default to LTP
+                subscription = self.subscriptions.get(f"{symbol}_{subscription_exchange}", {})
+                mode = subscription.get('mode', 1)  # Default to LTP mode
+                
+                # Map numeric mode to string format
+                mode_str = {
+                    1: 'LTP',
+                    2: 'QUOTE',
+                    3: 'DEPTH'
+                }.get(mode, 'LTP')
+                
                 # Normalize tick format to OpenAlgo standard
                 normalized_tick = self._normalize_tick(tick)
                 
-                # Get mode from tick data or default to LTP
-                mode = normalized_tick.get('mode', 'ltp')
+                # Override mode based on presence of depth data
+                if ('depth' in normalized_tick and 
+                    isinstance(normalized_tick.get('depth', {}), dict) and
+                    (normalized_tick['depth'].get('buy', []) or normalized_tick['depth'].get('sell', []))):
+                    mode_str = 'DEPTH'
+                    self.logger.debug(f"Depth data detected: {normalized_tick['depth']}")
                 
-                # Map mode to uppercase string format for topic
-                mode_str = {
-                    'ltp': 'LTP',
-                    'quote': 'QUOTE',
-                    'full': 'DEPTH',
-                    'depth': 'DEPTH'
-                }.get(mode.lower(), 'LTP')
+                # Add mode to normalized tick for proper handling
+                normalized_tick['mode'] = mode_str
                 
                 # Generate topics using both formats for maximum compatibility
                 # Format 1: With broker name (for WebSocket server with broker filtering)
@@ -543,7 +568,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.publish_market_data(legacy_topic, normalized_tick)
                 
                 # Debug log for troubleshooting polling data issues
-                if mode.lower() == 'ltp':
+                if mode_str.lower() == 'ltp':
                     self.logger.debug(f"LTP Data should be available for polling: {subscription_exchange}:{symbol}")
                 
         except Exception as e:
@@ -610,31 +635,58 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange": openalgo_exchange,
                 "token": tick.get("token") or tick.get("instrument_token"),
                 "timestamp": tick.get("timestamp"),
-                "ltp": last_price  # Use 'ltp' key for compatibility with get_ltp(), rounded to 2 decimals
+                "ltp": last_price,  # Use 'ltp' key for compatibility with get_ltp()
+                "volume": tick.get("volume", 0),
+                "oi": tick.get("open_interest", 0)
             }
             
             # Add OHLC if available
             if "ohlc" in tick:
-                normalized["ohlc"] = tick["ohlc"]
-            
-            # Add volume if available
-            if "volume" in tick:
-                normalized["volume"] = tick["volume"]
-                
-            # Add bid/ask if available
-            if "buy_price" in tick and "sell_price" in tick:
-                normalized["bid"] = tick.get("buy_price")
-                normalized["ask"] = tick.get("sell_price")
-                normalized["bid_qty"] = tick.get("buy_quantity")
-                normalized["ask_qty"] = tick.get("sell_quantity")
+                ohlc = tick["ohlc"]
+                normalized.update({
+                    "open": round(float(ohlc.get("open", 0)), 2),
+                    "high": round(float(ohlc.get("high", 0)), 2),
+                    "low": round(float(ohlc.get("low", 0)), 2),
+                    "close": round(float(ohlc.get("close", 0)), 2)
+                })
                 
             # Add market depth if available
             if "depth" in tick:
-                normalized["depth"] = tick["depth"]
+                depth_data = tick["depth"]
+                buy_orders = depth_data.get("buy", [])
+                sell_orders = depth_data.get("sell", [])
                 
-            # Add open interest if available
-            if "open_interest" in tick:
-                normalized["oi"] = tick["open_interest"]
+                # Format depth data similar to Angel's format
+                normalized["depth"] = {
+                    "buy": [
+                        {
+                            "price": round(float(level.get("price", 0)), 2),
+                            "quantity": int(level.get("quantity", 0)),
+                            "orders": int(level.get("orders", 0))
+                        }
+                        for level in buy_orders[:5]  # Take top 5 levels
+                    ],
+                    "sell": [
+                        {
+                            "price": round(float(level.get("price", 0)), 2),
+                            "quantity": int(level.get("quantity", 0)),
+                            "orders": int(level.get("orders", 0))
+                        }
+                        for level in sell_orders[:5]  # Take top 5 levels
+                    ]
+                }
+                
+                # Calculate total buy/sell quantities from depth
+                normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
+                normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
+                
+                # Set best bid/ask from depth
+                if buy_orders:
+                    normalized["bid"] = round(float(buy_orders[0].get("price", 0)), 2)
+                    normalized["bid_qty"] = int(buy_orders[0].get("quantity", 0))
+                if sell_orders:
+                    normalized["ask"] = round(float(sell_orders[0].get("price", 0)), 2)
+                    normalized["ask_qty"] = int(sell_orders[0].get("quantity", 0))
                 
             return normalized
             

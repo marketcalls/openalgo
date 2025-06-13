@@ -802,88 +802,132 @@ class DhanWebSocket:
             # H: message length (2)
             # B: exchange code (1)
             # I: token (4)
-            # I: ltp (4)
-            # H: ltq (2)
+            # f: last traded price (4)
+            # H: last traded quantity (2)
             # I: timestamp (4)
-            # I: atp (4)
-            # I: total buy qty (4)
-            # I: total sell qty (4)
-            # I: oi value (4)
-            # I: oi high (4)
-            # I: oi low (4)
-            # I: open price (4)
-            # I: close price (4)
-            # I: high price (4)
-            # I: low price (4)
+            # f: average trade price (4)
+            # I: volume (4)
+            # I: total buy quantity (4)
+            # I: total sell quantity (4)
+            # I: open interest (4)
+            # I: OI high (4)
+            # I: OI low (4)
+            # f: open price (4)
+            # f: high price (4)
+            # f: low price (4)
+            # f: close price (4)
             # 100s: market depth data (100)
+            # I: net change (4)
+            # Format for 162-byte packet (total size breakdown):
+            # Header (8): message type(1) + length(2) + exchange(1) + token(4)
+            # Market data (14): ltp(4) + ltq(2) + timestamp(4) + atp(4)
+            # Volume/OI (24): volume(4) + buy_qty(4) + sell_qty(4) + oi(4) + oi_high(4) + oi_low(4)
+            # OHLC (16): open(4) + high(4) + low(4) + close(4)
+            # Depth data (100): 5 levels * 20 bytes per level
+            # Total: 162 bytes
+            packet_format = '<BHBIfHIfIIIIIIffff100s'
+            
             (
-                msg_type, msg_len, exchange_code, token, ltp, ltq, timestamp, atp, \
-                total_buy_qty, total_sell_qty, oi_val, oi_high, oi_low, \
-                open_price, close_price, high_price, low_price, depth_data
-            ) = struct.unpack('>BHBIIIIIIIIIIIIIIII100s', packet_data)
+                msg_type, msg_len, exchange_code, token, ltp, ltq,
+                timestamp, atp, volume, total_buy_qty, total_sell_qty,
+                oi_val, oi_high, oi_low, open_price, high_price,
+                low_price, close_price, depth_data
+            ) = struct.unpack(packet_format, packet_data)
             
-            # Debug timestamp
-            logger.info(f"Raw timestamp bytes: {timestamp:08x}")
-            ts = datetime.utcfromtimestamp(timestamp)
-            logger.info(f"Converted timestamp: {ts}")
+            logger.debug(f"Full packet unpacked: msg_type={msg_type}, exchange={exchange_code}, token={token}, ltp={ltp}")
             
-            # Get price scale for this exchange
-            price_scale = self._get_price_scale(exchange_code)
+            # Get price scaling factor for this exchange
+            price_scale = self._get_price_scale(exchange_code) # Dhan prices are scaled
+            exch_name = self.EXCHANGE_MAP.get(exchange_code, 'UNKNOWN')
             
-            # Parse market depth from the 100-byte depth_data
+            # Scale all price values
+            ltp = round(ltp , 2) 
+            open_price = round(open_price , 2) 
+            high_price = round(high_price , 2) 
+            low_price = round(low_price , 2) 
+            close_price = round(close_price , 2) 
+            atp = round(atp , 2) 
+            
+            # Debug exchange and packet info
+            logger.debug(f"Processing {exch_name} packet with price scale {price_scale}")
+            logger.debug(f"Header values: token={token}, ltp={ltp}, oi={oi_val}, ltq={ltq}, timestamp={timestamp}")
             depth = {
                 'buy': [],
                 'sell': []
             }
             
-            # Each depth level is 20 bytes: bid_qty(4) + ask_qty(4) + bid_orders(2) + ask_orders(2) + bid_price(4) + ask_price(4)
-            # Note: All prices are integers, scaled by price_scale
-            packet_format = '>IIHHII'
+            # Each depth level is 20 bytes: <IIHHII> per level
+            # I: bid quantity (4)
+            # I: ask quantity (4)
+            # H: bid orders (2)
+            # H: ask orders (2)
+            # I: bid price (4)
+            # I: ask price (4)
+            packet_format = '<IIHHff'
             packet_size = struct.calcsize(packet_format)
             
-            # Debug raw values
-            logger.info(f"Raw LTP: {ltp}, ATP: {atp}, Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
+            # Debug raw depth data
+            logger.debug(f"Raw depth data ({len(depth_data)} bytes): {depth_data.hex()}")
             
-            # Process all 5 depth levels
-            for i in range(5):
-                start_idx = i * packet_size
-                end_idx = start_idx + packet_size
+            for i in range(5):  # 5 depth levels
+                offset = i * packet_size
+                end_offset = offset + packet_size
                 
-                # Unpack one level of depth data
-                bid_qty, ask_qty, bid_orders, ask_orders, bid_price, ask_price = struct.unpack(
-                    packet_format, 
-                    depth_data[start_idx:end_idx]
-                )
+                if end_offset > len(depth_data):
+                    logger.error(f"Not enough data for level {i} (need {end_offset} bytes, have {len(depth_data)})")
+                    break
+                    
+                level_data = depth_data[offset:end_offset]
+                logger.debug(f"Level {i} raw bytes: {level_data.hex()}")
+                
+                try:
+                    bid_qty, ask_qty, bid_orders, ask_orders, bid_price, ask_price = struct.unpack(
+                        packet_format,
+                        level_data
+                    )
+                    logger.debug(f"Level {i} raw: qty={bid_qty}/{ask_qty} orders={bid_orders}/{ask_orders} price={bid_price}/{ask_price}")
+                except Exception as e:
+                    logger.error(f"Error unpacking depth level {i}: {e}, data: {level_data.hex()}")
+                    continue
+                
+                # Scale prices - all prices are integers that need to be scaled
+                
+                bid_price = round(bid_price , 2)
+                ask_price = round(ask_price , 2)
+                
+                logger.debug(f"Level {i} scaled: bid={bid_price}, ask={ask_price}")
                 
                 # Add bid level if valid
-                if self._is_valid_price(bid_price, exchange_code):
+                if self._is_valid_price(bid_price * price_scale, exchange_code):
                     depth['buy'].append({
-                        'price': bid_price / price_scale,  # Apply exchange-specific scaling
+                        'price': bid_price,
                         'quantity': bid_qty,
                         'orders': bid_orders
                     })
+                    logger.debug(f"Added buy level {i}: price={bid_price}, qty={bid_qty}, orders={bid_orders}")
                 
                 # Add ask level if valid
-                if self._is_valid_price(ask_price, exchange_code):
+                if self._is_valid_price(ask_price * price_scale, exchange_code):
                     depth['sell'].append({
-                        'price': ask_price / price_scale,  # Apply exchange-specific scaling
+                        'price': ask_price,
                         'quantity': ask_qty,
                         'orders': ask_orders
                     })
+                    logger.debug(f"Added sell level {i}: price={ask_price}, qty={ask_qty}, orders={ask_orders}")
             
             tick = {
                 'instrument_token': token,
                 'exchange': self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ'),
-                'last_price': ltp / price_scale,  # Apply exchange-specific scaling
+                'last_price': ltp,
                 'last_quantity': ltq,
-                'average_price': atp / price_scale,  # Apply exchange-specific scaling
+                'average_price': atp,
                 'volume': total_buy_qty + total_sell_qty,
                 'oi': oi_val,
                 'ohlc': {
-                    'open': open_price / price_scale,  # Apply exchange-specific scaling
-                    'high': high_price / price_scale,  # Apply exchange-specific scaling
-                    'low': low_price / price_scale,  # Apply exchange-specific scaling
-                    'close': close_price / price_scale  # Apply exchange-specific scaling
+                    'open': open_price,  # Already scaled above
+                    'high': high_price,
+                    'low': low_price,
+                    'close': close_price
                 },
                 'depth': depth,
                 'total_buy_quantity': total_buy_qty,
@@ -893,7 +937,8 @@ class DhanWebSocket:
             }
             
             logger.debug(f"Parsed full data for token {tick['instrument_token']}: {len(depth['buy'])} buy levels, {len(depth['sell'])} sell levels")
-            return tick
+            # Return full tick data with depth
+            return tick if (depth['buy'] or depth['sell']) else None
             
         except Exception as e:
             logger.error(f"Error parsing full data: {e}")
