@@ -32,6 +32,7 @@ class DhanWebSocket:
     TYPE_DEPTH = 21      # Full market depth (matches REQUEST_CODE_FULL)
     TYPE_OI = 9          # Open Interest data
     TYPE_PREV_CLOSE = 10  # Previous day close price
+    TYPE_MARKET_UPDATE = 4  # Market data update packet
     
     # WebSocket URL constants
     MARKET_FEED_WSS = "wss://api-feed.dhan.co"
@@ -439,6 +440,12 @@ class DhanWebSocket:
                         logger.info(f"Parsed prev close for token {token}")
                         self.on_ticks([tick])
                         
+                elif msg_type == self.TYPE_MARKET_UPDATE:  # 4 - Market data update
+                    tick = self._parse_market_update(message)
+                    if tick and self.on_ticks:
+                        logger.info(f"Parsed market update for token {token}")
+                        self.on_ticks([tick])
+                        
                 elif msg_type == 8:  # Full data (ticker + depth)
                     tick = self._parse_full_data(message)
                     if tick and self.on_ticks:
@@ -600,6 +607,74 @@ class DhanWebSocket:
             logger.error(f"Error in legacy ticker payload parsing: {e}")
             return None
     
+    def _parse_market_update(self, packet_data):
+        """Parse market data update packet (message type TYPE_MARKET_UPDATE = 4)
+        
+        Binary format:
+        - Byte 0: Message type (4)
+        - Bytes 1-2: Message length
+        - Byte 3: Exchange segment
+        - Bytes 4-7: Token
+        - Bytes 8-11: LTP (float)
+        - Bytes 12-15: Volume (int)
+        - Bytes 16-19: Total buy quantity (int)
+        - Bytes 20-23: VWAP (float)
+        - Bytes 24-27: Open price (float)
+        - Bytes 28-31: Close price (float)
+        - Bytes 32-35: High price (float)
+        - Bytes 36-39: Low price (float)
+        """
+        try:
+            if len(packet_data) < 40:  # Need at least 40 bytes for all fields
+                logger.warning(f"Market update data too short: {len(packet_data)} bytes")
+                return None
+                
+            # Unpack header and basic fields
+            msg_type, msg_len, exchange_code, token = struct.unpack('<BHBI', packet_data[0:8])
+            
+            # Unpack market update fields - using little-endian float and int
+            # Format: <fIIfffff (float, int, int, float, float, float, float, float)
+            ltp, volume, total_buy_qty, vwap, open_price, close_price, high_price, low_price = struct.unpack(
+                '<fIIfffff', packet_data[8:40])
+            
+            # Map exchange code to string name
+            exch_name = self.EXCHANGE_MAP.get(exchange_code, f'UNK_{exchange_code}')
+            
+            # Log raw values for debugging
+            logger.debug(f"Market Update - Token: {token}, LTP: {ltp}, Volume: {volume}, "
+                       f"Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
+            
+            # Create tick dictionary with OHLC data
+            tick = {
+                'token': token,
+                'instrument_token': token,
+                'exchange_segment': exchange_code,
+                'exchange': exch_name,
+                'last_price': ltp,
+                'volume': volume,
+                'total_buy_quantity': total_buy_qty,
+                'average_price': vwap,
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'ohlc': {
+                    'open': open_price,
+                    'high': high_price,
+                    'low': low_price,
+                    'close': close_price
+                },
+                'mode': 'quote',
+                'packet_type': 'market_update'
+            }
+            
+            logger.debug(f"Parsed market update: Token={tick['token']} LTP={tick['last_price']}")
+            return tick
+            
+        except Exception as e:
+            logger.error(f"Error parsing market update data: {e}")
+            return None
+            
     def _parse_market_depth(self, packet_data):
         """Parse market depth data (message type 3)"""
         try:
@@ -680,55 +755,59 @@ class DhanWebSocket:
             return None
             
     def _parse_quote_data(self, packet_data):
-        """Parse quote data (message type TYPE_QUOTE = 17)"""
+        """Parse quote data (message type TYPE_QUOTE = 17)
+        
+        Binary format (from Dhan API docs):
+        <BHBIfHIfIIIffff - 50 bytes total
+        B: Message type (1 byte)
+        H: Exchange segment (2 bytes)
+        B: Padding (1 byte)
+        I: Security ID (4 bytes)
+        f: LTP (4 bytes)
+        H: LTQ (2 bytes)
+        I: LTT (4 bytes)
+        f: Avg Price (4 bytes)
+        I: Volume (4 bytes)
+        I: Total Sell Qty (4 bytes)
+        I: Total Buy Qty (4 bytes)
+        f: Open (4 bytes)
+        f: Close (4 bytes)
+        f: High (4 bytes)
+        f: Low (4 bytes)
+        """
         try:
-            # Based on official Dhan client, first byte is message type (17), the rest is structured data
-            if len(packet_data) < 112:  # Expected minimum length for quote data
-                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 112")
+            if len(packet_data) < 50:  # Minimum length for quote data
+                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 50")
                 return None
                 
-            # Skip the first byte (message type)
-            data = packet_data[1:]
+            # Unpack all fields at once
+            (msg_type, exchange_code, _, token, ltp, ltq, ltt, 
+             avg_price, volume, total_sell_qty, total_buy_qty,
+             open_price, close_price, high_price, low_price) = struct.unpack('<BHBIfHIfIIIffff', packet_data[:50])
             
-            # Unpack fields according to official client format
-            token = struct.unpack('<I', data[0:4])[0]
-            exchange_id = data[4]
-            if exchange_id == 1:
-                exchange = "NSE"
-            elif exchange_id == 2:
-                exchange = "BSE"
-            elif exchange_id == 3:
-                exchange = "NFO"
-            elif exchange_id == 4:
-                exchange = "CDS"
-            elif exchange_id == 5:
-                exchange = "MCX"
-            else:
-                exchange = f"UNK_{exchange_id}"
-            
-            ltp = struct.unpack('<f', data[7:11])[0]
-            last_quantity = struct.unpack('<I', data[11:15])[0]
-            avg_price = struct.unpack('<f', data[23:27])[0]
-            volume = struct.unpack('<Q', data[15:23])[0]
-            bid_price = struct.unpack('<f', data[67:71])[0]
-            bid_quantity = struct.unpack('<I', data[71:75])[0]
-            ask_price = struct.unpack('<f', data[75:79])[0]
-            ask_quantity = struct.unpack('<I', data[79:83])[0]
-            open_price = struct.unpack('<f', data[27:31])[0]
-            high_price = struct.unpack('<f', data[31:35])[0]
-            low_price = struct.unpack('<f', data[35:39])[0]
-            close_price = struct.unpack('<f', data[39:43])[0]
+            # Map exchange code to exchange name
+            exchange_map = {
+                0: "IDX_I",
+                1: "NSE",
+                2: "NFO",
+                3: "CDS",
+                4: "BSE",
+                5: "MCX",
+                7: "BSE_CURRENCY",
+                8: "BSE_FNO"
+            }
+            exchange = exchange_map.get(exchange_code, f"UNK_{exchange_code}")
             
             tick = {
                 'token': token,
                 'instrument_token': token,
                 'exchange': exchange,
                 'last_price': ltp,
-                'last_quantity': last_quantity,
+                'last_quantity': ltq,
                 'average_price': avg_price,
                 'volume': volume,
-                'buy_quantity': bid_quantity,
-                'sell_quantity': ask_quantity,
+                'buy_quantity': total_buy_qty,
+                'sell_quantity': total_sell_qty,
                 'ohlc': {
                     'open': open_price,
                     'high': high_price,
@@ -736,12 +815,16 @@ class DhanWebSocket:
                     'close': close_price
                 },
                 'depth': {
-                    'buy': [{'price': bid_price, 'quantity': bid_quantity, 'orders': 0}],
-                    'sell': [{'price': ask_price, 'quantity': ask_quantity, 'orders': 0}]
+                    'buy': [{'price': 0, 'quantity': 0, 'orders': 0}],
+                    'sell': [{'price': 0, 'quantity': 0, 'orders': 0}]
                 },
                 'mode': 'quote',
-                'packet_type': 'quote'
+                'packet_type': 'quote',
+                'timestamp': ltt  # Include the timestamp if needed
             }
+            
+            logger.debug(f"Parsed quote data for token {token}: OHLC=({open_price}, {high_price}, {low_price}, {close_price}), LTP={ltp}")
+            return tick
             
             logger.debug(f"Parsed quote data for token {token}: LTP={ltp}")
             return tick
@@ -1114,6 +1197,76 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error subscribing to tokens: {e}")
             return False
+            
+    def _parse_quote_data(self, packet_data):
+        """Parse quote data (message type TYPE_QUOTE = 17)"""
+        try:
+            # Based on official Dhan client, first byte is message type (17), the rest is structured data
+            if len(packet_data) < 51:  # Expected minimum length for quote data
+                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 51")
+                return None
+                
+            # Skip the first byte (message type)
+            data = packet_data[1:]
+            
+            # Unpack 50 bytes of quote data
+            # Format: <BHBIfHIfIIIffff
+            # Breakdown:
+            # B = 1 byte (msg subtype)
+            # H = 2 bytes (message length)
+            # B = 1 byte (exchange segment)
+            # I = 4 bytes (security id / token)
+            # f = 4 bytes (LTP)
+            # H = 2 bytes (LTQ)
+            # I = 4 bytes (LTT)
+            # f = 4 bytes (avg price)
+            # I = 4 bytes (volume)
+            # I = 4 bytes (total sell qty)
+            # I = 4 bytes (total buy qty)
+            # f = 4 bytes (open)
+            # f = 4 bytes (close)
+            # f = 4 bytes (high)
+            # f = 4 bytes (low)
+            
+            unpacked = struct.unpack('<BHBIfHIfIIIffff', data[0:50])
+            
+            # Get exchange name and price scale
+            exchange_code = unpacked[2]
+            exch_name = self.EXCHANGE_MAP.get(exchange_code, 'UNKNOWN')
+            
+            # Create standardized tick format
+            tick = {
+                'token': unpacked[3],
+                'instrument_token': unpacked[3],
+                'exchange_segment': exchange_code,
+                'exchange': exch_name,
+                'last_price': round(unpacked[4], 2),
+                'last_quantity': unpacked[5],
+                'average_price': round(unpacked[7], 2),
+                'volume': unpacked[8],
+                'buy_quantity': unpacked[10],
+                'sell_quantity': unpacked[9],
+                'ohlc': {
+                    'open': round(unpacked[11], 2),
+                    'high': round(unpacked[13], 2),
+                    'low': round(unpacked[14], 2),
+                    'close': round(unpacked[12], 2),
+                },
+                'depth': {
+                    'buy': [],  # not provided in quote packet
+                    'sell': []  # not provided in quote packet
+                },
+                'mode': 'quote',
+                'packet_type': 'quote',
+                'last_trade_time': int(unpacked[6])  # Unix timestamp
+            }
+            
+            logger.debug(f"Parsed quote data: Token={tick['token']} LTP={tick['last_price']}")
+            return tick
+            
+        except Exception as e:
+            logger.error(f"Error parsing quote data: {e}")
+            return None
             
     def _parse_prev_close(self, packet_data):
         """

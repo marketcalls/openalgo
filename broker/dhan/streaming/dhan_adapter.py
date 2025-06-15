@@ -8,6 +8,14 @@ import threading
 import time
 from typing import Dict, List, Optional, Any, Set
 
+# Add the project root to Python path if not already there
+import sys
+import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Now import using relative paths from the project root
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from database.token_db import get_token
 from database.auth_db import get_auth_token
@@ -524,8 +532,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 self.logger.info(f"Processing tick for {symbol}: price={tick.get('last_price')}, token={token}, exchange={subscription_exchange}")
                 
-                # Get mode from subscriptions or default to LTP
-                subscription = self.subscriptions.get(f"{symbol}_{subscription_exchange}", {})
+                # Get mode from subscribed_symbols tracking
+                subscription = self.subscribed_symbols.get(symbol, {})
                 mode = subscription.get('mode', 1)  # Default to LTP mode
                 
                 # Map numeric mode to string format
@@ -538,12 +546,13 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Normalize tick format to OpenAlgo standard
                 normalized_tick = self._normalize_tick(tick)
                 
-                # Override mode based on presence of depth data
-                if ('depth' in normalized_tick and 
-                    isinstance(normalized_tick.get('depth', {}), dict) and
-                    (normalized_tick['depth'].get('buy', []) or normalized_tick['depth'].get('sell', []))):
+                # Set mode based on packet type
+                packet_type = tick.get('packet_type', '')
+                if packet_type == 'market_update' or packet_type == 'quote':
+                    mode_str = 'QUOTE'
+                elif 'depth' in normalized_tick and isinstance(normalized_tick.get('depth', {}), dict):
                     mode_str = 'DEPTH'
-                    self.logger.debug(f"Depth data detected: {normalized_tick['depth']}")
+                self.logger.debug(f"Packet type {packet_type} mapped to mode {mode_str}")
                 
                 # Add mode to normalized tick for proper handling
                 normalized_tick['mode'] = mode_str
@@ -634,6 +643,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "symbol": tick.get("symbol"),
                 "exchange": openalgo_exchange,
                 "token": tick.get("token") or tick.get("instrument_token"),
+                "ltt": tick.get("timestamp"),
                 "timestamp": tick.get("timestamp"),
                 "ltp": last_price,  # Use 'ltp' key for compatibility with get_ltp()
                 "volume": tick.get("volume", 0),
