@@ -3,7 +3,6 @@ Flattrade WebSocket adapter for OpenAlgo WebSocket proxy
 """
 import threading
 import logging
-import sys
 import os
 from typing import Dict, Any, Optional
 import json
@@ -12,9 +11,6 @@ import time
 from broker.flattrade.streaming.flattrade_websocket import FlattradeWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
-
-# Add parent directory to path to allow imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
@@ -236,7 +232,8 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Generate topic for market data publishing, matching OpenAlgo convention.
         """
-        return f"{exchange}_{symbol}_{mode_str}"
+        # FIX: Publish as {symbol}_{exchange}_{mode_str} to match OpenAlgo proxy expectation
+        return f"{symbol}_{exchange}_{mode_str}"
 
     def _normalize_market_data(self, data, t) -> Dict[str, Any]:
         result = {
