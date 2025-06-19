@@ -51,6 +51,7 @@ class FlattradeWebSocket:
     def _on_open(self, ws):
         self.connected = True
         self.logger.info("WebSocket connection opened. Sending authentication...")
+        print("[FlattradeWebSocket] Connection opened, sending auth message...")
         auth_msg = {
             "t": "c",
             "uid": self.user_id,
@@ -58,14 +59,23 @@ class FlattradeWebSocket:
             "source": "API",
             "susertoken": self.susertoken
         }
+        print(f"[FlattradeWebSocket] Auth message: {auth_msg}")
         ws.send(json.dumps(auth_msg))
         if self.on_open:
-            self.on_open(ws)
+            try:
+                print(f"[FlattradeWebSocket] Calling on_open callback")
+                self.on_open(ws)
+            except Exception as e:
+                print(f"[FlattradeWebSocket] Exception in on_open callback: {e}")
 
     def _on_message(self, ws, message):
         print(f"[FlattradeWebSocket] Received: {message}")  # Debug print
         if self.on_message:
-            self.on_message(ws, message)
+            try:
+                print(f"[FlattradeWebSocket] Passing message to adapter.on_message")
+                self.on_message(ws, message)
+            except Exception as e:
+                print(f"[FlattradeWebSocket] Exception in on_message callback: {e}")
 
     def _on_error(self, ws, error):
         self.logger.error(f"WebSocket error: {error}")
@@ -97,4 +107,8 @@ class FlattradeWebSocket:
     def _send(self, msg):
         if self.ws and self.connected:
             print(f"[FlattradeWebSocket] Sending: {msg}")  # Debug print
+            self.logger.info(f"[SEND] {msg}")
             self.ws.send(json.dumps(msg))
+        else:
+            print(f"[FlattradeWebSocket] Not connected, cannot send: {msg}")
+            self.logger.warning(f"[SEND_FAIL] Not connected, cannot send: {msg}")

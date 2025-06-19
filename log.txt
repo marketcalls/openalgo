@@ -1,0 +1,12 @@
+Initializing Traffic Logs DB
+Initializing Latency DB
+Initializing Auth DB
+Initializing User DB
+Initializing Master Contract DB
+Initializing API Log DB
+Initializing Analyzer Table
+Initializing Settings DB
+Initializing Chartink DB
+Initializing Traffic Logs DB
+Initializing Latency DB
+Initializing Strategy DB

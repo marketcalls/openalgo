@@ -147,7 +147,7 @@ class SimpleFeed:
         """Process incoming WebSocket messages"""
         try:
             message = json.loads(message_str)
-            
+
             # Handle authentication response
             if message.get("type") == "auth":
                 if message.get("status") == "success":
@@ -158,49 +158,40 @@ class SimpleFeed:
                     print(f"Authentication failed: {message}")
                     self.pending_auth = False
                 return
-                
+
             # Handle subscription response
             if message.get("type") == "subscribe":
                 print(f"Subscription response: {message}")
                 return
-                
-            # Handle market data
+
+            # Handle market data (Flattrade-style, but works for all brokers)
             if message.get("type") == "market_data":
                 exchange = message.get("exchange")
                 symbol = message.get("symbol")
                 if exchange and symbol:
                     # Special case to fix topic parsing issue in server
-                    # When the server parses NSE_INDEX_NIFTY_LTP, it splits incorrectly,
-                    # setting exchange=INDEX and symbol=NIFTY
                     if exchange == "INDEX" and "broker" in message and message.get("broker") == "NSE":
                         exchange = "NSE_INDEX"
-                        
+
                     symbol_key = f"{exchange}:{symbol}"
                     mode = message.get("mode")
                     market_data = message.get("data", {})
-                    
-                    if mode == 1 and "ltp" in market_data:  # LTP mode
-                        # Store the LTP value in our cache in nested format
-                        ltp = market_data.get("ltp")
+
+                    # Accept both 'ltp' and 'last_price' for LTP mode, and always store as 'ltp'
+                    if mode == 1 and ("ltp" in market_data or "last_price" in market_data):
+                        ltp = market_data.get("ltp", market_data.get("last_price"))
                         timestamp = market_data.get("timestamp", 0)
-                        
                         with self.lock:
-                            # Initialize exchange dict if it doesn't exist
                             if exchange not in self.market_data['ltp']:
                                 self.market_data['ltp'][exchange] = {}
-                                
-                            # Store LTP with timestamp
                             self.market_data['ltp'][exchange][symbol] = {
                                 'timestamp': timestamp,
                                 'ltp': ltp
                             }
-                        
-                        # Print when LTP data is received
                         print(f"LTP {symbol_key}: {ltp} | Time: {timestamp}")
-                        
-                        # Invoke callback if set
                         if self.on_data_callback:
                             self.on_data_callback(message)
+                    # For depth/quote modes, you can add similar normalization here if needed
         except json.JSONDecodeError:
             print(f"Invalid JSON message: {message_str}")
         except Exception as e:

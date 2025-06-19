@@ -90,19 +90,23 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for symbol, exchange, mode in subs:
             token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
             if not token_info:
+                self.logger.error(f"[SCRIP_KEY] No token found for {symbol}-{exchange}")
                 continue
             token = token_info['token']
             brexchange = token_info['brexchange']
             scrips.append(f"{FlattradeExchangeMapper.to_flattrade_exchange(brexchange)}|{token}")
+        self.logger.info(f"[SCRIP_KEY] Built scrips: {scrips}")
         return '#'.join(scrips) if len(scrips) > 1 else (scrips[0] if scrips else '')
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         key = (symbol, exchange, mode)
         try:
+            self.logger.info(f"[SUBSCRIBE] Requested: symbol={symbol}, exchange={exchange}, mode={mode}, depth_level={depth_level}")
             with self.lock:
                 self.subscriptions[key] = True
                 active = [k for k, v in self.subscriptions.items() if v and k[2] == mode]
             scrip_key = self._build_scrip_key(active)
+            self.logger.info(f"[SUBSCRIBE] Built scrip_key: {scrip_key} for active subscriptions: {active}")
             if not scrip_key:
                 self.logger.error(f"No valid tokens for subscription: {symbol}-{exchange} mode {mode}")
                 return self._create_error_response(404, f"No valid tokens for subscription.")
@@ -111,10 +115,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for s, ex, m in active:
                 token_info = SymbolMapper.get_token_from_symbol(s, ex)
                 if token_info:
+                    self.logger.info(f"[SUBSCRIBE] Mapping token {token_info['token']} to ({s}, {ex})")
                     self.token_symbol_map[token_info['token']] = (s, ex)
             if mode in [1, 2]:
+                self.logger.info(f"[SUBSCRIBE] Calling ws_client.subscribe_touchline({scrip_key})")
                 self.ws_client.subscribe_touchline(scrip_key)
             elif mode == 3:
+                self.logger.info(f"[SUBSCRIBE] Calling ws_client.subscribe_depth({scrip_key})")
                 self.ws_client.subscribe_depth(scrip_key)
             else:
                 self.logger.error(f"Unsupported mode for subscribe: {mode}")
@@ -222,25 +229,27 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for symbol, exchange, mode in subs:
             token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
             if not token_info:
+                self.logger.error(f"[SCRIP_KEY] No token found for {symbol}-{exchange}")
                 continue
             token = token_info['token']
             brexchange = token_info['brexchange']
             scrips.append(f"{FlattradeExchangeMapper.to_flattrade_exchange(brexchange)}|{token}")
+        self.logger.info(f"[SCRIP_KEY] Built scrips: {scrips}")
         return '#'.join(scrips) if len(scrips) > 1 else (scrips[0] if scrips else '')
 
-    def _generate_topic(self, symbol: str, exchange: str, mode_str: str) -> str:
-        """
-        Generate topic for market data publishing, matching OpenAlgo convention.
-        """
-        # FIX: Publish as {symbol}_{exchange}_{mode_str} to match OpenAlgo proxy expectation
-        return f"{symbol}_{exchange}_{mode_str}"
+    def _generate_topic(self, exchange: str, symbol: str, mode_str: str) -> str:
+        # Publish as {exchange}_{symbol}_{mode_str} to match OpenAlgo proxy expectation
+        return f"{exchange}_{symbol}_{mode_str}"
 
-    def _normalize_market_data(self, data, t) -> Dict[str, Any]:
+    def _normalize_market_data(self, data, t, mode=None) -> Dict[str, Any]:
+        # Always include both 'ltp' and 'last_price' for LTP mode for client compatibility
+        last_price = float(data.get('lp', 0) or 0)
         result = {
             'symbol': data.get('ts', ''),
             'exchange': data.get('e', ''),
             'token': data.get('tk', ''),
-            'last_price': float(data.get('lp', 0) or 0),
+            'last_price': last_price,
+            'ltp': last_price,  # Always include 'ltp' for client compatibility
             'volume': int(data.get('v', 0) or 0),
             'open': float(data.get('o', 0) or 0),
             'high': float(data.get('h', 0) or 0),
@@ -248,9 +257,17 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'close': float(data.get('c', 0) or 0),
             'average_price': float(data.get('ap', 0) or 0),
             'percent_change': float(data.get('pc', 0) or 0),
-            'mode': 'LTP' if t in ('tf', 'tk') else 'DEPTH',
+            'mode': 'LTP' if t in ('tf', 'tk') and (mode == 1 or mode is None) else ('QUOTE' if t in ('tf', 'tk') and mode == 2 else 'DEPTH'),
             'timestamp': data.get('ltt') or data.get('ft') or '',
         }
+        # For quote mode (mode 2), add bid/ask fields (touchline)
+        if (t in ('tf', 'tk') and mode == 2):
+            # Touchline/quote: best bid/ask and their quantities
+            result['best_bid_price'] = float(data.get('bp1', 0) or 0)
+            result['best_bid_qty'] = int(data.get('bq1', 0) or 0)
+            result['best_ask_price'] = float(data.get('sp1', 0) or 0)
+            result['best_ask_qty'] = int(data.get('sq1', 0) or 0)
+            # Optionally add more levels if available
         if t in ('df', 'dk'):
             result['bids'] = [
                 {'price': float(data.get(f'bp{i}', 0) or 0), 'qty': int(data.get(f'bq{i}', 0) or 0)}
@@ -264,20 +281,34 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_message(self, ws, message):
         try:
-            self.logger.debug(f"[DEBUG] Raw message: {message}")
+            self.logger.info(f"[ON_MESSAGE] Raw message: {message}")
             data = json.loads(message)
             t = data.get('t')
+            self.logger.info(f"[ON_MESSAGE] Message type: {t}, data: {data}")
+            # Determine mode from active subscriptions (default to 1 if not found)
+            token = data.get('tk')
+            mode = None
+            for (sym, exch, m), active in self.subscriptions.items():
+                token_info = SymbolMapper.get_token_from_symbol(sym, exch)
+                if token_info and token_info['token'] == token and active:
+                    mode = m
+                    break
             if t in ('tf', 'tk', 'df', 'dk'):
-                self.logger.debug(f"[DEBUG] Incoming data for {t}: {data}")
-                normalized = self._normalize_market_data(data, t)
-                self.logger.debug(f"[DEBUG] Normalized data: {normalized}")
+                self.logger.debug(f"[ON_MESSAGE] Incoming data for {t}: {data}")
+                normalized = self._normalize_market_data(data, t, mode)
+                self.logger.debug(f"[ON_MESSAGE] Normalized data: {normalized}")
                 token = normalized.get('token')
-                # Use token_symbol_map for canonical publishing
                 symbol, exchange = self.token_symbol_map.get(token, (normalized.get('symbol'), normalized.get('exchange')))
-                self.logger.debug(f"[DEBUG] Using canonical symbol/exchange for publish: {symbol}, {exchange} (token: {token})")
-                mode_str = 'LTP' if t in ('tf', 'tk') else 'DEPTH'
+                self.logger.debug(f"[ON_MESSAGE] Using canonical symbol/exchange for publish: {symbol}, {exchange} (token: {token})")
+                # Determine topic type
+                if t in ('tf', 'tk') and mode == 2:
+                    mode_str = 'QUOTE'
+                elif t in ('tf', 'tk'):
+                    mode_str = 'LTP'
+                else:
+                    mode_str = 'DEPTH'
                 topic = self._generate_topic(exchange, symbol, mode_str)
-                self.logger.debug(f"[DEBUG] Publishing topic: {topic} with symbol: {symbol}, exchange: {exchange}")
+                self.logger.debug(f"[ON_MESSAGE] Publishing topic: {topic} with symbol: {symbol}, exchange: {exchange}")
                 normalized['symbol'] = symbol
                 normalized['exchange'] = exchange
                 self.publish_market_data(topic, normalized)

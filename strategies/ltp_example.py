@@ -29,6 +29,12 @@ def on_data_received(data):
             print(f"  {k}: {v}")
     else:
         print("[DEBUG] Data is not a dict!")
+    # Print current LTP data after every callback
+    if hasattr(client, 'get_ltp'):
+        print("[DEBUG] get_ltp() after callback:")
+        print(client.get_ltp())
+    else:
+        print("[DEBUG] client has no get_ltp() method!")
 
 # Connect and subscribe
 client.connect()
@@ -53,8 +59,26 @@ if hasattr(client, '_ws') and hasattr(client._ws, 'on_message'):
     orig_on_message = client._ws.on_message
     def debug_on_message(msg):
         print(f"[DEBUG] Raw WebSocket message: {msg}")
-        return orig_on_message(msg)
+        result = orig_on_message(msg)
+        print(f"[DEBUG] After on_message, get_ltp(): {client.get_ltp()}")
+        return result
     client._ws.on_message = debug_on_message
+    print("[DEBUG] Monkey-patched client._ws.on_message for extra logging.")
+else:
+    print("[DEBUG] Could not monkey-patch client._ws.on_message.")
+
+# Add a wrapper to the client's _process_message if possible
+if hasattr(client, '_process_message'):
+    orig_process_message = client._process_message
+    def debug_process_message(msg):
+        print(f"[DEBUG] _process_message called with: {msg}")
+        result = orig_process_message(msg)
+        print(f"[DEBUG] After _process_message, get_ltp(): {client.get_ltp()}")
+        return result
+    client._process_message = debug_process_message
+    print("[DEBUG] Wrapped client._process_message for extra logging.")
+else:
+    print("[DEBUG] Could not wrap client._process_message.")
 
 # Poll LTP data a few times
 for i in range(5):
