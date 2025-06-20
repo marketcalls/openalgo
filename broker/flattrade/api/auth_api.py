@@ -1,7 +1,8 @@
-import requests
+import httpx
 import hashlib
 import json
 import os
+from utils.httpx_client import get_httpx_client
 
 def sha256_hash(text):
     """Generate SHA256 hash."""
@@ -38,7 +39,10 @@ def authenticate_broker(code, password=None, totp_code=None):
         
         print(f"Request Data: {data}")  # Debug print
         
-        response = requests.post(url, json=data)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        response = client.post(url, json=data)
         
         print(f"Response Status: {response.status_code}")  # Debug print
         print(f"Response Content: {response.text}")  # Debug print
@@ -81,7 +85,10 @@ def authenticate_broker_oauth(code):
             'api_secret': security_hash
         }
         
-        response = requests.post(url, json=data)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        response = client.post(url, json=data)
         
         if response.status_code == 200:
             response_data = response.json()
