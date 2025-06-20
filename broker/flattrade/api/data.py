@@ -1,14 +1,15 @@
-import http.client
+import httpx
 import json
 import os
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from utils.httpx_client import get_httpx_client
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Flattrade
+    Common function to make API calls to Flattrade using httpx with connection pooling
     """
     AUTH_TOKEN = auth
     full_api_key = os.getenv('BROKER_API_KEY')
@@ -26,21 +27,23 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
     payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("piconnect.flattrade.in")
+    # Get the shared httpx client
+    client = get_httpx_client()
+    
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    url = f"https://piconnect.flattrade.in{endpoint}"
 
-    conn.request(method, endpoint, payload_str, headers)
-    res = conn.getresponse()
-    data = res.read()
+    response = client.request(method, url, content=payload_str, headers=headers)
+    data = response.text
     
     # Print raw response for debugging
-    print(f"Raw Response: {data.decode('utf-8')}")
+    print(f"Raw Response: {data}")
     
     try:
-        return json.loads(data.decode("utf-8"))
+        return json.loads(data)
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
-        print(f"Response data: {data.decode('utf-8')}")
+        print(f"Response data: {data}")
         raise
 
 class BrokerData:
@@ -302,13 +305,9 @@ class BrokerData:
                     if df.empty or df['timestamp'].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quotes = self.get_quotes([{
-                                "exchange": exchange,
-                                "token": token
-                            }])
+                            quote = self.get_quotes(symbol, exchange)
                             
-                            if quotes and len(quotes) > 0:
-                                quote = quotes[0]
+                            if quote:
                                 today_data = {
                                     'timestamp': today_ts,
                                     'open': float(quote.get('open', 0)),
