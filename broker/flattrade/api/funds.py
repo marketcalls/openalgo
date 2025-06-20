@@ -1,6 +1,7 @@
 import os
-import http.client
+import httpx
 import json
+from utils.httpx_client import get_httpx_client
 
 def calculate_pnl(entry):
     """Calculate realized and unrealized PnL for a given entry."""
@@ -15,15 +16,14 @@ def calculate_pnl(entry):
     
     return realized_pnl, unrealized_pnl
 
-def fetch_data(endpoint, payload, headers, conn):
-    """Send a POST request and return the parsed JSON response."""
-    conn.request("POST", endpoint, payload, headers)
-    response = conn.getresponse()
-    return json.loads(response.read().decode("utf-8"))
+def fetch_data(endpoint, payload, headers, client):
+    """Send a POST request and return the parsed JSON response using httpx."""
+    url = f"https://piconnect.flattrade.in{endpoint}"
+    response = client.post(url, content=payload, headers=headers)
+    return response.json()
 
 def get_margin_data(auth_token):
     """Fetch and process margin and position data."""
-    url = "piconnect.flattrade.in"
     full_api_key = os.getenv('BROKER_API_KEY')
     userid = full_api_key.split(':::')[0]
     actid = userid
@@ -31,13 +31,13 @@ def get_margin_data(auth_token):
     # Prepare payload
     data = {"uid": userid, "actid": actid}
     payload = f"jData={json.dumps(data)}&jKey={auth_token}"
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
-    # Initialize HTTP connection
-    conn = http.client.HTTPSConnection(url)
+    # Get the shared httpx client
+    client = get_httpx_client()
 
     # Fetch margin data
-    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, conn)
+    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, client)
     
     # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
@@ -46,7 +46,7 @@ def get_margin_data(auth_token):
         return {}
 
     # Fetch position data
-    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, conn)
+    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, client)
     
     total_realised = 0
     total_unrealised = 0

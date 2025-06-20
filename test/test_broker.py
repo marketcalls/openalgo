@@ -18,7 +18,7 @@ colorama_init(autoreset=True)
 # ───────────────── CONFIG ─────────────────
 API_KEY = os.getenv(
     "OPENALGO_API_KEY",
-    "499128a9359e97ce3e4d2bfb6a32f41be45e504e8cdbb7f35fee23795c9a7b9d"
+    "3bb8d260915ff680a7258108c0483b9eb7675ced31309a36f5846366943ee9fa"
 )
 HOST = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5000")
 
