@@ -746,7 +746,6 @@ class WebSocketProxy:
         if client_id in self.clients:
             websocket = self.clients[client_id]
             try:
-                logger.info(f"[WS DEBUG] Sending to client {client_id}: {json.dumps(message)}")
                 await websocket.send(json.dumps(message))
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending message to client {client_id}")
@@ -769,6 +768,7 @@ class WebSocketProxy:
     async def zmq_listener(self):
         """Listen for messages from broker adapters via ZeroMQ and forward to clients"""
         logger.info("Starting ZeroMQ listener")
+        
         while self.running:
             try:
                 # Receive message from ZeroMQ with a timeout
@@ -778,11 +778,12 @@ class WebSocketProxy:
                         timeout=0.1
                     )
                 except aio.TimeoutError:
+                    # No message received within timeout, continue the loop
                     continue
+                
+                # Parse the message
                 topic_str = topic.decode('utf-8')
                 data_str = data.decode('utf-8')
-                logger.info(f"[ZMQ DEBUG] Received topic: {topic_str}")
-                logger.info(f"[ZMQ DEBUG] Received data: {data_str}")
                 market_data = json.loads(data_str)
                 
                 # Extract topic components
@@ -837,22 +838,22 @@ class WebSocketProxy:
                 # 'dictionary changed size during iteration' errors
                 subscriptions_snapshot = list(self.subscriptions.items())
                 
-                # Print all current subscriptions
-                logger.info(f"[ZMQ DEBUG] Current subscriptions: {self.subscriptions}")
-                for client_id, subscriptions in list(self.subscriptions.items()):
+                for client_id, subscriptions in subscriptions_snapshot:
                     user_id = self.user_mapping.get(client_id)
                     if not user_id:
                         continue
+                    
+                    # Check if this client's broker matches the message broker (if broker is specified)
                     client_broker = self.user_broker_mapping.get(user_id)
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
-                        continue
+                        continue  # Skip if broker doesn't match
+                    
+                    # Create a snapshot of the subscription set before iteration
                     subscriptions_list = list(subscriptions)
                     for sub_json in subscriptions_list:
                         try:
-                            logger.info(f"[ZMQ DEBUG] Checking sub_json: {sub_json}")
                             sub = json.loads(sub_json)
-                            logger.info(f"[ZMQ DEBUG] Parsed sub: {sub}")
-                            logger.info(f"[ZMQ DEBUG] Comparing topic symbol={symbol}, exchange={exchange}, mode={mode} to sub symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, mode={sub.get('mode')}")
+                            
                             # Check subscription match
                             if (sub.get("symbol") == symbol and 
                                 sub.get("exchange") == exchange and 

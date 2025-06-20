@@ -7,7 +7,7 @@ import time
 
 # Initialize feed client with explicit parameters
 client = api(
-    api_key="82153b8f2dec355488bf99fb2333ae30794c063643f72c38bbd6d003383c246e",  # Updated API key
+    api_key="your-openalgo-api-key",  # Replace with your API key
     host="http://127.0.0.1:5000",  # Replace with your API host
     ws_url="ws://127.0.0.1:8765"  # Explicit WebSocket URL (can be different from REST API host)
 )
@@ -20,78 +20,17 @@ instruments_list = [
 ]
 
 def on_data_received(data):
-    print("[DEBUG] on_data_received called!")
-    print("[DEBUG] Raw data received in on_data_received callback:")
+    print("LTP Update:")
     print(data)
-    print(f"[DEBUG] Type of data: {type(data)}")
-    if isinstance(data, dict):
-        for k, v in data.items():
-            print(f"  {k}: {v}")
-    else:
-        print("[DEBUG] Data is not a dict!")
-    # Print current LTP data after every callback
-    if hasattr(client, 'get_ltp'):
-        print("[DEBUG] get_ltp() after callback:")
-        print(client.get_ltp())
-    else:
-        print("[DEBUG] client has no get_ltp() method!")
 
 # Connect and subscribe
 client.connect()
 client.subscribe_ltp(instruments_list, on_data_received=on_data_received)
 
-# Print client internal state if possible
-print("[DEBUG] Client attributes:")
-for attr in dir(client):
-    if not attr.startswith("__"):
-        try:
-            print(f"  {attr}: {getattr(client, attr)}")
-        except Exception as e:
-            print(f"  {attr}: <error: {e}>")
-
-# Print subscriptions if accessible
-if hasattr(client, 'subscriptions'):
-    print("[DEBUG] Client subscriptions:")
-    print(client.subscriptions)
-
-# Optionally, monkey-patch the client's internal message handler for deeper debug (if available)
-if hasattr(client, '_ws') and hasattr(client._ws, 'on_message'):
-    orig_on_message = client._ws.on_message
-    def debug_on_message(msg):
-        print(f"[DEBUG] Raw WebSocket message: {msg}")
-        result = orig_on_message(msg)
-        print(f"[DEBUG] After on_message, get_ltp(): {client.get_ltp()}")
-        return result
-    client._ws.on_message = debug_on_message
-    print("[DEBUG] Monkey-patched client._ws.on_message for extra logging.")
-else:
-    print("[DEBUG] Could not monkey-patch client._ws.on_message.")
-
-# Add a wrapper to the client's _process_message if possible
-if hasattr(client, '_process_message'):
-    orig_process_message = client._process_message
-    def debug_process_message(msg):
-        print(f"[DEBUG] _process_message called with: {msg}")
-        result = orig_process_message(msg)
-        print(f"[DEBUG] After _process_message, get_ltp(): {client.get_ltp()}")
-        return result
-    client._process_message = debug_process_message
-    print("[DEBUG] Wrapped client._process_message for extra logging.")
-else:
-    print("[DEBUG] Could not wrap client._process_message.")
-
 # Poll LTP data a few times
-for i in range(5):
+for i in range(100):
     print(f"\nPoll {i+1}:")
-    print("[DEBUG] client.get_ltp() output:")
-    ltp = client.get_ltp()
-    print(ltp)
-    print(f"[DEBUG] Type of ltp: {type(ltp)}")
-    if isinstance(ltp, dict):
-        for k, v in ltp.items():
-            print(f"  {k}: {v}")
-    else:
-        print("[DEBUG] LTP is not a dict!")
+    print(client.get_ltp())
     time.sleep(0.5)
 
 # Cleanup

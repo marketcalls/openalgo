@@ -33,14 +33,17 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
         self._reconnect_delay = 2  # seconds, will use exponential backoff
+        self._reconnect_lock = threading.Lock()  # Prevent concurrent reconnects
+        self.connected = False
 
     def initialize(self, broker_name: str, user_id: str = None, auth_data: Optional[Dict[str, str]] = None) -> None:
         self.broker_name = broker_name
         # Flattrade: user_id and actid are the same, fetched from env
         self.user_id = os.getenv('BROKER_API_KEY', '').split(':::')[0]
         self.actid = self.user_id
-        # susertoken from DB for 'root' user
-        self.susertoken = get_auth_token('root')
+        # susertoken from DB for OpenAlgo username (not broker user)
+        self.logger.info(f"[DEBUG] Fetching susertoken for OpenAlgo username: {user_id}")
+        self.susertoken = get_auth_token(user_id)
         print(f"[Flattrade Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: {self.susertoken}")
         if not self.actid or not self.susertoken:
             raise ValueError("Missing Flattrade actid or susertoken for user")
@@ -56,30 +59,39 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = True
 
     def connect(self) -> None:
-        if not self.ws_client:
-            self.logger.error("WebSocket client not initialized")
-            raise RuntimeError("WebSocket client not initialized")
-        try:
-            connected = self.ws_client.connect()
-            if not connected:
-                self.logger.error("Failed to connect to Flattrade WebSocket server")
-                raise ConnectionError("Failed to connect to Flattrade WebSocket server")
-            self.connected = True
-            self.logger.info("Connected to Flattrade WebSocket server")
-        except Exception as e:
-            self.logger.error(f"Exception during WebSocket connect: {e}")
-            raise
+        with self._reconnect_lock:
+            if not self.ws_client:
+                self.logger.error("WebSocket client not initialized")
+                raise RuntimeError("WebSocket client not initialized")
+            try:
+                # Clean up any previous connection
+                if hasattr(self.ws_client, 'disconnect'):
+                    try:
+                        self.ws_client.disconnect()
+                    except Exception:
+                        pass
+                self.connected = False
+                connected = self.ws_client.connect()
+                if not connected:
+                    self.logger.error("Failed to connect to Flattrade WebSocket server")
+                    raise ConnectionError("Failed to connect to Flattrade WebSocket server")
+                self.connected = True
+                self.logger.info("Connected to Flattrade WebSocket server")
+            except Exception as e:
+                self.logger.error(f"Exception during WebSocket connect: {e}")
+                raise
 
     def disconnect(self) -> None:
         self.running = False
-        if self.ws_client:
-            try:
-                self.ws_client.disconnect()
-                self.logger.info("Disconnected from Flattrade WebSocket server")
-            except Exception as e:
-                self.logger.error(f"Exception during WebSocket disconnect: {e}")
-        self.cleanup_zmq()
-        self.connected = False
+        with self._reconnect_lock:
+            if self.ws_client:
+                try:
+                    self.ws_client.disconnect()
+                    self.logger.info("Disconnected from Flattrade WebSocket server")
+                except Exception as e:
+                    self.logger.error(f"Exception during WebSocket disconnect: {e}")
+            self.cleanup_zmq()
+            self.connected = False
 
     def _build_scrip_key(self, subs):
         """
@@ -182,25 +194,39 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.warning(f"Unsupported mode {mode} for {symbol}-{exchange}")
 
     def _reconnect(self):
-        if self._reconnect_attempts >= self._max_reconnect_attempts:
-            self.logger.error(f"Max reconnect attempts ({self._max_reconnect_attempts}) reached. Giving up.")
-            return
-        delay = self._reconnect_delay * (2 ** self._reconnect_attempts)
-        self.logger.warning(f"Attempting to reconnect in {delay} seconds (attempt {self._reconnect_attempts+1})...")
-        time.sleep(delay)
-        try:
-            self._reconnect_attempts += 1
-            self.connect()
-            if self.connected:
-                self.logger.info("Reconnected successfully. Resubscribing...")
-                self._reconnect_attempts = 0
-                self._resubscribe_all()
-            else:
-                self.logger.error("Reconnect failed. Will retry if attempts remain.")
+        with self._reconnect_lock:
+            if not self.running:
+                self.logger.info("Not running, skipping reconnect.")
+                return
+            if self._reconnect_attempts >= self._max_reconnect_attempts:
+                self.logger.error(f"Max reconnect attempts ({self._max_reconnect_attempts}) reached. Giving up.")
+                return
+            delay = self._reconnect_delay * (2 ** self._reconnect_attempts)
+            self.logger.warning(f"Attempting to reconnect in {delay} seconds (attempt {self._reconnect_attempts+1})...")
+            time.sleep(delay)
+            try:
+                self._reconnect_attempts += 1
+                # Always create a new ws_client for a clean state
+                self.ws_client = FlattradeWebSocket(
+                    user_id=self.user_id,
+                    actid=self.actid,
+                    susertoken=self.susertoken,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                    on_open=self._on_open
+                )
+                self.connect()
+                if self.connected:
+                    self.logger.info("Reconnected successfully. Resubscribing...")
+                    self._reconnect_attempts = 0
+                    self._resubscribe_all()
+                else:
+                    self.logger.error("Reconnect failed. Will retry if attempts remain.")
+                    self._reconnect()
+            except Exception as e:
+                self.logger.error(f"Reconnect exception: {e}")
                 self._reconnect()
-        except Exception as e:
-            self.logger.error(f"Reconnect exception: {e}")
-            self._reconnect()
 
     def _on_open(self, ws):
         self.logger.info("Flattrade WebSocket connection opened.")
@@ -242,8 +268,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return f"{exchange}_{symbol}_{mode_str}"
 
     def _normalize_market_data(self, data, t, mode=None) -> Dict[str, Any]:
+        import time
         # Always include both 'ltp' and 'last_price' for LTP mode for client compatibility
         last_price = float(data.get('lp', 0) or 0)
+        # Use local system timestamp in ms if not present
+        timestamp = data.get('ltt') or data.get('ft')
+        if not timestamp:
+            timestamp = int(time.time() * 1000)
         result = {
             'symbol': data.get('ts', ''),
             'exchange': data.get('e', ''),
@@ -258,7 +289,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'average_price': float(data.get('ap', 0) or 0),
             'percent_change': float(data.get('pc', 0) or 0),
             'mode': 'LTP' if t in ('tf', 'tk') and (mode == 1 or mode is None) else ('QUOTE' if t in ('tf', 'tk') and mode == 2 else 'DEPTH'),
-            'timestamp': data.get('ltt') or data.get('ft') or '',
+            'timestamp': timestamp,
         }
         # For quote mode (mode 2), add bid/ask fields (touchline)
         if (t in ('tf', 'tk') and mode == 2):
@@ -269,14 +300,17 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             result['best_ask_qty'] = int(data.get('sq1', 0) or 0)
             # Optionally add more levels if available
         if t in ('df', 'dk'):
-            result['bids'] = [
-                {'price': float(data.get(f'bp{i}', 0) or 0), 'qty': int(data.get(f'bq{i}', 0) or 0)}
-                for i in range(1, 6)
-            ]
-            result['asks'] = [
-                {'price': float(data.get(f'sp{i}', 0) or 0), 'qty': int(data.get(f'sq{i}', 0) or 0)}
-                for i in range(1, 6)
-            ]
+            # Patch: publish depth as {'depth': {'buy': [...], 'sell': [...]}}
+            result['depth'] = {
+                'buy': [
+                    {'price': float(data.get(f'bp{i}', 0) or 0), 'quantity': int(data.get(f'bq{i}', 0) or 0), 'orders': int(data.get(f'bo{i}', 0) or 0)}
+                    for i in range(1, 6)
+                ],
+                'sell': [
+                    {'price': float(data.get(f'sp{i}', 0) or 0), 'quantity': int(data.get(f'sq{i}', 0) or 0), 'orders': int(data.get(f'so{i}', 0) or 0)}
+                    for i in range(1, 6)
+                ]
+            }
         return result
 
     def _on_message(self, ws, message):
@@ -311,6 +345,9 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug(f"[ON_MESSAGE] Publishing topic: {topic} with symbol: {symbol}, exchange: {exchange}")
                 normalized['symbol'] = symbol
                 normalized['exchange'] = exchange
+                # --- ADDED DEBUG: Log if this is a DEPTH message ---
+                if mode_str == 'DEPTH':
+                    self.logger.info(f"[DEPTH DEBUG] Publishing DEPTH data for {symbol} {exchange}: {normalized}")
                 self.publish_market_data(topic, normalized)
             else:
                 self.logger.warning(f"Received unknown message type: {t} | message: {data}")
