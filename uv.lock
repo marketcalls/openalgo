@@ -610,6 +610,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517 },
 ]
 
+[package.optional-dependencies]
+http2 = [
+    { name = "h2" },
+]
+
 [[package]]
 name = "hyperframe"
 version = "6.1.0"
@@ -980,7 +985,7 @@ dependencies = [
     { name = "h2" },
     { name = "hpack" },
     { name = "httpcore" },
-    { name = "httpx" },
+    { name = "httpx", extra = ["http2"] },
     { name = "hyperframe" },
     { name = "idna" },
     { name = "importlib-resources" },
@@ -1097,7 +1102,7 @@ requires-dist = [
     { name = "h2", specifier = "==4.2.0" },
     { name = "hpack", specifier = "==4.1.0" },
     { name = "httpcore", specifier = "==1.0.9" },
-    { name = "httpx", specifier = "==0.28.1" },
+    { name = "httpx", extras = ["http2"], specifier = "==0.28.1" },
     { name = "hyperframe", specifier = "==6.1.0" },
     { name = "idna", specifier = "==3.7" },
     { name = "importlib-resources", specifier = "==6.4.0" },
