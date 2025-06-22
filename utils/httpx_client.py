@@ -20,6 +20,7 @@ def get_httpx_client():
         # Setting limits to allow connection reuse but prevent resource exhaustion
         _httpx_client = httpx.Client(
             http2=True,
+            http1=False,  # Force HTTP/2 only with prior knowledge
             timeout=30.0,
             limits=httpx.Limits(
                 max_keepalive_connections=10,
