@@ -17,7 +17,8 @@ _fallback_enabled = True  # Can be disabled if needed
 
 # Track domains that require HTTP/1.1
 _http1_only_domains = {
-    "authapi.flattrade.in",  # Known to have HTTP/2 issues
+    "authapi.flattrade.in",  # Flattrade auth API - has HTTP/2 issues
+    "piconnect.flattrade.in",  # Flattrade trading API - has HTTP/2 issues
 }
 
 
