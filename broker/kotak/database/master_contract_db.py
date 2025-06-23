@@ -88,7 +88,7 @@ def download_csv_kotak_data(output_path):
     logger.info("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
     csv_urls = get_kotak_master_filepaths()
-    logger.info("%s", csv_urls)
+    logger.info(f"Master contract URLs: {csv_urls}")
     # Create a list to hold the paths of the downloaded files
     downloaded_files = []
 
@@ -105,7 +105,7 @@ def download_csv_kotak_data(output_path):
                 file.write(response.content)
             downloaded_files.append(file_path)
         else:
-            logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
+            logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
     
 
 def process_kotak_nse_csv(path):
@@ -265,7 +265,7 @@ def get_kotak_master_filepaths():
     'accept': '*/*',
     'Authorization': f'Bearer {access_token}'
     }
-    conn.request("GET", "/Files/1.0/masterscrip/v1/file-paths", payload, headers)
+    conn.request("GET", "/Files/1.0/masterscrip/v2/file-paths", payload, headers)
     res = conn.getresponse()
     
     data = res.read().decode("utf-8")
@@ -274,7 +274,7 @@ def get_kotak_master_filepaths():
     filepaths_list = data_dict['data']['filesPaths']
     file_dict = {}
     for url in filepaths_list:
-        file_name = url.split('/')[-1].upper().replace('.CSV', '')  
+        file_name = url.split('/')[-1].upper().replace('.CSV', '').replace('-V1', '')
         file_dict[file_name] = url
 
     return file_dict
@@ -365,7 +365,7 @@ def process_kotak_bfo_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    logger.info("Processing kotak MCX CSV Data")
+    logger.info("Processing kotak BFO CSV Data")
     file_path = f'{path}/BSE_FO.csv'
 
     df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
