@@ -39,8 +39,8 @@ def get_margin_data(auth_token):
         
         #TODO FIX realized and unrealized
         processed_margin_data = {
-                "availablecash": f"{margin_data['Net']}",
-                "collateral": f"{margin_data['Collateral']}",
+                "availablecash": f"{float(margin_data['Net']):.2f}",
+                "collateral": f"{float(margin_data['Collateral']):.2f}",
                 "m2munrealized": f"{(-float(margin_data['CurUnRlsMtomPrsnt'])+float(margin_data['ComUnRlsMtomPrsnt'])+float(margin_data['FoUnRlsMtomPrsnt'])+float(margin_data['CashUnRlsMtomPrsnt']))*-1}",
                 "m2mrealized": f"{(-float(margin_data['CurRlsMtomPrsnt'])+float(margin_data['ComRlsMtomPrsnt'])+float(margin_data['FoRlsMtomPrsnt'])+float(margin_data['CashRlsMtomPrsnt']))*-1}",
                 "utiliseddebits": f"{round(((float(margin_data['CurRlsMtomPrsnt'])+float(margin_data['ComRlsMtomPrsnt'])+float(margin_data['FoRlsMtomPrsnt'])+float(margin_data['CashRlsMtomPrsnt']))*-1)-(float(margin_data['MarginUsed'])*-1)-(float(margin_data['RealizedMtomPrsnt'])*-1),2)}"
