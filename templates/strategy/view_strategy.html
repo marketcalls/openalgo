@@ -454,28 +454,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Handle strategy deletion
-    document.getElementById('confirm_strategy_delete').addEventListener('click', function() {
-        fetch(`/strategy/{{ strategy.id }}/delete`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                window.location.href = "{{ url_for('strategy_bp.index') }}";
-            } else {
-                showToast('error', data.error || 'Error deleting strategy');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('error', 'Error deleting strategy');
-        });
-    });
 });
 
 function showToast(type, message) {
