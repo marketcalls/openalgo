@@ -1,11 +1,11 @@
 import asyncio
 import threading
-import logging
 import sys
 import platform
 import os
 
 from .server import main as websocket_main
+from utils.logging import get_logger
 
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings
 if platform.system() == 'Windows':
@@ -15,7 +15,7 @@ if platform.system() == 'Windows':
 # Used to prevent multiple instances in Flask debug mode
 _websocket_server_started = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Check if we're in the Flask child process that should start the WebSocket server
 def should_start_websocket():
@@ -52,9 +52,7 @@ def start_websocket_server():
             asyncio.set_event_loop(loop)
             loop.run_until_complete(websocket_main())
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            logger.error(f"Error in WebSocket server thread: {e}\n{error_details}")
+            logger.exception(f"Error in WebSocket server thread: {e}")
     
     # Start the WebSocket server in a daemon thread
     websocket_thread = threading.Thread(

@@ -161,7 +161,7 @@ def create_app():
     def internal_server_error(e):
         """Custom handler for 500 Internal Server Error"""
         # Log the error (optional)
-        app.logger.error(f"Server Error: {e}")
+        logger.error(f"Server Error: {e}")
 
         # Provide a logout option
         return render_template("500.html"), 500

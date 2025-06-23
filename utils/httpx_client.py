@@ -3,11 +3,11 @@ Shared httpx client module with connection pooling support for all broker APIs
 with automatic HTTP/2 to HTTP/1.1 fallback
 """
 import httpx
-import logging
 from typing import Optional, Union, Dict, Any, Callable
+from utils.logging import get_logger
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global httpx clients for connection pooling
 _httpx_client_http2 = None  # For HTTP/2 with prior knowledge

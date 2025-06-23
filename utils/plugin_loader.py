@@ -3,6 +3,9 @@
 import os
 import importlib
 from flask import current_app
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 def load_broker_auth_functions(broker_directory='broker'):
     auth_functions = {}
@@ -21,8 +24,8 @@ def load_broker_auth_functions(broker_directory='broker'):
             if auth_function:
                 auth_functions[f"{broker_name}_auth"] = auth_function
         except ImportError as e:
-            current_app.logger.error(f"Failed to import broker plugin {broker_name}: {e}")
+            logger.error(f"Failed to import broker plugin {broker_name}: {e}")
         except AttributeError as e:
-            current_app.logger.error(f"Authentication function not found in broker plugin {broker_name}: {e}")
+            logger.error(f"Authentication function not found in broker plugin {broker_name}: {e}")
 
     return auth_functions

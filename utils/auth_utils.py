@@ -5,9 +5,9 @@ from utils.session import get_session_expiry_time, set_session_login_time
 from database.auth_db import upsert_auth, get_feed_token as db_get_feed_token
 from database.master_contract_status_db import init_broker_status, update_status
 import importlib
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def async_master_contract_download(broker):
     """

@@ -1,4 +1,3 @@
-import logging
 import traceback
 import copy
 import requests
@@ -9,10 +8,10 @@ from database.apilog_db import async_log_order, executor as log_executor
 from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
 from extensions import socketio
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """

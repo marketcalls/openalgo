@@ -1,5 +1,4 @@
 import importlib
-import logging
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional, List
@@ -18,10 +17,10 @@ from utils.constants import (
     VALID_PRODUCT_TYPES,
     REQUIRED_ORDER_FIELDS
 )
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Maximum number of orders allowed
 MAX_ORDERS = 100

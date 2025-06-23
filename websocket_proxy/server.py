@@ -1,7 +1,7 @@
 import asyncio as aio
 import websockets
 import json
-import logging
+from utils.logging import get_logger
 import signal
 import zmq
 import zmq.asyncio
@@ -18,10 +18,8 @@ from database.auth_db import verify_api_key
 from .broker_factory import create_broker_adapter
 from .base_adapter import BaseBrokerWebSocketAdapter
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("websocket_proxy")
+# Initialize logger
+logger = get_logger("websocket_proxy")
 
 class WebSocketProxy:
     """
@@ -118,13 +116,11 @@ class WebSocketProxy:
                     logger.info(f"WebSocket server successfully started on {self.host}:{self.port}")
                     await stop  # Wait until stopped
             except Exception as e:
-                import traceback
-                error_details = traceback.format_exc()
-                logger.error(f"Failed to start WebSocket server: {e}\n{error_details}")
+                logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
                 
         except Exception as e:
-            logger.error(f"Error in start method: {e}")
+            logger.exception(f"Error in start method: {e}")
             raise
     
     async def stop(self):
@@ -161,8 +157,7 @@ class WebSocketProxy:
                     logger.debug(f"Received message from client {client_id}: {message}")
                     await self.process_client_message(client_id, message)
                 except Exception as e:
-                    import traceback
-                    logger.error(f"Error processing message from client {client_id}: {e}\n{traceback.format_exc()}")
+                    logger.exception(f"Error processing message from client {client_id}: {e}")
                     # Send error to client but don't disconnect
                     try:
                         await self.send_error(client_id, "PROCESSING_ERROR", str(e))
@@ -171,8 +166,7 @@ class WebSocketProxy:
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"Client disconnected: {client_id}, code: {e.code}, reason: {e.reason}")
         except Exception as e:
-            import traceback
-            logger.error(f"Unexpected error handling client {client_id}: {e}\n{traceback.format_exc()}")
+            logger.exception(f"Unexpected error handling client {client_id}: {e}")
         finally:
             # Clean up when the client disconnects
             await self.cleanup_client(client_id)
@@ -206,9 +200,9 @@ class WebSocketProxy:
                         adapter = self.broker_adapters[user_id]
                         adapter.unsubscribe(symbol, exchange, mode)
                 except json.JSONDecodeError as e:
-                    logger.error(f"Error parsing subscription: {sub_json}, Error: {e}")
+                    logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
                 except Exception as e:
-                    logger.error(f"Error processing subscription: {e}")
+                    logger.exception(f"Error processing subscription: {e}")
                     continue
             
             del self.subscriptions[client_id]
@@ -263,11 +257,10 @@ class WebSocketProxy:
                 logger.warning(f"Client {client_id} requested invalid action: {action}")
                 await self.send_error(client_id, "INVALID_ACTION", f"Invalid action: {action}")
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON from client {client_id}: {message}")
+            logger.exception(f"Invalid JSON from client {client_id}: {message}")
             await self.send_error(client_id, "INVALID_JSON", "Invalid JSON message")
         except Exception as e:
-            import traceback
-            logger.error(f"Error processing client message: {e}\n{traceback.format_exc()}")
+            logger.exception(f"Error processing client message: {e}")
             await self.send_error(client_id, "SERVER_ERROR", str(e))
     
     async def get_user_broker_configuration(self, user_id):
@@ -333,9 +326,7 @@ class WebSocketProxy:
             return broker_config
             
         except Exception as e:
-            logger.error(f"Error getting broker configuration for user {user_id}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.exception(f"Error getting broker configuration for user {user_id}: {e}")
             return None
     
     async def authenticate_client(self, client_id, data):
@@ -883,11 +874,7 @@ class WebSocketProxy:
 # Entry point for running the server standalone
 async def main():
     """Main entry point for running the WebSocket proxy server"""
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+
     
     # Load environment variables
     load_dotenv()

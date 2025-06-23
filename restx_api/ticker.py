@@ -5,20 +5,18 @@ from database.auth_db import get_auth_token_broker
 from limiter import limiter
 import os
 import importlib
-import traceback
-import logging
 import pandas as pd
 from datetime import datetime, timezone
 import pytz
 
 from .data_schemas import TickerSchema
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('ticker', description='Stock Ticker Data API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 ticker_schema = TickerSchema()
@@ -29,7 +27,7 @@ def import_broker_module(broker_name):
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 class TextResponse(Response):
@@ -176,8 +174,7 @@ class Ticker(Resource):
                     }), 200)
 
             except Exception as e:
-                logger.error(f"Error in broker_module.get_history: {e}")
-                traceback.print_exc()
+                logger.exception(f"Error in broker_module.get_history: {e}")
                 if response_format == 'txt':
                     response = TextResponse(str(e))
                     response.content_type = 'text/plain'
@@ -199,8 +196,7 @@ class Ticker(Resource):
                 'message': err.messages
             }), 400)
         except Exception as e:
-            logger.error(f"Unexpected error in ticker endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in ticker endpoint: {e}")
             if response_format == 'txt':
                 response = TextResponse('An unexpected error occurred')
                 response.content_type = 'text/plain'

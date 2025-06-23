@@ -2,9 +2,9 @@ from flask import Blueprint, render_template, session, redirect, url_for, reques
 from database.symbol import enhanced_search_symbols
 from utils.session import check_session_validity
 from typing import List, Dict
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 search_bp = Blueprint('search_bp', __name__, url_prefix='/search')
 

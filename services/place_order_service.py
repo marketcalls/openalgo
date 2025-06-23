@@ -1,5 +1,4 @@
 import importlib
-import logging
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional, List, Union
@@ -17,10 +16,10 @@ from utils.constants import (
     REQUIRED_ORDER_FIELDS
 )
 from restx_api.schemas import OrderSchema
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 order_schema = OrderSchema()

@@ -3,7 +3,6 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
 import traceback
 import copy
 
@@ -12,13 +11,13 @@ from services.basket_order_service import place_basket_order
 from database.apilog_db import async_log_order, executor as log_executor
 from database.settings_db import get_analyze_mode
 from services.basket_order_service import emit_analyzer_error
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('basket_order', description='Basket Order API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 basket_schema = BasketOrderSchema()

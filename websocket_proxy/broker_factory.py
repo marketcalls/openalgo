@@ -1,10 +1,10 @@
 import importlib
-import logging
 from typing import Dict, Type, Optional
 
 from .base_adapter import BaseBrokerWebSocketAdapter
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Registry of all supported broker adapters
 BROKER_ADAPTERS: Dict[str, Type[BaseBrokerWebSocketAdapter]] = {}
@@ -77,7 +77,7 @@ def create_broker_adapter(broker_name: str) -> Optional[BaseBrokerWebSocketAdapt
             return adapter_class()
     
     except (ImportError, AttributeError) as e:
-        logger.error(f"Failed to load adapter for broker {broker_name}: {e}")
+        logger.exception(f"Failed to load adapter for broker {broker_name}: {e}")
         raise ValueError(f"Unsupported broker: {broker_name}. No adapter available.")
     
     return None

@@ -3,12 +3,12 @@ from database.user_db import add_user, find_user_by_username
 from utils.session import invalidate_session_if_invalid
 from blueprints.apikey import generate_api_key
 from database.auth_db import upsert_api_key
-import logging
+from utils.logging import get_logger
 import qrcode
 import io
 import base64
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 core_bp = Blueprint('core_bp', __name__)
 

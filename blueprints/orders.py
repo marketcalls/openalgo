@@ -4,11 +4,11 @@ from database.auth_db import get_auth_token
 from utils.session import check_session_validity
 from services.place_smart_order_service import place_smart_order
 from services.close_position_service import close_position
-import logging
+from utils.logging import get_logger
 import csv
 import io
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')

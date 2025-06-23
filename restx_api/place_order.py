@@ -2,17 +2,15 @@ from flask_restx import Namespace, Resource, fields
 from flask import request, jsonify, make_response
 from limiter import limiter
 import os
-import logging
-import traceback
 
 from services.place_order_service import place_order
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('place_order', description='Place Order API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # All functionality moved to place_order_service.py
 
@@ -37,8 +35,7 @@ class PlaceOrder(Resource):
             return make_response(jsonify(response_data), status_code)
             
         except Exception as e:
-            logger.error("An unexpected error occurred in PlaceOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in PlaceOrder endpoint.")
             error_response = {
                 'status': 'error',
                 'message': 'An unexpected error occurred in the API endpoint'

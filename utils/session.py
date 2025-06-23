@@ -2,10 +2,10 @@ from datetime import datetime, timedelta
 import pytz
 from functools import wraps
 from flask import session, redirect, url_for
-import logging
+from utils.logging import get_logger
 import os
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_session_expiry_time():
     """Get session expiry time set to 3 AM IST next day"""

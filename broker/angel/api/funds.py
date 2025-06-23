@@ -38,7 +38,7 @@ def get_margin_data(auth_token):
     
     margin_data = json.loads(response.text)
 
-    logger.info("Margin Data %s", margin_data)
+    logger.info(f"Margin Data: {margin_data}")
 
     if margin_data.get('data'):
         required_keys = [

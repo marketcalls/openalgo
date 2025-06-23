@@ -1,9 +1,9 @@
 from flask import Blueprint, jsonify, session
 from database.master_contract_status_db import get_status, check_if_ready
 from utils.session import check_session_validity
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 master_contract_status_bp = Blueprint('master_contract_status_bp', __name__, url_prefix='/api')
 

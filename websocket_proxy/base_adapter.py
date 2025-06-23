@@ -1,7 +1,7 @@
 import json
 import threading
 import zmq
-import logging
+
 import random
 import socket
 import os
@@ -34,7 +34,7 @@ def find_free_zmq_port(start_port=5556, max_attempts=50):
         int: Available port number, or None if no port is available
     """
     # Create logger here instead of using self.logger because this is a standalone function
-    logger = logging.getLogger("zmq_port_finder")
+    logger = get_logger("zmq_port_finder")
     
     # First check if any ports in the bound_ports set are actually free now
     # This handles cases where the process that had the port died without cleanup
@@ -87,7 +87,7 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.socket = self.context.socket(zmq.PUB)
         
         # Find an available port for ZMQ
-        self.logger = logging.getLogger("broker_adapter")
+        self.logger = get_logger("broker_adapter")
         self.zmq_port = self._bind_to_available_port()
         self.logger.info(f"ZeroMQ socket bound to port {self.zmq_port}")
         # Updating used ZMQ_PORT in environment variable.
@@ -225,7 +225,7 @@ class BaseBrokerWebSocketAdapter(ABC):
                 self.context.term()
                 self.logger.info("ZeroMQ context terminated")
         except Exception as e:
-            self.logger.error(f"Error cleaning up ZeroMQ resources: {e}")
+            self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
             
     def __del__(self):
         """
@@ -235,7 +235,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             self.cleanup_zmq()
         except Exception as e:
             # Can't use self.logger here as it might be gone during destruction
-            logger.error(f"Error in __del__ cleaning up ZMQ resources: {e}")
+            logger.exception(f"Error in __del__ cleaning up ZMQ resources: {e}")
             pass
     
     def publish_market_data(self, topic, data):
@@ -252,7 +252,7 @@ class BaseBrokerWebSocketAdapter(ABC):
                 json.dumps(data).encode('utf-8')
             ])
         except Exception as e:
-            self.logger.error(f"Error publishing market data: {e}")
+            self.logger.exception(f"Error publishing market data: {e}")
     
     def _create_success_response(self, message, **kwargs):
         """

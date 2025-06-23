@@ -4,9 +4,9 @@ from importlib import import_module
 from utils.session import check_session_validity
 import multiprocessing
 import sys
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def dynamic_import(broker):
     try:

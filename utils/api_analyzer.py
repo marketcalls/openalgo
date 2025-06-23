@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime, timedelta
 import pytz
 from database.analyzer_db import AnalyzerLog, db_session
@@ -23,8 +22,9 @@ from utils.constants import (
     DEFAULT_TRIGGER_PRICE,
     DEFAULT_DISCLOSED_QUANTITY
 )
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global variable to track order sequence
 _order_sequence = 0
