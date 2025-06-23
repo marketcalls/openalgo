@@ -42,7 +42,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # broker_name will be set in initialize()
         self.running = False
         self.connected = False
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # Changed to RLock for reentrant locking
         self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
         self.token_to_symbol = {}  # {token: (symbol, exchange)}
         
@@ -52,8 +52,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         # Connection management
         self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 5
-        self.reconnect_delay = 5
+        self.max_reconnect_attempts = 10  # Increased max attempts
+        self.reconnect_delay = 5  # Start with 5s delay
+        self.max_reconnect_delay = 300  # Max 5 minutes between attempts
+        self.reconnecting = False  # Flag to prevent multiple concurrent reconnections
         
         # Extended mode mapping to handle all possible OpenAlgo modes
         self.mode_map = {
@@ -436,7 +438,13 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         # Attempt to reconnect if we're still running
         if self.running:
-            self._try_reconnect()
+            # Start reconnection in a separate thread to avoid blocking
+            reconnect_thread = threading.Thread(
+                target=self._try_reconnect,
+                name=f"{self.broker_name}_reconnect_thread",
+                daemon=True
+            )
+            reconnect_thread.start()
             
     def _on_error(self, error):
         """
@@ -707,31 +715,60 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _try_reconnect(self):
         """
         Try to reconnect to WebSocket server with exponential backoff.
+        This method runs in a separate thread to avoid blocking the main thread.
         """
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Maximum reconnection attempts reached")
-            self.disconnect()  # Give up and disconnect completely
-            return
+        with self.lock:  # Ensure thread safety
+            if not self.running:
+                self.logger.info("Not attempting reconnect as adapter is shutting down")
+                return
+                
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Maximum reconnection attempts reached")
+                self.disconnect()  # Give up and disconnect completely
+                return
+                
+            # Calculate delay with exponential backoff
+            delay = self.reconnect_delay * (2 ** self.reconnect_attempts)
+            self.reconnect_attempts += 1
             
-        # Calculate delay with exponential backoff
-        delay = self.reconnect_delay * (2 ** self.reconnect_attempts)
-        self.reconnect_attempts += 1
-        
-        self.logger.info(f"Attempting to reconnect in {delay} seconds (attempt {self.reconnect_attempts})")
-        
-        # Wait and reconnect
-        time.sleep(delay)
-        
-        # Try to reconnect
-        if self.ws_client:
-            self.ws_client.stop()
-            self.ws_client = None
+            self.logger.info(f"Attempting to reconnect in {delay} seconds (attempt {self.reconnect_attempts})")
             
-        connection_result = self.connect()
-        
-        # Reset reconnect attempts if successful
-        if connection_result.get("status") == "success":
-            self.reconnect_attempts = 0
+            # Wait before reconnecting
+            time.sleep(delay)
+            
+            if not self.running:
+                self.logger.info("Aborting reconnect as adapter is shutting down")
+                return
+                
+            try:
+                # Clean up existing connection
+                if self.ws_client:
+                    try:
+                        self.ws_client.stop()
+                    except Exception as e:
+                        self.logger.error(f"Error stopping WebSocket client during reconnect: {e}")
+                    finally:
+                        self.ws_client = None
+                
+                # Attempt to reconnect
+                self.logger.info("Attempting to establish new WebSocket connection...")
+                connection_result = self.connect()
+                
+                # Reset reconnect attempts if successful
+                if connection_result.get("status") == "success":
+                    self.logger.info("Successfully reconnected to WebSocket server")
+                    self.reconnect_attempts = 0  # Reset counter on successful reconnect
+                else:
+                    self.logger.error(f"Failed to reconnect: {connection_result.get('message', 'Unknown error')}")
+                    # Schedule next reattempt if still running
+                    if self.running:
+                        self._on_disconnect()
+                        
+            except Exception as e:
+                self.logger.error(f"Error during reconnection attempt: {e}")
+                # Schedule next reattempt if still running
+                if self.running:
+                    self._on_disconnect()
     
     def is_connected(self):
         """

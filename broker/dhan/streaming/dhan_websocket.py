@@ -145,7 +145,7 @@ class DhanWebSocket:
             logger.info("WebSocket client thread stopped")
     
     async def _run_client(self):
-        """Main WebSocket client loop"""
+        """Main WebSocket client loop with enhanced error handling"""
         retries = 0
         max_retries = 5
         retry_delay = 2
@@ -175,6 +175,7 @@ class DhanWebSocket:
                     wait_time = retry_delay * retries
                     logger.info(f"Attempting to reconnect in {wait_time} seconds...")
                     await asyncio.sleep(wait_time)
+                    await self._reconnect()
             except Exception as e:
                 self.connected = False
                 logger.error(f"Unexpected error: {e}", exc_info=True)
@@ -183,6 +184,7 @@ class DhanWebSocket:
                 if retries < max_retries and self.running:
                     wait_time = retry_delay * retries
                     await asyncio.sleep(wait_time)
+                    await self._reconnect()
                 
         if retries >= max_retries:
             logger.error(f"Failed to connect after {max_retries} retries")
@@ -227,83 +229,126 @@ class DhanWebSocket:
             raise
             
     async def _close_connection(self):
-        """Close the WebSocket connection gracefully"""
-        logger.info("Closing WebSocket connection")
+        """
+        Close the WebSocket connection and clean up resources gracefully.
+        
+        This method ensures all resources are properly released and handles edge cases:
+        1. Safely closes the WebSocket connection if it exists
+        2. Cancels and cleans up pending tasks
+        3. Stops the heartbeat task
+        4. Resets connection state
+        5. Triggers the disconnect callback
+        """
+        logger.info("Closing WebSocket connection and cleaning up resources")
+        
+        # Store the current ws reference and set to None to prevent race conditions
+        ws = self.ws
+        self.ws = None
+        
+        # Store the current heartbeat task and clear the reference
+        heartbeat_task = getattr(self, 'heartbeat_task', None)
+        if hasattr(self, 'heartbeat_task'):
+            self.heartbeat_task = None
+        
+        # Store the current pending tasks and clear the list
+        pending_tasks = getattr(self, 'pending_tasks', [])
+        if hasattr(self, 'pending_tasks'):
+            self.pending_tasks = []
+        
+        # Flag to track if we need to call on_disconnect
+        should_notify_disconnect = self.connected
+        
         try:
-            if self.ws:
-                await self.ws.close()
-                logger.info("WebSocket connection closed")
+            # Close WebSocket connection if it exists and is open
+            if ws and hasattr(ws, 'open') and ws.open:
+                try:
+                    # Use a short timeout for the close operation
+                    await asyncio.wait_for(ws.close(), timeout=5.0)
+                    logger.info("WebSocket connection closed successfully")
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout closing WebSocket connection")
+                except Exception as e:
+                    logger.error(f"Error closing WebSocket: {e}", exc_info=True)
+            
+            # Cancel and clean up heartbeat task if it exists
+            if heartbeat_task and not heartbeat_task.done():
+                try:
+                    heartbeat_task.cancel()
+                    # Give it a moment to cancel
+                    await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except Exception as e:
+                    logger.error(f"Error cancelling heartbeat task: {e}", exc_info=True)
+            
+            # Cancel any pending tasks
+            if pending_tasks:
+                # Create a list to gather all cancellation tasks
+                cancel_tasks = []
+                
+                for task in pending_tasks:
+                    if not task.done():
+                        task.cancel()
+                        cancel_tasks.append(task)
+                
+                if cancel_tasks:
+                    # Wait for all cancellation tasks to complete with a timeout
+                    try:
+                        await asyncio.wait(
+                            cancel_tasks,
+                            timeout=2.0,
+                            return_when=asyncio.ALL_COMPLETED
+                        )
+                    except Exception as e:
+                        logger.error(f"Error waiting for task cancellation: {e}", exc_info=True)
+            
         except Exception as e:
-            logger.error(f"Error closing WebSocket connection: {e}")
+            logger.error(f"Unexpected error during connection close: {e}", exc_info=True)
+            if self.on_error:
+                try:
+                    self.on_error(e)
+                except Exception as callback_error:
+                    logger.error(f"Error in error callback: {callback_error}", exc_info=True)
         finally:
+            # Ensure we always reset connection state
+            self.connected = False
+            
+            # Notify disconnection if we were previously connected
+            if should_notify_disconnect and self.on_disconnect:
+                try:
+                    self.on_disconnect()
+                except Exception as e:
+                    logger.error(f"Error in disconnect callback: {e}", exc_info=True)
+            
+            logger.info("Connection cleanup completed")
+    
+    async def _process_messages(self):
+        """
+        Process incoming WebSocket messages in a loop.
+        
+        This method runs in the WebSocket client's event loop and processes
+        all incoming messages until the connection is closed or an error occurs.
+        """
+        try:
+            async for message in self.ws:
+                try:
+                    await self._on_message(message)
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}", exc_info=True)
+                    if self.on_error:
+                        self.on_error(e)
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning(f"WebSocket connection closed while processing messages: {e}")
             self.connected = False
             if self.on_disconnect:
                 self.on_disconnect()
-                
-    async def _reconnect(self):
-        """Reconnect to WebSocket server after disconnection"""
-        try:
-            # Only attempt reconnect if we're still supposed to be running
-            if not self.running:
-                logger.info("Not reconnecting because client is stopping")
-                return
-                
-            logger.info("Reconnecting to Dhan WebSocket server...")
-            
-            # Close existing connection if any
-            await self._close_connection()
-            
-            # Wait a bit before reconnecting to avoid hammering the server
-            await asyncio.sleep(2)
-            
-            # Try to reconnect
-            await self._connect()
-            
-            # Resubscribe to all instruments if reconnection successful
-            if self.connected:
-                logger.info("Reconnected successfully, resubscribing...")
-                await self._resubscribe()
-            else:
-                logger.warning("Reconnection failed, will retry")
-                # Schedule another reconnect attempt
-                await asyncio.sleep(5)  # Wait longer before trying again
-                asyncio.create_task(self._reconnect())
-                
+            raise  # Re-raise to trigger reconnection in _run_client
         except Exception as e:
-            logger.error(f"Error during reconnect: {e}")
-            # Schedule another reconnect attempt
-            await asyncio.sleep(5)  # Wait longer before trying again
-            asyncio.create_task(self._reconnect())
-    
-    async def _process_messages(self):
-        """Process incoming WebSocket messages in a loop"""
-        if not self.ws:
-            logger.error("No WebSocket connection to process messages")
-            return
-            
-        try:
-            heartbeat_task = asyncio.create_task(self._heartbeat_task())
-            
-            while self.running and self.connected:
-                try:
-                    message = await asyncio.wait_for(self.ws.recv(), timeout=1.0)
-                    await self._on_message(message)
-                    
-                except asyncio.TimeoutError:
-                    continue
-                except (websockets.exceptions.ConnectionClosedOK, websockets.exceptions.ConnectionClosedError) as e:
-                    logger.warning(f"WebSocket connection closed while processing messages: {e}")
-                    self.connected = False
-                    break
-                    
-            if not heartbeat_task.done():
-                heartbeat_task.cancel()
-                
-        except Exception as e:
-            logger.error(f"Error processing messages: {e}")
+            logger.error(f"Error in message processing loop: {e}", exc_info=True)
             self.connected = False
             if self.on_error:
                 self.on_error(e)
+            raise  # Re-raise to trigger reconnection in _run_client
     
     async def _heartbeat_task(self):
         """
@@ -317,6 +362,79 @@ class DhanWebSocket:
                 except Exception as e:
                     logger.error(f"Error sending heartbeat: {e}")
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+    
+    async def _reconnect(self):
+        """
+        Attempt to reconnect to the WebSocket server with exponential backoff.
+        
+        This method will:
+        1. Wait for any existing reconnection attempts to complete
+        2. Implement exponential backoff between retry attempts
+        3. Clean up any existing connection before reconnecting
+        4. Resubscribe to all instruments after successful reconnection
+        """
+        # Initialize reconnect lock if it doesn't exist
+        if not hasattr(self, '_reconnect_lock'):
+            self._reconnect_lock = asyncio.Lock()
+        
+        # Skip if already in a reconnect attempt
+        if self._reconnect_lock.locked():
+            logger.debug("Reconnect already in progress, skipping duplicate attempt")
+            return
+        
+        async with self._reconnect_lock:
+            if not self.running:
+                logger.info("Not reconnecting - client is shutting down")
+                return
+            
+            logger.info("Starting reconnection process...")
+            
+            # Reconnect with exponential backoff
+            base_delay = 1.0  # Start with 1 second
+            max_delay = 60.0  # Max 60 seconds between retries
+            max_attempts = 10  # Max number of retry attempts
+            
+            for attempt in range(1, max_attempts + 1):
+                if not self.running:
+                    logger.info("Stopping reconnection attempts - client is shutting down")
+                    return
+                
+                try:
+                    logger.info(f"Reconnection attempt {attempt}/{max_attempts}")
+                    
+                    # Close any existing connection
+                    await self._close_connection()
+                    
+                    # Attempt to establish a new connection
+                    await self._connect()
+                    
+                    if self.connected:
+                        logger.info("Successfully reconnected to WebSocket")
+                        return
+                        
+                except Exception as e:
+                    logger.warning(f"Reconnection attempt {attempt} failed: {str(e)}")
+                
+                # Calculate next delay with exponential backoff and jitter
+                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                jitter = random.uniform(0.8, 1.2)  # Add some jitter
+                sleep_time = min(delay * jitter, max_delay)
+                
+                logger.info(f"Waiting {sleep_time:.1f} seconds before next reconnection attempt...")
+                
+                # Sleep with periodic checks for shutdown
+                start_time = time.time()
+                while time.time() - start_time < sleep_time:
+                    if not self.running:
+                        logger.info("Stopping reconnection attempts - client is shutting down")
+                        return
+                    await asyncio.sleep(0.1)
+            
+            # If we get here, all reconnection attempts failed
+            error_msg = f"Failed to reconnect after {max_attempts} attempts"
+            logger.error(error_msg)
+            if self.on_error:
+                self.on_error(Exception(error_msg))
     
     async def _on_message(self, message):
         """Process a received WebSocket message"""
@@ -754,84 +872,6 @@ class DhanWebSocket:
             logger.error(f"Error parsing market depth data: {e}")
             return None
             
-    def _parse_quote_data(self, packet_data):
-        """Parse quote data (message type TYPE_QUOTE = 17)
-        
-        Binary format (from Dhan API docs):
-        <BHBIfHIfIIIffff - 50 bytes total
-        B: Message type (1 byte)
-        H: Exchange segment (2 bytes)
-        B: Padding (1 byte)
-        I: Security ID (4 bytes)
-        f: LTP (4 bytes)
-        H: LTQ (2 bytes)
-        I: LTT (4 bytes)
-        f: Avg Price (4 bytes)
-        I: Volume (4 bytes)
-        I: Total Sell Qty (4 bytes)
-        I: Total Buy Qty (4 bytes)
-        f: Open (4 bytes)
-        f: Close (4 bytes)
-        f: High (4 bytes)
-        f: Low (4 bytes)
-        """
-        try:
-            if len(packet_data) < 50:  # Minimum length for quote data
-                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 50")
-                return None
-                
-            # Unpack all fields at once
-            (msg_type, exchange_code, _, token, ltp, ltq, ltt, 
-             avg_price, volume, total_sell_qty, total_buy_qty,
-             open_price, close_price, high_price, low_price) = struct.unpack('<BHBIfHIfIIIffff', packet_data[:50])
-            
-            # Map exchange code to exchange name
-            exchange_map = {
-                0: "IDX_I",
-                1: "NSE",
-                2: "NFO",
-                3: "CDS",
-                4: "BSE",
-                5: "MCX",
-                7: "BSE_CURRENCY",
-                8: "BSE_FNO"
-            }
-            exchange = exchange_map.get(exchange_code, f"UNK_{exchange_code}")
-            
-            tick = {
-                'token': token,
-                'instrument_token': token,
-                'exchange': exchange,
-                'last_price': ltp,
-                'last_quantity': ltq,
-                'average_price': avg_price,
-                'volume': volume,
-                'buy_quantity': total_buy_qty,
-                'sell_quantity': total_sell_qty,
-                'ohlc': {
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': close_price
-                },
-                'depth': {
-                    'buy': [{'price': 0, 'quantity': 0, 'orders': 0}],
-                    'sell': [{'price': 0, 'quantity': 0, 'orders': 0}]
-                },
-                'mode': 'quote',
-                'packet_type': 'quote',
-                'timestamp': ltt  # Include the timestamp if needed
-            }
-            
-            logger.debug(f"Parsed quote data for token {token}: OHLC=({open_price}, {high_price}, {low_price}, {close_price}), LTP={ltp}")
-            return tick
-            
-            logger.debug(f"Parsed quote data for token {token}: LTP={ltp}")
-            return tick
-        except Exception as e:
-            logger.error(f"Error parsing quote data: {e}")
-            return None
-    
     def _parse_quote_payload(self, payload):
         """Legacy parsing method - redirects to _parse_quote_data"""
         try:
@@ -921,7 +961,7 @@ class DhanWebSocket:
             
             # Get price scaling factor for this exchange
             price_scale = self._get_price_scale(exchange_code) # Dhan prices are scaled
-            exch_name = self.EXCHANGE_MAP.get(exchange_code, 'UNKNOWN')
+            exch_name = self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ')
             
             # Scale all price values
             ltp = round(ltp , 2) 
@@ -1267,7 +1307,6 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error parsing quote data: {e}")
             return None
-            
     def _parse_prev_close(self, packet_data):
         """
         Parse message type 6: Previous close
@@ -1395,15 +1434,101 @@ class DhanWebSocket:
             return False
             
     def stop(self):
-        """Stop the WebSocket client"""
+        """
+        Stop the WebSocket client and clean up all resources.
+        
+        This method ensures proper cleanup of all resources including:
+        1. WebSocket connection
+        2. Pending tasks
+        3. Event loop
+        4. Thread
+        5. Internal state
+        """
         try:
+            logger.info("Stopping WebSocket client...")
+            
+            # Set running flag to False to stop reconnection attempts
             self.running = False
+            
+            # Close WebSocket connection if open
             if self.ws:
-                asyncio.run_coroutine_threadsafe(
-                    self.ws.close(),
-                    self.loop
-                )
-            if self.thread:
-                self.thread.join()
+                try:
+                    # Use a new event loop if the existing one is not running
+                    if not self.loop or self.loop.is_closed():
+                        temp_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(temp_loop)
+                        temp_loop.run_until_complete(self._close_connection())
+                        temp_loop.close()
+                    else:
+                        # Schedule the close connection coroutine
+                        future = asyncio.run_coroutine_threadsafe(
+                            self._close_connection(),
+                            self.loop
+                        )
+                        # Wait for the close to complete with a timeout
+                        future.result(timeout=5.0)
+                except Exception as e:
+                    logger.error(f"Error closing WebSocket: {e}", exc_info=True)
+            
+            # Cancel all pending tasks
+            if hasattr(self, 'pending_tasks') and self.pending_tasks:
+                for task in self.pending_tasks:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            task.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            logger.error(f"Error cancelling task: {e}", exc_info=True)
+                self.pending_tasks.clear()
+            
+            # Stop event loop if running
+            if self.loop and self.loop.is_running():
+                try:
+                    # Stop the loop
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                    # Give it a moment to stop
+                    if self.thread and self.thread.is_alive():
+                        self.thread.join(timeout=2.0)
+                except Exception as e:
+                    logger.error(f"Error stopping event loop: {e}", exc_info=True)
+            
+            # Close event loop if it exists and is not closed
+            if self.loop and not self.loop.is_closed():
+                try:
+                    # Run remaining tasks to completion
+                    pending = asyncio.all_tasks(loop=self.loop)
+                    if pending:
+                        self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    self.loop.close()
+                except Exception as e:
+                    logger.error(f"Error closing event loop: {e}", exc_info=True)
+                finally:
+                    self.loop = None
+            
+            # Join thread if it exists and is alive
+            if self.thread and self.thread.is_alive():
+                try:
+                    self.thread.join(timeout=2.0)
+                    if self.thread.is_alive():
+                        logger.warning("Thread did not terminate gracefully")
+                except Exception as e:
+                    logger.error(f"Error joining thread: {e}", exc_info=True)
+                finally:
+                    self.thread = None
+            
+            # Clear instruments list
+            with self.lock:
+                self.instruments.clear()
+            
+            # Reset connection state
+            self.connected = False
+            self.ws = None
+            
+            logger.info("WebSocket client stopped and resources cleaned up")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error stopping WebSocket client: {e}")
+            logger.error(f"Error stopping WebSocket client: {e}", exc_info=True)
+            return False
