@@ -13,6 +13,10 @@ from argon2.exceptions import VerifyMismatchError
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from utils.logging import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
@@ -72,7 +76,7 @@ class ApiKeys(Base):
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
-    print("Initializing Auth DB")
+    logger.info("Initializing Auth DB")
     Base.metadata.create_all(bind=engine)
 
 def encrypt_token(token):
@@ -88,7 +92,7 @@ def decrypt_token(encrypted_token):
     try:
         return fernet.decrypt(encrypted_token.encode()).decode()
     except Exception as e:
-        print(f"Error decrypting token: {e}")
+        logger.error(f"Error decrypting token: {e}")
         return None
 
 def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
@@ -132,10 +136,10 @@ def get_auth_token_dbquery(name):
         if auth_obj and not auth_obj.is_revoked:
             return auth_obj
         else:
-            print(f"No valid auth token found for name '{name}'.")
+            logger.warning(f"No valid auth token found for name '{name}'.")
             return None
     except Exception as e:
-        print("Error while querying the database for auth token:", e)
+        logger.error(f"Error while querying the database for auth token: {e}")
         return None
 
 def get_feed_token(name):
@@ -161,10 +165,10 @@ def get_feed_token_dbquery(name):
         if auth_obj and not auth_obj.is_revoked:
             return auth_obj
         else:
-            print(f"No valid feed token found for name '{name}'.")
+            logger.warning(f"No valid feed token found for name '{name}'.")
             return None
     except Exception as e:
-        print("Error while querying the database for feed token:", e)
+        logger.error(f"Error while querying the database for feed token: {e}")
         return None
 
 def upsert_api_key(user_id, api_key):
@@ -196,7 +200,7 @@ def get_api_key(user_id):
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
         return api_key_obj is not None
     except Exception as e:
-        print("Error while querying the database for API key:", e)
+        logger.error(f"Error while querying the database for API key: {e}")
         return None
 
 def get_api_key_for_tradingview(user_id):
@@ -207,7 +211,7 @@ def get_api_key_for_tradingview(user_id):
             return decrypt_token(api_key_obj.api_key_encrypted)
         return None
     except Exception as e:
-        print("Error while querying the database for API key:", e)
+        logger.error(f"Error while querying the database for API key: {e}")
         return None
 
 def verify_api_key(provided_api_key):
@@ -227,7 +231,7 @@ def verify_api_key(provided_api_key):
         
         return None
     except Exception as e:
-        print(f"Error verifying API key: {e}")
+        logger.error(f"Error verifying API key: {e}")
         return None
 
 def get_broker_name(provided_api_key):
@@ -247,10 +251,10 @@ def get_broker_name(provided_api_key):
                 broker_cache[provided_api_key] = auth_obj.broker
                 return auth_obj.broker
             else:
-                print(f"No valid broker found for user_id '{user_id}'.")
+                logger.warning(f"No valid broker found for user_id '{user_id}'.")
                 return None
         except Exception as e:
-            print("Error while querying the database for broker name:", e)
+            logger.error(f"Error while querying the database for broker name: {e}")
             return None
     return None
 
@@ -268,10 +272,10 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                     return decrypted_token, decrypted_feed_token, auth_obj.broker
                 return decrypted_token, auth_obj.broker
             else:
-                print(f"No valid auth token or broker found for user_id '{user_id}'.")
+                logger.warning(f"No valid auth token or broker found for user_id '{user_id}'.")
                 return (None, None, None) if include_feed_token else (None, None)
         except Exception as e:
-            print("Error while querying the database for auth token and broker:", e)
+            logger.error(f"Error while querying the database for auth token and broker: {e}")
             return (None, None, None) if include_feed_token else (None, None)
     else:
         return (None, None, None) if include_feed_token else (None, None)

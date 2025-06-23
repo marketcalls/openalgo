@@ -11,6 +11,7 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+from utils.logging import get_logger  # Import centralized logging
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
 
@@ -47,6 +48,9 @@ from database.strategy_db import init_db as ensure_strategy_tables_exists
 from utils.plugin_loader import load_broker_auth_functions
 
 import os
+
+# Initialize logger
+logger = get_logger(__name__)
 
 def create_app():
     # Initialize Flask application
@@ -188,7 +192,7 @@ def setup_environment(app):
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
-        print(" * ngrok URL: " + public_url + " *")
+        logger.info(f"ngrok URL: {public_url}")
 
 app = create_app()
 

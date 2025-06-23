@@ -3,11 +3,15 @@ from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+from utils.logging import get_logger
 import http.client
 import json
 import jwt
 import base64
 import hashlib
+
+# Initialize logger
+logger = get_logger(__name__)
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -23,7 +27,7 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
-    print(f'Broker is {broker}')
+    logger.info(f'Broker callback initiated for: {broker}')
     # Check if user is not in session first
     if 'user' not in session:
         return redirect(url_for('auth.login'))
@@ -72,7 +76,7 @@ def broker_callback(broker,para=None):
             return render_template('aliceblue.html')
         
         elif request.method == 'POST':
-            print('Aliceblue Login Flow')
+            logger.info('Aliceblue Login Flow initiated')
             userid = request.form.get('userid')
             # Step 1: Get encryption key
             # Use the shared httpx client with connection pooling
@@ -93,7 +97,7 @@ def broker_callback(broker,para=None):
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data_dict = response.json()
-                print(data_dict)
+                logger.debug(f'Aliceblue response data: {data_dict}')
                 
                 # Check if we successfully got the encryption key
                 if data_dict.get('stat') == 'Ok' and data_dict.get('encKey'):
@@ -114,7 +118,7 @@ def broker_callback(broker,para=None):
                 
     elif broker=='fivepaisaxts':
         code = 'fivepaisaxts'
-        print(f'The code is {code}')  
+        logger.debug(f'FivePaisaXTS broker - code: {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -195,7 +199,7 @@ def broker_callback(broker,para=None):
 
     elif broker=='fyers':
         code = request.args.get('auth_code')
-        print(f'The code is {code}')
+        logger.debug(f'Fyers broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
@@ -220,15 +224,15 @@ def broker_callback(broker,para=None):
         
     elif broker=='icici':
         full_url = request.full_path
-        print(f'Full URL: {full_url}') 
+        logger.debug(f'ICICI broker - Full URL: {full_url}') 
         code = request.args.get('apisession')
-        print(f'The code is {code}')
+        logger.debug(f'ICICI broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker=='iifl':
         code = 'iifl'
-        print(f'The code is {code}')  
+        logger.debug(f'IIFL broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -236,7 +240,7 @@ def broker_callback(broker,para=None):
     
     elif broker=='jainam':
         code = 'jainam'
-        print(f'The code is {code}')  
+        logger.debug(f'Jainam broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -244,7 +248,7 @@ def broker_callback(broker,para=None):
 
     elif broker=='jainampro':
         code = 'jainampro'
-        print(f'The code is {code}')  
+        logger.debug(f'JainamPro broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -252,26 +256,26 @@ def broker_callback(broker,para=None):
 
     elif broker=='dhan':
         code = 'dhan'
-        print(f'The code is {code}')
+        logger.debug(f'Dhan broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker=='dhan_sandbox':
         code = 'dhan_sandbox'
-        print(f'The code is {code}')
+        logger.debug(f'Dhan Sandbox broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
         
 
     elif broker == 'groww':
         code = 'groww'
-        print(f'The code is {code}')
+        logger.debug(f'Groww broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker == 'wisdom':
         code = 'wisdom'
-        print(f'The code is {code}')
+        logger.debug(f'Wisdom broker - The code is {code}')
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
@@ -314,12 +318,12 @@ def broker_callback(broker,para=None):
     elif broker == 'flattrade':
         code = request.args.get('code')
         client = request.args.get('client')  # Flattrade returns client ID as well
-        print(f'The code is {code} for client {client}')
+        logger.debug(f'Flattrade broker - The code is {code} for client {client}')
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = 'broker.html'
 
     elif broker=='kotak':
-        print(f"The Broker is {broker}")
+        logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
         
@@ -336,7 +340,7 @@ def broker_callback(broker,para=None):
 
     elif broker == 'paytm':
          request_token = request.args.get('requestToken')
-         print(f'The request token is {request_token}')
+         logger.debug(f'Paytm broker - The request token is {request_token}')
          auth_token, error_message = auth_function(request_token)
 
     elif broker == 'pocketful':
@@ -349,16 +353,16 @@ def broker_callback(broker,para=None):
         # Check if there was an error in the OAuth process
         if error:
             error_msg = f"OAuth error: {error}. {error_description if error_description else ''}"
-            print(error_msg)
+            logger.error(error_msg)
             return handle_auth_failure(error_msg, forward_url='broker.html')
         
         # Check if authorization code was provided
         if not auth_code:
             error_msg = "Authorization code not provided"
-            print(error_msg)
+            logger.error(error_msg)
             return handle_auth_failure(error_msg, forward_url='broker.html')
             
-        print(f'Received authorization code: {auth_code}')
+        logger.debug(f'Pocketful broker - Received authorization code: {auth_code}')
         # Exchange auth code for access token and fetch client_id
         auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = 'broker.html'
@@ -366,14 +370,14 @@ def broker_callback(broker,para=None):
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
-        print(f'The code is {code}')
+        logger.debug(f'Generic broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
     
     if auth_token:
         # Store broker in session
         session['broker'] = broker
-        print(f'Connected broker: {broker}')
+        logger.info(f'Successfully connected broker: {broker}')
         if broker == 'zerodha':
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':

@@ -157,5 +157,5 @@ def init_latency_db():
     # Create db directory if it doesn't exist
     os.makedirs('db', exist_ok=True)
     
-    print("Initializing Latency DB")
+    logger.info("Initializing Latency DB")
     LatencyBase.metadata.create_all(bind=latency_engine)

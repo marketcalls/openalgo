@@ -4,6 +4,10 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token, get_br_symbol, get_symbol
 from broker.firstock.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.logging import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
@@ -29,7 +33,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         data = res.read()
         return json.loads(data.decode("utf-8"))
     except Exception as e:
-        print(f"Error in API call: {str(e)}")
+        logger.error(f"Error in API call: {str(e)}")
         return {"status": "failed", "error": str(e)}
     finally:
         conn.close()

@@ -36,7 +36,12 @@ def load_and_check_env_variables():
         'SESSION_EXPIRY_TIME',  # Added SESSION_EXPIRY_TIME as it's required for session management
         'WEBSOCKET_HOST',  # Host for the WebSocket server
         'WEBSOCKET_PORT',  # Port for the WebSocket server
-        'WEBSOCKET_URL'   # Full WebSocket URL for clients
+        'WEBSOCKET_URL',   # Full WebSocket URL for clients
+        'LOG_TO_FILE',     # Enable/disable file logging
+        'LOG_LEVEL',       # Logging level
+        'LOG_DIR',         # Directory for log files
+        'LOG_FORMAT',      # Log message format
+        'LOG_RETENTION'    # Days to retain log files
     ]
 
     # Check if each required environment variable is set
@@ -174,4 +179,42 @@ def load_and_check_env_variables():
     if not websocket_url.startswith('ws://') and not websocket_url.startswith('wss://'):
         print("\nError: WEBSOCKET_URL must start with 'ws://' or 'wss://'")
         print("Example: WEBSOCKET_URL='ws://localhost:8765'")
+        sys.exit(1)
+        
+    # Validate logging configuration
+    log_to_file = os.getenv('LOG_TO_FILE', '').lower()
+    if log_to_file not in ['true', 'false']:
+        print("\nError: LOG_TO_FILE must be 'True' or 'False'")
+        print("Example: LOG_TO_FILE=False")
+        sys.exit(1)
+        
+    log_level = os.getenv('LOG_LEVEL', '').upper()
+    valid_log_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+    if log_level not in valid_log_levels:
+        print(f"\nError: LOG_LEVEL must be one of: {', '.join(valid_log_levels)}")
+        print("Example: LOG_LEVEL=INFO")
+        sys.exit(1)
+        
+    # Validate LOG_RETENTION is a positive integer
+    try:
+        retention = int(os.getenv('LOG_RETENTION', '0'))
+        if retention < 1:
+            raise ValueError
+    except ValueError:
+        print("\nError: LOG_RETENTION must be a positive integer (days)")
+        print("Example: LOG_RETENTION=14")
+        sys.exit(1)
+        
+    # Validate LOG_DIR is not empty
+    log_dir = os.getenv('LOG_DIR', '').strip()
+    if not log_dir:
+        print("\nError: LOG_DIR cannot be empty")
+        print("Example: LOG_DIR=log")
+        sys.exit(1)
+        
+    # Validate LOG_FORMAT is not empty
+    log_format = os.getenv('LOG_FORMAT', '').strip()
+    if not log_format:
+        print("\nError: LOG_FORMAT cannot be empty")
+        print("Example: LOG_FORMAT=[%(asctime)s] %(levelname)s in %(module)s: %(message)s")
         sys.exit(1)

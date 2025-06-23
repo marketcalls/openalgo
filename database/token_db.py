@@ -1,5 +1,8 @@
 from database.symbol import SymToken  # Import here to avoid circular imports
 from cachetools import TTLCache
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Define a cache for the tokens, symbols with a max size and a 3600-second TTL
 token_cache = TTLCache(maxsize=1024, ttl=3600)
@@ -32,7 +35,7 @@ def get_token_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        print(f"Error while querying the database: {e}")
+        logger.error(f"Error while querying the database: {e}")
         return None
     
 
@@ -64,7 +67,7 @@ def get_symbol_dbquery(token, exchange):
         else:
             return None
     except Exception as e:
-        print(f"Error while querying the database: {e}")
+        logger.error(f"Error while querying the database: {e}")
         return None
 
 
@@ -95,7 +98,7 @@ def get_oa_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        print(f"Error while querying the database: {e}")
+        logger.error(f"Error while querying the database: {e}")
         return None
 
 def get_symbol_count():
@@ -106,7 +109,7 @@ def get_symbol_count():
         count = SymToken.query.count()
         return count
     except Exception as e:
-        print(f"Error while counting symbols: {e}")
+        logger.error(f"Error while counting symbols: {e}")
         return 0
 
 
@@ -137,7 +140,7 @@ def get_br_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        print(f"Error while querying the database: {e}")
+        logger.error(f"Error while querying the database: {e}")
         return None
 
 def get_brexchange(symbol, exchange):
@@ -167,5 +170,5 @@ def get_brexchange_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        print(f"Error while querying the database: {e}")
+        logger.error(f"Error while querying the database: {e}")
         return None

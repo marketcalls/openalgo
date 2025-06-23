@@ -96,5 +96,5 @@ def init_logs_db():
     # Create db directory if it doesn't exist
     os.makedirs('db', exist_ok=True)
     
-    print("Initializing Traffic Logs DB")
+    logger.info("Initializing Traffic Logs DB")
     LogBase.metadata.create_all(bind=logs_engine)

@@ -6,6 +6,10 @@ import random
 import socket
 import os
 from abc import ABC, abstractmethod
+from utils.logging import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 def is_port_available(port):
     """
@@ -231,7 +235,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             self.cleanup_zmq()
         except Exception as e:
             # Can't use self.logger here as it might be gone during destruction
-            print(f"Error in __del__ cleaning up ZMQ resources: {e}")
+            logger.error(f"Error in __del__ cleaning up ZMQ resources: {e}")
             pass
     
     def publish_market_data(self, topic, data):

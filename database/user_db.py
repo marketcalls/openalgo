@@ -9,6 +9,9 @@ from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 import pyotp
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
@@ -66,7 +69,7 @@ class User(Base):
         return totp.verify(token)
 
 def init_db():
-    print("Initializing User DB")
+    logger.info("Initializing User DB")
     Base.metadata.create_all(bind=engine)
 
 def add_user(username, email, password, is_admin=False):

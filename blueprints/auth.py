@@ -7,6 +7,10 @@ from database.user_db import authenticate_user, User, db_session, find_user_by_u
 import re
 from utils.session import check_session_validity
 import secrets
+from utils.logging import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 # Access environment variables
 LOGIN_RATE_LIMIT_MIN = os.getenv("LOGIN_RATE_LIMIT_MIN", "5 per minute")
@@ -40,7 +44,7 @@ def login():
         
         if authenticate_user(username, password):
             session['user'] = username  # Set the username in the session
-            print("login success")
+            logger.info(f"Login success for user: {username}")
             # Redirect to broker login without marking as fully logged in
             return jsonify({'status': 'success'}), 200
         else:
@@ -184,10 +188,10 @@ def logout():
         #writing to database      
         inserted_id = upsert_auth(username, "", "", revoke=True)
         if inserted_id is not None:
-            print(f"Database Upserted record with ID: {inserted_id}")
-            print(f'Auth Revoked in the Database')
+            logger.info(f"Database Upserted record with ID: {inserted_id}")
+            logger.info(f'Auth Revoked in the Database for user: {username}')
         else:
-            print("Failed to upsert auth token")
+            logger.error(f"Failed to upsert auth token for user: {username}")
         
         # Remove tokens and user information from session
         session.pop('user', None)  # Remove 'user' from session if exists
