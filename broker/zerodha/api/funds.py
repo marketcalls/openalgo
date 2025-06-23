@@ -43,7 +43,7 @@ def get_margin_data(auth_token):
         logger.error("Error fetching margin data: %s", error_message)
         return {}
 
-    logger.info("Funds Details: %s", margin_data)
+    logger.info("Funds Details: %s", str(margin_data))
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
