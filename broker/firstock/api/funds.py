@@ -1,6 +1,10 @@
 import requests
 import json
 import os
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Get margin/limit data from Firstock."""
@@ -48,12 +52,12 @@ def get_margin_data(auth_token):
                 
                 return processed_margin_data
             else:
-                print(f"Error fetching margin data: {data.get('error', {}).get('message')}")
+                logger.info("Error fetching margin data: %s).get('message')}", data.get('error', {)
                 return {}
         else:
-            print(f"Error: {response.status_code}, {response.text}")
+            logger.error("Error: {response.status_code}, %s", response.text)
             return {}
 
     except Exception as e:
-        print(f"Error processing margin data: {str(e)}")
+        logger.error("Error processing margin data: %s", str(e))
         return {}

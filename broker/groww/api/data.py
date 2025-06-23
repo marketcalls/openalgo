@@ -3,7 +3,6 @@ import os
 import pytz
 from datetime import datetime, timedelta
 import pandas as pd
-import logging
 import httpx
 from typing import Dict, List, Any, Union, Optional
 import time
@@ -13,11 +12,14 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from datetime import datetime, timedelta
 import pandas as pd
 import pytz
-import logging
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 # API endpoints are handled by the Groww SDK
 
 # Exchange constants for Groww API
@@ -984,7 +986,7 @@ class BrokerData:
                         debug=True
                     )
                     
-                    print(f"Groww API response: {response}")
+                    logger.info("Groww API response: %s", response)
                     elapsed = time.time() - start_time
                     logger.info(f"Got response from Groww API in {elapsed:.2f}s")
                     
@@ -997,7 +999,7 @@ class BrokerData:
                         # Extract payload which contains the actual quote data
                         if response.get('status') == 'SUCCESS' and isinstance(response.get('payload'), dict):
                             response = response.get('payload', {})
-                            print(f"response: {response}")
+                            logger.info("response: %s", response)
                             logger.info(f"Extracted payload data with keys: {list(response.keys())[:10]}")
                             
                             # Extract OHLC data from the nested structure
@@ -1029,14 +1031,14 @@ class BrokerData:
                             
                             # Create quote_item in OpenAlgo format
                             # Print each field being extracted for debugging
-                            print(f"last_price: {response.get('last_price')}")
-                            print(f"ohlc: {ohlc}")
-                            print(f"volume: {response.get('volume')}")
+                            logger.info("last_price: %s", response.get('last_price'))
+                            logger.info("ohlc: %s", ohlc)
+                            logger.info("volume: %s", response.get('volume'))
                             
                             # CRITICAL: Build the quote item directly with values extracted from the response, using field names that OpenAlgo understands
                             # The quote_item should use the frontend-compatible field names
                             last_price = safe_float(response.get('last_price'))
-                            print(f"EXTRACTED last_price = {last_price}")
+                            logger.info("EXTRACTED last_price = %s", last_price)
                             
                             quote_item = {
                                 'symbol': symbol,
@@ -1105,7 +1107,7 @@ class BrokerData:
                             
                             # Add to quote data
                             quote_data.append(quote_item)
-                            print(f"Added quote_item: {quote_item}")
+                            logger.info("Added quote_item: %s", quote_item)
                         else:
                             logger.warning(f"Invalid response format for {symbol} on {exchange}")
                             response = {}
@@ -1167,7 +1169,7 @@ class BrokerData:
                 })
     
         # Debug output of the final quote_data
-        print(f"FINAL QUOTE DATA: {quote_data}")
+        logger.info("FINAL QUOTE DATA: %s", quote_data)
         
         # No data case
         if not quote_data:
@@ -1226,7 +1228,7 @@ class BrokerData:
 
     # Legacy implementation - no longer used
     # The code below is from the previous implementation and is kept for reference
-    #    print("Empty quote_data received in _format_single_quote_response")
+    #    logger.info("Empty quote_data received in _format_single_quote_response")
     #    return {
     #        "status": "success",
     #        "data": {}
@@ -1235,7 +1237,7 @@ class BrokerData:
     #    # Extract first (and only) item in single quote request    
     #    quote = quote_data[0] if isinstance(quote_data, list) and len(quote_data) > 0 else {}
         
-        print(f"EXTRACTED QUOTE: {quote}")
+        logger.info("EXTRACTED QUOTE: %s", quote)
         logger.info(f"Formatting single quote response for OpenAlgo frontend: {quote}")
         
         # Based on the sample response, OpenAlgo expects exactly these fields
@@ -1297,9 +1299,9 @@ class BrokerData:
             simple_data["ask"] = float(quote["offer_price"])
             
         # Debug output
-        print("FINAL SIMPLE FORMAT:")
+        logger.info("FINAL SIMPLE FORMAT:")
         for key, value in simple_data.items():
-            print(f"{key}: {value}")
+            logger.info("{key}: %s", value)
         
         # Return exact structure expected by OpenAlgo
         result = {
@@ -1307,7 +1309,7 @@ class BrokerData:
             "data": simple_data
         }
         
-        print(f"FINAL FORMATTED RESULT: {result}")
+        logger.info("FINAL FORMATTED RESULT: %s", result)
         logger.info(f"Formatted result for OpenAlgo frontend: {result}")
         
         return result

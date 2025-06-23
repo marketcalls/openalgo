@@ -9,6 +9,10 @@ from database.token_db import get_br_symbol, get_token, get_oa_symbol
 from broker.fivepaisa.mapping.transform_data import map_exchange, map_exchange_type
 import traceback
 import pandas as pd
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Retrieve the BROKER_API_KEY environment variable
 broker_api_key = os.getenv('BROKER_API_KEY')
@@ -55,13 +59,13 @@ def get_api_response(endpoint: str, auth: str, method: str = "GET", payload: str
         return response.json()
         
     except httpx.HTTPStatusError as e:
-        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        logger.error("HTTP error occurred: {e.response.status_code} - %s", e.response.text)
         raise
     except httpx.RequestError as e:
-        print(f"Request error occurred: {str(e)}")
+        logger.error("Request error occurred: %s", str(e))
         raise
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        logger.error("An error occurred: %s", str(e))
         raise
 
 class BrokerData:
@@ -124,12 +128,12 @@ class BrokerData:
             response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
-                print(f"Market Depth Error: {response['head']['statusDescription']}")
+                logger.info("Market Depth Error: %s", response['head']['statusDescription'])
                 return None
 
             depth_data = response['body']
             if not depth_data or 'MarketDepthData' not in depth_data:
-                print("No depth data in response")
+                logger.info("No depth data in response")
                 return None
 
             # Get best bid and ask
@@ -147,14 +151,14 @@ class BrokerData:
                 # Get lowest sell price
                 ask = min(float(order['Price']) for order in sell_orders)
             
-            print(f"Extracted Bid: {bid}, Ask: {ask}")
+            logger.info("Extracted Bid: {bid}, Ask: %s", ask)
             return {'bid': bid, 'ask': ask}
 
         except Exception as e:
-            print(f"Error fetching market depth: {str(e)}")
-            print(f"Exception type: {type(e)}")
+            logger.error("Error fetching market depth: %s", str(e))
+            logger.info("Exception type: %s", type(e))
             import traceback
-            print(f"Traceback: {traceback.format_exc()}")
+            logger.info("Traceback: %s", traceback.format_exc())
             return None
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -370,7 +374,7 @@ class BrokerData:
             }
 
         except Exception as e:
-            print(f"Error in get_quotes: {str(e)}")
+            logger.error("Error in get_quotes: %s", str(e))
             return None
 
     def map_interval(self, interval: str) -> str:
@@ -417,7 +421,7 @@ class BrokerData:
         # Reorder columns
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
         
-        print(f"Processed {len(df)} candles from raw data")
+        logger.info("Processed %s candles from raw data", len(df))
         return df
         
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -439,14 +443,14 @@ class BrokerData:
             # First normalize the interval to handle case insensitivity
             if interval.upper() == 'D':
                 interval = '1d'  # Always use 1d internally for daily
-                print(f"Debug: Converted interval from {original_interval} to {interval}")
+                logger.debug("Debug: Converted interval from {original_interval} to %s", interval)
                 
             # Get token from symbol
             token = get_token(symbol, exchange)
             
             # Map interval
             fivepaisa_interval = self.map_interval(interval)
-            print(f"Debug: Mapped {interval} to {fivepaisa_interval}")
+            logger.debug("Debug: Mapped {interval} to %s", fivepaisa_interval)
             
             if not fivepaisa_interval:
                 supported = ["1m", "5m", "15m", "30m", "1h", "1d"]
@@ -454,7 +458,7 @@ class BrokerData:
             
             # Convert 5paisa timeframe to our format
             resolution = self.timeframe_map.get(interval, '1D')
-            print(f"Debug: Final API resolution: {resolution}")
+            logger.debug("Debug: Final API resolution: %s", resolution)
             
             # No special handling needed for 10m interval anymore
             # Just use the native 10m interval from the API
@@ -469,10 +473,10 @@ class BrokerData:
             # We're now using normalized interval where 'D' is always '1d'
             if interval == '1d':
                 chunk_days = 100  # For daily data, fetch in 100-day chunks
-                print("Debug: Using daily chunk size (100 days)")
+                logger.debug("Debug: Using daily chunk size (100 days)")
             else:
                 chunk_days = 30  # For intraday data, fetch in 30-day chunks
-                print(f"Debug: Using intraday chunk size (30 days) for {interval}")
+                logger.debug("Debug: Using intraday chunk size (30 days) for %s", interval)
             
             # Initialize empty list to store DataFrames
             dfs = []
@@ -491,7 +495,7 @@ class BrokerData:
                 url = f"/V2/historical/{map_exchange(exchange)}/{map_exchange_type(exchange)}/{token}/{fivepaisa_interval}"
                 url += f"?from={chunk_start}&end={chunk_end}"
                 
-                print(f"Fetching chunk from {chunk_start} to {chunk_end}")  # Debug log
+                logger.debug("Fetching chunk from {chunk_start} to %s", chunk_end)  # Debug log
                 
                 try:
                     # Make API request
@@ -509,13 +513,13 @@ class BrokerData:
                     
                     if response.get('status') != 'success':
                         error_msg = response.get('message', 'Unknown error')
-                        print(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
+                        logger.error("Error for chunk {chunk_start} to {chunk_end}: %s", error_msg)
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
                     
                     candles = response.get('data', {}).get('candles', [])
                     if not candles:
-                        print(f"No data for chunk {chunk_start} to {chunk_end}")
+                        logger.info("No data for chunk {chunk_start} to %s", chunk_end)
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
                     
@@ -583,27 +587,27 @@ class BrokerData:
                             transformed_candles.append(transformed_candle)
                             
                         except Exception as e:
-                            print(f"Error transforming candle {candle}: {str(e)}")
+                            logger.error("Error transforming candle {candle}: %s", str(e))
                             continue
                     
                     if transformed_candles:
                         chunk_df = pd.DataFrame(transformed_candles)
                         # Ensure timestamp column exists and is first
                         if 'timestamp' not in chunk_df.columns:
-                            print(f"Warning: Missing timestamp column in chunk. Columns: {chunk_df.columns}")
+                            logger.warning("Warning: Missing timestamp column in chunk. Columns: %s", chunk_df.columns)
                             continue
                         dfs.append(chunk_df)
-                        print(f"Added {len(transformed_candles)} candles from chunk")
+                        logger.info("Added %s candles from chunk", len(transformed_candles))
                     
                 except Exception as e:
-                    print(f"Error processing chunk {chunk_start} to {chunk_end}: {str(e)}")
+                    logger.error("Error processing chunk {chunk_start} to {chunk_end}: %s", str(e))
                 
                 # Move to next chunk
                 current_start = current_end + pd.Timedelta(days=1)
             
             # If no data was found, return empty DataFrame
             if not dfs:
-                print("No valid data found for the entire period")
+                logger.info("No valid data found for the entire period")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             # Combine all chunks
@@ -696,21 +700,21 @@ class BrokerData:
             # No need for resampling from 5m data anymore
             if interval == '10m' and not df.empty:
                 # Apply our timestamp fixing function with appropriate time alignment
-                print("Debug: Fixing 10m timestamps")
+                logger.debug("Debug: Fixing 10m timestamps")
                 df = self.fix_timestamps(df, '10m')
             else:
                 # Apply our timestamp fixing function as a final step
-                print(f"Debug: Fixing timestamps for {interval}")
+                logger.debug("Debug: Fixing timestamps for %s", interval)
                 df = self.fix_timestamps(df, interval)
                 
             # Check after timestamp fixing
             if len(df) > 0:
-                print(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
+                logger.info("Debug: First timestamp after fixing: %s", pd.to_datetime(df['timestamp'].iloc[0], unit='s'))
             
             # Final check for daily data with wrong timestamps (03:45 instead of 09:15)
             # This is a direct fix for the case where uppercase D or lowercase d is used
             if (original_interval.upper() == 'D' or original_interval == 'd') and len(df) > 0:
-                print("Debug: Applying final daily timestamp fix")
+                logger.debug("Debug: Applying final daily timestamp fix")
                 # Convert to datetime for fixing
                 temp_df = df.copy()
                 temp_df['timestamp'] = pd.to_datetime(temp_df['timestamp'], unit='s')
@@ -720,7 +724,7 @@ class BrokerData:
                                ((temp_df['timestamp'].dt.hour == 9) & (temp_df['timestamp'].dt.minute < 15)))
                 
                 if early_morning.any():
-                    print("Debug: Found early morning timestamps, fixing to 09:15")
+                    logger.debug("Debug: Found early morning timestamps, fixing to 09:15")
                     # Set all timestamps to 09:15
                     temp_df['timestamp'] = temp_df['timestamp'].apply(lambda ts: 
                         ts.replace(hour=9, minute=15, second=0))
@@ -739,20 +743,20 @@ class BrokerData:
             # Reorder columns to match expected format
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
             
-            print(f"Returning {len(df)} total candles")
+            logger.info("Returning %s total candles", len(df))
             return df
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Error in get_history: {error_msg}\nTraceback: {traceback.format_exc()}")  # Debug log
+            logger.error("Error in get_history: {error_msg}\nTraceback: %s", traceback.format_exc())  # Debug log
             
             # Check if this is the timestamp conversion error with raw_data available
             if 'non convertible value' in error_msg and 'with the unit' in error_msg and hasattr(e, 'raw_data'):
-                print("Attempting to recover from timestamp conversion error using raw_data")
+                logger.error("Attempting to recover from timestamp conversion error using raw_data")
                 try:
                     return self._process_raw_candles(e.raw_data, interval)
                 except Exception as recovery_error:
-                    print(f"Recovery attempt failed: {str(recovery_error)}")
+                    logger.error("Recovery attempt failed: %s", str(recovery_error))
             
             raise
 
@@ -795,7 +799,7 @@ class BrokerData:
         interval_minutes = 5
         # Standardize how we check for daily interval
         is_daily_interval = interval.upper() == 'D' or interval == '1d' or interval == 'd'
-        print(f"Debug: is_daily_interval={is_daily_interval}, is_daily_data={is_daily_data}, interval={interval}")
+        logger.debug("Debug: is_daily_interval={is_daily_interval}, is_daily_data={is_daily_data}, interval=%s", interval)
         
         if is_daily_interval or is_daily_data:
             # For daily or data that looks like daily (1 candle per day),

@@ -4,23 +4,25 @@ import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
 from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
 from flask import session  
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
 from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
 import pytz
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
     if feed_token:
         FEED_TOKEN = feed_token
-    print(f"Feed Token: {FEED_TOKEN}")
+    logger.info("Feed Token: %s", FEED_TOKEN)
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -304,7 +306,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    print(f"Exchange: {exchange}, Segment ID: {segment_id}")
+                    logger.info("Exchange: {exchange}, Segment ID: %s", segment_id)
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {

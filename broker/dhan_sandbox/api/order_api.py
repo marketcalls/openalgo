@@ -8,6 +8,10 @@ from broker.dhan_sandbox.mapping.transform_data import transform_data , map_prod
 from broker.dhan_sandbox.mapping.transform_data import map_exchange_type, map_exchange
 from utils.httpx_client import get_httpx_client
 from broker.dhan_sandbox.api.baseurl import get_url
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
@@ -48,13 +52,13 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
                 if error_data:
                     error_code = list(error_data.keys())[0] if error_data else 'unknown'
                     error_message = error_data.get(error_code, 'Unknown error')
-                    print(f"API Error: {error_code} - {error_message}")
+                    logger.error("API Error: {error_code} - %s", error_message)
                     # Return the error response for further handling
                     return response_data
             
             # Other Dhan API errors might come in this format
             if response_data.get('errorType'):
-                print(f"API Error: {response_data.get('errorCode')} - {response_data.get('errorMessage')}")
+                logger.info("API Error: %s - %s", response_data.get('errorCode'), response_data.get('errorMessage'))
                 # Return the error response for further handling
                 return response_data
         
@@ -62,7 +66,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         
     except Exception as e:
         # Handle connection or parsing errors
-        print(f"Error in API request to {url}: {str(e)}")
+        logger.error("Error in API request to {url}: %s", str(e))
         return {'errorType': 'ConnectionError', 'errorMessage': str(e)}
 
 def get_order_book(auth):
@@ -86,7 +90,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     
     # Check if positions_data is an error response
     if isinstance(positions_data, dict) and (positions_data.get('errorType') or positions_data.get('status') == 'failed' or positions_data.get('status') == 'error'):
-        print(f"Error getting positions for {tradingsymbol}: {positions_data.get('errorMessage', 'API Error')}")
+        logger.info("Error getting positions for %s: %s", tradingsymbol, positions_data.get('errorMessage', 'API Error'))
         return net_qty
     
     # Only process if positions_data is valid and not an error
@@ -111,7 +115,7 @@ def place_order_api(data,auth):
     }
     payload = json.dumps(newdata)
 
-    print(payload)
+    logger.info("%s", payload)
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -121,7 +125,7 @@ def place_order_api(data,auth):
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
     response_data = json.loads(res.text)
-    print(response_data)
+    logger.info("%s", response_data)
     if response_data:
         orderid = response_data['orderId']
     else:
@@ -147,8 +151,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    logger.info("position_size : %s", position_size) 
+    logger.info("Open Position : %s", current_position) 
     
     # Determine action based on position_size and current_position
     action = None
@@ -159,11 +163,11 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #print(f"action : {action}")
-        #print(f"Quantity : {quantity}")
+        #logger.info("action : %s", action)
+        #logger.info("Quantity : %s", quantity)
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
+        #logger.info("%s", res)
+        #logger.info("%s", response)
         
         return res , response, orderid
         
@@ -190,11 +194,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #print(f"smart buy quantity : {quantity}")
+            #logger.info("smart buy quantity : %s", quantity)
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #print(f"smart sell quantity : {quantity}")
+            #logger.info("smart sell quantity : %s", quantity)
 
 
 
@@ -205,11 +209,11 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #print(order_data)
+        #logger.info("%s", order_data)
         # Place the order
         res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
+        #logger.info("%s", res)
+        #logger.info("%s", response)
         
         return res , response, orderid
     
@@ -220,7 +224,7 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
-    #print(positions_response)
+    #logger.info("%s", positions_response)
     
     # Check if the positions data is null or empty
     if positions_response is None or not positions_response:
@@ -242,7 +246,7 @@ def close_all_positions(current_api_key,auth):
 
             #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['securityId'],map_exchange(position['exchangeSegment']))
-            #print(f'The Symbol is {symbol}')
+            #logger.info("The Symbol is %s", symbol)
 
             # Prepare the order payload
             place_order_payload = {
@@ -256,12 +260,12 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.info("%s", place_order_payload)
 
             # Place the order to close the position
             _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
-            #print(api_response)
+            #logger.info("%s", api_response)
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -326,7 +330,7 @@ def modify_order(data,auth):
     }
     payload = json.dumps(transformed_order_data)
 
-    print(payload)
+    logger.info("%s", payload)
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -342,7 +346,7 @@ def modify_order(data,auth):
     
     # Parse the response
     data = json.loads(res.text)
-    print(data)
+    logger.info("%s", data)
     #return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
 
     if data["orderId"]:
@@ -355,14 +359,14 @@ def cancel_all_orders_api(data,auth):
     # Get the order book
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
+    #logger.info("%s", order_book_response)
     if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response
                         if order['orderStatus'] in ['PENDING']]
-    print(orders_to_cancel)
+    logger.info("%s", orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 

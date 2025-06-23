@@ -1,6 +1,10 @@
 import os
 import json
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def calculate_pnl(entry):
     """Calculate realized and unrealized PnL for a given entry."""
@@ -21,7 +25,7 @@ def get_margin_data(auth_token):
         # Get API key from environment
         api_key = os.getenv('BROKER_API_SECRET')
         if not api_key:
-            print("Error: BROKER_API_SECRET not set")
+            logger.info("Error: BROKER_API_SECRET not set")
             return {}
             
         # Get the shared httpx client
@@ -41,18 +45,18 @@ def get_margin_data(auth_token):
         )
         
         # Print response for debugging
-        print('Tradejini Funds Response:', response.status_code)
-        print('Tradejini Funds Data:', response.text)
+        logger.info("%s", 'Tradejini Funds Response:', response.status_code)
+        logger.info("%s", 'Tradejini Funds Data:', response.text)
         
         if response.status_code != 200:
-            print(f"Error fetching margin data: {response.text}")
+            logger.info("Error fetching margin data: %sresponse.text")
             return {}
             
         data = response.json()
         
         # Check if response is valid
         if data.get('s') != 'ok' or 'd' not in data:
-            print(f"Invalid response format: {data}")
+            logger.info("Invalid response format: %sdata")
             return {}
             
         # Extract margin details
@@ -70,5 +74,5 @@ def get_margin_data(auth_token):
         return processed_margin_data
         
     except Exception as e:
-        print(f"Error processing margin data: {str(e)}")
+        logger.info("Error processing margin data: %sstr(e)")
         return {}

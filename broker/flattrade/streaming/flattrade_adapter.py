@@ -1,8 +1,11 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 Flattrade WebSocket adapter for OpenAlgo WebSocket proxy
 """
 import threading
-import logging
 import os
 from typing import Dict, Any, Optional
 import json
@@ -44,7 +47,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # susertoken from DB for OpenAlgo username (not broker user)
         self.logger.info(f"[DEBUG] Fetching susertoken for OpenAlgo username: {user_id}")
         self.susertoken = get_auth_token(user_id)
-        print(f"[Flattrade Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: {self.susertoken}")
+        logger.info("[Flattrade Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: %s", self.susertoken)
         if not self.actid or not self.susertoken:
             raise ValueError("Missing Flattrade actid or susertoken for user")
         self.ws_client = FlattradeWebSocket(

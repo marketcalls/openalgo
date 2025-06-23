@@ -21,6 +21,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 # Define the headers as provided
@@ -83,16 +87,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -107,11 +111,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 
@@ -131,7 +135,7 @@ def download_csv_fyers_data(output_path: str) -> Tuple[bool, List[str], Optional
             - Optional[str]: Error message if any error occurred, None otherwise
     """
     from utils.httpx_client import get_httpx_client
-    print("Downloading Master Contract CSV Files")
+    logger.info("Downloading Master Contract CSV Files")
     
     # URLs of the CSV files to be downloaded
     csv_urls = {
@@ -159,19 +163,19 @@ def download_csv_fyers_data(output_path: str) -> Tuple[bool, List[str], Optional
                 with open(file_path, 'wb') as file:
                     file.write(response.content)
                 downloaded_files.append(file_path)
-                print(f"Successfully downloaded {key} to {file_path}")
+                logger.info("Successfully downloaded {key} to %s", file_path)
                 
             except httpx.HTTPStatusError as e:
                 error_msg = f"HTTP error occurred while downloading {key} from {url}: {e.response.status_code} {e.response.reason_phrase}"
-                print(error_msg)
+                logger.error("%s", error_msg)
                 errors.append(error_msg)
             except httpx.RequestError as e:
                 error_msg = f"Request error occurred while downloading {key} from {url}: {str(e)}"
-                print(error_msg)
+                logger.error("%s", error_msg)
                 errors.append(error_msg)
             except Exception as e:
                 error_msg = f"Unexpected error downloading {key}: {str(e)}"
-                print(error_msg)
+                logger.error("%s", error_msg)
                 errors.append(error_msg)
     finally:
         # Don't close the client as it's shared
@@ -193,7 +197,7 @@ def process_fyers_nse_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers NSE CSV Data")
+    logger.info("Processing Fyers NSE CSV Data")
     file_path = f'{path}/NSE_CM.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -244,7 +248,7 @@ def process_fyers_bse_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers BSE CSV Data")
+    logger.info("Processing Fyers BSE CSV Data")
     file_path = f'{path}/BSE_CM.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -292,7 +296,7 @@ def process_fyers_nfo_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers NFO CSV Data")
+    logger.info("Processing Fyers NFO CSV Data")
     file_path = f'{path}/NSE_FO.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -339,7 +343,7 @@ def process_fyers_cds_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers CDS CSV Data")
+    logger.info("Processing Fyers CDS CSV Data")
     file_path = f'{path}/NSE_CD.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -386,7 +390,7 @@ def process_fyers_bfo_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers BFO CSV Data")
+    logger.info("Processing Fyers BFO CSV Data")
     file_path = f'{path}/BSE_FO.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -432,7 +436,7 @@ def process_fyers_mcx_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Fyers MCX CSV Data")
+    logger.info("Processing Fyers MCX CSV Data")
     file_path = f'{path}/MCX_COM.csv'
 
     df = pd.read_csv(file_path, names=headers, dtype=data_types)
@@ -489,11 +493,11 @@ def delete_fyers_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
     
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -521,7 +525,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

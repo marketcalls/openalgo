@@ -1,6 +1,10 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol
 from broker.kotak.mapping.transform_data import map_exchange 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -17,7 +21,7 @@ def map_order_data(order_data):
     
     
     if order_data['stat'] == 'Not_Ok':
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
         return order_data
         
@@ -25,7 +29,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
@@ -47,7 +51,7 @@ def map_order_data(order_data):
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")         
+                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)         
     return order_data
 
 
@@ -107,7 +111,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
         if order.get('prcTp') == 'MKT':
             order['prcTp'] = 'MARKET'
@@ -149,7 +153,7 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     if trade_data['stat'] == 'Not_Ok':
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
         return trade_data
         # Check if 'data' is None
@@ -157,7 +161,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data['data']
@@ -170,11 +174,11 @@ def map_trade_data(trade_data):
             symbol = order['tok']
             exchange = map_exchange(order['exSeg'])
             order['exSeg'] = exchange
-            print(symbol)
-            print(exchange)
+            logger.info("%s", symbol)
+            logger.info("%s", exchange)
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symbol, exchange)
-            print(symbol_from_db)
+            logger.info("%s", symbol_from_db)
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
@@ -184,8 +188,8 @@ def map_trade_data(trade_data):
                     order['trnsTp'] = 'SELL'
                     
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-    print(trade_data)           
+                logger.info("Unable to find the symbol {symbol} and exchange %s. Keeping original trading symbol.", exchange)
+    logger.info("%s", trade_data)           
     return trade_data
 
 
@@ -234,8 +238,8 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    print("Holdings Data")
-    print(holdings_data)
+    logger.info("Holdings Data")
+    logger.info("%s", holdings_data)
     for holding in holdings_data:
         transformed_position = {
             "symbol": holding.get('displaySymbol', ''),
@@ -253,8 +257,8 @@ def transform_holdings_data(holdings_data):
         }
 
         transformed_data.append(transformed_position)
-    print("Holdings Data")
-    print(transformed_data)
+    logger.info("Holdings Data")
+    logger.info("%s", transformed_data)
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
@@ -271,7 +275,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data.get('data') is None:
-        print("No data available.")
+        logger.info("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 
@@ -293,7 +297,7 @@ def map_portfolio_data(portfolio_data):
         if portfolio['instrumentType'] == 'Equity':
             portfolio['instrumentType'] = 'CNC'  # Modify 'product' field
         else:
-            print("Kotak Portfolio - Product Value for Delivery Not Found or Changed.")
+            logger.info("Kotak Portfolio - Product Value for Delivery Not Found or Changed.")
     
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.

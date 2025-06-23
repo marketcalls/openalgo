@@ -4,6 +4,10 @@ import os
 import json
 from utils.httpx_client import get_httpx_client
 from broker.paytm.api.order_api import get_positions
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from Paytm API using the provided auth token."""
@@ -15,17 +19,17 @@ def get_margin_data(auth_token):
         'Accept': 'application/json',
     }
 
-    print(f"Making request to: {base_url}{request_path}")
+    logger.info("Making request to: {base_url}%s", request_path)
     client = get_httpx_client()
     response = client.get(f"{base_url}{request_path}", headers=headers)
     margin_data = response.json()
 
-    print(f"Funds Details: {margin_data}")
+    logger.info("Funds Details: %s", margin_data)
 
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
         return {}
     # Extracting funds summary safely
     funds_summary = margin_data.get('data', {}).get('funds_summary', {})
@@ -34,7 +38,7 @@ def get_margin_data(auth_token):
 
         position_book = get_positions(auth_token)
 
-        print(f'Positionbook : {position_book}')
+        logger.info("Positionbook : %s", position_book)
 
         #position_book = map_position_data(position_book)
 

@@ -5,6 +5,10 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -56,7 +60,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
 
-    print(positions_data)
+    logger.info("%s", positions_data)
 
     net_qty = '0'
 
@@ -101,7 +105,7 @@ def place_order_api(data,auth):
         "quantity": newdata['quantity']
     })
 
-    print(payload)
+    logger.info("%s", payload)
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -145,8 +149,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    print(f"position_size : {position_size}") 
-    print(f"Open Position : {current_position}") 
+    logger.info("position_size : %s", position_size) 
+    logger.info("Open Position : %s", current_position) 
     
     # Determine action based on position_size and current_position
     action = None
@@ -157,11 +161,11 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #print(f"action : {action}")
-        #print(f"Quantity : {quantity}")
+        #logger.info("action : %s", action)
+        #logger.info("Quantity : %s", quantity)
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #print(res)
-        #print(response)
+        #logger.info("%s", res)
+        #logger.info("%s", response)
         
         return res , response, orderid
         
@@ -187,11 +191,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #print(f"smart buy quantity : {quantity}")
+            #logger.info("smart buy quantity : %s", quantity)
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #print(f"smart sell quantity : {quantity}")
+            #logger.info("smart sell quantity : %s", quantity)
 
 
 
@@ -202,12 +206,12 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #print(order_data)
+        #logger.info("%s", order_data)
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
-        #print(res)
-        print(response)
-        print(orderid)
+        #logger.info("%s", res)
+        logger.info("%s", response)
+        logger.info("%s", orderid)
         
         return res , response, orderid
     
@@ -238,7 +242,7 @@ def close_all_positions(current_api_key,auth):
 
             #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['symboltoken'],position['exchange'])
-            print(f'The Symbol is {symbol}')
+            logger.info("The Symbol is %s", symbol)
 
             # Prepare the order payload
             place_order_payload = {
@@ -252,14 +256,14 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.info("%s", place_order_payload)
 
             # Place the order to close the position
             res, response, orderid =   place_order_api(place_order_payload,auth)
 
-            # print(res)
-            # print(response)
-            # print(orderid)
+            # logger.info("%s", res)
+            # logger.info("%s", response)
+            # logger.info("%s", orderid)
 
 
             
@@ -368,14 +372,14 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
+    #logger.info("%s", order_book_response)
     if order_book_response['status'] != True:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['open', 'trigger pending']]
-    #print(orders_to_cancel)
+    #logger.info("%s", orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 

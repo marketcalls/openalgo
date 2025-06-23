@@ -7,9 +7,13 @@ from broker.dhan.api.order_api import get_positions
 from broker.dhan.mapping.order_data import map_position_data
 from utils.httpx_client import get_httpx_client
 from broker.dhan.api.baseurl import get_url
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
-    print(auth_token)
+    logger.info("%s", auth_token)
     """Fetch margin data from Dhan API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
     
@@ -28,23 +32,23 @@ def get_margin_data(auth_token):
     res.status = res.status_code
     margin_data = json.loads(res.text)
 
-    print(f"Funds Details: {margin_data}")
+    logger.info("Funds Details: %s", margin_data)
 
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
         return {}
 
     try:
 
         position_book = get_positions(auth_token)
 
-        print(f'Positionbook : {position_book}')
+        logger.info("Positionbook : %s", position_book)
 
         # Check if position_book is an error response
         if isinstance(position_book, dict) and position_book.get('errorType'):
-            print(f"Error getting positions: {position_book.get('errorMessage', 'Unknown error')}")
+            logger.info("Error getting positions: %s", position_book.get('errorMessage', 'Unknown error'))
             total_realised = 0
             total_unrealised = 0
         else:

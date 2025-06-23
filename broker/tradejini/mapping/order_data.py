@@ -1,11 +1,9 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.tradejini.mapping.transform_data import reverse_map_product_type
-import logging
+from utils.logging import get_logger
 
-# Configure logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """
@@ -17,11 +15,11 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated fields
     """
-    print(f"[DEBUG] map_order_data - Input order_data: {order_data}")
+    logger.debug("map_order_data - Input order_data: %s", order_data)
     
     # Check if response status is ok
     if order_data.get('stat') != 'Ok':
-        print("[DEBUG] map_order_data - Error in API response")
+        logger.debug("map_order_data - Error in API response")
         return []
     
     # Get orders from response - they are nested under 'data' field
@@ -34,7 +32,7 @@ def map_order_data(order_data):
         for order in orders_data:
             # Get the actual order data from the nested structure
             order_info = order.get('data', {})
-           # print(f"[DEBUG] map_order_data - Processing order info: {order_info}")
+           # logger.info("[DEBUG] map_order_data - Processing order info: %s", order_info)
             
             # Update fields in place
             order['action'] = "BUY" if order_info.get('side') == 'buy' else "SELL"
@@ -531,14 +529,14 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'portfolio_data' is a list
     if not portfolio_data or not isinstance(portfolio_data, list):
-        print("No data available or incorrect data format.")
+        logger.warning("No data available or incorrect data format.")
         return []
 
     # Iterate over the portfolio_data list and process each entry
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get('stat') != 'Ok':
-            print(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
+            logger.error("Error: %s", portfolio.get('emsg', 'Unknown error occurred.'))
             continue
 
         # Process the 'exch_tsym' list inside each portfolio entry
@@ -552,7 +550,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
+                logger.warning("Zebu Portfolio - Product Value for %s Not Found or Changed.", symbol)
     
     return portfolio_data
 
@@ -564,7 +562,7 @@ def calculate_portfolio_statistics(holdings_data):
 
     # Check if the data is valid or contains an error
     if not holdings_data or not isinstance(holdings_data, list):
-        print("Error: Invalid or missing holdings data.")
+        logger.error("Error: Invalid or missing holdings data.")
         return {
             'totalholdingvalue': totalholdingvalue,
             'totalinvvalue': totalinvvalue,
@@ -576,7 +574,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if holding.get('stat') != 'Ok':
-            print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
+            logger.error("Error: %s", holding.get('emsg', 'Unknown error occurred.'))
             continue
 
         # Filter out the NSE entry and ignore BSE for the same symbol
@@ -612,8 +610,8 @@ def calculate_portfolio_statistics(holdings_data):
 
         # Valuation formula from API
         valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        print("test valuation :"+str(npoadqty))
-        print("test valuation :"+str(upload_price))
+        logger.debug("test valuation: %s", str(npoadqty))
+        logger.debug("test valuation: %s", str(upload_price))
         # Accumulate total valuation
         totalholdingvalue += valuation
 

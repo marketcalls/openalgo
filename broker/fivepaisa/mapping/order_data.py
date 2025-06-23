@@ -3,6 +3,10 @@ import re
 from datetime import datetime, timedelta
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.fivepaisa.mapping.transform_data import reverse_map_exchange
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def convert_date_string(date_str):
     # Extract the timestamp and timezone offset using regular expressions
@@ -37,7 +41,7 @@ def map_order_data(order_data):
     # Check if 'data' is None
     if order_data['body']['OrderBookDetail'] is None:
         # Handle the case where there is no data
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['body']['OrderBookDetail']
@@ -71,7 +75,7 @@ def map_order_data(order_data):
                 elif order['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['DelvIntra'] == 'D':
                     order['DelvIntra'] = 'NRML'
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
                 
     return order_data
 
@@ -140,7 +144,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
 
         pricetype = ""
@@ -207,7 +211,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data['body']['TradeBookDetail']
@@ -247,7 +251,7 @@ def map_trade_data(trade_data):
                     order['BuySell'] = 'SELL'
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
           
     return trade_data
 
@@ -295,12 +299,12 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data['body']['NetPositionDetail'] 
         
-    print(position_data)
+    logger.info("%s", position_data)
 
     if position_data:
         for position in position_data:
@@ -332,7 +336,7 @@ def map_position_data(position_data):
              
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
           
     return position_data
 
@@ -375,7 +379,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data['body']['Data'] is None:
-        print("No data available.")
+        logger.info("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 

@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
@@ -44,7 +48,7 @@ def map_order_data(order_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['product'] == 'D':
                     order['product'] = 'NRML'
             else:
-                print(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token {instrument_token} and exchange %s. Keeping original trading symbol.", exchange)
                 
     return order_data
 
@@ -101,7 +105,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
 
         transformed_order = {
@@ -190,7 +194,7 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['data']
@@ -203,7 +207,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.info("Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 

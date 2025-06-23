@@ -1,6 +1,5 @@
 import json
 import os
-import logging
 import httpx
 from database.token_db import get_br_symbol, get_oa_symbol
 import pandas as pd
@@ -8,9 +7,13 @@ from datetime import datetime
 import urllib.parse
 import time
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """
@@ -145,7 +148,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            print(f"Using broker symbol: {br_symbol}")
+            logger.info("Using broker symbol: %s", br_symbol)
             
             # Check for unsupported timeframes first
             if interval in ['W', 'M']:
@@ -176,7 +179,7 @@ class BrokerData:
             
             # Adjust end date if it's in the future
             if end_dt > current_dt:
-                print(f"Warning: End date {end_dt.date()} is in the future. Adjusting to current date {current_dt.date()}")
+                logger.warning("Warning: End date {end_dt.date()} is in the future. Adjusting to current date %s", current_dt.date())
                 end_dt = current_dt
             
             # Validate date range
@@ -206,7 +209,7 @@ class BrokerData:
                     chunk_start = current_start.strftime('%Y-%m-%d')
                     chunk_end = current_end.strftime('%Y-%m-%d')
                     
-                    print(f"Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to {chunk_end}")
+                    logger.info("Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to %s", chunk_end)
                     
                     # URL encode the symbol to handle special characters
                     encoded_symbol = urllib.parse.quote(br_symbol)
@@ -219,16 +222,16 @@ class BrokerData:
                               f"range_from={chunk_start}&"
                               f"range_to={chunk_end}")
                     
-                    print(f"Making request to endpoint: {endpoint}")
+                    logger.info("Making request to endpoint: %s", endpoint)
                     response = get_api_response(endpoint, self.auth_token)
                     
                     if response.get('s') != 'ok':
                         error_msg = response.get('message', 'Unknown error')
-                        print(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
+                        logger.error("Error for chunk {chunk_start} to {chunk_end}: %s", error_msg)
                         
                         if retry_count < max_retries:
                             retry_count += 1
-                            print(f"Retrying... Attempt {retry_count} of {max_retries}")
+                            logger.info("Retrying... Attempt {retry_count} of %s", max_retries)
                             time.sleep(2 * retry_count)  # Exponential backoff
                             continue
                         
@@ -247,9 +250,9 @@ class BrokerData:
                         # Convert list of lists to DataFrame with epoch timestamp
                         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         dfs.append(df)
-                        print(f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}")
+                        logger.info("Got {len(candles)} candles for period {chunk_start} to %s", chunk_end)
                     else:
-                        print(f"No data available for period {chunk_start} to {chunk_end}")
+                        logger.info("No data available for period {chunk_start} to %s", chunk_end)
                     
                     # Add a small delay between chunks to avoid rate limiting
                     time.sleep(0.5)
@@ -258,10 +261,10 @@ class BrokerData:
                     current_start = current_end + pd.Timedelta(days=1)
                     
                 except Exception as e:
-                    print(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
+                    logger.error("Error fetching chunk {chunk_start} to {chunk_end}: %s", str(e))
                     if retry_count < max_retries:
                         retry_count += 1
-                        print(f"Retrying... Attempt {retry_count} of {max_retries}")
+                        logger.info("Retrying... Attempt {retry_count} of %s", max_retries)
                         time.sleep(2 * retry_count)
                         continue
                     
@@ -273,7 +276,7 @@ class BrokerData:
             
             # If no data was found, return empty DataFrame
             if not dfs:
-                print("No data was collected for the entire period")
+                logger.info("No data was collected for the entire period")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             # Combine all chunks
@@ -282,12 +285,12 @@ class BrokerData:
             # Sort by timestamp and remove duplicates
             final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp'], keep='first')
             
-            print(f"Successfully collected data: {len(final_df)} total candles")
+            logger.info("Successfully collected data: %s total candles", len(final_df))
             return final_df
             
         except Exception as e:
             error_msg = f"Error fetching historical data: {str(e)}"
-            print(error_msg)
+            logger.error("%s", error_msg)
             raise Exception(error_msg)
 
     def get_depth(self, symbol: str, exchange: str) -> dict:

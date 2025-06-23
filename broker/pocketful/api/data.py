@@ -4,15 +4,17 @@ import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.pocketful.database.master_contract_db import SymToken, db_session
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from broker.pocketful.api.pocketfulwebsocket import PocketfulSocket, get_ws_connection_status, get_snapquotedata
 import time
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class PocketfulPermissionError(Exception):
     """Custom exception for Pocketful API permission errors"""

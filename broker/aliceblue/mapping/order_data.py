@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,12 +20,12 @@ def map_order_data(order_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            print(f"Error fetching order data: {order_data['emsg']}")
+            logger.info("Error fetching order data: %s", order_data['emsg'])
             order_data = {}
     else:
         order_data = order_data
         
-    # print(order_data)
+    # logger.info("%s", order_data)
 
     if order_data:
         for order in order_data:
@@ -34,7 +38,7 @@ def map_order_data(order_data):
             if symbol:
                 order['Trsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return order_data
 
@@ -87,16 +91,16 @@ def transform_order_data(orders):
         orders = [orders]
 
     transformed_orders = []
-    print(orders)
+    logger.info("%s", orders)
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
         
         # Check if the necessary keys exist in the order
         if 'Trantype' not in order or 'Prctype' not in order:
-            print("Error: Missing required keys in the order. Skipping this item.")
+            logger.error("Error: Missing required keys in the order. Skipping this item.")
             continue
         
         if order['Trantype'] == 'B':
@@ -151,12 +155,12 @@ def map_trade_data(trade_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            print(f"Error fetching order data: {trade_data['emsg']}")
+            logger.info("Error fetching order data: %s", trade_data['emsg'])
             trade_data = {}
     else:
         trade_data = trade_data
         
-    # print(trade_data)
+    # logger.info("%s", trade_data)
 
     if trade_data:
         for trade in trade_data:
@@ -168,7 +172,7 @@ def map_trade_data(trade_data):
             if symbol:
                 trade['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return trade_data
 
@@ -178,7 +182,7 @@ def transform_tradebook_data(tradebook_data):
 
         # Check if the necessary keys exist in the order
         # if 'Qty' not in trade or 'Average price' not in trade:
-        #     print("Error: Missing required keys in the order. Skipping this item.")
+        #     logger.error("Error: Missing required keys in the order. Skipping this item.")
         #     continue
 
         # Ensure quantity and average price are converted to the correct types
@@ -215,12 +219,12 @@ def map_position_data(position_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            print(f"Error fetching order data: {position_data['emsg']}")
+            logger.info("Error fetching order data: %s", position_data['emsg'])
             position_data = {}
     else:
         position_data = position_data
         
-    # print(order_data)
+    # logger.info("%s", order_data)
 
     if position_data:
         for position in position_data:
@@ -233,7 +237,7 @@ def map_position_data(position_data):
             if symbol:
                 position['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return position_data
     
@@ -304,12 +308,12 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-            print("No data available.")
+            logger.info("No data available.")
             portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['HoldingVal']
         
-    print(portfolio_data)
+    logger.info("%s", portfolio_data)
 
     if portfolio_data:
         for portfolio in portfolio_data:
@@ -317,7 +321,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['Pcode'] = 'CNC'
 
             else:
-                print(f"AliceBlue Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.info("AliceBlue Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 
@@ -328,7 +332,7 @@ def calculate_portfolio_statistics(holdings_data):
     totalprofitandloss = sum((float(item['Ltp']) - float(item['Price'])) * int(item['HUqty']) for item in holdings_data)
     
     for item in holdings_data:
-        print((item['Ltp'],item['Price'],item['HUqty']))
+        logger.info("%s", (item['Ltp'],item['Price'],item['HUqty']))
     # To avoid division by zero in the case when totalinvvalue is 0
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
 

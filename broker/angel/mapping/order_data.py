@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,11 +20,11 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
-        print(order_data)
+        logger.info("%s", order_data)
         
 
 
@@ -45,7 +49,7 @@ def map_order_data(order_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
                     order['producttype'] = 'NRML'
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
                 
     return order_data
 
@@ -102,7 +106,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
 
         ordertype = order.get("ordertype", "")
@@ -146,7 +150,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data['data']
@@ -174,7 +178,7 @@ def map_trade_data(trade_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
                     order['producttype'] = 'NRML'
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Unable to find the symbol {symbol} and exchange %s. Keeping original trading symbol.", exchange)
                 
     return trade_data
 
@@ -246,7 +250,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data.get('data') is None or 'holdings' not in portfolio_data['data']:
-        print("No data available.")
+        logger.info("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 
@@ -266,7 +270,7 @@ def map_portfolio_data(portfolio_data):
             if portfolio['product'] == 'DELIVERY':
                 portfolio['product'] = 'CNC'  # Modify 'product' field
             else:
-                print("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.info("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
     
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.

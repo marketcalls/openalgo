@@ -2,15 +2,18 @@ import websocket
 import json
 import threading
 import time
-import logging
 import hashlib
 import ssl
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AliceBlueWebSocket:
     """

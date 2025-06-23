@@ -1,6 +1,10 @@
 import os
 import http.client
 import json
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from Zebu's API using the provided auth token."""
@@ -39,12 +43,12 @@ def get_margin_data(auth_token):
     # Parse the response
     margin_data = json.loads(data.decode("utf-8"))
 
-    print(margin_data)
+    logger.info("%s", margin_data)
 
     # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('emsg')}")
+        logger.info("Error fetching margin data: %s", margin_data.get('emsg'))
         return {}
 
     try:
@@ -66,6 +70,6 @@ def get_margin_data(auth_token):
         return processed_margin_data
     except KeyError as e:
         # Log the exception and return an empty dictionary if there's an unexpected error
-        print(f"Error processing margin data: {str(e)}")
+        logger.error("Error processing margin data: %s", str(e))
         return {}
 

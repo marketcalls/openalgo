@@ -1,5 +1,4 @@
 import os
-import logging
 import datetime
 import json
 import pandas as pd
@@ -7,6 +6,10 @@ import re
 from typing import Dict, List, Any, Optional
 from database.token_db import get_symbol 
 from broker.dhan.mapping.transform_data import map_exchange
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -18,15 +21,15 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with standardized fields in OpenAlgo format.
     """
-    logging.info("Starting map_order_data function")
-    logging.debug(f"Order data type: {type(order_data)}")
+    logger.info("Starting map_order_data function")
+    logger.debug(f"Order data type: {type(order_data)}")
     
     # Initialize empty result
     mapped_orders = []
     
     # Handle empty input
     if not order_data:
-        logging.warning("Order data is None or empty")
+        logger.warning("Order data is None or empty")
         return mapped_orders
     
     # Determine which data source to use
@@ -34,39 +37,39 @@ def map_order_data(order_data):
     
     # For debugging, log all keys in the structure
     if isinstance(order_data, dict):
-        logging.debug(f"Keys in order_data: {list(order_data.keys())}")
+        logger.debug(f"Keys in order_data: {list(order_data.keys())}")
         if 'raw_response' in order_data and isinstance(order_data['raw_response'], dict):
-            logging.debug(f"Keys in raw_response: {list(order_data['raw_response'].keys())}")
+            logger.debug(f"Keys in raw_response: {list(order_data['raw_response'].keys())}")
     
     # Try raw_response (direct Groww API format) first if it exists
     if isinstance(order_data, dict) and 'raw_response' in order_data and order_data['raw_response']:
         raw_response = order_data['raw_response']
         if 'order_list' in raw_response and raw_response['order_list']:
-            logging.info("Using raw_response.order_list for mapping")
+            logger.info("Using raw_response.order_list for mapping")
             orders_to_process = raw_response['order_list']
     
     # Then try the data array if raw_response wasn't available or was empty
     if not orders_to_process and isinstance(order_data, dict) and 'data' in order_data:
         if order_data['data']:
-            logging.info("Using data array for mapping")
+            logger.info("Using data array for mapping")
             orders_to_process = order_data['data']
     
     # Handle direct order_list format (from Groww API)
     if not orders_to_process and isinstance(order_data, dict) and 'order_list' in order_data:
         if order_data['order_list']:
-            logging.info("Using direct order_list for mapping")
+            logger.info("Using direct order_list for mapping")
             orders_to_process = order_data['order_list']
     
     # If no valid orders found, return empty result
     if not orders_to_process:
-        logging.warning("No valid orders found for mapping")
+        logger.warning("No valid orders found for mapping")
         return mapped_orders
         
-    logging.info(f"Processing {len(orders_to_process)} orders")
+    logger.info(f"Processing {len(orders_to_process)} orders")
     
     for i, order in enumerate(orders_to_process):
-        logging.debug(f"Processing order {i+1}/{len(orders_to_process)}")
-        logging.debug(f"Original order: {order}")
+        logger.debug(f"Processing order {i+1}/{len(orders_to_process)}")
+        logger.debug(f"Original order: {order}")
         
         # Get fields from order - handle both original Groww API and our standardized format
         order_id = order.get('groww_order_id', order.get('orderid', ''))
@@ -80,7 +83,7 @@ def map_order_data(order_data):
         
         # For debugging
         if i == 0:
-            logging.debug(f"Sample order id: {order_id}, symbol: {symbol}, type: {order_type}")
+            logger.debug(f"Sample order id: {order_id}, symbol: {symbol}, type: {order_type}")
         
         # Get the trading symbol from Groww order data
         broker_symbol = order.get('trading_symbol', '')
@@ -95,9 +98,9 @@ def map_order_data(order_data):
                 # Import the conversion function
                 from broker.groww.database.master_contract_db import format_groww_to_openalgo_symbol
                 openalgo_symbol = format_groww_to_openalgo_symbol(broker_symbol, exchange)
-                logging.info(f"Transformed display symbol: {broker_symbol} -> {openalgo_symbol}")
+                logger.info(f"Transformed display symbol: {broker_symbol} -> {openalgo_symbol}")
             except Exception as e:
-                logging.error(f"Error converting symbol format: {e}")
+                logger.error(f"Error converting symbol format: {e}")
         
         # Look up in database as fallback
         if openalgo_symbol == broker_symbol and ' ' in broker_symbol:
@@ -107,9 +110,9 @@ def map_order_data(order_data):
                 db_record = db_session.query(SymToken).filter_by(brsymbol=broker_symbol, brexchange=exchange).first()
                 if db_record and db_record.symbol:
                     openalgo_symbol = db_record.symbol
-                    logging.info(f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}")
+                    logger.info(f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}")
             except Exception as e:
-                logging.error(f"Error looking up symbol in database: {e}")
+                logger.error(f"Error looking up symbol in database: {e}")
         
         mapped_order = {
             'orderid': order.get('groww_order_id', ''),
@@ -140,7 +143,7 @@ def map_order_data(order_data):
         }
         original_status = mapped_order['status']
         mapped_order['status'] = status_map.get(original_status, 'open')
-        logging.debug(f"Mapped status from '{original_status}' to '{mapped_order['status']}'")
+        logger.debug(f"Mapped status from '{original_status}' to '{mapped_order['status']}'")
         
         # Map product type to OpenAlgo format
         original_product = mapped_order['product']
@@ -151,12 +154,12 @@ def map_order_data(order_data):
         elif original_product == 'MARGIN':
             mapped_order['product'] = 'NRML'
         
-        logging.debug(f"Mapped product from '{original_product}' to '{mapped_order['product']}'")
-        logging.debug(f"Mapped order: {mapped_order}")
+        logger.debug(f"Mapped product from '{original_product}' to '{mapped_order['product']}'")
+        logger.debug(f"Mapped order: {mapped_order}")
             
         mapped_orders.append(mapped_order)
     
-    logging.info(f"Finished mapping {len(mapped_orders)} orders")
+    logger.info(f"Finished mapping {len(mapped_orders)} orders")
     return mapped_orders
 
 
@@ -173,8 +176,8 @@ def calculate_order_statistics(order_data):
     Returns:
     - A dictionary containing counts of different types of orders.
     """
-    logging.info("Starting calculate_order_statistics")
-    logging.debug(f"Order data type: {type(order_data)}")
+    logger.info("Starting calculate_order_statistics")
+    logger.debug(f"Order data type: {type(order_data)}")
     
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
@@ -191,7 +194,7 @@ def calculate_order_statistics(order_data):
 
     # Handle empty input
     if not order_data:
-        logging.warning("Order data is None or empty in calculate_order_statistics")
+        logger.warning("Order data is None or empty in calculate_order_statistics")
         return default_stats
     
     # Determine which data structure we're dealing with
@@ -199,28 +202,28 @@ def calculate_order_statistics(order_data):
     
     # Case 1: Direct list of orders (preferred new format)
     if isinstance(order_data, list):
-        logging.info("Using direct list of orders for statistics")
+        logger.info("Using direct list of orders for statistics")
         orders_to_process = order_data
     # Case 2: Nested dictionary with 'data' key (backward compatibility)
     elif isinstance(order_data, dict) and 'data' in order_data:
-        logging.info("Using nested data dictionary for statistics")
+        logger.info("Using nested data dictionary for statistics")
         orders_to_process = order_data['data']
     # Case 3: Direct Groww API response with 'order_list' (original API format)
     elif isinstance(order_data, dict) and 'order_list' in order_data:
-        logging.info("Using direct order_list for statistics")
+        logger.info("Using direct order_list for statistics")
         orders_to_process = order_data['order_list']
     
     # If no valid order data found, return default stats
     if not orders_to_process:
-        logging.warning("No valid orders found for statistics calculation")
+        logger.warning("No valid orders found for statistics calculation")
         return default_stats
         
-    logging.info(f"Calculating statistics for {len(orders_to_process)} orders")
+    logger.info(f"Calculating statistics for {len(orders_to_process)} orders")
 
     for i, order in enumerate(orders_to_process):
         # Log the structure of the first order for debugging
         if i == 0:
-            logging.debug(f"Sample order structure for statistics: {order}")
+            logger.debug(f"Sample order structure for statistics: {order}")
             
         # Count buy and sell orders
         transaction_type = order.get('transaction_type')
@@ -229,7 +232,7 @@ def calculate_order_statistics(order_data):
         elif transaction_type == 'SELL':
             total_sell_orders += 1
         else:
-            logging.debug(f"Unknown transaction type: {transaction_type}")
+            logger.debug(f"Unknown transaction type: {transaction_type}")
         
         # Count orders based on their status
         status = order.get('order_status')
@@ -240,7 +243,7 @@ def calculate_order_statistics(order_data):
         elif status == 'REJECTED':
             total_rejected_orders += 1
         else:
-            logging.debug(f"Order with status not counted in statistics: {status}")
+            logger.debug(f"Order with status not counted in statistics: {status}")
 
     # Compile statistics
     stats = {
@@ -251,7 +254,7 @@ def calculate_order_statistics(order_data):
         'total_rejected_orders': total_rejected_orders
     }
     
-    logging.info(f"Order statistics calculated: {stats}")
+    logger.info(f"Order statistics calculated: {stats}")
     return stats
 
 
@@ -265,12 +268,12 @@ def transform_order_data(orders):
     Returns:
         list: Transformed orders in OpenAlgo format for orderbook.py
     """
-    logging.info("Starting transform_order_data function")
-    logging.debug(f"Input order data type: {type(orders)}")
+    logger.info("Starting transform_order_data function")
+    logger.debug(f"Input order data type: {type(orders)}")
     
     # If we get a list directly, these are already mapped orders from map_order_data
     if isinstance(orders, list):
-        logging.info(f"Received {len(orders)} pre-mapped orders")
+        logger.info(f"Received {len(orders)} pre-mapped orders")
         orders_to_process = orders
     else:
         # Try to extract orders from different possible structures
@@ -278,43 +281,43 @@ def transform_order_data(orders):
         
         # If orders is None or empty, return empty list
         if not orders:
-            logging.warning("Orders input is None or empty")
+            logger.warning("Orders input is None or empty")
             return []
         
         # Handle dictionary structures with data or order_list
         if isinstance(orders, dict):
             # Log keys for debugging
-            logging.debug(f"Keys in orders: {list(orders.keys()) if orders else 'None'}")
+            logger.debug(f"Keys in orders: {list(orders.keys()) if orders else 'None'}")
             
             # Try raw_response.order_list format
             if 'raw_response' in orders and orders['raw_response']:
                 raw_response = orders['raw_response']
-                logging.debug(f"Raw response keys: {list(raw_response.keys()) if raw_response else 'None'}")
+                logger.debug(f"Raw response keys: {list(raw_response.keys()) if raw_response else 'None'}")
                 if 'order_list' in raw_response and raw_response['order_list']:
-                    logging.info("Using raw_response.order_list for transformation")
+                    logger.info("Using raw_response.order_list for transformation")
                     orders_to_process = raw_response['order_list']
             
             # Try data array format
             if not orders_to_process and 'data' in orders and orders['data']:
-                logging.info("Using data array for transformation")
+                logger.info("Using data array for transformation")
                 orders_to_process = orders['data']
             
             # Try direct order_list format
             if not orders_to_process and 'order_list' in orders and orders['order_list']:
-                logging.info("Using direct order_list for transformation")
+                logger.info("Using direct order_list for transformation")
                 orders_to_process = orders['order_list']
     
     # If we still couldn't find orders, return empty list
     if not orders_to_process:
-        logging.warning("No valid orders found for transformation")
+        logger.warning("No valid orders found for transformation")
         return []
     
-    logging.info(f"Processing {len(orders_to_process)} orders for transformation")
+    logger.info(f"Processing {len(orders_to_process)} orders for transformation")
     transformed_orders = []
     
     # Dump first order for debug
     if len(orders_to_process) > 0:
-        logging.debug(f"Sample order to transform: {orders_to_process[0]}")
+        logger.debug(f"Sample order to transform: {orders_to_process[0]}")
     
     for i, order in enumerate(orders_to_process):
         # Get fields with fallbacks between original and mapped formats
@@ -341,7 +344,7 @@ def transform_order_data(orders):
                 openalgo_symbol = get_oa_symbol(token, exchange)
                 if openalgo_symbol:
                     symbol = openalgo_symbol
-                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+                    logger.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
             
             # If token lookup failed or token wasn't available, try by broker symbol
             elif broker_symbol:
@@ -357,15 +360,15 @@ def transform_order_data(orders):
                         
                         if record and record.symbol:
                             symbol = record.symbol
-                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+                            logger.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
         except Exception as e:
-            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+            logger.error(f"Error looking up OpenAlgo symbol from database: {e}")
             # Fall back to the original symbol
             symbol = broker_symbol
         
         # Make sure we get the status from all possible fields
         status = order.get('order_status', order.get('status', ''))
-        logging.debug(f"Order {i} raw status: {status}")
+        logger.debug(f"Order {i} raw status: {status}")
         
         order_type = order.get('order_type', order.get('pricetype', 'MARKET'))
         transaction_type = order.get('transaction_type', order.get('action', ''))
@@ -402,15 +405,15 @@ def transform_order_data(orders):
             'REJECTED': 'rejected'
         }
         # Log original status for debugging
-        logging.debug(f"Original order status for order {i}: '{status}'")
+        logger.debug(f"Original order status for order {i}: '{status}'")
         
         # Important: Use the status map but ensure we have a fallback value
         # If status isn't in our map, use the lowercase version of the original status
         mapped_status = status_map.get(status, status.lower() if status else '')
-        logging.debug(f"Mapped status for order {i}: '{mapped_status}'")
+        logger.debug(f"Mapped status for order {i}: '{mapped_status}'")
         
         # Log key fields for debugging
-        logging.debug(f"Order {i}: Symbol='{symbol}', ID='{order_id}', Type='{mapped_order_type}', Product='{mapped_product}'")
+        logger.debug(f"Order {i}: Symbol='{symbol}', ID='{order_id}', Type='{mapped_order_type}', Product='{mapped_product}'")
         
         # For NFO instruments, ensure the symbol is in OpenAlgo format (AARTIIND29MAY25630CE)
         exchange = order.get("exchange", "NSE")
@@ -424,9 +427,9 @@ def transform_order_data(orders):
                     broker_symbol = symbol
                     # Use OpenAlgo symbol format for display
                     symbol = openalgo_symbol
-                    logging.info(f"Transformed order symbol for UI: {broker_symbol} -> {symbol}")
+                    logger.info(f"Transformed order symbol for UI: {broker_symbol} -> {symbol}")
             except Exception as e:
-                logging.error(f"Error converting order symbol format: {e}")
+                logger.error(f"Error converting order symbol format: {e}")
         
         # Create transformed order in OpenAlgo format
         transformed_order = {
@@ -446,7 +449,7 @@ def transform_order_data(orders):
         # Add to result
         transformed_orders.append(transformed_order)
 
-    logging.info(f"Successfully transformed {len(transformed_orders)} orders")
+    logger.info(f"Successfully transformed {len(transformed_orders)} orders")
     
     # Final check to ensure all symbols are in OpenAlgo format using database lookups
     # This avoids complex transformations since the database already has the correct symbols
@@ -463,10 +466,10 @@ def transform_order_data(orders):
                     openalgo_symbol = get_oa_symbol(token, order.get('exchange', 'NSE'))
                     if openalgo_symbol:
                         order['symbol'] = openalgo_symbol
-                        logging.info(f"Final token lookup: {symbol} -> {openalgo_symbol}")
+                        logger.info(f"Final token lookup: {symbol} -> {openalgo_symbol}")
                         continue
                 except Exception as e:
-                    logging.error(f"Error in final token lookup: {e}")
+                    logger.error(f"Error in final token lookup: {e}")
             
             # Last resort - try looking up the broker symbol directly from database
             try:
@@ -480,55 +483,55 @@ def transform_order_data(orders):
                     
                     if record and record.symbol:
                         order['symbol'] = record.symbol
-                        logging.info(f"Final db lookup: {symbol} -> {record.symbol}")
+                        logger.info(f"Final db lookup: {symbol} -> {record.symbol}")
             except Exception as e:
-                logging.error(f"Error in final database lookup: {e}")
+                logger.error(f"Error in final database lookup: {e}")
     
     return transformed_orders
 
 def map_trade_data(trade_data):
-    logging.info(f"Map trade data received type: {type(trade_data)}")
+    logger.info(f"Map trade data received type: {type(trade_data)}")
     
     # If it's a tuple with status code (from direct API), extract the data
     if isinstance(trade_data, tuple) and len(trade_data) == 2:
         trade_data = trade_data[0]
-        logging.info("Extracted trade data from tuple")
+        logger.info("Extracted trade data from tuple")
     
     # Handle direct list of trades (which our get_trade_book now returns)
     if isinstance(trade_data, list):
-        logging.info(f"Received direct list of {len(trade_data)} trades")
+        logger.info(f"Received direct list of {len(trade_data)} trades")
         return trade_data
         
     # Handle dictionary formats
     if isinstance(trade_data, dict):
         # Log keys for debugging
-        logging.info(f"Trade data dict keys: {list(trade_data.keys())}")
+        logger.info(f"Trade data dict keys: {list(trade_data.keys())}")
         
         # Check for data field
         if 'data' in trade_data and isinstance(trade_data['data'], list):
-            logging.info(f"Using 'data' field with {len(trade_data['data'])} trades")
+            logger.info(f"Using 'data' field with {len(trade_data['data'])} trades")
             return trade_data['data']
             
         # Check for tradebook field
         if 'tradebook' in trade_data and isinstance(trade_data['tradebook'], list):
-            logging.info(f"Using 'tradebook' field with {len(trade_data['tradebook'])} trades")
+            logger.info(f"Using 'tradebook' field with {len(trade_data['tradebook'])} trades")
             return trade_data['tradebook']
     
     # If all else fails, try the regular order mapping (fallback)
-    logging.info("Falling back to regular order mapping")
+    logger.info("Falling back to regular order mapping")
     return map_order_data(trade_data)
     
 def transform_tradebook_data(tradebook_data):
-    logging.info(f"Transform tradebook received type: {type(tradebook_data)}")
+    logger.info(f"Transform tradebook received type: {type(tradebook_data)}")
     
     # Handle empty input
     if not tradebook_data:
-        logging.warning("Tradebook data is empty")
+        logger.warning("Tradebook data is empty")
         return []
     
     # Log first trade for debugging
     if isinstance(tradebook_data, list) and tradebook_data:
-        logging.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
+        logger.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
     
     transformed_data = []
     for trade in tradebook_data:
@@ -556,7 +559,7 @@ def transform_tradebook_data(tradebook_data):
                 openalgo_symbol = get_oa_symbol(token, exchange)
                 if openalgo_symbol:
                     symbol = openalgo_symbol
-                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+                    logger.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
             
             # If token lookup failed or token wasn't available, try by broker symbol
             elif broker_symbol:
@@ -572,9 +575,9 @@ def transform_tradebook_data(tradebook_data):
                         
                         if record and record.symbol:
                             symbol = record.symbol
-                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+                            logger.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
         except Exception as e:
-            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+            logger.error(f"Error looking up OpenAlgo symbol from database: {e}")
         
         # Get other trade fields
         product = trade.get('productType', trade.get('product', ''))
@@ -604,19 +607,19 @@ def transform_tradebook_data(tradebook_data):
         }
         transformed_data.append(transformed_trade)
     
-    logging.info(f"Transformed {len(transformed_data)} trades successfully")
+    logger.info(f"Transformed {len(transformed_data)} trades successfully")
     return transformed_data
 #def transform_tradebook_data(tradebook_data):
-    logging.info(f"Transform tradebook received type: {type(tradebook_data)}")
+    logger.info(f"Transform tradebook received type: {type(tradebook_data)}")
     
     # Handle empty input
     if not tradebook_data:
-        logging.warning("Tradebook data is empty")
+        logger.warning("Tradebook data is empty")
         return []
     
     # Log first trade for debugging
     if isinstance(tradebook_data, list) and tradebook_data:
-        logging.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
+        logger.info(f"Sample trade to transform: {json.dumps(tradebook_data[0], indent=2)[:500]}")
     
     transformed_data = []
     for trade in tradebook_data:
@@ -650,46 +653,46 @@ def transform_tradebook_data(tradebook_data):
         }
         transformed_data.append(transformed_trade)
     
-    logging.info(f"Transformed {len(transformed_data)} trades successfully")
+    logger.info(f"Transformed {len(transformed_data)} trades successfully")
     return transformed_data
 
 def map_position_data(position_data):
-    logging.info(f"Map position data received type: {type(position_data)}")
+    logger.info(f"Map position data received type: {type(position_data)}")
     
     # If it's a tuple with status code (from direct API), extract the data
     if isinstance(position_data, tuple) and len(position_data) == 2:
         position_data = position_data[0]
-        logging.info("Extracted position data from tuple")
+        logger.info("Extracted position data from tuple")
     
     # Handle direct list of positions
     if isinstance(position_data, list):
-        logging.info(f"Received direct list of {len(position_data)} positions")
+        logger.info(f"Received direct list of {len(position_data)} positions")
         return position_data
         
     # Handle dictionary formats
     if isinstance(position_data, dict):
         # Log keys for debugging
-        logging.info(f"Position data dict keys: {list(position_data.keys())}")
+        logger.info(f"Position data dict keys: {list(position_data.keys())}")
         
         # Check for data field
         if 'data' in position_data and isinstance(position_data['data'], list):
-            logging.info(f"Using 'data' field with {len(position_data['data'])} positions")
+            logger.info(f"Using 'data' field with {len(position_data['data'])} positions")
             return position_data['data']
     
     # If all else fails, try the regular order mapping (fallback)
-    logging.info("Falling back to regular order mapping")
+    logger.info("Falling back to regular order mapping")
     return map_order_data(position_data)
 def transform_positions_data(positions_data):
-    logging.info(f"Transform positions received type: {type(positions_data)}, length: {len(positions_data) if isinstance(positions_data, list) else 'not a list'}")
+    logger.info(f"Transform positions received type: {type(positions_data)}, length: {len(positions_data) if isinstance(positions_data, list) else 'not a list'}")
     
     # Handle empty input
     if not positions_data:
-        logging.warning("Positions data is empty")
+        logger.warning("Positions data is empty")
         return []
     
     # Log first position for debugging
     if isinstance(positions_data, list) and positions_data:
-        logging.info(f"Sample position to transform: {json.dumps(positions_data[0], indent=2)[:500]}")
+        logger.info(f"Sample position to transform: {json.dumps(positions_data[0], indent=2)[:500]}")
     
     transformed_data = []
     for position in positions_data:
@@ -706,7 +709,7 @@ def transform_positions_data(positions_data):
         segment = position.get('segment', '')
         
         # For debugging
-        logging.info(f"Processing position with trading_symbol: {trading_symbol}, broker_symbol: {broker_symbol}, segment: {segment}")
+        logger.info(f"Processing position with trading_symbol: {trading_symbol}, broker_symbol: {broker_symbol}, segment: {segment}")
         
         # Determine proper exchange based on segment and symbol pattern
         if segment == 'FNO' or (broker_symbol and any(marker in broker_symbol for marker in ['CE', 'PE', 'FUT'])):
@@ -735,7 +738,7 @@ def transform_positions_data(positions_data):
                 openalgo_symbol = get_oa_symbol(token, exchange)
                 if openalgo_symbol:
                     symbol = openalgo_symbol
-                    logging.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
+                    logger.info(f"Found OpenAlgo symbol by token: {broker_symbol} -> {symbol}")
             
             # If token lookup failed or token wasn't available, try by broker symbol
             elif broker_symbol:
@@ -751,9 +754,9 @@ def transform_positions_data(positions_data):
                         
                         if record and record.symbol:
                             symbol = record.symbol
-                            logging.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
+                            logger.info(f"Found OpenAlgo symbol in database: {broker_symbol} -> {symbol}")
         except Exception as e:
-            logging.error(f"Error looking up OpenAlgo symbol from database: {e}")
+            logger.error(f"Error looking up OpenAlgo symbol from database: {e}")
         
         # Continue with the rest of your transformation
         quantity = float(position.get('quantity', 0))
@@ -785,7 +788,7 @@ def transform_positions_data(positions_data):
         }
         transformed_data.append(transformed_position)
     
-    logging.info(f"Transformed {len(transformed_data)} positions successfully")
+    logger.info(f"Transformed {len(transformed_data)} positions successfully")
     return transformed_data
 
 def transform_holdings_data(holdings_data):
@@ -798,8 +801,7 @@ def transform_holdings_data(holdings_data):
     Returns:
         List of transformed holdings
     """
-    import logging
-    logger = logging.getLogger(__name__)
+        logger = get_logger(__name__)
     
     # Handle dictionary input with nested holdings
     if isinstance(holdings_data, dict) and 'data' in holdings_data:
@@ -852,7 +854,7 @@ def map_portfolio_data(portfolio_data):
         portfolio_data.get('internalErrorCode') == "DH-1111" or
         portfolio_data.get('internalErrorMessage') == "No holdings available"):
         # Handle the case where there is no data or specific error message about no holdings
-        print("No data or no holdings available.")
+        logger.info("No data or no holdings available.")
         portfolio_data = {}  # This resets portfolio_data to an empty dictionary if conditions are met
 
     return portfolio_data
@@ -869,8 +871,7 @@ def calculate_portfolio_statistics(holdings_data):
     - Dictionary with portfolio statistics
     """
     # Logging for debugging
-    import logging
-    logger = logging.getLogger(__name__)
+        logger = get_logger(__name__)
     logger.info(f"Input holdings data type: {type(holdings_data)}")
     logger.info(f"Input holdings data: {holdings_data}")
     

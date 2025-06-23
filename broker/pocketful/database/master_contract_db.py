@@ -18,6 +18,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -81,16 +85,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -105,11 +109,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 
@@ -137,13 +141,13 @@ def download_csv_pocketful_data(output_path):
             zip_file.extractall(output_path)
             extracted_files = zip_file.namelist()
             downloaded_files.extend([os.path.join(output_path, name) for name in extracted_files])
-            print("Extraction successful!")
+            logger.info("Extraction successful!")
     except httpx.HTTPError as e:
-        print(f"Failed to download ZIP archive. HTTP Error: {e}")
+        logger.error("Failed to download ZIP archive. HTTP Error: %s", e)
     except zipfile.BadZipFile as e:
-        print(f"Failed to extract ZIP archive. Error: {e}")
+        logger.error("Failed to extract ZIP archive. Error: %s", e)
     except Exception as e:
-        print(f"Unexpected error during contract download: {e}")
+        logger.error("Unexpected error during contract download: %s", e)
 
     return downloaded_files
     
@@ -157,7 +161,7 @@ def process_pocketful_nse_csv(path):
     """
     Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing pocketful NSE CSV Data")
+    logger.info("Processing pocketful NSE CSV Data")
     file_path = f'{path}/NSECompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -194,7 +198,7 @@ def process_pocketful_bse_csv(path):
     """
     Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing pocketful BSE CSV Data")
+    logger.info("Processing pocketful BSE CSV Data")
     file_path = f'{path}/BSECompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -231,7 +235,7 @@ def process_pocketful_nfo_csv(path):
     Processes the pocketful CSV file to fit the existing database schema and formats the symbol properly
     using the actual expiry date instead of what's embedded in the trading_symbol.
     """
-    print("Processing pocketful NFO CSV Data")
+    logger.info("Processing pocketful NFO CSV Data")
     file_path = f'{path}/NFOCompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -255,7 +259,7 @@ def process_pocketful_nfo_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            print(f"Error building symbol: {row}, Error: {e}")
+            logger.error("Error building symbol: {row}, Error: %s", e)
             return row['trading_symbol']
 
     # Build the symbol column
@@ -284,7 +288,7 @@ def process_pocketful_bfo_csv(path):
     """
     Processes the Pocketful BFO CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing pocketful BFO CSV Data")
+    logger.info("Processing pocketful BFO CSV Data")
     file_path = f'{path}/BFOCompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -315,7 +319,7 @@ def process_pocketful_bfo_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            print(f"Error processing row: {row}, Error: {e}")
+            logger.error("Error processing row: {row}, Error: %s", e)
             return row['trading_symbol']
 
     # Apply symbol formatting to all types
@@ -349,7 +353,7 @@ def process_pocketful_mcx_csv(path):
     """
     Processes the pocketful MCX CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing pocketful MCX CSV Data")
+    logger.info("Processing pocketful MCX CSV Data")
     file_path = f'{path}/MCXCompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -380,7 +384,7 @@ def process_pocketful_mcx_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            print(f"Error processing row: {row}, Error: {e}")
+            logger.error("Error processing row: {row}, Error: %s", e)
             return row['trading_symbol']  # fallback to just the symbol
 
     # Apply the symbol formatting for all rows based on option_type
@@ -410,7 +414,7 @@ def process_pocketful_indices_csv(path):
     """
     Processes the pocketful CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing pocketful INDICES CSV Data")
+    logger.info("Processing pocketful INDICES CSV Data")
     file_path = f'{path}/NSECompactScrip.csv'
 
     df = pd.read_csv(file_path)
@@ -467,11 +471,11 @@ def process_pocketful_indices_csv(path):
     }).fillna(filter_df['exchange'])
     token_df['tick_size'] = 0.01
 
-    # print("Unique trading_symbols before replacement:")
-    # print(filter_df['trading_symbol'].unique())
+    # logger.info("Unique trading_symbols before replacement:")
+    # logger.info("%s", filter_df['trading_symbol'].unique())
 
-    # print("Symbols after replacement:")
-    # print(filter_df['symbol'].unique())
+    # logger.info("Symbols after replacement:")
+    # logger.info("%s", filter_df['symbol'].unique())
 
     return token_df
 
@@ -486,11 +490,11 @@ def delete_pocketful_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
     
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -517,9 +521,9 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

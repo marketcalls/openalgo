@@ -9,6 +9,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -38,16 +42,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -73,24 +77,24 @@ def copy_from_dataframe(df):
                     symbol = record.get('symbol')
                     if not symbol or pd.isna(symbol) or str(symbol).strip() == '':
                         invalid_records.append(record)
-                        print(f"Schema validation failed for record: {record}")
-                        print(f"Symbol is missing, empty, or null")
+                        logger.error("Schema validation failed for record: %s", record)
+                        logger.info("Symbol is missing, empty, or null")
                     else:
                         valid_records.append(record)
             
             if valid_records:
                 db_session.bulk_insert_mappings(SymToken, valid_records)
                 db_session.commit()
-                print(f"Bulk insert completed successfully with {len(valid_records)} new records.")
+                logger.info("Bulk insert completed successfully with %s new records.", len(valid_records))
                 
             if invalid_records:
-                print(f"Warning: {len(invalid_records)} records failed schema validation and were skipped.")
+                logger.error("Warning: %s records failed schema validation and were skipped.", len(invalid_records))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         if hasattr(e, '__cause__'):
-            print(f"Caused by: {e.__cause__}")
+            logger.info("Caused by: %s", e.__cause__)
         db_session.rollback()
 
 
@@ -98,11 +102,11 @@ def copy_from_dataframe(df):
 
 def download_csv_paytm_data(output_path):
 
-    print("Downloading Master Contract CSV Files")
+    logger.info("Downloading Master Contract CSV Files")
     # Create output directory if it doesn't exist
     if not os.path.exists(output_path):
         os.makedirs(output_path)
-        print(f"Created directory: {output_path}")
+        logger.info("Created directory: %s", output_path)
 
     # URLs of the CSV files to be downloaded
     csv_urls = {
@@ -126,7 +130,7 @@ def download_csv_paytm_data(output_path):
                 file.write(response.content)
             downloaded_files.append(file_path)
         else:
-            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+            logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
     
 
 def reformat_symbol(row):
@@ -202,7 +206,7 @@ def assign_values(row):
 
 def process_paytm_csv(path):
     """Processes the Paytm CSV file to fit the existing database schema and performs exchange name mapping."""
-    print("Processing Paytm Scrip Master CSV Data")
+    logger.info("Processing Paytm Scrip Master CSV Data")
     file_path = os.path.join(path, "master.csv")
 
     df = pd.read_csv(file_path, low_memory=False)
@@ -268,11 +272,11 @@ def delete_paytm_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
     
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -290,7 +294,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

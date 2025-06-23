@@ -3,6 +3,10 @@
 import os
 import json
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 def get_margin_data(auth_token):
@@ -36,14 +40,14 @@ def get_margin_data(auth_token):
         except:
             pass
             
-        print(f"Error fetching margin data: {error_message}")
+        logger.error("Error fetching margin data: %s", error_message)
         return {}
 
-    print(f"Funds Details: {margin_data}")
+    logger.info("Funds Details: %s", margin_data)
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
         return {}
 
     try:

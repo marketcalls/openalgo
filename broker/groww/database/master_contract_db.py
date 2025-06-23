@@ -11,6 +11,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -40,16 +44,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -62,7 +66,7 @@ def copy_from_dataframe(df):
     # Insert in bulk the filtered records
     try:
         if filtered_data_dict:  # Proceed only if there's anything to insert
-            print(f"Inserting {len(filtered_data_dict)} new records into the database")
+            logger.info("Inserting %s new records into the database", len(filtered_data_dict))
             # Create a list of SymToken objects from the filtered data
             symtoken_objects = []
             for item in filtered_data_dict:
@@ -84,12 +88,12 @@ def copy_from_dataframe(df):
             # Add all objects and commit in one transaction
             db_session.add_all(symtoken_objects)
             db_session.commit()
-            print(f"Successfully inserted {len(symtoken_objects)} records into the database")
+            logger.info("Successfully inserted %s records into the database", len(symtoken_objects))
         else:
-            print("No new records to insert")
+            logger.info("No new records to insert")
     except Exception as e:
         db_session.rollback()
-        print(f"Error during bulk insert: {str(e)}")
+        logger.error("Error during bulk insert: %s", str(e))
         raise
 
 
@@ -105,7 +109,7 @@ def format_openalgo_to_groww_symbol(symbol, exchange):
     Returns:
         str: Symbol in Groww format (e.g., "AARTIIND 29MAY25 630 CE")
     """
-    print(f"Converting symbol from OpenAlgo to Groww format: {symbol}, {exchange}")
+    logger.info("Converting symbol from OpenAlgo to Groww format: {symbol}, %s", exchange)
     
     # If it's already in the right format or invalid, return as is
     if not symbol or len(symbol) < 6:
@@ -156,7 +160,7 @@ def format_openalgo_to_groww_symbol(symbol, exchange):
             
             # Format with spaces for Groww
             groww_symbol = f"{base_symbol} {date_str} {strike_str} {option_type}"
-            print(f"Converted to Groww format: {groww_symbol}")
+            logger.info("Converted to Groww format: %s", groww_symbol)
             return groww_symbol
         else:
             # If we couldn't find a standard date pattern, try to parse it differently
@@ -188,7 +192,7 @@ def format_openalgo_to_groww_symbol(symbol, exchange):
                             
                             # Format with spaces for Groww
                             groww_symbol = f"{base_symbol} {date_str} {strike_str} {option_type}"
-                            print(f"Converted to Groww format (alternate method): {groww_symbol}")
+                            logger.info("Converted to Groww format (alternate method): %s", groww_symbol)
                             return groww_symbol
                     break  # Exit month loop if we found a match
     
@@ -220,7 +224,7 @@ def format_groww_to_openalgo_symbol(groww_symbol, exchange):
     Returns:
         str: Symbol in OpenAlgo format (e.g., "AARTIIND29MAY25630CE")
     """
-    print(f"Converting symbol from Groww to OpenAlgo format: {groww_symbol}, {exchange}")
+    logger.info("Converting symbol from Groww to OpenAlgo format: {groww_symbol}, %s", exchange)
     
     if not groww_symbol:
         return groww_symbol
@@ -249,7 +253,7 @@ def format_groww_to_openalgo_symbol(groww_symbol, exchange):
             # Combine into OpenAlgo format: [BaseSymbol][ExpirationDate][StrikePrice][OptionType]
             # Example: AARTIIND29MAY25630CE
             openalgo_symbol = f"{base_symbol}{date_str}{strike_price}{option_type}"
-            print(f"Converted to OpenAlgo format: {openalgo_symbol}")
+            logger.info("Converted to OpenAlgo format: %s", openalgo_symbol)
             return openalgo_symbol
             
         # For futures
@@ -261,7 +265,7 @@ def format_groww_to_openalgo_symbol(groww_symbol, exchange):
             # Combine into OpenAlgo format: [BaseSymbol][ExpirationDate]FUT
             # Example: NIFTY29MAY25FUT
             openalgo_symbol = f"{base_symbol}{date_str}FUT"
-            print(f"Converted to OpenAlgo format: {openalgo_symbol}")
+            logger.info("Converted to OpenAlgo format: %s", openalgo_symbol)
             return openalgo_symbol
         
         # Handle case where option type might be missing
@@ -285,7 +289,7 @@ def format_groww_to_openalgo_symbol(groww_symbol, exchange):
                     
                     # Combine into standard format
                     openalgo_symbol = f"{base_symbol}{date_str}{strike_price}{option_type}"
-                    print(f"Converted to OpenAlgo format (assumed {option_type}): {openalgo_symbol}")
+                    logger.info("Converted to OpenAlgo format (assumed {option_type}): %s", openalgo_symbol)
                     return openalgo_symbol
                 except ValueError:
                     # Third part is not a number, might not be an option
@@ -367,24 +371,24 @@ def find_token_by_symbol(symbol, exchange):
                     symbol = record.get('symbol')
                     if not symbol or pd.isna(symbol) or str(symbol).strip() == '':
                         invalid_records.append(record)
-                        print(f"Schema validation failed for record: {record}")
-                        print(f"Symbol is missing, empty, or null")
+                        logger.error("Schema validation failed for record: %s", record)
+                        logger.info("Symbol is missing, empty, or null")
                     else:
                         valid_records.append(record)
             
             if valid_records:
                 db_session.bulk_insert_mappings(SymToken, valid_records)
                 db_session.commit()
-                print(f"Bulk insert completed successfully with {len(valid_records)} new records.")
+                logger.info("Bulk insert completed successfully with %s new records.", len(valid_records))
                 
             if invalid_records:
-                print(f"Warning: {len(invalid_records)} records failed schema validation and were skipped.")
+                logger.error("Warning: %s records failed schema validation and were skipped.", len(invalid_records))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         if hasattr(e, '__cause__'):
-            print(f"Caused by: {e.__cause__}")
+            logger.info("Caused by: %s", e.__cause__)
         db_session.rollback()
 
 
@@ -396,7 +400,7 @@ def download_groww_instrument_data(output_path):
     and saves it to the specified output directory.
     Uses shared httpx client with connection pooling for efficient downloads.
     """
-    print("Downloading Groww Instrument Data...")
+    logger.info("Downloading Groww Instrument Data...")
 
     # Ensure the output directory exists
     os.makedirs(output_path, exist_ok=True)
@@ -430,12 +434,12 @@ def download_groww_instrument_data(output_path):
 
             # Save with new headers
             df.to_csv(file_path, index=False)
-            print(f"Successfully saved instruments CSV to: {file_path}")
+            logger.info("Successfully saved instruments CSV to: %s", file_path)
             return [file_path]
         else:
             raise ValueError("Downloaded content does not appear to be a valid CSV.")
     except Exception as e:
-        print(f"Failed to download or process Groww instrument data: {e}")
+        logger.error("Failed to download or process Groww instrument data: %s", e)
         raise
     
 
@@ -490,7 +494,7 @@ def assign_values(row):
 
 def process_groww_data(path):
     """Processes the Groww instruments CSV file to fit the existing database schema."""
-    print("Processing Groww Instrument Data")
+    logger.info("Processing Groww Instrument Data")
     
     # Check for both possible file names
     master_file = os.path.join(path, "master.csv")
@@ -502,15 +506,15 @@ def process_groww_data(path):
     elif os.path.exists(instruments_file):
         file_path = instruments_file
     else:
-        print(f"No instrument files found in {path}")
+        logger.info("No instrument files found in %s", path)
         return pd.DataFrame()
     
-    print(f"Using instrument file: {file_path}")
+    logger.info("Using instrument file: %s", file_path)
         
     try:
         # Load the CSV file - from the documentation, we know the CSV format
         # CSV columns: exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,lot_size,expiry_date,strike_price,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,feed_key
-        print(f"Loading CSV file from {file_path}")
+        logger.info("Loading CSV file from %s", file_path)
         # Specify dtypes for columns with known types to avoid mixed type warnings
         dtype_dict = {
             'exchange': str,
@@ -531,8 +535,8 @@ def process_groww_data(path):
         }
         df = pd.read_csv(file_path, low_memory=False, dtype=dtype_dict)
         
-        print(f"Loaded {len(df)} instruments from CSV file")
-        print(f"CSV columns: {', '.join(df.columns)}")
+        logger.info("Loaded %s instruments from CSV file", len(df))
+        logger.info("CSV columns: {")
         
         # Create a mapping from Groww CSV columns to our database columns
         column_mapping = {
@@ -679,7 +683,7 @@ def process_groww_data(path):
                         if option_type:
                             return f"{symbol}{expiry_str}{strike}{option_type}"
                 except Exception as e:
-                    print(f"Error formatting F&O symbol: {e}")
+                    logger.error("Error formatting F&O symbol: %s", e)
                     
             # Return original symbol if formatting fails
             return row['symbol']
@@ -687,11 +691,11 @@ def process_groww_data(path):
         # Apply F&O symbol formatting
         df_mapped['symbol'] = df_mapped.apply(format_fo_symbol, axis=1)
         
-        print(f"Processed {len(df_mapped)} instruments")
+        logger.info("Processed %s instruments", len(df_mapped))
         return df_mapped
         
     except Exception as e:
-        print(f"Error processing Groww instrument data: {str(e)}")
+        logger.error("Error processing Groww instrument data: %s", str(e))
         return pd.DataFrame()
     
     # Map instrument types to OpenAlgo standard types
@@ -788,7 +792,7 @@ def process_groww_data(path):
     # Remove duplicates
     token_df = token_df.drop_duplicates(subset=['symbol', 'exchange'], keep='first')
     
-    print(f"Processed {len(token_df)} Groww instruments")
+    logger.info("Processed %s Groww instruments", len(token_df))
     return token_df
 
 def delete_groww_temp_data(output_path):
@@ -801,17 +805,17 @@ def delete_groww_temp_data(output_path):
             # Check if it is a file (not a directory)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-                print(f"Deleted temporary file: {file_path}")
+                logger.info("Deleted temporary file: %s", file_path)
         
         # Check if the directory is now empty
         if not os.listdir(output_path):
             os.rmdir(output_path)
-            print(f"Deleted empty directory: {output_path}")
+            logger.info("Deleted empty directory: %s", output_path)
     except Exception as e:
-        print(f"Error deleting temporary files: {str(e)}")
+        logger.error("Error deleting temporary files: %s", str(e))
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
     output_path = 'tmp'
     try:
@@ -829,7 +833,7 @@ def master_contract_download():
         missing_cols = [col for col in required_cols if col not in token_df.columns]
         
         if missing_cols:
-            print(f"Missing required columns in processed data: {missing_cols}")
+            logger.info("Missing required columns in processed data: %s", missing_cols)
             # Add missing columns with default values
             for col in missing_cols:
                 if col in ['strike', 'tick_size']:
@@ -857,7 +861,7 @@ def master_contract_download():
                 token_df.at[idx, 'symbol'] = format_groww_to_openalgo_symbol(row['brsymbol'], 'NFO')
         
         # Step 6: Insert into database
-        print(f"Inserting {len(token_df)} records into database")
+        logger.info("Inserting %s records into database", len(token_df))
         copy_from_dataframe(token_df)
         
         # Step 7: Cleanup
@@ -865,14 +869,14 @@ def master_contract_download():
         
         # Verify data was inserted
         count = db_session.query(SymToken).count()
-        print(f"Total records in database after insertion: {count}")
+        logger.info("Total records in database after insertion: %s", count)
         
         return socketio.emit('master_contract_download', {'status': 'success', 'message': f'Successfully downloaded and inserted {count} symbols'})
     
     except Exception as e:
         import traceback
-        print(f"Error in master_contract_download: {str(e)}")
-        print(traceback.format_exc())
+        logger.error("Error in master_contract_download: %s", str(e))
+        logger.info("%s", traceback.format_exc())
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

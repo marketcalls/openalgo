@@ -2,12 +2,15 @@
 
 import os
 import json
-import logging
 import httpx
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data from Alice Blue's API using the provided auth token and shared connection pooling."""

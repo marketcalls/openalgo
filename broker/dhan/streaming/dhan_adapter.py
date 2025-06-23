@@ -1,3 +1,7 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 Dhan websocket adapter implementation for OpenAlgo websocket proxy
 """
@@ -5,7 +9,6 @@ import os
 import json
 import time
 import struct  # For binary data processing
-import logging
 import threading
 from typing import Dict, Any, List, Optional, Tuple, Union
 
@@ -29,7 +32,7 @@ try:
 except ImportError:
     # Define a fallback function for get_symbol_from_token if it can't be imported
     def get_symbol_from_token(token: str, exchange: str) -> Optional[str]:
-        logging.getLogger(__name__).warning(f"get_symbol_from_token not available, can't lookup token {token} on {exchange}")
+        get_logger(__name__).warning(f"get_symbol_from_token not available, can't lookup token {token} on {exchange}")
         return None
 
 class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):

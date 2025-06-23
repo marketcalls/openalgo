@@ -5,6 +5,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
@@ -190,12 +194,12 @@ class BrokerData:
                     "to": str(end_ts)
                 }
                 
-                print("EOD Payload:", payload)  # Debug print
+                logger.debug("EOD Payload: %s", payload)  # Debug print
                 try:
                     response = get_api_response("/NorenWClientTP/EODChartData", self.auth_token, payload=payload)
-                    print("EOD Response:", response)  # Debug print
+                    logger.debug("EOD Response: %s", response)  # Debug print
                 except Exception as e:
-                    print(f"Error in EOD request: {str(e)}")
+                    logger.error("Error in EOD request: %s", str(e))
                     response = []  # Continue with empty response to try quotes
             else:
                 # For intraday data, use TPSeries endpoint
@@ -208,9 +212,9 @@ class BrokerData:
                     "intrv": self.timeframe_map[interval]
                 }
                 
-                print("Intraday Payload:", payload)  # Debug print
+                logger.debug("Intraday Payload: %s", payload)  # Debug print
                 response = get_api_response("/NorenWClientTP/TPSeries", self.auth_token, payload=payload)
-                print("Intraday Response:", response)  # Debug print
+                logger.debug("Intraday Response: %s", response)  # Debug print
 
             # Convert response to DataFrame
             data = []
@@ -249,7 +253,7 @@ class BrokerData:
                             'volume': float(candle.get('intv', 0))
                         })
                 except (KeyError, ValueError) as e:
-                    print(f"Error parsing candle data: {e}, Candle: {candle}")
+                    logger.error("Error parsing candle data: {e}, Candle: %s", candle)
                     continue
 
             df = pd.DataFrame(data)
@@ -270,7 +274,7 @@ class BrokerData:
                                 "token": token
                             }
                             quotes_response = get_api_response("/NorenWClientTP/GetQuotes", self.auth_token, payload=payload)
-                            print("Quotes Response:", quotes_response)  # Debug print
+                            logger.debug("Quotes Response: %s", quotes_response)  # Debug print
                             
                             if quotes_response and quotes_response.get('stat') == 'Ok':
                                 today_data = {
@@ -281,19 +285,19 @@ class BrokerData:
                                     'close': float(quotes_response.get('lp', 0)),  # Use LTP as close
                                     'volume': float(quotes_response.get('v', 0))
                                 }
-                                print(f"Today's quote data: {today_data}")
+                                logger.info("Today's quote data: %s", today_data)
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
-                                print(f"Added today's data from quotes")
+                                logger.info("Added today's data from quotes", )
                         except Exception as e:
-                            print(f"Error fetching today's data from quotes: {e}")
+                            logger.info("Error fetching today's data from quotes: %s", e)
                 else:
-                    print(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
+                    logger.info("Today ({today_ts}) is outside requested range ({start_ts} to %s)", end_ts)
 
             # Sort by timestamp
             df = df.sort_values('timestamp')
             return df
             
         except Exception as e:
-            print(f"Error in get_history: {str(e)}")  # Add debug logging
+            logger.error("Error in get_history: %s", str(e))  # Add debug logging
             raise Exception(f"Error fetching historical data: {str(e)}")

@@ -1,6 +1,5 @@
 import threading
 import json
-import logging
 import time
 from typing import Dict, Any, Optional, List
 
@@ -10,6 +9,10 @@ from database.token_db import get_token
 
 import sys
 import os
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))

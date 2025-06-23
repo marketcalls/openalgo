@@ -10,6 +10,10 @@ import re
 import os
 import sys
 from datetime import datetime
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 CURRENT_VERSION = 1
 PKG_VERSION = '1.0.2'
@@ -189,9 +193,9 @@ class NxtradStream:
         if not self.token:
             sys.exit('Unable to connect auth token is empty')
         if self.isConnected:
-            print('Socket already connected')
+            logger.info("%s", 'Socket already connected')
             return
-        print("Reconnecting...")
+        logger.info("Reconnecting...")
         self.__tryConnect()
 
     def __tryConnect(self):
@@ -364,7 +368,7 @@ class NxtradStream:
             return False
 
         r = json.dumps(req)
-        # print(r);
+        # logger.info("%s", r);
         self.ws.send(r + "\n")
         return True
 
@@ -397,7 +401,7 @@ class NxtradStream:
         pktType = struct.unpack("b", data[2:3])[0]
         pktSpec = DEFAULT_PKT_INFO["PKT_SPEC"]
         if pktType not in pktSpec:
-            print("Unknown PktType : ", pktType)
+            logger.info("%s", "Unknown PktType : ", pktType)
             return
 
         packetType = PKT_TYPE[pktType]
@@ -621,7 +625,7 @@ class NxtradStream:
         totalRecivedLen = struct.unpack("i", message[:4])[0]
         version = struct.unpack("b", message[4:5])[0]
         if version != CURRENT_VERSION:
-            print("Kindly download and use the updated SDK.")
+            logger.info("Kindly download and use the updated SDK.")
             return
 
         compressionAlgo = struct.unpack("b", message[5:6])[0]
@@ -635,7 +639,7 @@ class NxtradStream:
             pktLen = struct.unpack(
                 "h", dc_data[bufferIndex: (bufferIndex + 2)])[0]
             if pktLen <= 0:
-                print("Packet Length is wrong exiting the loop" + str(pktLen))
+                logger.info("%s", "Packet Length is wrong exiting the loop" + str(pktLen))
                 break
 
             self.__onsinglePacket(
@@ -663,4 +667,4 @@ class NxtradStream:
             try:
                 callback(*args)
             except Exception as e:
-                print("Error in Calling callback {}: {}".format(callback, e))
+                logger.info("%s", "Error in Calling callback {}: {}".format(callback, e))

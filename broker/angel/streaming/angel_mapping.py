@@ -1,4 +1,7 @@
-import logging
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class AngelExchangeMapper:
     """Maps OpenAlgo exchange codes to Angel-specific exchange types"""

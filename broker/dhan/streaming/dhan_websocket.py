@@ -1,10 +1,13 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 WebSocket client for Dhan broker API with binary message parsing
 """
 import json
 import threading
 import time
-import logging
 import struct
 from typing import Dict, Any, List, Optional, Callable, Union, Tuple
 import websocket

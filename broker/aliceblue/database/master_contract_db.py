@@ -17,6 +17,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -80,16 +84,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -104,11 +108,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 
@@ -117,7 +121,7 @@ def copy_from_dataframe(df):
 def download_csv_aliceblue_data(output_path):
     """Download AliceBlue master contract CSV files using shared connection pooling."""
 
-    print("Downloading Master Contract CSV Files")
+    logger.info("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
     csv_urls = {
         "CDS": "https://v2api.aliceblueonline.com/restpy/static/contract_master/CDS.csv",
@@ -151,10 +155,10 @@ def download_csv_aliceblue_data(output_path):
                 file.write(response.content)
                 
             downloaded_files.append(file_path)
-            print(f"Successfully downloaded {key} master contract")
+            logger.info("Successfully downloaded %s master contract", key)
             
         except Exception as e:
-            print(f"Failed to download {key} from {url}. Error: {str(e)}")
+            logger.error("Failed to download {key} from {url}. Error: %s", str(e))
 
     
 def reformat_symbol_detail(s):
@@ -167,7 +171,7 @@ def process_aliceblue_nse_csv(path):
     """
     Processes the aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing aliceblue NSE CSV Data")
+    logger.info("Processing aliceblue NSE CSV Data")
     file_path = f'{path}/NSE.csv'
 
     df = pd.read_csv(file_path)
@@ -198,7 +202,7 @@ def process_aliceblue_bse_csv(path):
     """
     Processes the aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing aliceblue BSE CSV Data")
+    logger.info("Processing aliceblue BSE CSV Data")
     file_path = f'{path}/BSE.csv'
 
     df = pd.read_csv(file_path)
@@ -229,7 +233,7 @@ def process_aliceblue_nfo_csv(path):
     """
     Processes the AliceBlue NFO CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing AliceBlue NFO CSV Data")
+    logger.info("Processing AliceBlue NFO CSV Data")
     file_path = f'{path}/NFO.csv'
 
     df = pd.read_csv(file_path)
@@ -291,7 +295,7 @@ def process_aliceblue_cds_csv(path):
     """
     Processes the AliceBlue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue CDS CSV Data")
+    logger.info("Processing Aliceblue CDS CSV Data")
     file_path = f'{path}/CDS.csv'
 
     df = pd.read_csv(file_path)
@@ -353,7 +357,7 @@ def process_aliceblue_bfo_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue BFO CSV Data")
+    logger.info("Processing Aliceblue BFO CSV Data")
     file_path = f'{path}/BFO.csv'
 
     df = pd.read_csv(file_path)
@@ -406,7 +410,7 @@ def process_aliceblue_mcx_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue MCX CSV Data")
+    logger.info("Processing Aliceblue MCX CSV Data")
     file_path = f'{path}/MCX.csv'
 
     df = pd.read_csv(file_path)
@@ -475,7 +479,7 @@ def process_aliceblue_bcd_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue BCD CSV Data")
+    logger.info("Processing Aliceblue BCD CSV Data")
     file_path = f'{path}/BCD.csv'
 
     df = pd.read_csv(file_path)
@@ -543,7 +547,7 @@ def process_aliceblue_indices_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue INDICES CSV Data")
+    logger.info("Processing Aliceblue INDICES CSV Data")
     file_path = f'{path}/INDICES.csv'
 
     df = pd.read_csv(file_path)
@@ -582,11 +586,11 @@ def delete_aliceblue_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
     
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -615,7 +619,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

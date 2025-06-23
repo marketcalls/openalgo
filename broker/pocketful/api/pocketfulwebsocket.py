@@ -3,13 +3,15 @@ import json
 import threading
 import time
 import websocket
-import logging
 import struct
 from broker.pocketful.api.packet_decoder import decodeDetailedMarketData, decodeCompactMarketData, decodeSnapquoteData, decodeOrderUpdate, decodeTradeUpdate
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global variables for WebSocket communication
 websock = None
@@ -180,14 +182,14 @@ class PocketfulSocket(object):
         headers = self.headers
         headers['Authorization'] = f'Bearer {self.access_token}'
         res = requests.post(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        print(res)
+        logger.info("%s", res)
         return res.json()
 
     def put_request(self, url, data):
         headers = self.headers
         headers['Authorization'] = f'Bearer {self.access_token}'
         res = requests.put(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        print(res)
+        logger.info("%s", res)
         return res.json()
 
     def delete_request(self, url, params):

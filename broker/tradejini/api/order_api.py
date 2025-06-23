@@ -1,16 +1,19 @@
 import httpx
 import json
 import os
-import logging
 from database.auth_db import get_auth_token
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from ..mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from ..mapping.order_data import transform_tradebook_data, transform_holdings_data, map_trade_data
 
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 def get_api_response(endpoint, auth, method="GET", data=None, params=None):
@@ -134,8 +137,8 @@ def get_order_book(auth):
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        #print(f"[DEBUG] get_order_book - Making request to: {client.base_url}/v2/api/oms/orders")
-        #print(f"[DEBUG] get_order_book - Headers: {headers}")
+        #logger.debug("[DEBUG] get_order_book - Making request to: %s/v2/api/oms/orders", client.base_url)
+        #logger.debug("[DEBUG] get_order_book - Headers: %s", headers)
         #print(f"[DEBUG] get_order_book - Query params: {{'symDetails': 'true'}}")
         
         # Make API request
@@ -145,8 +148,8 @@ def get_order_book(auth):
             params={"symDetails": "true"}
         )
         
-        #print(f"[DEBUG] get_order_book - Response status: {response.status_code}")
-        #print(f"[DEBUG] get_order_book - Response headers: {dict(response.headers)}")
+        #logger.debug("[DEBUG] get_order_book - Response status: %s", response.status_code)
+        #logger.debug("[DEBUG] get_order_book - Response headers: %s", dict(response.headers))
         
         response.raise_for_status()
         
@@ -159,7 +162,7 @@ def get_order_book(auth):
             # Transform each order to OpenAlgo format
             transformed_orders = []
             for order in response_data['d']:
-                #print(f"[DEBUG] get_order_book - Processing order: {order}")
+                #logger.debug("[DEBUG] get_order_book - Processing order: %s", order)
                 try:
                     # Get OpenAlgo symbol using symbol and exchange
                     openalgo_symbol = get_oa_symbol(
@@ -190,7 +193,7 @@ def get_order_book(auth):
                             'valid_till': order['validTill']
                         }
                     }
-                    #print(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
+                    #logger.debug("[DEBUG] get_order_book - Transformed order: %s", transformed_order)
                     transformed_orders.append(transformed_order)
                 except KeyError as e:
                     logger.error(f"get_order_book - Missing field in order: {str(e)}")

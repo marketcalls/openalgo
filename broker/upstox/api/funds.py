@@ -6,6 +6,10 @@ import httpx
 from utils.httpx_client import get_httpx_client
 from broker.upstox.api.order_api import get_positions
 from broker.upstox.mapping.order_data import map_order_data
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from Upstox's API using the provided auth token with httpx connection pooling."""
@@ -27,12 +31,12 @@ def get_margin_data(auth_token):
     
     margin_data = response.json()
 
-    print(f"Funds Details: {margin_data}")
+    logger.info("Funds Details: %s", margin_data)
 
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
         return {}
 
     try:

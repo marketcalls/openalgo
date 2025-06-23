@@ -7,6 +7,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 import numpy as np
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """Common function to make API calls to Upstox using httpx with connection pooling"""
@@ -67,11 +71,11 @@ class BrokerData:
             if not token:
                 raise ValueError(f"No token found for {symbol} on {exchange}")
             
-            print(f"Using instrument key: {token}")
+            logger.info("Using instrument key: %s", token)
             return token
             
         except Exception as e:
-            print(f"Error getting instrument key: {e}")
+            logger.error("Error getting instrument key: %s", e)
             raise
 
     def _is_trading_day(self, date):
@@ -158,7 +162,7 @@ class BrokerData:
             }
             
         except Exception as e:
-            print(f"Exception in get_quotes: {str(e)}")
+            logger.info("Exception in get_quotes: %s", str(e))
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -176,13 +180,13 @@ class BrokerData:
         try:
             # Get the correct instrument key
             instrument_key = self._get_instrument_key(symbol, exchange)
-            print(f"Using instrument key: {instrument_key}")
+            logger.info("Using instrument key: %s", instrument_key)
             
             # Map standard interval to Upstox interval
             upstox_interval = self.timeframe_map.get(interval)
             if not upstox_interval:
                 raise Exception(f"Invalid interval: {interval}")
-            print(f"Using interval: {upstox_interval}")
+            logger.info("Using interval: %s", upstox_interval)
                 
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
@@ -191,7 +195,7 @@ class BrokerData:
             end = datetime.strptime(end_date, '%Y-%m-%d')
             start = datetime.strptime(start_date, '%Y-%m-%d')
             current_date = datetime.now()
-            print(f"Date range: {start} to {end}")
+            logger.info("Date range: {start} to %s", end)
             
             # Check if end date is today to fetch today's data as well
             is_today_requested = end.date() == current_date.date()
@@ -202,71 +206,71 @@ class BrokerData:
                 max_start = end - timedelta(days=30)
                 if start < max_start:
                     start = max_start
-                    print(f"Adjusted start date to {start} for 1m interval")
+                    logger.info("Adjusted start date to %s for 1m interval", start)
             elif interval == '30m':
                 # 30-minute: last year only
                 max_start = end - timedelta(days=365)
                 if start < max_start:
                     start = max_start
-                    print(f"Adjusted start date to {start} for 30m interval")
+                    logger.info("Adjusted start date to %s for 30m interval", start)
             elif interval == 'D':
                 # Daily: last year only
                 max_start = end - timedelta(days=365)
                 if start < max_start:
                     start = max_start
-                    print(f"Adjusted start date to {start} for D interval")
+                    logger.info("Adjusted start date to %s for D interval", start)
             elif interval == 'W':
                 # Weekly: last 10 years
                 max_start = end - timedelta(days=3650)  # 10 years
                 if start < max_start:
                     start = max_start
-                    print(f"Adjusted start date to {start} for W interval")
+                    logger.info("Adjusted start date to %s for W interval", start)
             elif interval == 'M':
                 # Monthly: last 10 years
                 max_start = end - timedelta(days=3650)  # 10 years
                 if start < max_start:
                     start = max_start
-                    print(f"Adjusted start date to {start} for M interval")
+                    logger.info("Adjusted start date to %s for M interval", start)
             
             all_candles = []
             
             # Try intraday endpoint first if interval is 1m or 30m
             if interval in ['1m', '30m']:
-                print("Trying intraday endpoint...")
+                logger.info("Trying intraday endpoint...")
                 intraday_url = f"/v2/historical-candle/intraday/{encoded_symbol}/{upstox_interval}"
-                print(f"Intraday URL: {intraday_url}")
+                logger.info("Intraday URL: %s", intraday_url)
                 intraday_response = get_api_response(intraday_url, self.auth_token)
-                print(f"Intraday Response: {intraday_response}")
+                logger.info("Intraday Response: %s", intraday_response)
                 
                 if intraday_response.get('status') == 'success':
                     intraday_candles = intraday_response.get('data', {}).get('candles', [])
-                    print(f"Got {len(intraday_candles)} candles from intraday endpoint")
+                    logger.info("Got %s candles from intraday endpoint", len(intraday_candles))
                     all_candles.extend(intraday_candles)
             
             # If no intraday data or need more historical data, try historical endpoint
             if not all_candles or start.date() < current_date.date():
-                print("Trying historical endpoint...")
+                logger.info("Trying historical endpoint...")
                 # Format dates for historical endpoint
                 from_date = start.strftime('%Y-%m-%d')
                 to_date = end.strftime('%Y-%m-%d')
                 
                 # Historical endpoint URL format: /historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
                 historical_url = f"/v2/historical-candle/{encoded_symbol}/{upstox_interval}/{to_date}/{from_date}"
-                print(f"Historical URL: {historical_url}")
+                logger.info("Historical URL: %s", historical_url)
                 historical_response = get_api_response(historical_url, self.auth_token)
-                print(f"Historical Response: {historical_response}")
+                logger.info("Historical Response: %s", historical_response)
                 
                 if historical_response.get('status') == 'success':
                     historical_candles = historical_response.get('data', {}).get('candles', [])
-                    print(f"Got {len(historical_candles)} candles from historical endpoint")
+                    logger.info("Got %s candles from historical endpoint", len(historical_candles))
                     all_candles.extend(historical_candles)
             
-            print(f"Total candles: {len(all_candles)}")
+            logger.info("Total candles: %s", len(all_candles))
             
             # Special case: If requesting only today's data (start and end dates are the same day and that day is today)
             today = datetime.now().date()
             if start.date() == end.date() == today and not all_candles:
-                print("Special case: Requesting only today's data")
+                logger.info("Special case: Requesting only today's data")
                 try:
                     # Get today's data from quote endpoint
                     quote = self.get_quotes(symbol, exchange)
@@ -285,9 +289,9 @@ class BrokerData:
                             0  # OI default
                         ]
                         all_candles.append(today_candle)
-                        print("Added today's candle from quote data for single-day request")
+                        logger.info("Added today's candle from quote data for single-day request")
                 except Exception as e:
-                    print(f"Could not add today's data for single-day request: {str(e)}")
+                    logger.info("Could not add today's data for single-day request: %s", str(e))
             
             if not all_candles:
                 if start.date() == end.date() == today:
@@ -343,9 +347,9 @@ class BrokerData:
                             
                             # Append to dataframe
                             df = pd.concat([df, today_candle], ignore_index=True)
-                            print("Added today's candle from quote data")
+                            logger.info("Added today's candle from quote data")
                     except Exception as e:
-                        print(f"Could not add today's data: {str(e)}")
+                        logger.info("Could not add today's data: %s", str(e))
             
             # Ensure all timestamps are consistent before converting to Unix epoch
             if not df.empty:
@@ -370,7 +374,7 @@ class BrokerData:
             return df
             
         except Exception as e:
-            print(f"Exception in get_history: {str(e)}")
+            logger.info("Exception in get_history: %s", str(e))
             raise Exception(f"Error fetching historical data: {str(e)}")
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -457,7 +461,7 @@ class BrokerData:
             }
             
         except Exception as e:
-            print(f"Exception in get_depth: {str(e)}")
+            logger.info("Exception in get_depth: %s", str(e))
             raise Exception(f"Error fetching market depth: {str(e)}")
 
     # Alias for get_depth to maintain compatibility

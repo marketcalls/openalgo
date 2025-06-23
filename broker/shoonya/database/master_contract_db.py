@@ -8,6 +8,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -38,16 +42,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -62,11 +66,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 # Define the shoonya URLs for downloading the symbol files
@@ -83,7 +87,7 @@ def download_and_unzip_shoonya_data(output_path):
     """
     Downloads and unzips the shoonya text files to the tmp folder.
     """
-    print("Downloading and Unzipping shoonya Data")
+    logger.info("Downloading and Unzipping shoonya Data")
 
     # Create the tmp directory if it doesn't exist
     if not os.path.exists(output_path):
@@ -98,16 +102,16 @@ def download_and_unzip_shoonya_data(output_path):
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
-                print(f"Successfully downloaded {key} from {url}")
+                logger.info("Successfully downloaded {key} from %s", url)
                 
                 # Use in-memory file to handle the downloaded zip file
                 z = zipfile.ZipFile(io.BytesIO(response.content))
                 z.extractall(output_path)
                 downloaded_files.append(f"{key}.txt")
             else:
-                print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+                logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
         except Exception as e:
-            print(f"Error downloading {key} from {url}: {e}")
+            logger.error("Error downloading {key} from {url}: %s", e)
 
     return downloaded_files
 
@@ -118,7 +122,7 @@ def process_shoonya_nse_data(output_path):
     Processes the shoonya NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
     Separates EQ, BE symbols, and Index symbols.
     """
-    print("Processing shoonya NSE Data")
+    logger.info("Processing shoonya NSE Data")
     file_path = f'{output_path}/NSE_symbols.txt'
 
     # Read the NSE symbols file, specifying the exact columns to use and ignoring extra columns
@@ -180,7 +184,7 @@ def process_shoonya_nfo_data(output_path):
     Processes the shoonya NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya NFO Data")
+    logger.info("Processing shoonya NFO Data")
     file_path = f'{output_path}/NFO_symbols.txt'
 
     # Read the NFO symbols file, specifying the exact columns to use
@@ -198,7 +202,7 @@ def process_shoonya_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -247,7 +251,7 @@ def process_shoonya_cds_data(output_path):
     Processes the shoonya CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya CDS Data")
+    logger.info("Processing shoonya CDS Data")
     file_path = f'{output_path}/CDS_symbols.txt'
 
     # Read the CDS symbols file, specifying the exact columns to use
@@ -267,7 +271,7 @@ def process_shoonya_cds_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -317,7 +321,7 @@ def process_shoonya_mcx_data(output_path):
     Processes the shoonya MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing shoonya MCX Data")
+    logger.info("Processing shoonya MCX Data")
     file_path = f'{output_path}/MCX_symbols.txt'
 
     # Read the MCX symbols file, specifying the exact columns to use
@@ -335,7 +339,7 @@ def process_shoonya_mcx_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -385,7 +389,7 @@ def process_shoonya_bse_data(output_path):
     Processes the shoonya BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
     Ensures that the instrument type is always 'EQ'.
     """
-    print("Processing shoonya BSE Data")
+    logger.info("Processing shoonya BSE Data")
     file_path = f'{output_path}/BSE_symbols.txt'
 
     # Read the BSE symbols file
@@ -435,7 +439,7 @@ def process_shoonya_bfo_data(output_path):
     Processes the shoonya BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
     Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
     """
-    print("Processing shoonya BFO Data")
+    logger.info("Processing shoonya BFO Data")
     file_path = f'{output_path}/BFO_symbols.txt'
 
     # Read the BFO symbols file, specifying the exact columns to use
@@ -453,7 +457,7 @@ def process_shoonya_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -525,13 +529,13 @@ def delete_shoonya_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         if filename.endswith(".txt") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
 
 def master_contract_download():
     """
     Downloads, processes, and deletes shoonya data.
     """
-    print("Downloading shoonya Master Contract")
+    logger.info("Downloading shoonya Master Contract")
 
     output_path = 'tmp'
     try:
@@ -556,5 +560,5 @@ def master_contract_download():
         
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
     except Exception as e:
-        print(str(e))
+        logger.info("%s", str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})

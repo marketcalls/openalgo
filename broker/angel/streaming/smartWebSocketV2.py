@@ -4,9 +4,12 @@ import ssl
 import json
 import websocket
 import os
-import logging
 import logzero
 from logzero import logger
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class SmartWebSocketV2(object):
     """

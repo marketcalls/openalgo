@@ -1,3 +1,7 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 Fixed Zerodha WebSocket client with proper websockets library usage.
 Addresses the 'ClientConnection' object has no attribute 'closed' error.
@@ -5,7 +9,6 @@ Enhanced to properly handle exchange mapping for INDEX instruments.
 """
 import asyncio
 import json
-import logging
 import struct
 import threading
 import time
@@ -36,7 +39,7 @@ class ZerodhaWebSocket:
         self.running = False
         self.loop = None
         self.ws_thread = None
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.lock = threading.Lock()
         
         # Subscription management

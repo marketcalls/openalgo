@@ -4,6 +4,10 @@ import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
 from broker.jainampro.baseurl import INTERACTIVE_URL, MARKET_DATA_URL, UNIQUE_KEY, HOSTLOOKUP_ERROR, initialize_urls
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # No longer needed as UNIQUE_KEY is imported directly from baseurl.py
 
@@ -37,7 +41,7 @@ def authenticate_broker(request_token):
         # Based on the screenshot, the URL should be structured as connectionString + /user/session
         # The second screenshot shows the correct URL format with port 4100
         session_url = f"{INTERACTIVE_URL}/user/session"
-        print(f"Session URL: {session_url}")
+        logger.info("Session URL: %s", session_url)
         response = client.post(session_url, json=payload, headers=headers)
 
   
@@ -45,7 +49,7 @@ def authenticate_broker(request_token):
             result = response.json()
             if result.get('type') == 'success':
                 token = result['result']['token']
-                print(f"Auth Token: {token}")
+                logger.info("Auth Token: %s", token)
 
                 # Call get_feed_token() after successful authentication
                 feed_token, user_id, feed_error = get_feed_token()
@@ -96,7 +100,7 @@ def get_feed_token():
             if feed_result.get("type") == "success":
                 feed_token = feed_result["result"].get("token")
                 user_id = feed_result["result"].get("userID")
-                print(f"Feed Token: {feed_token}")
+                logger.info("Feed Token: %s", feed_token)
             else:
                 return None, None, "Feed token request failed. Please check the response."
         else:

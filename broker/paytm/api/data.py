@@ -4,14 +4,16 @@ import urllib.parse
 import httpx
 from database.token_db import get_br_symbol, get_token
 from broker.paytm.database.master_contract_db import SymToken, db_session
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth

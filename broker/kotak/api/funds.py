@@ -2,6 +2,10 @@
 import urllib.parse
 import http.client
 import json
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from the broker's API using the provided auth token."""
@@ -26,10 +30,10 @@ def get_margin_data(auth_token):
     try:
         res = conn.getresponse()
         data = res.read()
-        print(data.decode("utf-8"))
+        logger.info("%s", data.decode("utf-8"))
         margin_data = json.loads(data.decode("utf-8"))
 
-        #print(f"Margin Data {margin_data}")
+        #logger.info("Margin Data %s", margin_data)
 
         # Process and return the 'data' key from margin_data if it exists and is not None
         
@@ -43,5 +47,5 @@ def get_margin_data(auth_token):
             }
         return processed_margin_data
     except Exception as e:
-        print(f"Error fetching margin data: {e}")
+        logger.error("Error fetching margin data: %s", e)
         return {}

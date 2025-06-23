@@ -4,6 +4,10 @@ import httpx
 from typing import Dict, Any
 from utils.httpx_client import get_httpx_client
 from broker.fivepaisa.api.order_api import get_positions
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 # Retrieve the BROKER_API_KEY environment variable
@@ -58,7 +62,7 @@ def get_margin_data(auth_token: str) -> Dict[str, Any]:
         )
         response.raise_for_status()
         margin_data = response.json()
-        print(f"Margin Data is : {margin_data}")
+        logger.info("Margin Data is : %s", margin_data)
         
         equity_margin = margin_data.get('body', {}).get('EquityMargin', [])[0]  # Access the first element of the list
         positions_data = get_positions(auth_token)
@@ -81,11 +85,11 @@ def get_margin_data(auth_token: str) -> Dict[str, Any]:
 
         return processed_margin_data
     except httpx.HTTPStatusError as e:
-        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        logger.error("HTTP error occurred: {e.response.status_code} - %s", e.response.text)
         return {}
     except httpx.RequestError as e:
-        print(f"Request error occurred: {str(e)}")
+        logger.error("Request error occurred: %s", str(e))
         return {}
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        logger.error("An error occurred: %s", str(e))
         return {}

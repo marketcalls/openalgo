@@ -1,3 +1,7 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """Jainam Pro broker base URLs configuration."""
 import json
 import requests
@@ -19,20 +23,20 @@ def get_hostlookup_response():
         headers = {"Content-Type": "application/json"}
         
         response = client.post(HOSTLOOKUP_URL, json=payload, headers=headers)
-        print(f"Hostlookup response code: {response.status_code}")
+        logger.info("Hostlookup response code: %s", response.status_code)
         
         if response.status_code == 200:
             result = response.json()
-            print(f"Hostlookup result: {result}")
+            logger.info("Hostlookup result: %s", result)
             if result.get("type") == True and "result" in result:
                 connection_string = result["result"]["connectionString"]
                 unique_key = result["result"]["uniqueKey"]
                 return connection_string, unique_key, None
         # Return fallback values if fetch fails
-        print("Failed to fetch from hostlookup endpoint, using fallback values")
+        logger.error("Failed to fetch from hostlookup endpoint, using fallback values")
         return "http://ctrade.jainam.in:4100", None, "Hostlookup failed"
     except Exception as e:
-        print(f"Error in hostlookup: {str(e)}")
+        logger.error("Error in hostlookup: %s", str(e))
         return "http://ctrade.jainam.in:4100", None, f"Error: {str(e)}"
 
 # Initialize global variables
@@ -51,5 +55,5 @@ def initialize_urls():
     INTERACTIVE_URL = BASE_URL
     
     if UNIQUE_KEY is not None:
-        print(f"Base URL set to: {BASE_URL}")
-        print(f"Unique Key available: True")
+        logger.info("Base URL set to: %s", BASE_URL)
+        logger.info("Unique Key available: True")

@@ -5,6 +5,10 @@ import httpx
 import json
 from flask import session
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 def get_margin_data(auth_token):
@@ -15,7 +19,7 @@ def get_margin_data(auth_token):
     # For Pocketful, we need the client_id which is stored in the session after authentication
     client_id = session.get('USER_ID')
     # Pocketful's base URL and endpoint for funds
-    print(f"Auth token is {auth_token}")
+    logger.info("Auth token is %s", auth_token)
     base_url = "https://trade.pocketful.in"
     endpoint = "/api/v2/funds/view"
     
@@ -42,12 +46,12 @@ def get_margin_data(auth_token):
             
             if info_data.get('status') == 'success':
                 client_id = info_data.get('data', {}).get('client_id')
-                print(f"Retrieved client_id: {client_id}")
+                logger.info("Retrieved client_id: %s", client_id)
             else:
-                print(f"Error fetching client_id: {info_data.get('message', 'Unknown error')}")
+                logger.info("Error fetching client_id: %s", info_data.get('message', 'Unknown error'))
                 return {}
         except Exception as e:
-            print(f"Error retrieving client_id: {str(e)}")
+            logger.error("Error retrieving client_id: %s", str(e))
             return {}
     
     # Required query parameters including client_id
@@ -71,11 +75,11 @@ def get_margin_data(auth_token):
         # Parse the response JSON
         margin_data = response.json()
         
-        print(f"Funds Details: {margin_data}")
+        logger.info("Funds Details: %s", margin_data)
         
         # Check if the response was successful
         if margin_data.get('status') != 'success':
-            print(f"Error fetching margin data: {margin_data.get('message')}")
+            logger.info("Error fetching margin data: %s", margin_data.get('message'))
             return {}
         
         # Client ID is already used in the query parameters
@@ -129,8 +133,8 @@ def get_margin_data(auth_token):
         return processed_margin_data
         
     except httpx.HTTPError as e:
-        print(f"API request error: {str(e)}")
+        logger.error("API request error: %s", str(e))
         return {}
     except (ValueError, KeyError, TypeError) as e:
-        print(f"Error processing margin data: {str(e)}")
+        logger.error("Error processing margin data: %s", str(e))
         return {}

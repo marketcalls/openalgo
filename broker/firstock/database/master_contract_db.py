@@ -6,6 +6,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Database setup
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -34,16 +38,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     data_dict = df.to_dict(orient='records')
     existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
     filtered_data_dict = [row for row in data_dict if row['token'] not in existing_tokens]
@@ -52,11 +56,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 # Firstock URLs for downloading symbol files
@@ -76,7 +80,7 @@ def download_firstock_data(output_path):
     NFO/BFO: Exchange, Token, LotSize, Symbol, TradingSymbol, CompanyName, Expiry, 
              Instrument, OptionType, StrikePrice, TickSize, FreezeQty
     """
-    print("Downloading Firstock Data")
+    logger.info("Downloading Firstock Data")
     
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -84,7 +88,7 @@ def download_firstock_data(output_path):
     downloaded_files = []
     for exchange, url in firstock_urls.items():
         try:
-            print(f"Downloading {exchange} data from {url}")
+            logger.info("Downloading {exchange} data from %s", url)
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
@@ -92,12 +96,12 @@ def download_firstock_data(output_path):
                 with open(file_path, 'w') as f:
                     f.write(response.text)
                 downloaded_files.append(f"{exchange}_symbols.csv")
-                print(f"Successfully downloaded {exchange} data")
+                logger.info("Successfully downloaded %s data", exchange)
             else:
-                print(f"Failed to download {exchange} data. Status code: {response.status_code}")
+                logger.error("Failed to download {exchange} data. Status code: %s", response.status_code)
                 
         except Exception as e:
-            print(f"Error downloading {exchange} data: {e}")
+            logger.error("Error downloading {exchange} data: %s", e)
             
     return downloaded_files
 
@@ -108,7 +112,7 @@ def process_firstock_nse_data(output_path):
     
     Index symbols are identified by having 0 values in ISIN, TickSize, and FreezeQty columns.
     """
-    print("Processing Firstock NSE Data")
+    logger.info("Processing Firstock NSE Data")
     file_path = f'{output_path}/NSE_symbols.csv'
 
     # Read the NSE symbols file with all columns
@@ -179,7 +183,7 @@ def process_firstock_nfo_data(output_path):
     Processes the Firstock NFO data (NFO_symbols.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Firstock NFO Data")
+    logger.info("Processing Firstock NFO Data")
     file_path = f'{output_path}/NFO_symbols.csv'
 
     # Read the NFO symbols file
@@ -209,7 +213,7 @@ def process_firstock_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -260,7 +264,7 @@ def process_firstock_bse_data(output_path):
     Processes the Firstock BSE data (BSE_symbols.csv) to generate OpenAlgo symbols.
     Ensures that the instrument type is always 'EQ'.
     """
-    print("Processing Firstock BSE Data")
+    logger.info("Processing Firstock BSE Data")
     file_path = f'{output_path}/BSE_symbols.csv'
 
     # Read the BSE symbols file
@@ -314,7 +318,7 @@ def process_firstock_bfo_data(output_path):
     Processes the Firstock BFO data (BFO_symbols.csv) to generate OpenAlgo symbols.
     Similar to NFO but for BSE derivatives.
     """
-    print("Processing Firstock BFO Data")
+    logger.info("Processing Firstock BFO Data")
     file_path = f'{output_path}/BFO_symbols.csv'
 
     # Read the BFO symbols file
@@ -344,7 +348,7 @@ def process_firstock_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info("Invalid expiry date format: %s", date_str)
             return None
 
     # Apply the expiry date format
@@ -396,11 +400,11 @@ def delete_firstock_temp_data(output_path):
         if filename.endswith("_symbols.csv"):
             file_path = os.path.join(output_path, filename)
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info("Deleted %s", file_path)
 
 def master_contract_download():
     """Downloads and processes Firstock contract data."""
-    print("Starting master contract download")
+    logger.info("Starting master contract download")
     output_path = 'tmp'
     
     try:
@@ -434,12 +438,12 @@ def master_contract_download():
             # Clean up temporary files
             delete_firstock_temp_data(output_path)
             
-            print("Master contract download completed successfully")
+            logger.info("Master contract download completed successfully")
             socketio.emit('download_progress', 'Download completed')
         else:
-            print("No files were downloaded")
+            logger.info("No files were downloaded")
             socketio.emit('download_progress', 'Download failed')
             
     except Exception as e:
-        print(f"Error in master contract download: {e}")
+        logger.error("Error in master contract download: %s", e)
         socketio.emit('download_progress', f'Error: {str(e)}')

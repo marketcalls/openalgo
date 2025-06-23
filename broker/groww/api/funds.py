@@ -2,13 +2,16 @@
 
 import os
 import json
-import logging
 import httpx
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data directly from Groww API using the provided auth token."""
-    print(f"Getting margin data with token: {auth_token}...")
+    logger.info("Getting margin data with token: %s...", auth_token)
     
     try:
         # Define the API endpoint for user margin details
@@ -28,23 +31,23 @@ def get_margin_data(auth_token):
         
         # Check if the request was successful
         if response.status_code != 200:
-            print(f"Error fetching margin data: HTTP {response.status_code} - {response.text}")
+            logger.error("Error fetching margin data: HTTP {response.status_code} - %s", response.text)
             return {}
         
         # Parse the JSON response
         response_data = response.json()
-        print(f"Funds Details: {response_data}")
+        logger.info("Funds Details: %s", response_data)
         
         # Check if the response was successful according to Groww's status field
         if response_data.get('status') != 'SUCCESS':
-            print(f"Error fetching margin data: {response_data.get('status')}")
+            logger.info("Error fetching margin data: %s", response_data.get('status'))
             return {}
         
         # Extract the margin data from the payload
         margin_data = response_data.get('payload', {})
         
         if not margin_data:
-            print("Error fetching margin data: Empty payload")
+            logger.error("Error fetching margin data: Empty payload")
             return {}
             
         # Create position data structure to calculate P&L
@@ -58,7 +61,7 @@ def get_margin_data(auth_token):
             # This would be implemented when adding position support
             pass
         except Exception as e:
-            print(f"Error fetching position data: {str(e)}")
+            logger.error("Error fetching position data: %s", str(e))
             # Default to zeros if unable to fetch
             total_unrealised = 0
             total_realised = 0
@@ -109,6 +112,6 @@ def get_margin_data(auth_token):
         return processed_margin_data
         
     except Exception as e:
-        print(f"Error in get_margin_data: {str(e)}")
+        logger.error("Error in get_margin_data: %s", str(e))
         # Return an empty dictionary in case of unexpected data structure or error
         return {}

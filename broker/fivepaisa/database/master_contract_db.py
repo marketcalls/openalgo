@@ -14,6 +14,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -41,16 +45,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -65,11 +69,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error("Error during bulk insert: %s", e)
         db_session.rollback()
 
 
@@ -91,7 +95,7 @@ def download_csv_5paisa_data(url, output_path):
     
     while current_retry < max_retries:
         try:
-            print(f"Downloading CSV data (attempt {current_retry + 1}/{max_retries})")
+            logger.info("Downloading CSV data (attempt {current_retry + 1}/%s)", max_retries)
             
             # Use a custom timeout for this specific request
             client = get_httpx_client()
@@ -116,24 +120,24 @@ def download_csv_5paisa_data(url, output_path):
                             if total_size > 0:
                                 progress = int((bytes_downloaded / total_size) * 100)
                                 if progress >= last_progress_report + 10:
-                                    print(f"Download progress: {progress}% ({bytes_downloaded} / {total_size} bytes)")
+                                    logger.info("Download progress: {progress}% ({bytes_downloaded} / %s bytes)", total_size)
                                     last_progress_report = progress
                     
-            print("Download complete")
+            logger.info("Download complete")
             return  # Successfully downloaded, exit the function
             
         except httpx.TimeoutException as e:
             current_retry += 1
-            print(f"Timeout downloading master contract (attempt {current_retry}/{max_retries}): {str(e)}")
+            logger.info("Timeout downloading master contract (attempt {current_retry}/{max_retries}): %s", str(e))
             if current_retry >= max_retries:
-                print("Maximum retries reached for master contract download.")
+                logger.info("Maximum retries reached for master contract download.")
                 raise Exception(f"Failed to download master contract after {max_retries} attempts: {str(e)}")
         except Exception as e:
-            print(f"Failed to download data: {str(e)}")
+            logger.error("Failed to download data: %s", str(e))
             if 'time' in str(e).lower() and current_retry < max_retries:
                 # If it's a timeout-related error, retry
                 current_retry += 1
-                print(f"Retrying download (attempt {current_retry}/{max_retries})")
+                logger.info("Retrying download (attempt {current_retry}/%s)", max_retries)
             else:
                 # For other errors, raise immediately
                 raise
@@ -256,15 +260,15 @@ def delete_5paisa_temp_data(output_path):
         if os.path.exists(output_path):
             # Delete the file
             os.remove(output_path)
-            print(f"The temporary file {output_path} has been deleted.")
+            logger.info("The temporary file %s has been deleted.", output_path)
         else:
-            print(f"The temporary file {output_path} does not exist.")
+            logger.info("The temporary file %s does not exist.", output_path)
     except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+        logger.error("An error occurred while deleting the file: %s", e)
 
 
 def master_contract_download():
-    print("Starting Master Contract Download Process")
+    logger.info("Starting Master Contract Download Process")
     url = 'https://openapi.5paisa.com/VendorsAPI/Service1.svc/ScripMaster/segment/all'
     output_path = 'tmp/5paisa.csv'
     
@@ -272,28 +276,28 @@ def master_contract_download():
     os.makedirs('tmp', exist_ok=True)
     
     try:
-        print(f"Initiating download from {url}")
+        logger.info("Initiating download from %s", url)
         download_csv_5paisa_data(url, output_path)
         
-        print("CSV downloaded, processing data...")
+        logger.info("CSV downloaded, processing data...")
         token_df = process_5paisa_csv(output_path)
-        print(f"Processed {len(token_df)} symbols")
+        logger.info("Processed %s symbols", len(token_df))
         
         # Clean up temporary files
         delete_5paisa_temp_data(output_path)
         
         # Clear existing data and insert new data
-        print("Updating database with new symbols...")
+        logger.info("Updating database with new symbols...")
         delete_symtoken_table()  # Clear existing table
         copy_from_dataframe(token_df)
         
-        print("Master contract download completed successfully")
+        logger.info("Master contract download completed successfully")
         # Notify UI through Socket.IO
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded Master Contract'})
     
     except Exception as e:
         error_message = str(e)
-        print(f"Error during master contract download: {error_message}")
+        logger.error("Error during master contract download: %s", error_message)
         
         # Check if it's a timeout error and provide more helpful message
         if 'timeout' in error_message.lower() or 'timed out' in error_message.lower():

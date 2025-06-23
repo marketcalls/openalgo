@@ -1,3 +1,7 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 Flattrade WebSocket client for OpenAlgo integration
 Handles connection, authentication, subscription, and message parsing.
@@ -5,7 +9,6 @@ Handles connection, authentication, subscription, and message parsing.
 import json
 import threading
 import websocket
-import logging
 import time
 
 class FlattradeWebSocket:
@@ -51,7 +54,7 @@ class FlattradeWebSocket:
     def _on_open(self, ws):
         self.connected = True
         self.logger.info("WebSocket connection opened. Sending authentication...")
-        print("[FlattradeWebSocket] Connection opened, sending auth message...")
+        logger.info("[FlattradeWebSocket] Connection opened, sending auth message...")
         auth_msg = {
             "t": "c",
             "uid": self.user_id,
@@ -59,23 +62,23 @@ class FlattradeWebSocket:
             "source": "API",
             "susertoken": self.susertoken
         }
-        print(f"[FlattradeWebSocket] Auth message: {auth_msg}")
+        logger.info("[FlattradeWebSocket] Auth message: %s", auth_msg)
         ws.send(json.dumps(auth_msg))
         if self.on_open:
             try:
-                print(f"[FlattradeWebSocket] Calling on_open callback")
+                logger.info("[FlattradeWebSocket] Calling on_open callback")
                 self.on_open(ws)
             except Exception as e:
-                print(f"[FlattradeWebSocket] Exception in on_open callback: {e}")
+                logger.info("[FlattradeWebSocket] Exception in on_open callback: %s", e)
 
     def _on_message(self, ws, message):
-        print(f"[FlattradeWebSocket] Received: {message}")  # Debug print
+        logger.debug("[FlattradeWebSocket] Received: %s", message)  # Debug print
         if self.on_message:
             try:
-                print(f"[FlattradeWebSocket] Passing message to adapter.on_message")
+                logger.info("[FlattradeWebSocket] Passing message to adapter.on_message")
                 self.on_message(ws, message)
             except Exception as e:
-                print(f"[FlattradeWebSocket] Exception in on_message callback: {e}")
+                logger.info("[FlattradeWebSocket] Exception in on_message callback: %s", e)
 
     def _on_error(self, ws, error):
         self.logger.error(f"WebSocket error: {error}")
@@ -106,9 +109,9 @@ class FlattradeWebSocket:
 
     def _send(self, msg):
         if self.ws and self.connected:
-            print(f"[FlattradeWebSocket] Sending: {msg}")  # Debug print
+            logger.debug("[FlattradeWebSocket] Sending: %s", msg)  # Debug print
             self.logger.info(f"[SEND] {msg}")
             self.ws.send(json.dumps(msg))
         else:
-            print(f"[FlattradeWebSocket] Not connected, cannot send: {msg}")
+            logger.info("[FlattradeWebSocket] Not connected, cannot send: %s", msg)
             self.logger.warning(f"[SEND_FAIL] Not connected, cannot send: {msg}")

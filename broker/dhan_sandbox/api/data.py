@@ -5,14 +5,17 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from broker.dhan_sandbox.mapping.transform_data import map_exchange_type
 import urllib.parse
-import logging
 import jwt
 import httpx
 from utils.httpx_client import get_httpx_client
 from broker.dhan_sandbox.api.baseurl import get_url
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=''):
@@ -94,7 +97,7 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        print(f'exchange: {exchange}')
+        logger.info("exchange: %s", exchange)
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
@@ -274,12 +277,12 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            print(f'exchange: {exchange}')
+            logger.info("exchange: %s", exchange)
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-            print(f'exchange segment: {exchange_segment}')
+            logger.info("exchange segment: %s", exchange_segment)
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []

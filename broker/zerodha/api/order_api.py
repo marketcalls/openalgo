@@ -6,6 +6,10 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.zerodha.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -76,7 +80,7 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         except:
             pass
             
-        print(f"API request failed: {error_msg}")
+        logger.error("API request failed: %s", error_msg)
         raise
 
 def get_order_book(auth):
@@ -99,13 +103,13 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     positions_data = get_positions(auth)
     net_qty = '0'
-    #print(positions_data['data']['net'])
+    #logger.info("%s", positions_data['data']['net'])
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']['net']:
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('product') == product:
                 net_qty = position.get('quantity', '0')
-                print(f'Net Quantity {net_qty}')
+                logger.info("Net Quantity %s", net_qty)
                 break  # Assuming you need the first match
 
     return net_qty
@@ -133,7 +137,7 @@ def place_order_api(data,auth):
         'tag': newdata['tag']
     }
 
-    print(payload)
+    logger.info("%s", payload)
     
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
@@ -156,7 +160,7 @@ def place_order_api(data,auth):
     
     # Parse the response
     response_data = response.json()
-    print(response_data)
+    logger.info("%s", response_data)
     
     # Handle the response
     if response_data['status'] == 'success':
@@ -185,7 +189,7 @@ def place_smartorder_api(data,auth):
         product = data.get("product")
         
         if not all([symbol, exchange, product]):
-            print("Missing required parameters in place_smartorder_api")
+            logger.info("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
             
         position_size = int(data.get("position_size", "0"))
@@ -193,8 +197,8 @@ def place_smartorder_api(data,auth):
         # Get current open position for the symbol
         current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
 
-        print(f"position_size: {position_size}")
-        print(f"Open Position: {current_position}")
+        logger.info("position_size: %s", position_size)
+        logger.info("Open Position: %s", current_position)
 
         # Determine action based on position_size and current_position
         action = None
@@ -228,13 +232,13 @@ def place_smartorder_api(data,auth):
             res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
             return res, response, orderid
         else:
-            print("No action required or invalid quantity")
+            logger.info("No action required or invalid quantity")
             response_data = {"status": "success", "message": "No action required"}
             return res, response_data, orderid
             
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {str(e)}"
-        print(error_msg)
+        logger.error("%s", error_msg)
         response_data = {"status": "error", "message": error_msg}
         return res, response_data, orderid
     
@@ -250,7 +254,7 @@ def close_all_positions(current_api_key,auth):
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
 
-    #print(positions_response)
+    #logger.info("%s", positions_response)
     # Check if the positions data is null or empty
     if positions_response['data'] is None or not positions_response['data']:
         return {"message": "No Open Positions Found"}, 200
@@ -280,12 +284,12 @@ def close_all_positions(current_api_key,auth):
                 "quantity": str(quantity)
             }
 
-            print(place_order_payload)
+            logger.info("%s", place_order_payload)
 
             # Place the order to close the position
             _, api_response, _ =   place_order_api(place_order_payload,AUTH_TOKEN)
 
-            print(api_response)
+            logger.info("%s", api_response)
             
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -323,7 +327,7 @@ def cancel_order(orderid, auth):
         
         response.raise_for_status()
         data = response.json()
-        print(f"Cancel order response: {data}")
+        logger.info("Cancel order response: %s", data)
         
         # Check if the request was successful
         if data.get("status"):
@@ -333,7 +337,7 @@ def cancel_order(orderid, auth):
             
     except Exception as e:
         error_msg = str(e)
-        print(f"Error canceling order {orderid}: {error_msg}")
+        logger.error("Error canceling order {orderid}: %s", error_msg)
         return {"status": "error", "message": f"Failed to cancel order: {error_msg}"}, 500
 
 def modify_order(data,auth):
@@ -354,7 +358,7 @@ def modify_order(data,auth):
     if newdata.get('trigger_price'):
         payload['trigger_price'] = str(newdata['trigger_price'])
     
-    print(payload)
+    logger.info("%s", payload)
     
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
@@ -377,7 +381,7 @@ def modify_order(data,auth):
     
     # Parse the response
     response_data = response.json()
-    print(response_data)
+    logger.info("%s", response_data)
     
     # Add status attribute to maintain backward compatibility
     response.status = response.status_code
@@ -393,14 +397,14 @@ def cancel_all_orders_api(data,auth):
     AUTH_TOKEN = auth
     # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)
-    #print(order_book_response)
+    #logger.info("%s", order_book_response)
     if order_book_response['status'] != 'success':
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['OPEN', 'TRIGGER PENDING']]
-    print(orders_to_cancel)
+    logger.info("%s", orders_to_cancel)
     canceled_orders = []
     failed_cancellations = []
 

@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
     # Mapping of (Exchange Code, Segment Code) to Exchange
 exchange_map = {
@@ -34,12 +38,12 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['orderBook']
         
-    #print(order_data)
+    #logger.info("%s", order_data)
 
 
 
@@ -57,7 +61,7 @@ def map_order_data(order_data):
                 order['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
                 order['exchange'] = exchange
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return order_data
 
@@ -114,7 +118,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
             continue
 
         if(order.get("status")==2):
@@ -186,12 +190,12 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data['tradeBook']
         
-    #print(trade_data)
+    #logger.info("%s", trade_data)
 
 
 
@@ -210,7 +214,7 @@ def map_trade_data(trade_data):
                 trade['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
                 trade['exchange'] = exchange
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return trade_data
 
@@ -268,12 +272,12 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data['netPositions']
         
-    print(position_data)
+    logger.info("%s", position_data)
 
     if position_data:
         for position in position_data:
@@ -289,7 +293,7 @@ def map_position_data(position_data):
                 position['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
                 position['exchange'] = exchange
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return position_data
     
@@ -341,12 +345,12 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['holdings']
         
-    print(portfolio_data)
+    logger.info("%s", portfolio_data)
 
     if portfolio_data:
         for portfolio in portfolio_data:
@@ -354,7 +358,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['holdingType'] = 'CNC'
 
             else:
-                print(f"Fyers Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.info("Fyers Portfolio - Product Value for Delivery Not Found or Changed.")
             
             exchange_code = portfolio['exchange']
             segment_code = portfolio['segment']
@@ -366,7 +370,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
                 portfolio['exchange'] = exchange
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
                 
     return portfolio_data
 

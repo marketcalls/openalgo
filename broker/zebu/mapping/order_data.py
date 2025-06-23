@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data
@@ -54,7 +58,7 @@ def map_order_data(order_data):
                     order['prctyp']="SL"
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Symbol not found for token %ssymboltoken and exchange %sexchange. Keeping original trading symbol.")
                 
     return order_data
 
@@ -110,7 +114,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.info("Warning: Expected a dict, but found a %stype(order). Skipping this item.")
             continue
 
         transformed_order = {
@@ -148,7 +152,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data
@@ -183,7 +187,7 @@ def map_trade_data(trade_data):
                 
                 
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Unable to find the symbol %ssymbol and exchange %sexchange. Keeping original trading symbol.")
                 
     return trade_data
 
@@ -214,7 +218,7 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data
@@ -246,7 +250,7 @@ def map_position_data(position_data):
                 
                 
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info("Unable to find the symbol %ssymbol and exchange %sexchange. Keeping original trading symbol.")
                 
     return position_data
 
@@ -277,14 +281,14 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'portfolio_data' is a list
     if not portfolio_data or not isinstance(portfolio_data, list):
-        print("No data available or incorrect data format.")
+        logger.info("No data available or incorrect data format.")
         return []
 
     # Iterate over the portfolio_data list and process each entry
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get('stat') != 'Ok':
-            print(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
+            logger.info("Error: %sportfolio.get('emsg', 'Unknown error occurred.')")
             continue
 
         # Process the 'exch_tsym' list inside each portfolio entry
@@ -298,7 +302,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
+                logger.info("Zebu Portfolio - Product Value for %ssymbol Not Found or Changed.")
     
     return portfolio_data
 
@@ -310,7 +314,7 @@ def calculate_portfolio_statistics(holdings_data):
 
     # Check if the data is valid or contains an error
     if not holdings_data or not isinstance(holdings_data, list):
-        print("Error: Invalid or missing holdings data.")
+        logger.info("Error: Invalid or missing holdings data.")
         return {
             'totalholdingvalue': totalholdingvalue,
             'totalinvvalue': totalinvvalue,
@@ -322,7 +326,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if holding.get('stat') != 'Ok':
-            print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
+            logger.info("Error: %sholding.get('emsg', 'Unknown error occurred.')")
             continue
 
         # Filter out the NSE entry and ignore BSE for the same symbol
@@ -358,8 +362,8 @@ def calculate_portfolio_statistics(holdings_data):
 
         # Valuation formula from API
         valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        print("test valuation :"+str(npoadqty))
-        print("test valuation :"+str(upload_price))
+        logger.info("%s", "test valuation :"+str(npoadqty))
+        logger.info("%s", "test valuation :"+str(upload_price))
         # Accumulate total valuation
         totalholdingvalue += valuation
 
