@@ -15,11 +15,6 @@ import pytz
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-
-# Configure logging
-logger = get_logger(__name__)
 # API endpoints are handled by the Groww SDK
 
 # Exchange constants for Groww API

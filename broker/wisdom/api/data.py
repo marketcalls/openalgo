@@ -14,10 +14,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Configure logging
-logger = get_logger(__name__)
-
 def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
     if feed_token:

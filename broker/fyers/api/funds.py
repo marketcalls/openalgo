@@ -9,10 +9,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Set up logging
-logger = get_logger(__name__)
-
 def get_margin_data(auth_token: str) -> Dict[str, str]:
     """
     Fetch and process margin/funds data from Fyers' API using shared HTTP client with connection pooling.

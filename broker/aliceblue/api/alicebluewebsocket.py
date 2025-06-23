@@ -11,10 +11,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Set up logger
-logger = get_logger(__name__)
-
 class AliceBlueWebSocket:
     """
     WebSocket client for AliceBlue broker's market data API.

@@ -32,26 +32,47 @@ OpenAlgo uses a centralized logging system to ensure consistent, secure, and con
 
 ## **How to Use the Logger in Your Module**
 
-Import and get a logger in any file:
+Import and get a logger instance at the top of any module:
 
 ```python
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-logger.info("Informational message")
-logger.debug("Detailed debug info")
-logger.error("An error occurred")
 ```
+
+### **Logging Levels & Examples**
+
+*   **Informational Messages:** Use `logger.info()` for general operational messages.
+    ```python
+    logger.info("Service started successfully.")
+    ```
+
+*   **Debug Messages:** Use `logger.debug()` for detailed diagnostic information useful during development.
+    ```python
+    logger.debug(f"Received payload: {payload}")
+    ```
+
+*   **Error Handling with Stack Traces:** Use `logger.exception()` inside a `try...except` block to log an error with its full stack trace. This is the **required** method for capturing exceptions.
+    ```python
+    try:
+        result = 1 / 0
+    except Exception as e:
+        logger.exception("An error occurred during calculation.")
+    ```
+*   **Warning Messages:** Use `logger.warning()` to indicate a potential issue that doesn't prevent the operation from continuing.
+    ```python
+    logger.warning("API response time is higher than expected.")
+    ```
 
 ---
 
 ## **Best Practices**
 
-* **Never use `print()` for debug/info/error messages.**
-* **Do not log sensitive information** such as passwords, tokens, or API keys.
-* **Set log levels via `.env` as needed for production, staging, or local debugging.**
-* **Check log files in the `/log` directory if file logging is enabled.**
+*   **Always use `logger.exception()` for Errors:** When catching exceptions, use `logger.exception()` instead of `logger.error()` to automatically include the full stack trace in the log. This is critical for effective debugging.
+*   **Instantiate the Logger Once Per Module:** Define `logger = get_logger(__name__)` at the top of the file, not inside functions or classes.
+*   **Never Use `print()`:** All diagnostic output must go through the logger.
+*   **Avoid Logging Sensitive Data Directly:** While the system has filters, it is best practice to avoid logging raw API keys, tokens, or passwords.
+*   **Use F-Strings for Dynamic Messages:** Construct log messages using f-strings for clarity and performance (e.g., `logger.info(f"Processing user {user_id}")`).
 
 ---
 
@@ -67,16 +88,20 @@ A: Set `LOG_LEVEL=DEBUG` (or another level) in your `.env` file.
 A: In the directory specified by `LOG_DIR` (default is `/log`).
 
 **Q: How can I keep logs clean and secure?**
-A: Avoid logging raw request payloads, and use logger filters to redact sensitive fields.
+A: Avoid logging raw request payloads. The system automatically redacts sensitive data matching patterns in `SENSITIVE_PATTERNS`, but you should not rely on it as a primary security measure.
 
 ---
 
-## **Migration Steps**
+## **Codebase Compliance**
 
-1. Remove all `print()` calls across the codebase.
-2. Replace with the centralized logger from `utils/logging.py`.
-3. Set up `.env` with the new logging options.
-4. Validate that logs behave as expected in both console and file mode.
+As of June 2025, the centralized logging system has been fully implemented across all major directories of the OpenAlgo project, including `/services`, `/blueprints`, `/restx_api`, `/websocket_proxy`, and `/broker`.
+
+All modules adhere to the following standards:
+*   A single logger instance is created per module using `get_logger(__name__)`.
+*   All `print()` statements and legacy `logging` calls have been removed.
+*   Error handling uses `logger.exception()` to provide full stack traces.
+
+Maintaining this standard is crucial for the stability and maintainability of the application.
 
 ---
 

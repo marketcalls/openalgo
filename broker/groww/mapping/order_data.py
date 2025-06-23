@@ -801,7 +801,6 @@ def transform_holdings_data(holdings_data):
     Returns:
         List of transformed holdings
     """
-        logger = get_logger(__name__)
     
     # Handle dictionary input with nested holdings
     if isinstance(holdings_data, dict) and 'data' in holdings_data:
@@ -871,7 +870,6 @@ def calculate_portfolio_statistics(holdings_data):
     - Dictionary with portfolio statistics
     """
     # Logging for debugging
-        logger = get_logger(__name__)
     logger.info(f"Input holdings data type: {type(holdings_data)}")
     logger.info(f"Input holdings data: {holdings_data}")
     

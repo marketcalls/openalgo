@@ -11,10 +11,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Set up logger
-logger = get_logger(__name__)
-
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """
     Make API requests to Fyers API using shared connection pooling.

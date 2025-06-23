@@ -8,10 +8,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Set up logger
-logger = get_logger(__name__)
-
 def authenticate_broker(userid, encKey):
     try:
         # Fetching the necessary credentials from environment variables

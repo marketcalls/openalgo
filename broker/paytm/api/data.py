@@ -11,10 +11,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Configure logging
-logger = get_logger(__name__)
-
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
     base_url = "https://developer.paytmmoney.com"

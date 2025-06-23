@@ -12,10 +12,6 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Set up logger
-logger = get_logger(__name__)
-
-
 def get_api_response(endpoint, auth, method="GET", payload=None):
     """Make API requests to AliceBlue API using shared connection pooling."""
     try:

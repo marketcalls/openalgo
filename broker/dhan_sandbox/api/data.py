@@ -14,10 +14,6 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Configure logging
-logger = get_logger(__name__)
-
-
 def get_api_response(endpoint, auth, method="POST", payload=''):
     AUTH_TOKEN = auth
     client_id = os.getenv('BROKER_API_KEY')

@@ -8,9 +8,6 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Set up logging
-logger = get_logger(__name__)
-
 def authenticate_broker(request_token: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Authenticate with FYERS API using request token and return access token with user details.

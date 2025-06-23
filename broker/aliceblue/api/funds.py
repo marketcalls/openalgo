@@ -8,10 +8,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-# Set up logger
-logger = get_logger(__name__)
-
 def get_margin_data(auth_token):
     """Fetch margin data from Alice Blue's API using the provided auth token and shared connection pooling."""
     # Initialize processed data dictionary

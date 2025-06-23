@@ -44,9 +44,6 @@ from utils.httpx_client import get_httpx_client
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from .alicebluewebsocket import AliceBlueWebSocket
 
-# Set up logger
-logger = get_logger(__name__)
-
 # AliceBlue API URLs
 BASE_URL = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/"
 SCRIP_DETAILS_URL = BASE_URL + "ScripDetails/getScripQuoteDetails"
