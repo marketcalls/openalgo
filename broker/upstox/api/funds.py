@@ -31,7 +31,7 @@ def get_margin_data(auth_token):
     
     margin_data = response.json()
 
-    logger.info("Funds Details: %s", margin_data)
+    logger.info(f"Funds Details: {margin_data}")
 
 
     if margin_data.get('status') == 'error':
