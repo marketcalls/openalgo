@@ -13,7 +13,6 @@ logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
-    logger.info("%s", auth_token)
     """Fetch margin data from Dhan API using the provided auth token."""
     api_key = os.getenv('BROKER_API_KEY')
     
@@ -32,23 +31,23 @@ def get_margin_data(auth_token):
     res.status = res.status_code
     margin_data = json.loads(res.text)
 
-    logger.info("Funds Details: %s", margin_data)
+    logger.info(f"Funds Details: {margin_data}")
 
 
     if margin_data.get('status') == 'error':
         # Log the error or return an empty dictionary to indicate failure
-        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
+        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
         return {}
 
     try:
 
         position_book = get_positions(auth_token)
 
-        logger.info("Positionbook : %s", position_book)
+        logger.info(f"Positionbook: {position_book}")
 
         # Check if position_book is an error response
         if isinstance(position_book, dict) and position_book.get('errorType'):
-            logger.info("Error getting positions: %s", position_book.get('errorMessage', 'Unknown error'))
+            logger.error(f"Error getting positions: {position_book.get('errorMessage', 'Unknown error')}")
             total_realised = 0
             total_unrealised = 0
         else:

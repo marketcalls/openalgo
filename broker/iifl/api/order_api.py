@@ -74,7 +74,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth   
-    logger.info("Data: %s", data)
+    logger.info(f"Data: {data}")
 
     # Check if this is a direct instrument ID payload or needs transformation
     if all(key in data for key in ['exchangeSegment', 'exchangeInstrumentID', 'productType', 'orderType']):
@@ -82,7 +82,7 @@ def place_order_api(data,auth):
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data['symbol'], data['exchange'])
-        logger.info("token: %s", token)
+        logger.info(f"token: {token}")
         newdata = transform_data(data, token)
 
     headers = {
@@ -142,11 +142,9 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #logger.info("action : %s", action)
-        #logger.info("Quantity : %s", quantity)
+        logger.info(f"Action: {action}, Quantity: {quantity}")
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
+        logger.info(f"Response: {response}")
         
         return res , response, orderid
         
@@ -172,11 +170,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #logger.info("smart buy quantity : %s", quantity)
+            logger.info(f"Smart buy quantity: {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #logger.info("smart sell quantity : %s", quantity)
+            logger.info(f"Smart sell quantity: {quantity}")
 
 
 
@@ -187,12 +185,11 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #logger.info("%s", order_data)
+        logger.info(f"Placing smart order: {order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
-        #logger.info("%s", res)
-        logger.info("%s", response)
-        logger.info("%s", orderid)
+        logger.info(f"Smart order response: {response}")
+        logger.info(f"Smart order ID: {orderid}")
         
         return res , response, orderid
     
@@ -204,7 +201,7 @@ def close_all_positions(current_api_key,auth):
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
-    logger.info("Open_positions : %s", positions_response)
+    logger.info(f"Open_positions: {positions_response}")
 
     positions_list = positions_response.get('result', {}).get('positionList', [])
     if not positions_list:
@@ -223,8 +220,7 @@ def close_all_positions(current_api_key,auth):
         exchange_segment = position['ExchangeSegment']
         instrument_id = position['ExchangeInstrumentId']
         
-        logger.info("Exchange Segment: %s", exchange_segment)
-        logger.info("Exchange Instrument ID: %s", instrument_id)
+        logger.info(f"Closing position for Exchange Segment: {exchange_segment}, Instrument ID: {instrument_id}")
 
         # Prepare the order payload
         place_order_payload = {
@@ -322,7 +318,7 @@ def modify_order(data,auth):
     
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    logger.info("Response of modify order :%s", response.status)
+    logger.info(f"Response of modify order: {response.status}")
     data = json.loads(response.text)
 
     if data.get("status") == "true" or data.get("message") == "SUCCESS":
@@ -338,7 +334,7 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    logger.info("Order book response: %s", order_book_response)
+    logger.info(f"Order book response: {order_book_response}")
     if order_book_response.get("type") != "success":
         return [], []  # Return empty lists indicating failure to retrieve the order book
     
@@ -350,7 +346,7 @@ def cancel_all_orders_api(data,auth):
         order for order in orders 
         if order["OrderStatus"] in ["New", "Trigger Pending"]
     ]
-    logger.info("Orders to cancel: %s", orders_to_cancel)
+    logger.info(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
@@ -359,10 +355,10 @@ def cancel_all_orders_api(data,auth):
         orderid = order['AppOrderID']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
-            logger.info("Canceled order %s", orderid)
+            logger.info(f"Canceled order {orderid}")
             canceled_orders.append(orderid)
         else:
-            logger.error("Failed to cancel order %s", orderid)
+            logger.error(f"Failed to cancel order {orderid}")
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations

@@ -111,11 +111,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -163,19 +163,19 @@ def download_csv_fyers_data(output_path: str) -> Tuple[bool, List[str], Optional
                 with open(file_path, 'wb') as file:
                     file.write(response.content)
                 downloaded_files.append(file_path)
-                logger.info("Successfully downloaded {key} to %s", file_path)
+                logger.info(f"Successfully downloaded {key} to {file_path}")
                 
             except httpx.HTTPStatusError as e:
                 error_msg = f"HTTP error occurred while downloading {key} from {url}: {e.response.status_code} {e.response.reason_phrase}"
-                logger.error("%s", error_msg)
+                logger.error(error_msg)
                 errors.append(error_msg)
             except httpx.RequestError as e:
-                error_msg = f"Request error occurred while downloading {key} from {url}: {str(e)}"
-                logger.error("%s", error_msg)
+                error_msg = f"Request error occurred while downloading {key} from {url}: {e}"
+                logger.error(error_msg)
                 errors.append(error_msg)
             except Exception as e:
-                error_msg = f"Unexpected error downloading {key}: {str(e)}"
-                logger.error("%s", error_msg)
+                error_msg = f"Unexpected error downloading {key}: {e}"
+                logger.error(error_msg)
                 errors.append(error_msg)
     finally:
         # Don't close the client as it's shared
@@ -492,12 +492,15 @@ def delete_fyers_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
-            os.remove(file_path)
-            logger.info("Deleted %s", file_path)
-    
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted {file_path}")
+            except OSError as e:
+                logger.warning(f"Error deleting file {file_path}: {e}")
+
 
 def master_contract_download():
-    logger.info("Downloading Master Contract")
+    logger.info(f"Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -525,11 +528,10 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
-        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        logger.exception(f"{e}")
+        return socketio.emit('master_contract_download', {'status': 'error', 'message': f"{e}"})
 
 
 
 def search_symbols(symbol, exchange):
     return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exchange == exchange).all()
-

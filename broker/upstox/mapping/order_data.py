@@ -20,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
+        logger.debug("No order data available to map.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
@@ -48,7 +48,7 @@ def map_order_data(order_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['product'] == 'D':
                     order['product'] = 'NRML'
             else:
-                logger.info("Symbol not found for token {instrument_token} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -105,7 +105,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Expected a dict, but found {type(order)}. Skipping this item.")
             continue
 
         transformed_order = {
@@ -194,7 +194,7 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
+        logger.debug("No portfolio data available to map.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['data']
@@ -207,7 +207,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                logger.info("Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.warning("Upstox Portfolio - Product value for Delivery not found or changed.")
                 
     return portfolio_data
 

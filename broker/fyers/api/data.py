@@ -65,7 +65,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         logger.error(f"JSON decode error: {str(e)}")
         return {"s": "error", "message": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
-        logger.error(f"Error during API request: {str(e)}")
+        logger.exception("An unexpected error occurred during API request")
         return {"s": "error", "message": f"General error: {str(e)}"}
 
 class BrokerData:
@@ -95,22 +95,20 @@ class BrokerData:
             dict: Simplified quote data with required fields
         """
         try:
-            # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
-            # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(br_symbol)
             
             response = get_api_response(f"/data/quotes?symbols={encoded_symbol}", self.auth_token)
-            
+            logger.debug(f"Fyers quotes API response: {response}")
+
             if response.get('s') != 'ok':
-                raise Exception(f"Error from Fyers API: {response.get('message', 'Unknown error')}")
+                error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
-            # Get first quote from response
-            quote = response.get('d', [{}])[0]
-            v = quote.get('v', {})
+            quote_data = response.get('d', [{}])[0]
+            v = quote_data.get('v', {})
             
-            # Return simplified quote data
             return {
                 'bid': v.get('bid', 0),
                 'ask': v.get('ask', 0), 
@@ -123,7 +121,8 @@ class BrokerData:
             }
             
         except Exception as e:
-            raise Exception(f"Error fetching quotes: {str(e)}")
+            logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
+            raise Exception(f"Error fetching quotes: {e}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -144,7 +143,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info("Using broker symbol: %s", br_symbol)
+            logger.debug(f"Using broker symbol: {br_symbol}")
             
             # Check for unsupported timeframes first
             if interval in ['W', 'M']:
@@ -175,7 +174,7 @@ class BrokerData:
             
             # Adjust end date if it's in the future
             if end_dt > current_dt:
-                logger.warning("Warning: End date {end_dt.date()} is in the future. Adjusting to current date %s", current_dt.date())
+                logger.warning(f"Warning: End date {end_dt.date()} is in the future. Adjusting to current date {current_dt.date()}")
                 end_dt = current_dt
             
             # Validate date range
@@ -205,7 +204,7 @@ class BrokerData:
                     chunk_start = current_start.strftime('%Y-%m-%d')
                     chunk_end = current_end.strftime('%Y-%m-%d')
                     
-                    logger.info("Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to %s", chunk_end)
+                    logger.debug(f"Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to {chunk_end}")
                     
                     # URL encode the symbol to handle special characters
                     encoded_symbol = urllib.parse.quote(br_symbol)
@@ -215,19 +214,19 @@ class BrokerData:
                               f"symbol={encoded_symbol}&"
                               f"resolution={resolution}&"
                               f"date_format=1&"  # Keep epoch format
-                              f"range_from={chunk_start}&"
-                              f"range_to={chunk_end}")
+                               f"range_from={chunk_start}&"
+                               f"range_to={chunk_end}")
                     
-                    logger.info("Making request to endpoint: %s", endpoint)
+                    logger.debug(f"Making request to endpoint: {endpoint}")
                     response = get_api_response(endpoint, self.auth_token)
                     
                     if response.get('s') != 'ok':
                         error_msg = response.get('message', 'Unknown error')
-                        logger.error("Error for chunk {chunk_start} to {chunk_end}: %s", error_msg)
+                        logger.error(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
                         
                         if retry_count < max_retries:
                             retry_count += 1
-                            logger.info("Retrying... Attempt {retry_count} of %s", max_retries)
+                            logger.debug(f"Retrying... Attempt {retry_count} of {max_retries}")
                             time.sleep(2 * retry_count)  # Exponential backoff
                             continue
                         
@@ -246,9 +245,9 @@ class BrokerData:
                         # Convert list of lists to DataFrame with epoch timestamp
                         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         dfs.append(df)
-                        logger.info("Got {len(candles)} candles for period {chunk_start} to %s", chunk_end)
+                        logger.debug(f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}")
                     else:
-                        logger.info("No data available for period {chunk_start} to %s", chunk_end)
+                        logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
                     
                     # Add a small delay between chunks to avoid rate limiting
                     time.sleep(0.5)
@@ -257,10 +256,10 @@ class BrokerData:
                     current_start = current_end + pd.Timedelta(days=1)
                     
                 except Exception as e:
-                    logger.error("Error fetching chunk {chunk_start} to {chunk_end}: %s", str(e))
+                    logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {e}")
                     if retry_count < max_retries:
                         retry_count += 1
-                        logger.info("Retrying... Attempt {retry_count} of %s", max_retries)
+                        logger.debug(f"Retrying... Attempt {retry_count} of {max_retries}")
                         time.sleep(2 * retry_count)
                         continue
                     
@@ -272,7 +271,7 @@ class BrokerData:
             
             # If no data was found, return empty DataFrame
             if not dfs:
-                logger.info("No data was collected for the entire period")
+                logger.warning("No data was collected for the entire period")
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             # Combine all chunks
@@ -281,13 +280,13 @@ class BrokerData:
             # Sort by timestamp and remove duplicates
             final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp'], keep='first')
             
-            logger.info("Successfully collected data: %s total candles", len(final_df))
+            logger.info(f"Successfully collected data: {len(final_df)} total candles")
             return final_df
             
         except Exception as e:
-            error_msg = f"Error fetching historical data: {str(e)}"
-            logger.error("%s", error_msg)
-            raise Exception(error_msg)
+            error_msg = f"Error fetching historical data for {exchange}:{symbol}"
+            logger.exception(error_msg)
+            raise Exception(f"{error_msg}: {e}")
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -299,24 +298,25 @@ class BrokerData:
             dict: Market depth data with OHLC, volume and open interest
         """
         try:
-            # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
-            # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(br_symbol)
             
             response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
-            
+            logger.debug(f"Fyers depth API response: {response}")
+
             if response.get('s') != 'ok':
-                raise Exception(f"Error from Fyers API: {response.get('message', 'Unknown error')}")
+                error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
-            depth_data = response.get('d', {}).get(br_symbol, {})
-            
-            # Get bids and asks, pad with zeros if less than 5 entries
+            depth_data = response.get('d', {}).get(br_symbol)
+            if not depth_data:
+                logger.warning(f"No market depth data found for {br_symbol} in API response.")
+                return {}
+
             bids = depth_data.get('bids', [])
-            asks = depth_data.get('ask', [])
+            asks = depth_data.get('asks', [])
             
-            # Ensure 5 entries for bids and asks
             empty_entry = {'price': 0, 'quantity': 0}
             bids_formatted = [{'price': b['price'], 'quantity': b['volume']} for b in bids[:5]]
             asks_formatted = [{'price': a['price'], 'quantity': a['volume']} for a in asks[:5]]
@@ -326,7 +326,6 @@ class BrokerData:
             while len(asks_formatted) < 5:
                 asks_formatted.append(empty_entry)
             
-            # Return depth data with OHLC, volume and open interest
             return {
                 'bids': bids_formatted,
                 'asks': asks_formatted,
@@ -335,7 +334,7 @@ class BrokerData:
                 'high': depth_data.get('h', 0),
                 'low': depth_data.get('l', 0),
                 'ltp': depth_data.get('ltp', 0),
-                'ltq': depth_data.get('ltq', 0),  # Last Traded Quantity
+                'ltq': depth_data.get('ltq', 0),
                 'open': depth_data.get('o', 0),
                 'prev_close': depth_data.get('c', 0),
                 'volume': depth_data.get('v', 0),
@@ -343,4 +342,5 @@ class BrokerData:
             }
             
         except Exception as e:
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            logger.exception(f"Error fetching market depth for {exchange}:{symbol}")
+            raise Exception(f"Error fetching market depth: {e}")

@@ -6,10 +6,6 @@ from utils.httpx_client import get_httpx_client
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from broker.paytm.mapping.transform_data import (
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
     transform_data,
     map_product_type,
     reverse_map_product_type,
@@ -17,15 +13,9 @@ logger = get_logger(__name__)
     map_exchange,
     reverse_map_order_type
 )
+from utils.logging import get_logger
 
-# Configure logging with more detailed format
-    level=logging.INFO,
-    format='%(asctime)s [%(name)s] [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-
-# Create a logger for this module
-logger = logging.getLogger('paytm_api')
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, retry_delay=2):
     base_url = "https://developer.paytmmoney.com"
@@ -53,7 +43,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, re
             # Check if it's an error response
             if not response.is_success:
                 error_msg = response_json.get('message', response.text)
-                logger.error("API Error: Status {response.status_code} - %s", error_msg)
+                logger.error(f"API Error: Status {response.status_code} - {error_msg}")
                 # Don't retry on 4xx errors as they are client errors
                 if response.status_code < 500:
                     return {
@@ -67,7 +57,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, re
             return response_json
 
         except (httpx.RequestError, httpx.HTTPError) as e:
-            logger.error("Request error (attempt {attempt + 1}/{max_retries}): %s", e)
+            logger.error(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 import time
                 time.sleep(retry_delay)
@@ -75,7 +65,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', max_retries=3, re
             return {"status": "error", "message": "Request failed after retries", "error": str(e)}
 
         except Exception as e:
-            logger.error("Unexpected error: %s", e)
+            logger.exception(f"Unexpected error: {e}")
             return {"status": "error", "message": "Unexpected error", "error": str(e)}
 
 def get_order_book(auth):
@@ -98,9 +88,9 @@ def get_holdings(auth):
 
 
 def get_open_positionss(tradingsymbol, exchange, product, auth):
-    logger.debug("##### DEBUG: ENTERING get_open_position FUNCTION #####")
+    logger.debug(f"Entering get_open_positionss for {tradingsymbol}")
     # Convert Trading Symbol from OpenAlgo Format to Broker Format (Token ID)
-    logger.debug("##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: %s #####", exchange)
+    logger.debug(f"Calling get_token with symbol: {tradingsymbol}, exchange: {exchange}")
     target_security_id = get_token(tradingsymbol, exchange)
     if target_security_id.isdigit():
         target_security_id = target_security_id
@@ -111,7 +101,7 @@ def get_open_positionss(tradingsymbol, exchange, product, auth):
             exchange = 'BSE'
         target_security_id = get_token(tradingsymbol, exchange)
         # Use original exchange
-    logger.info("##### DEBUG: Initial Target Security ID (using exchange '%s'): %s #####", exchange, target_security_id)
+    logger.debug(f"Initial Target Security ID (using exchange '{exchange}'): {target_security_id}")
     # Check if the initial lookup failed (returned non-numeric ID)
     # We assume valid security IDs are numeric strings
     
@@ -119,39 +109,38 @@ def get_open_positionss(tradingsymbol, exchange, product, auth):
     positions_data = get_positions(auth)
     net_qty = '0'
     
-    logger.debug("##### DEBUG: === Position Check Details === #####")
-    logger.debug("##### DEBUG: Looking for position: symbol={tradingsymbol}, exchange={exchange}, product={product}, target_id=%s #####", target_security_id)
+    logger.debug("=== Position Check Details ===")
+    logger.debug(f"Looking for position: symbol={tradingsymbol}, exchange={exchange}, product={product}, target_id={target_security_id}")
     
-    logger.info("=== Position Check Details ===")
-    logger.info(f"Looking for position:")
-    logger.info(f"Symbol: {tradingsymbol}")
-    logger.info(f"Exchange: {exchange}")
-    logger.info(f"Product: {product} (Broker format: {reverse_map_product_type(product)})")
-    logger.info(f"Target Security ID: {target_security_id}")
+    logger.debug("=== Position Check Details ===")
+    logger.debug(f"Looking for position:")
+    logger.debug(f"Symbol: {tradingsymbol}")
+    logger.debug(f"Exchange: {exchange}")
+    logger.debug(f"Product: {product} (Broker format: {reverse_map_product_type(product)})")
+    logger.debug(f"Target Security ID: {target_security_id}")
 
     if positions_data and positions_data.get('status') == 'success' and positions_data.get('data'):
-        logger.info(f"Found {len(positions_data['data'])} positions in account")
+        logger.debug(f"Found {len(positions_data['data'])} positions in account")
         
         for idx, position in enumerate(positions_data['data'], 1):
             pos_security_id = position.get('security_id') # This is the token ID from Paytm API
             pos_exchange = position.get('exchange')
             pos_product = position.get('product')
 
-            logger.info(f"\nChecking Position #{idx}:")
-            logger.info(f"API Security ID: {pos_security_id}")
-            logger.info(f"API Exchange: {pos_exchange}")
-            logger.info(f"API Product: {pos_product}")
-            logger.info(f"API Instrument: {position.get('instrument')}")
-            logger.info(f"API Net Qty: {position.get('net_qty', position.get('netQty', '0'))}")
+            logger.debug(f"\nChecking Position #{idx}:")
+            logger.debug(f"API Security ID: {pos_security_id}")
+            logger.debug(f"API Exchange: {pos_exchange}")
+            logger.debug(f"API Product: {pos_product}")
+            logger.debug(f"API Instrument: {position.get('instrument')}")
+            logger.debug(f"API Net Qty: {position.get('net_qty', position.get('netQty', '0'))}")
             
             # Map API exchange (NSE for both Eq/F&O) to our internal representation (NFO for F&O)
             our_exchange = exchange # Default to the requested exchange
             if pos_exchange == 'NSE' and (
-                'OPT' in position.get('instrument', '') or \
-                'FUT' in position.get('instrument', '')
+                'OPT' in position.get('instrument', '') or                 'FUT' in position.get('instrument', '')
             ):
                 our_exchange = 'NFO'
-                logger.info(f"Mapped to Internal Exchange: {our_exchange} (based on instrument type)")
+                logger.debug(f"Mapped to Internal Exchange: {our_exchange} (based on instrument type)")
 
             # --- Match Criteria --- 
             # 1. Security ID (Token) match
@@ -159,34 +148,34 @@ def get_open_positionss(tradingsymbol, exchange, product, auth):
             security_match = str(pos_security_id) == str(target_security_id)
             
             # 2. Exchange Match (using our mapped internal exchange)
-            #exchange_match = our_exchange == exchange
+            exchange_match = our_exchange == exchange
 
             # 3. Product Match (comparing API product with our reversed product type)
-            #product_match = pos_product == reverse_map_product_type(product)
+            product_match = pos_product == reverse_map_product_type(product)
             
-            logger.info("\nMatching Criteria:")
-            logger.info(f"Target Security ID: {target_security_id}, API Security ID: {pos_security_id} -> Match: {security_match}")
-            logger.info(f"Target Exchange: {exchange}, API Mapped Exchange: {our_exchange} -> Match: {exchange_match}")
-            logger.info(f"Target Product: {reverse_map_product_type(product)}, API Product: {pos_product} -> Match: {product_match}")
+            logger.debug("\nMatching Criteria:")
+            logger.debug(f"Target Security ID: {target_security_id}, API Security ID: {pos_security_id} -> Match: {security_match}")
+            logger.debug(f"Target Exchange: {exchange}, API Mapped Exchange: {our_exchange} -> Match: {exchange_match}")
+            logger.debug(f"Target Product: {reverse_map_product_type(product)}, API Product: {pos_product} -> Match: {product_match}")
             
             if security_match and exchange_match and product_match:
                 net_qty = str(position.get('net_qty', position.get('netQty', '0')))
-                logger.info(f"✓ Found matching position!")
-                logger.info(f"Net Quantity: {net_qty}")
+                logger.info(f"✓ Found matching position for {tradingsymbol}!")
+                logger.debug(f"Net Quantity: {net_qty}")
                 break
             else:
-                logger.info("✗ Position does not match criteria")
+                logger.debug("✗ Position does not match criteria")
     else:
-        logger.warning(f"⚠ No positions data available or error in API response: {positions_data}")
+        logger.warning(f"No positions data available or error in API response: {positions_data}")
     
-    logger.info("=== Position Check Complete ===")
+    logger.debug("=== Position Check Complete ===")
     return net_qty
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    logger.debug("##### DEBUG: ENTERING get_open_position FUNCTION #####")
+    logger.debug(f"Entering get_open_position for {tradingsymbol}")
     # Convert Trading Symbol from OpenAlgo Format to Broker Format (Token ID)
-    logger.debug("##### DEBUG: Calling get_token with symbol: {tradingsymbol}, exchange: %s #####", exchange)
+    logger.debug(f"Calling get_token with symbol: {tradingsymbol}, exchange: {exchange}")
     target_security_id = get_token(tradingsymbol, exchange)
     
     # Save original exchange for matching later
@@ -202,7 +191,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     if not target_security_id.isdigit():
         target_security_id = get_token(tradingsymbol, exchange)
         
-    logger.debug("##### DEBUG: Target Security ID: {target_security_id}, Original Exchange: {original_exchange}, Mapped Exchange: %s #####", exchange)
+    logger.debug(f"Target Security ID: {target_security_id}, Original Exchange: {original_exchange}, Mapped Exchange: {exchange}")
     
     # Also save the original symbol for direct symbol matching
     target_symbol = tradingsymbol
@@ -213,8 +202,8 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
-        logger.debug("##### DEBUG: Checking positions data for security_id={target_security_id}, exchange={exchange}, symbol=%s #####", target_symbol)
-        logger.info("##### DEBUG: Found %s positions #####", len(positions_data['data']))
+        logger.debug(f"Checking positions data for security_id={target_security_id}, exchange={exchange}, symbol={target_symbol}")
+        logger.debug(f"Found {len(positions_data['data'])} positions")
         
         for position in positions_data['data']:
             pos_security_id = position.get('security_id')
@@ -224,8 +213,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
             pos_display_name = position.get('display_name', '')
             pos_instrument = position.get('instrument', '')
             
-            logger.info("%s", f"##### DEBUG: Position: security_id={pos_security_id}, exchange={pos_exchange}, product={pos_product}, "
-                  f"qty={pos_qty}, instrument={pos_instrument}, display_name={pos_display_name} #####")
+            logger.debug(f"Checking Position: security_id={pos_security_id}, exchange={pos_exchange}, product={pos_product}, qty={pos_qty}, instrument={pos_instrument}, display_name={pos_display_name}")
             
             # Map Paytm's exchange to our internal exchange (NFO for derivatives)
             internal_exchange = pos_exchange
@@ -236,8 +224,8 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
                 
             product = reverse_map_product_type(pos_product)
             
-            logger.debug("##### DEBUG: Mapped to: internal_exchange={internal_exchange}, product=%s #####", product)
-            logger.debug("##### DEBUG: Comparing with target exchange: {internal_exchange}==%s #####", original_exchange)
+            logger.debug(f"Mapped to: internal_exchange={internal_exchange}, product={product}")
+            logger.debug(f"Comparing with target exchange: {internal_exchange}=={original_exchange}")
             
             # Multiple ways to match a position:
             # 1. Direct security_id match
@@ -252,11 +240,11 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
             # 3. Exchange match
             exchange_match = internal_exchange == original_exchange
             
-            logger.debug("##### DEBUG: Match criteria: security_id={security_id_match}, symbol={symbol_match}, exchange=%s #####", exchange_match)
+            logger.debug(f"Match criteria: security_id={security_id_match}, symbol={symbol_match}, exchange={exchange_match}")
             
             # If either security_id matches or symbol matches with the correct exchange, we've found our position
             if (security_id_match or symbol_match) and exchange_match:
-                logger.debug("##### DEBUG: Match found! Quantity: %s #####", pos_qty)
+                logger.debug(f"Match found! Quantity: {pos_qty}")
                 net_qty = pos_qty
                 break  # Assuming you need the first match
         
@@ -266,7 +254,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 def place_order_api(data, auth):
     payload = transform_data(data)
     payload = json.dumps(payload)
-    logger.info("Order payload: %s", payload)
+    logger.debug(f"Order payload: {payload}")
 
     response = get_api_response(
         endpoint="/orders/v1/place/regular",
@@ -275,7 +263,7 @@ def place_order_api(data, auth):
         payload=payload
     )
 
-    logger.info("Response: %s", response)
+    logger.debug(f"Response: {response}")
 
     # Create a response object with status code
     res = type('Response', (), {'status': 200 if response.get('status') == 'success' else 500})()
@@ -304,8 +292,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    logger.info("position_size : %s", position_size) 
-    logger.info("Open Position : %s", current_position) 
+    logger.debug(f"position_size: {position_size}") 
+    logger.debug(f"Open Position: {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -316,11 +304,9 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #logger.info("action : %s", action)
-        #logger.info("Quantity : %s", quantity)
+        logger.debug(f"Action: {action}, Quantity: {quantity}")
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
+        logger.debug(f"Response: {response}")
         
         return res , response, orderid
         
@@ -346,11 +332,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #logger.info("smart buy quantity : %s", quantity)
+            logger.debug(f"Smart buy quantity: {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #logger.info("smart sell quantity : %s", quantity)
+            logger.debug(f"Smart sell quantity: {quantity}")
 
     if action:
         # Prepare data for placing the order
@@ -358,12 +344,11 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #logger.info("%s", order_data)
+        logger.info(f"Placing smart order: {order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
-        #logger.info("%s", res)
-        logger.info("%s", response)
-        logger.info("%s", orderid)
+        logger.debug(f"Smart order response: {response}")
+        logger.info(f"Smart order ID: {orderid}")
         
         return res , response, orderid
     
@@ -373,10 +358,11 @@ def close_all_positions(current_api_key, auth):
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
 
-    logger.info("Positions retrieved response : %s", positions_response)
+    logger.debug(f"Positions retrieved response: {positions_response}")
     
     # First check if the API request was successful
     if positions_response.get('status') == 'error':
+        logger.error(f"Failed to fetch positions: {positions_response.get('message', 'Unknown error')}")
         return {"status": "error", "message": positions_response.get('message', 'Failed to fetch positions')}, 500
         
     # Check if the positions data is null or empty
@@ -388,7 +374,7 @@ def close_all_positions(current_api_key, auth):
     
     if positions_response['status'] == 'success':
         total_positions = len(positions_response['data'])
-        logger.info("Found %s positions", total_positions)
+        logger.info(f"Found {total_positions} positions")
         
         # Loop through each position to close
         for position in positions_response['data']:
@@ -396,7 +382,7 @@ def close_all_positions(current_api_key, auth):
             net_qty = position.get('net_qty', position.get('netQty', '0'))
             # Skip if net quantity is zero
             if int(net_qty) == 0:
-                logger.info("Skipping position with zero quantity: %s", position.get('security_id'))
+                logger.info(f"Skipping position with zero quantity: {position.get('security_id')}")
                 continue
 
             # Determine action based on net quantity
@@ -462,13 +448,14 @@ def close_all_positions(current_api_key, auth):
                 payload=json.dumps(order_payload)
             )
             
-            logger.info("Order Response: %s", response)
+            logger.debug(f"Payload for closing order: {json.dumps(order_payload)}")
+            logger.debug(f"Response from closing order: {response}")
             
             if response.get('status') == 'success':
                 logger.info("Successfully closed position for {pos_security_id} (%s)", pos_display_name)
                 successful_closes += 1
             else:
-                logger.info("Failed to close position for %s (%s): %s", pos_security_id, pos_display_name, response.get('message'))
+                logger.error(f"Failed to close position for {pos_security_id} ({pos_display_name}): {response.get('message', 'Unknown error')}")
                 failed_closes += 1
 
     # Report on success/failures

@@ -33,37 +33,29 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if order_data['orderBook'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data['orderBook']
+    if not order_data or order_data.get('orderBook') is None:
+        logger.debug("No order data available in 'orderBook'.")
+        return []
+    
+    order_list = order_data['orderBook']
+
+    for order in order_list:
+        exchange_code = order.get('exchange')
+        segment_code = order.get('segment')
+        exchange = get_exchange(exchange_code, segment_code)
+        symbol = order.get('symbol')
         
-    #logger.info("%s", order_data)
-
-
-
-    if order_data:
-        for order in order_data:
-            # Extract the instrument_token and exchange for the current order
-            exchange_code = order['exchange']
-            segment_code = order['segment']
-            exchange = get_exchange(exchange_code, segment_code)
-            symbol = order['symbol']
-       
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                order['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+        if symbol:
+            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            if oa_symbol:
+                order['symbol'] = oa_symbol
                 order['exchange'] = exchange
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
-                
-    return order_data
+                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+        else:
+            logger.warning(f"Symbol not found in order: {order}. Keeping original trading symbol.")
+            
+    return order_list
 
 
 def calculate_order_statistics(order_data):
@@ -108,54 +100,40 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
-    # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
-        # Convert the single dictionary into a list of one dictionary
         orders = [orders]
 
     transformed_orders = []
     
+    status_map = {2: "complete", 5: "rejected", 4: "trigger pending", 6: "open", 1: "cancelled"}
+    side_map = {1: "BUY", -1: "SELL"}
+    type_map = {1: "LIMIT", 2: "MARKET", 3: "SL-M", 4: "SL"}
+    product_map = {"CNC": "CNC", "INTRADAY": "MIS", "MARGIN": "NRML", "CO": "CO", "BO": "BO"}
+
     for order in orders:
-        # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Expected a dict, but found {type(order)}. Skipping this item.")
             continue
 
-        if(order.get("status")==2):
-            order_status = "complete"
-        if(order.get("status")==5):
-            order_status = "rejected"
-        if(order.get("status")==4):
-            order_status = "trigger pending"
-        if(order.get("status")==6):
-            order_status = "open"
-        if(order.get("status")==1):
-            order_status = "cancelled"
+        order_status_code = order.get("status")
+        order_status = status_map.get(order_status_code, "unknown")
+        if order_status == "unknown":
+            logger.warning(f"Unknown order status code '{order_status_code}' for order: {order.get('id')}")
 
-        if(order.get("side")==1):
-            action = "BUY"
-        if(order.get("side")==-1):
-            action = "SELL"
+        side_code = order.get("side")
+        action = side_map.get(side_code, "unknown")
+        if action == "unknown":
+            logger.warning(f"Unknown side code '{side_code}' for order: {order.get('id')}")
 
-        if(order.get("type")==1):
-            ordertype = "LIMIT"
-        if(order.get("type")==2):
-            ordertype = "MARKET"
-        if(order.get("type")==3):
-            ordertype = "SL-M"
-        if(order.get("type")==4):
-            ordertype = "SL"
-
-        if(order.get("productType")=="CNC"):
-            producttype = "CNC"
-        if(order.get("productType")=="INTRADAY"):
-            producttype = "MIS"
-        if(order.get("productType")=="MARGIN"):
-            producttype = "NRML"
-        if(order.get("productType")=="CO"):
-            producttype = "CO"
-        if(order.get("productType")=="BO"):
-            producttype = "BO"
+        type_code = order.get("type")
+        ordertype = type_map.get(type_code, "unknown")
+        if ordertype == "unknown":
+            logger.warning(f"Unknown order type code '{type_code}' for order: {order.get('id')}")
+        
+        product_code = order.get("productType")
+        producttype = product_map.get(product_code, "unknown")
+        if producttype == "unknown":
+            logger.warning(f"Unknown product type '{product_code}' for order: {order.get('id')}")
 
         transformed_order = {
             "symbol": order.get("symbol", ""),
@@ -170,7 +148,6 @@ def transform_order_data(orders):
             "order_status": order_status,
             "timestamp": order.get("orderDateTime", "")
         }
-
         transformed_orders.append(transformed_order)
 
     return transformed_orders
@@ -185,63 +162,47 @@ def map_trade_data(trade_data):
     Returns:
     - The modified trade_data with updated 'symbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if trade_data['tradeBook'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        trade_data = trade_data['tradeBook']
+    if not trade_data or trade_data.get('tradeBook') is None:
+        logger.debug("No trade data available in 'tradeBook'.")
+        return []
+    
+    trade_list = trade_data['tradeBook']
+
+    for trade in trade_list:
+        exchange_code = trade.get('exchange')
+        segment_code = trade.get('segment')
+        exchange = get_exchange(exchange_code, segment_code)
+        symbol = trade.get('symbol')
         
-    #logger.info("%s", trade_data)
-
-
-
-    if trade_data:
-        for trade in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            exchange_code = trade['exchange']
-            segment_code = trade['segment']
-            exchange = get_exchange(exchange_code, segment_code)
-            symbol = trade['symbol']
-            
-       
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                trade['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+        if symbol:
+            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            if oa_symbol:
+                trade['symbol'] = oa_symbol
                 trade['exchange'] = exchange
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
-                
-    return trade_data
+                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+        else:
+            logger.warning(f"Symbol not found in trade: {trade}. Keeping original trading symbol.")
+            
+    return trade_list
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
+    side_map = {1: "BUY", -1: "SELL"}
+    product_map = {"CNC": "CNC", "INTRADAY": "MIS", "MARGIN": "NRML", "CO": "CO", "BO": "BO"}
+
     for trade in tradebook_data:
-
         symbol = trade.get('symbol')
-        exchange = trade.get('exchange')
+        
+        side_code = trade.get("side")
+        action = side_map.get(side_code, "unknown")
+        if action == "unknown":
+            logger.warning(f"Unknown side code '{side_code}' for trade: {trade.get('orderNumber')}")
 
-        if(trade.get("side")==1):
-            action = "BUY"
-        if(trade.get("side")==-1):
-            action = "SELL"
-
-
-        if(trade.get("productType")=="CNC"):
-            producttype = "CNC"
-        if(trade.get("productType")=="INTRADAY"):
-            producttype = "MIS"
-        if(trade.get("productType")=="MARGIN"):
-            producttype = "NRML"
-        if(trade.get("productType")=="CO"):
-            producttype = "CO"
-        if(trade.get("productType")=="BO"):
-            producttype = "BO"
-
+        product_code = trade.get("productType")
+        producttype = product_map.get(product_code, "unknown")
+        if producttype == "unknown":
+            logger.warning(f"Unknown product type '{product_code}' for trade: {trade.get('orderNumber')}")
 
         transformed_trade = {
             "symbol": symbol,
@@ -267,35 +228,30 @@ def map_position_data(position_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol'
     """
-        # Check if 'data' is None
-    if position_data['netPositions'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        position_data = position_data['netPositions']
-        
-    logger.info("%s", position_data)
+    if not position_data or position_data.get('netPositions') is None:
+        logger.debug("No position data available in 'netPositions'.")
+        return []
+    
+    position_list = position_data['netPositions']
+    logger.debug(f"Raw Fyers positions: {position_list}")
 
-    if position_data:
-        for position in position_data:
-            # Extract the instrument_token and exchange for the current order
-            exchange_code = position['exchange']
-            segment_code = position['segment']
-            exchange = get_exchange(exchange_code, segment_code)
-            symbol = position['symbol']
-       
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                position['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+    for position in position_list:
+        exchange_code = position.get('exchange')
+        segment_code = position.get('segment')
+        exchange = get_exchange(exchange_code, segment_code)
+        symbol = position.get('symbol')
+        
+        if symbol:
+            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            if oa_symbol:
+                position['symbol'] = oa_symbol
                 position['exchange'] = exchange
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
-                
-    return position_data
+                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+        else:
+            logger.warning(f"Symbol not found in position: {position}. Keeping original trading symbol.")
+            
+    return position_list
     
 
 def transform_positions_data(positions_data):
@@ -340,39 +296,35 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - The modified portfolio_data with  'product' fields.
     """
-        # Check if 'holdings' is None
-    if portfolio_data['holdings'] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        portfolio_data = portfolio_data['holdings']
+    if not portfolio_data or portfolio_data.get('holdings') is None:
+        logger.debug("No portfolio data available in 'holdings'.")
+        return []
+    
+    portfolio_list = portfolio_data['holdings']
+    logger.debug(f"Raw Fyers portfolio: {portfolio_list}")
+
+    for portfolio in portfolio_list:
+        if portfolio.get('holdingType') in ('HLD', 'T1'):
+            portfolio['holdingType'] = 'CNC'
+        else:
+            logger.warning(f"Fyers Portfolio - Unknown product value for delivery: {portfolio.get('holdingType')}")
         
-    logger.info("%s", portfolio_data)
+        exchange_code = portfolio.get('exchange')
+        segment_code = portfolio.get('segment')
+        exchange = get_exchange(exchange_code, segment_code)
+        symbol = portfolio.get('symbol')
 
-    if portfolio_data:
-        for portfolio in portfolio_data:
-            if portfolio['holdingType'] == 'HLD' or portfolio['holdingType'] == 'T1':
-                portfolio['holdingType'] = 'CNC'
-
-            else:
-                logger.info("Fyers Portfolio - Product Value for Delivery Not Found or Changed.")
-            
-            exchange_code = portfolio['exchange']
-            segment_code = portfolio['segment']
-            exchange = get_exchange(exchange_code, segment_code)
-            symbol = portfolio['symbol']
-
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol:
-                portfolio['symbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+        if symbol:
+            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            if oa_symbol:
+                portfolio['symbol'] = oa_symbol
                 portfolio['exchange'] = exchange
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
-                
-    return portfolio_data
+                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+        else:
+            logger.warning(f"Symbol not found in portfolio holding: {portfolio}. Keeping original trading symbol.")
+            
+    return portfolio_list
 
 
 def transform_holdings_data(holdings_data):

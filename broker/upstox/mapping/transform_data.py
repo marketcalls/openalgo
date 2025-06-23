@@ -1,6 +1,10 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
 #Mapping Upstox Broking Parameters https://upstox.com/developer/api-documentation/orders
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 def transform_data(data,token):
     """
     Transforms the new API request structure to the current expected structure.
@@ -51,7 +55,10 @@ def map_order_type(pricetype):
         "SL": "SL",
         "SL-M": "SL-M"
     }
-    return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
+    if pricetype not in order_type_mapping:
+        logger.warning(f"Unknown pricetype '{pricetype}' received. Defaulting to 'MARKET'.")
+        return "MARKET"
+    return order_type_mapping[pricetype]
 
 def map_product_type(product):
     """
@@ -62,7 +69,10 @@ def map_product_type(product):
         "NRML": "D",
         "MIS": "I",
     }
-    return product_type_mapping.get(product, "I")  # Default to INTRADAY if not found
+    if product not in product_type_mapping:
+        logger.warning(f"Unknown product type '{product}' received. Defaulting to 'I' (Intraday).")
+        return "I"
+    return product_type_mapping[product]
 
 def reverse_map_product_type(exchange,product):
     """
@@ -80,6 +90,12 @@ def reverse_map_product_type(exchange,product):
     
     # Reverse mapping based on product type and exchange
     if product == 'D':
-        return exchange_mapping_for_d.get(exchange)  # Removed default; will return None if not found
+        openalgo_product = exchange_mapping_for_d.get(exchange)
+        if not openalgo_product:
+            logger.warning(f"Could not reverse map product type 'D' for unknown exchange '{exchange}'.")
+        return openalgo_product
     elif product == 'I':
         return "MIS"
+    else:
+        logger.warning(f"Unknown product type '{product}' received for reverse mapping.")
+        return None

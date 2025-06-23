@@ -26,6 +26,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     }
     
     url = f"https://api.upstox.com{endpoint}"
+    logger.debug(f"Making {method} request to Upstox API: {url}")
     
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -71,11 +72,11 @@ class BrokerData:
             if not token:
                 raise ValueError(f"No token found for {symbol} on {exchange}")
             
-            logger.info("Using instrument key: %s", token)
+            logger.debug(f"Using instrument key: {token}")
             return token
             
         except Exception as e:
-            logger.error("Error getting instrument key: %s", e)
+            logger.exception(f"Error getting instrument key for {symbol} on {exchange}")
             raise
 
     def _is_trading_day(self, date):
@@ -113,7 +114,9 @@ class BrokerData:
                     error_code = error.get('errorCode', 'NO_CODE')
                 else:
                     error_code = response.get('code', 'NO_CODE')
-                raise Exception(f"API Error - Code: {error_code}, Message: {error_msg}")
+                full_error_msg = f"API Error - Code: {error_code}, Message: {error_msg}"
+                logger.error(f"Failed to get quotes for {instrument_key}: {full_error_msg} | Response: {response}")
+                raise Exception(full_error_msg)
             
             # Get quote data for the symbol
             quote_data = response.get('data', {})
@@ -162,8 +165,8 @@ class BrokerData:
             }
             
         except Exception as e:
-            logger.info("Exception in get_quotes: %s", str(e))
-            raise Exception(f"Error fetching quotes: {str(e)}")
+            logger.exception(f"Error fetching quotes for {symbol} on {exchange}")
+            raise
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -180,13 +183,13 @@ class BrokerData:
         try:
             # Get the correct instrument key
             instrument_key = self._get_instrument_key(symbol, exchange)
-            logger.info("Using instrument key: %s", instrument_key)
+            logger.debug(f"Using instrument key: {instrument_key}")
             
             # Map standard interval to Upstox interval
             upstox_interval = self.timeframe_map.get(interval)
             if not upstox_interval:
                 raise Exception(f"Invalid interval: {interval}")
-            logger.info("Using interval: %s", upstox_interval)
+            logger.debug(f"Using interval: {upstox_interval}")
                 
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
@@ -195,7 +198,7 @@ class BrokerData:
             end = datetime.strptime(end_date, '%Y-%m-%d')
             start = datetime.strptime(start_date, '%Y-%m-%d')
             current_date = datetime.now()
-            logger.info("Date range: {start} to %s", end)
+            logger.debug(f"Date range: {start} to {end}")
             
             # Check if end date is today to fetch today's data as well
             is_today_requested = end.date() == current_date.date()
@@ -206,71 +209,71 @@ class BrokerData:
                 max_start = end - timedelta(days=30)
                 if start < max_start:
                     start = max_start
-                    logger.info("Adjusted start date to %s for 1m interval", start)
+                    logger.debug(f"Adjusted start date to {start} for 1m interval")
             elif interval == '30m':
                 # 30-minute: last year only
                 max_start = end - timedelta(days=365)
                 if start < max_start:
                     start = max_start
-                    logger.info("Adjusted start date to %s for 30m interval", start)
+                    logger.debug(f"Adjusted start date to {start} for 30m interval")
             elif interval == 'D':
                 # Daily: last year only
                 max_start = end - timedelta(days=365)
                 if start < max_start:
                     start = max_start
-                    logger.info("Adjusted start date to %s for D interval", start)
+                    logger.debug(f"Adjusted start date to {start} for D interval")
             elif interval == 'W':
                 # Weekly: last 10 years
                 max_start = end - timedelta(days=3650)  # 10 years
                 if start < max_start:
                     start = max_start
-                    logger.info("Adjusted start date to %s for W interval", start)
+                    logger.debug(f"Adjusted start date to {start} for W interval")
             elif interval == 'M':
                 # Monthly: last 10 years
                 max_start = end - timedelta(days=3650)  # 10 years
                 if start < max_start:
                     start = max_start
-                    logger.info("Adjusted start date to %s for M interval", start)
+                    logger.debug(f"Adjusted start date to {start} for M interval")
             
             all_candles = []
             
             # Try intraday endpoint first if interval is 1m or 30m
             if interval in ['1m', '30m']:
-                logger.info("Trying intraday endpoint...")
+                logger.debug("Trying intraday endpoint...")
                 intraday_url = f"/v2/historical-candle/intraday/{encoded_symbol}/{upstox_interval}"
-                logger.info("Intraday URL: %s", intraday_url)
+                logger.debug(f"Intraday URL: {intraday_url}")
                 intraday_response = get_api_response(intraday_url, self.auth_token)
-                logger.info("Intraday Response: %s", intraday_response)
+                logger.debug(f"Intraday Response: {intraday_response}")
                 
                 if intraday_response.get('status') == 'success':
                     intraday_candles = intraday_response.get('data', {}).get('candles', [])
-                    logger.info("Got %s candles from intraday endpoint", len(intraday_candles))
+                    logger.debug(f"Got {len(intraday_candles)} candles from intraday endpoint")
                     all_candles.extend(intraday_candles)
             
             # If no intraday data or need more historical data, try historical endpoint
             if not all_candles or start.date() < current_date.date():
-                logger.info("Trying historical endpoint...")
+                logger.debug("Trying historical endpoint...")
                 # Format dates for historical endpoint
                 from_date = start.strftime('%Y-%m-%d')
                 to_date = end.strftime('%Y-%m-%d')
                 
                 # Historical endpoint URL format: /historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
                 historical_url = f"/v2/historical-candle/{encoded_symbol}/{upstox_interval}/{to_date}/{from_date}"
-                logger.info("Historical URL: %s", historical_url)
+                logger.debug(f"Historical URL: {historical_url}")
                 historical_response = get_api_response(historical_url, self.auth_token)
-                logger.info("Historical Response: %s", historical_response)
+                logger.debug(f"Historical Response: {historical_response}")
                 
                 if historical_response.get('status') == 'success':
                     historical_candles = historical_response.get('data', {}).get('candles', [])
-                    logger.info("Got %s candles from historical endpoint", len(historical_candles))
+                    logger.debug(f"Got {len(historical_candles)} candles from historical endpoint")
                     all_candles.extend(historical_candles)
             
-            logger.info("Total candles: %s", len(all_candles))
+            logger.debug(f"Total candles: {len(all_candles)}")
             
             # Special case: If requesting only today's data (start and end dates are the same day and that day is today)
             today = datetime.now().date()
             if start.date() == end.date() == today and not all_candles:
-                logger.info("Special case: Requesting only today's data")
+                logger.debug("Special case: Requesting only today's data")
                 try:
                     # Get today's data from quote endpoint
                     quote = self.get_quotes(symbol, exchange)
@@ -289,9 +292,9 @@ class BrokerData:
                             0  # OI default
                         ]
                         all_candles.append(today_candle)
-                        logger.info("Added today's candle from quote data for single-day request")
+                        logger.debug("Added today's candle from quote data for single-day request")
                 except Exception as e:
-                    logger.info("Could not add today's data for single-day request: %s", str(e))
+                    logger.warning(f"Could not add today's data for single-day request: {e}")
             
             if not all_candles:
                 if start.date() == end.date() == today:
@@ -347,9 +350,9 @@ class BrokerData:
                             
                             # Append to dataframe
                             df = pd.concat([df, today_candle], ignore_index=True)
-                            logger.info("Added today's candle from quote data")
+                            logger.debug("Added today's candle from quote data")
                     except Exception as e:
-                        logger.info("Could not add today's data: %s", str(e))
+                        logger.warning(f"Could not add today's data: {e}")
             
             # Ensure all timestamps are consistent before converting to Unix epoch
             if not df.empty:
@@ -374,8 +377,8 @@ class BrokerData:
             return df
             
         except Exception as e:
-            logger.info("Exception in get_history: %s", str(e))
-            raise Exception(f"Error fetching historical data: {str(e)}")
+            logger.exception(f"Error fetching historical data for {symbol} on {exchange}")
+            raise
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -405,45 +408,42 @@ class BrokerData:
                     error_code = error.get('errorCode', 'NO_CODE')
                 else:
                     error_code = response.get('code', 'NO_CODE')
-                raise Exception(f"API Error - Code: {error_code}, Message: {error_msg}")
+                full_error_msg = f"API Error - Code: {error_code}, Message: {error_msg}"
+                logger.error(f"Failed to get market depth for {instrument_key}: {full_error_msg} | Response: {response}")
+                raise Exception(full_error_msg)
             
             # Get quote data for the symbol
             quote_data = response.get('data', {})
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
-                
+            
             # Find the quote data - Upstox uses exchange:symbol format for the key
             quote = None
             for key, value in quote_data.items():
                 if value.get('instrument_token') == instrument_key:
                     quote = value
                     break
-                    
+            
             if not quote:
-                raise Exception(f"No quote data found for instrument key: {instrument_key}")
+                logger.warning(f"No quote data found for instrument key: {instrument_key}")
+                return {'buy': [], 'sell': []}
             
-            # Get depth data
+            # Extract depth data
             depth = quote.get('depth', {})
+            buy_orders = depth.get('buy', [])
+            sell_orders = depth.get('sell', [])
             
-            # Check if this is an index instrument (NSE_INDEX or BSE_INDEX)
-            is_index = 'INDEX' in instrument_key.split('|')[0]
+            # Format buy and sell orders
+            buy = [{'quantity': order.get('quantity', 0), 'price': order.get('price', 0), 'orders': order.get('orders', 0)} for order in buy_orders]
+            sell = [{'quantity': order.get('quantity', 0), 'price': order.get('price', 0), 'orders': order.get('orders', 0)} for order in sell_orders]
             
-            # For index instruments, provide empty asks and bids arrays
-            if is_index:
-                asks = []
-                bids = []
-            else:
-                # Extract depth data for tradable instruments
-                asks = [{
-                    'price': order.get('price', 0),
-                    'quantity': order.get('quantity', 0)
-                } for order in depth.get('sell', [])]
-                
-                bids = [{
-                    'price': order.get('price', 0),
-                    'quantity': order.get('quantity', 0)
-                } for order in depth.get('buy', [])]
+            return {'buy': buy, 'sell': sell}
             
+        except Exception as e:
+            logger.exception(f"Error fetching market depth for {symbol} on {exchange}")
+            raise
+                error_msg = response.get('message', 'Unknown error')
+                if 'errors' in response:
             # Return standard depth data format
             return {
                 'asks': asks,

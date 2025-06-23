@@ -13,33 +13,34 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data from Upstox's API using the provided auth token with httpx connection pooling."""
-    api_key = os.getenv('BROKER_API_KEY')
-    
-    # Get the shared httpx client with connection pooling
-    client = get_httpx_client()
-    
-    headers = {
-        'Authorization': f'Bearer {auth_token}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    
-    response = client.get("https://api.upstox.com/v2/user/get-funds-and-margin", headers=headers)
-    
-    # Add status attribute for compatibility with existing code that expects http.client response
-    response.status = response.status_code
-    
-    margin_data = response.json()
-
-    logger.info(f"Funds Details: {margin_data}")
-
-
-    if margin_data.get('status') == 'error':
-        # Log the error or return an empty dictionary to indicate failure
-        logger.info("Error fetching margin data: %s", margin_data.get('errors'))
-        return {}
-
+    logger.debug("Attempting to fetch margin data...")
     try:
+        api_key = os.getenv('BROKER_API_KEY')
+        if not api_key:
+            logger.error("BROKER_API_KEY environment variable not set.")
+            return {}
+
+        client = get_httpx_client()
+        headers = {
+            'Authorization': f'Bearer {auth_token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        }
+        
+        url = "https://api.upstox.com/v2/user/get-funds-and-margin"
+        logger.debug(f"Requesting funds and margin data from {url}")
+        
+        response = client.get(url, headers=headers)
+        response.raise_for_status()
+        
+        margin_data = response.json()
+        logger.debug(f"Received funds and margin data: {margin_data}")
+
+        if margin_data.get('status') == 'error':
+            error_details = margin_data.get('errors', 'Unknown error')
+            logger.error(f"API error fetching margin data: {error_details}")
+            return {}
+
         # Calculate the sum of available_margin and used_margin
         total_available_margin = sum([
             margin_data['data']['commodity']['available_margin'],
@@ -51,18 +52,14 @@ def get_margin_data(auth_token):
         ])
 
         position_book = get_positions(auth_token)
-
         position_book = map_order_data(position_book)
 
         def sum_realised_unrealised(position_book):
-            total_realised = 0
-            total_unrealised = 0
-            total_realised = sum(position['realised'] for position in position_book)
-            total_unrealised = sum(position['unrealised'] for position in position_book)
+            total_realised = sum(position.get('realised', 0) for position in position_book)
+            total_unrealised = sum(position.get('unrealised', 0) for position in position_book)
             return total_realised, total_unrealised
 
         total_realised, total_unrealised = sum_realised_unrealised(position_book)
-
 
         # Construct and return the processed margin data
         processed_margin_data = {
@@ -72,7 +69,15 @@ def get_margin_data(auth_token):
             "m2mrealized": "{:.2f}".format(total_realised),
             "utiliseddebits": "{:.2f}".format(total_used_margin),
         }
+        logger.debug(f"Successfully processed margin data: {processed_margin_data}")
         return processed_margin_data
-    except KeyError:
-        # Return an empty dictionary in case of unexpected data structure
+        
+    except httpx.HTTPStatusError as e:
+        logger.exception(f"HTTP error occurred while fetching margin data: {e.response.text}")
+        return {}
+    except (KeyError, TypeError) as e:
+        logger.exception(f"Error processing margin data structure: {e}")
+        return {}
+    except Exception as e:
+        logger.exception("An unexpected error occurred while fetching margin data")
         return {}

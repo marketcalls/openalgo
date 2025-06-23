@@ -58,14 +58,14 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         return response_data
         
     except httpx.HTTPError as e:
-        logger.error(f"HTTP error during API request: {str(e)}")
-        return {"s": "error", "message": f"HTTP error: {str(e)}"}
+        logger.error(f"HTTP error during API request: {e}")
+        return {"s": "error", "message": f"HTTP error: {e}"}
     except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {str(e)}")
-        return {"s": "error", "message": f"Invalid JSON response: {str(e)}"}
+        logger.error(f"JSON decode error: {e}")
+        return {"s": "error", "message": f"Invalid JSON response: {e}"}
     except Exception as e:
-        logger.error(f"Error during API request: {str(e)}")
-        return {"s": "error", "message": f"General error: {str(e)}"}
+        logger.exception("Error during API request")
+        return {"s": "error", "message": f"General error: {e}"}
 
 def get_order_book(auth):
     return get_api_response("/api/v3/orders",auth)
@@ -87,14 +87,13 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     positions_data = get_positions(auth)
     net_qty = '0'
-    #logger.info("%s", positions_data['data']['net'])
 
     if positions_data and positions_data.get('s') and positions_data.get('netPositions'):
         for position in positions_data['netPositions']:
 
             if position.get('symbol') == tradingsymbol  and position.get("productType") == product:
                 net_qty = position.get('netQty', '0')
-                logger.info("Net Quantity %s", net_qty)
+                logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
     return net_qty
@@ -150,17 +149,17 @@ def place_order_api(data, auth):
         return response, response_data, orderid
         
     except httpx.HTTPError as e:
-        logger.error(f"HTTP error during order placement: {str(e)}")
+        logger.error(f"HTTP error during order placement: {e}")
         response = type('obj', (object,), {'status_code': 500, 'status': 500})
-        return response, {"s": "error", "message": f"HTTP error: {str(e)}"}, None
+        return response, {"s": "error", "message": f"HTTP error: {e}"}, None
     except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error during order placement: {str(e)}")
+        logger.error(f"JSON decode error during order placement: {e}")
         response = type('obj', (object,), {'status_code': 500, 'status': 500})
-        return response, {"s": "error", "message": f"Invalid JSON response: {str(e)}"}, None
+        return response, {"s": "error", "message": f"Invalid JSON response: {e}"}, None
     except Exception as e:
-        logger.error(f"Error during order placement: {str(e)}")
+        logger.exception("Error during order placement")
         response = type('obj', (object,), {'status_code': 500, 'status': 500})
-        return response, {"s": "error", "message": f"General error: {str(e)}"}, None
+        return response, {"s": "error", "message": f"General error: {e}"}, None
 
 def place_smartorder_api(data,auth):
 
@@ -181,8 +180,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    logger.info("position_size : %s", position_size) 
-    logger.info("Open Position : %s", current_position) 
+    logger.debug(f"position_size : {position_size}") 
+    logger.debug(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -193,21 +192,19 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #logger.info("action : %s", action)
-        #logger.info("Quantity : %s", quantity)
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
         
         return res , response, orderid
         
     elif position_size == current_position:
         if int(data['quantity'])==0:
+            logger.info("No open position found. Not placing exit order.")
             response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
         else:
+            logger.info("No action needed. Position size matches current position.")
             response = {"status": "success", "message": "No action needed. Position size matches current position"}
         orderid = None
-        return res, response, orderid  # res remains None as no API call was mad
+        return res, response, orderid
    
    
 
@@ -224,11 +221,9 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #logger.info("smart buy quantity : %s", quantity)
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #logger.info("smart sell quantity : %s", quantity)
 
 
 
@@ -239,11 +234,8 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #logger.info("%s", order_data)
         # Place the order
         res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
         
         return res , response, orderid
     
@@ -293,17 +285,14 @@ def close_all_positions(current_api_key, auth):
             return {"status": "error", "message": error_msg}, response.status_code
             
     except httpx.HTTPError as e:
-        error_msg = f"HTTP error during close all positions: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("HTTP error during close all positions")
+        return {"status": "error", "message": f"HTTP error: {e}"}, 500
     except json.JSONDecodeError as e:
-        error_msg = f"JSON decode error during close all positions: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("JSON decode error during close all positions")
+        return {"status": "error", "message": f"JSON decode error: {e}"}, 500
     except Exception as e:
-        error_msg = f"Error during close all positions: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("Unexpected error during close all positions")
+        return {"status": "error", "message": f"General error: {e}"}, 500
 
 def cancel_order(orderid, auth):
     """
@@ -348,17 +337,14 @@ def cancel_order(orderid, auth):
             return {"status": "error", "message": error_msg}, response.status_code
             
     except httpx.HTTPError as e:
-        error_msg = f"HTTP error during order cancellation: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("HTTP error during order cancellation")
+        return {"status": "error", "message": f"HTTP error: {e}"}, 500
     except json.JSONDecodeError as e:
-        error_msg = f"JSON decode error during order cancellation: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("JSON decode error during order cancellation")
+        return {"status": "error", "message": f"JSON decode error: {e}"}, 500
     except Exception as e:
-        error_msg = f"Error during order cancellation: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("Unexpected error during order cancellation")
+        return {"status": "error", "message": f"General error: {e}"}, 500
 
 
 def modify_order(data, auth):
@@ -404,42 +390,65 @@ def modify_order(data, auth):
             return {"status": "error", "message": error_msg}, response.status_code
             
     except httpx.HTTPError as e:
-        error_msg = f"HTTP error during order modification: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("HTTP error during order modification")
+        return {"status": "error", "message": f"HTTP error: {e}"}, 500
     except json.JSONDecodeError as e:
-        error_msg = f"JSON decode error during order modification: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}, 500
+        logger.exception("JSON decode error during order modification")
+        return {"status": "error", "message": f"JSON decode error: {e}"}, 500
+    except Exception as e:
+        logger.exception("Unexpected error during order modification")
+        return {"status": "error", "message": f"General error: {e}"}, 500
     except Exception as e:
         error_msg = f"Error during order modification: {str(e)}"
         logger.error(error_msg)
         return {"status": "error", "message": error_msg}, 500
     
 
-def cancel_all_orders_api(data,auth):
-
+def cancel_all_orders_api(data, auth):
+    """
+    Cancel all open orders.
+    
+    Args:
+        data: (unused)
+        auth: Authentication token
+        
+    Returns:
+        tuple: (list of canceled order IDs, list of failed order IDs)
+    """
     AUTH_TOKEN = auth
-    # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)
-    #logger.info("%s", order_book_response)
-    if order_book_response['s'] != 'ok':
-        return [], []  # Return empty lists indicating failure to retrieve the order book
+    
+    if order_book_response.get('s') != 'ok':
+        error_msg = order_book_response.get('message', 'Failed to retrieve order book')
+        logger.error(f"Could not fetch order book to cancel all orders: {error_msg}")
+        return [], []
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    orders_to_cancel = [order for order in order_book_response.get('orderBook', [])
-                        if order['status'] in [4, 6]]
-    logger.info("%s", orders_to_cancel)
+    orders_to_cancel = [
+        order for order in order_book_response.get('orderBook', [])
+        if order.get('status') in [4, 6]  # 4: Trigger-pending, 6: Open
+    ]
+    
+    if not orders_to_cancel:
+        logger.info("No open orders to cancel.")
+        return [], []
+
+    logger.debug(f"Found {len(orders_to_cancel)} open orders to cancel.")
+    
     canceled_orders = []
     failed_cancellations = []
 
-    # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['id']
-        cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
+        orderid = order.get('id')
+        if not orderid:
+            logger.warning(f"Skipping order with no ID: {order}")
+            continue
+            
+        cancel_response, status_code = cancel_order(orderid, AUTH_TOKEN)
         if status_code == 200:
+            logger.info(f"Successfully canceled order {orderid}.")
             canceled_orders.append(orderid)
         else:
+            logger.warning(f"Failed to cancel order {orderid}: {cancel_response.get('message', 'Unknown reason')}")
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations

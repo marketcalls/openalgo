@@ -42,7 +42,7 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    logger.info("Initializing Master Contract DB")
+    logger.debug("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
@@ -77,24 +77,24 @@ def copy_from_dataframe(df):
                     symbol = record.get('symbol')
                     if not symbol or pd.isna(symbol) or str(symbol).strip() == '':
                         invalid_records.append(record)
-                        logger.error("Schema validation failed for record: %s", record)
-                        logger.info("Symbol is missing, empty, or null")
+                        logger.error(f"Schema validation failed for record: {record}")
+                        logger.debug("Symbol is missing, empty, or null")
                     else:
                         valid_records.append(record)
             
             if valid_records:
                 db_session.bulk_insert_mappings(SymToken, valid_records)
                 db_session.commit()
-                logger.info("Bulk insert completed successfully with %s new records.", len(valid_records))
+                logger.info(f"Bulk insert completed successfully with {len(valid_records)} new records.")
                 
             if invalid_records:
-                logger.error("Warning: %s records failed schema validation and were skipped.", len(invalid_records))
+                logger.warning(f"{len(invalid_records)} records failed schema validation and were skipped.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.exception(f"Error during bulk insert: {e}")
         if hasattr(e, '__cause__'):
-            logger.info("Caused by: %s", e.__cause__)
+            logger.error(f"Caused by: {e.__cause__}")
         db_session.rollback()
 
 
@@ -106,7 +106,7 @@ def download_csv_paytm_data(output_path):
     # Create output directory if it doesn't exist
     if not os.path.exists(output_path):
         os.makedirs(output_path)
-        logger.info("Created directory: %s", output_path)
+        logger.debug(f"Created directory: {output_path}")
 
     # URLs of the CSV files to be downloaded
     csv_urls = {
@@ -118,19 +118,20 @@ def download_csv_paytm_data(output_path):
 
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
-        # Send GET request using httpx client
-        client = get_httpx_client()
-        response = client.get(url)
-        # Check if the request was successful
-        if response.status_code == 200:
+        try:
+            # Send GET request using httpx client
+            client = get_httpx_client()
+            response = client.get(url)
+            response.raise_for_status() # Raise an exception for bad status codes
             # Construct the full output path for the file
             file_path = os.path.join(output_path, f"{key}.csv")
             # Write the content to the file
             with open(file_path, 'wb') as file:
                 file.write(response.content)
             downloaded_files.append(file_path)
-        else:
-            logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
+            logger.info(f"Successfully downloaded {key} from {url}")
+        except Exception as e:
+            logger.exception(f"Failed to download {key} from {url}. Error: {e}")
     
 
 def reformat_symbol(row):
@@ -272,7 +273,7 @@ def delete_paytm_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
     
 
 def master_contract_download():
@@ -294,7 +295,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.exception(f"An error occurred during master contract download: {e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

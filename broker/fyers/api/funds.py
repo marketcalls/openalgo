@@ -112,7 +112,7 @@ def get_margin_data(auth_token: str) -> Dict[str, str]:
             }
             
         except (ValueError, TypeError) as e:
-            logger.error(f"Error calculating fund totals: {str(e)}")
+            logger.exception("Error calculating fund totals")
             return default_response
             
     except httpx.HTTPStatusError as e:
@@ -122,7 +122,7 @@ def get_margin_data(auth_token: str) -> Dict[str, str]:
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Fyers API response: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error in get_margin_data: {str(e)}")
+        logger.exception("Unexpected error in get_margin_data")
     
     return default_response
 
