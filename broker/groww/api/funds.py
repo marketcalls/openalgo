@@ -36,7 +36,7 @@ def get_margin_data(auth_token):
         
         # Parse the JSON response
         response_data = response.json()
-        logger.info("Funds Details: %s", response_data)
+        logger.info(f"Funds Details: {response_data}")
         
         # Check if the response was successful according to Groww's status field
         if response_data.get('status') != 'SUCCESS':

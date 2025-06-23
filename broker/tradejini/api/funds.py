@@ -45,18 +45,18 @@ def get_margin_data(auth_token):
         )
         
         # Print response for debugging
-        logger.info("%s", 'Tradejini Funds Response:', response.status_code)
-        logger.info("%s", 'Tradejini Funds Data:', response.text)
+        logger.info(f'Tradejini Funds Response: {response.status_code}')
+        logger.info(f'Tradejini Funds Data: {response.text}')
         
         if response.status_code != 200:
-            logger.info("Error fetching margin data: %sresponse.text")
+            logger.info(f"Error fetching margin data: {response.text}")
             return {}
             
         data = response.json()
         
         # Check if response is valid
         if data.get('s') != 'ok' or 'd' not in data:
-            logger.info("Invalid response format: %sdata")
+            logger.info(f"Invalid response format: {data}")
             return {}
             
         # Extract margin details
@@ -74,5 +74,5 @@ def get_margin_data(auth_token):
         return processed_margin_data
         
     except Exception as e:
-        logger.info("Error processing margin data: %sstr(e)")
+        logger.info(f"Error processing margin data: {e}")
         return {}

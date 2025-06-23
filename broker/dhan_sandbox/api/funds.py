@@ -32,7 +32,7 @@ def get_margin_data(auth_token):
     res.status = res.status_code
     margin_data = json.loads(res.text)
 
-    logger.info("Funds Details: %s", margin_data)
+    logger.info(f"Funds Details: {margin_data}")
 
 
     if margin_data.get('status') == 'error':
@@ -44,7 +44,7 @@ def get_margin_data(auth_token):
 
         position_book = get_positions(auth_token)
 
-        logger.info("Positionbook : %s", position_book)
+        logger.info(f"Positionbook : {position_book}")
 
         # Check if position_book is an error response
         if isinstance(position_book, dict) and position_book.get('errorType'):

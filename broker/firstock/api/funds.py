@@ -52,10 +52,10 @@ def get_margin_data(auth_token):
                 
                 return processed_margin_data
             else:
-                logger.info("Error fetching margin data: %s).get('message')}", data.get('error', {)
+                logger.info(f"Error fetching margin data: {data.get('error', {}).get('message')}")
                 return {}
         else:
-            logger.error("Error: {response.status_code}, %s", response.text)
+            logger.error(f"Error: {response.status_code}, {response.text}")
             return {}
 
     except Exception as e:

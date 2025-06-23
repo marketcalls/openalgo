@@ -62,7 +62,7 @@ def get_margin_data(auth_token: str) -> Dict[str, Any]:
         )
         response.raise_for_status()
         margin_data = response.json()
-        logger.info("Margin Data is : %s", margin_data)
+        logger.info(f"Margin Data is : {margin_data}")
         
         equity_margin = margin_data.get('body', {}).get('EquityMargin', [])[0]  # Access the first element of the list
         positions_data = get_positions(auth_token)
