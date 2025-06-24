@@ -165,6 +165,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
             self.connected = False
             self.running = False
+            
+            # Clean up ZeroMQ resources
+            self.cleanup_zmq()
+            
             self.logger.info(f"Disconnected from {self.broker_name} WebSocket server")
             return {"status": "success", "message": f"Disconnected from {self.broker_name} WebSocket server"}
             
