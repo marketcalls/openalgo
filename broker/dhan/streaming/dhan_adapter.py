@@ -290,7 +290,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "mode": mode,
                     "depth_level": depth_level  # Store depth_level for future reference
                 }
-                self.token_to_symbol[actual_token] = (symbol, exchange)
+                # Store token mapping with both string and int keys for robustness
+                self.token_to_symbol[str(actual_token)] = (symbol, exchange)
+                self.token_to_symbol[int(actual_token)] = (symbol, exchange)
+                
+                self.logger.info(f"📝 Stored token mapping: {actual_token} -> ({symbol}, {exchange})")
+                self.logger.info(f"📝 Current token_to_symbol: {self.token_to_symbol}")
             
             # Map OpenAlgo exchange to Dhan exchange code
             exchange_code = 1  # Default to NSE_EQ
@@ -317,10 +322,30 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(f"Exchange {exchange} mapped to Dhan exchange code {exchange_code}")
                 
             # Subscribe to token with Dhan WebSocket, passing exchange code
-            self.logger.info(f"Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
-            self.ws_client.subscribe_tokens([actual_token], dhan_mode, exchange_codes={actual_token: exchange_code})
+            self.logger.info(f"🚀 Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
             
-            self.logger.info(f"Subscribed to {exchange}:{symbol}")
+            # Check if WebSocket client is properly initialized and connected
+            if not self.ws_client:
+                self.logger.error("❌ WebSocket client is None!")
+                return {"status": "error", "message": "WebSocket client not initialized"}
+                
+            # Check connection status
+            is_connected = self.ws_client.is_connected()
+            self.logger.info(f"WebSocket connection status: {is_connected}")
+            
+            if not is_connected:
+                self.logger.warning("⚠️ WebSocket client may not be connected, but attempting subscription anyway")
+                # Don't fail here - let the subscription attempt proceed
+            
+            # Perform subscription
+            success = self.ws_client.subscribe_tokens([actual_token], dhan_mode, exchange_codes={actual_token: exchange_code})
+            
+            if success:
+                self.logger.info(f"✅ Successfully subscribed to {exchange}:{symbol}")
+            else:
+                self.logger.error(f"❌ Failed to subscribe to {exchange}:{symbol}")
+                return {"status": "error", "message": f"Failed to subscribe to {exchange}:{symbol}"}
+            
             return {"status": "success", "message": f"Subscribed to {exchange}:{symbol}"}
             
         except Exception as e:
@@ -425,7 +450,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Callback handler for WebSocket connection event.
         """
-        self.logger.info("WebSocket connected callback")
+        self.logger.info("🟢 WebSocket connected callback triggered")
         self.connected = True
         
     def _on_disconnect(self):
@@ -433,7 +458,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Callback handler for WebSocket disconnection event.
         Attempts to reconnect if needed.
         """
-        self.logger.warning("WebSocket disconnected callback")
+        self.logger.warning("🔴 WebSocket disconnected callback triggered")
         self.connected = False
         
         # Attempt to reconnect if we're still running
@@ -453,7 +478,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Args:
             error: Error object or message from WebSocket
         """
-        self.logger.error(f"WebSocket error: {error}")
+        self.logger.error(f"🚨 WebSocket error callback triggered: {error}")
         
         # Attempt to reconnect on error if still running
         if self.running and self.ws_client:
@@ -470,9 +495,14 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         try:
             if not ticks:
+                self.logger.warning("No ticks received in _on_ticks callback")
                 return
                 
-            self.logger.info(f"Received {len(ticks)} ticks from Dhan WebSocket")
+            self.logger.info(f"🎯 Received {len(ticks)} ticks from Dhan WebSocket")
+            
+            # Debug: Log raw tick data
+            for i, tick in enumerate(ticks):
+                self.logger.info(f"Raw tick {i+1}: {tick}")
             
             # Process each tick
             for tick in ticks:
@@ -483,6 +513,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     
                 # Find symbol from token and handle cleanup
                 with self.lock:
+                    # Debug: Show current token mappings
+                    self.logger.info(f"Looking up token {token} (type: {type(token).__name__})")
+                    self.logger.info(f"Current token_to_symbol mappings: {self.token_to_symbol}")
+                    self.logger.info(f"Current subscribed_symbols: {list(self.subscribed_symbols.keys())}")
+                    
                     # Try direct lookup with both string and int formats for robustness
                     symbol_exchange = self.token_to_symbol.get(str(token)) or self.token_to_symbol.get(int(token))
                     
@@ -490,20 +525,21 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # Enhanced debug info for token mapping
                         token_keys = list(self.token_to_symbol.keys())
                         token_types = [(k, type(k).__name__) for k in token_keys]
-                        self.logger.warning(f"TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found")
+                        self.logger.warning(f"❌ TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found")
                         self.logger.warning(f"Available tokens: {token_types}")
                         
                         # Try more aggressive lookup methods
                         for k, v in self.token_to_symbol.items():
                             try:
                                 if int(k) == int(token):
-                                    self.logger.info(f"Found match using int conversion: {k} -> {v}")
+                                    self.logger.info(f"✅ Found match using int conversion: {k} -> {v}")
                                     symbol_exchange = v
                                     break
                             except (ValueError, TypeError):
                                 pass
                         
                         if not symbol_exchange:
+                            self.logger.error(f"❌ CRITICAL: No symbol found for token {token}, skipping tick")
                             continue  # Still no match, skip this tick
                     
                     # Check if this symbol is still subscribed

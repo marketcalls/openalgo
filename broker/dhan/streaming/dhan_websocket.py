@@ -33,19 +33,24 @@ class DhanWebSocket:
     TYPE_OI = 9          # Open Interest data
     TYPE_PREV_CLOSE = 10  # Previous day close price
     TYPE_MARKET_UPDATE = 4  # Market data update packet
+    TYPE_DEPTH_20_BID = 41   # 20-level depth bid data
+    TYPE_DEPTH_20_ASK = 51   # 20-level depth ask data
     
     # WebSocket URL constants
     MARKET_FEED_WSS = "wss://api-feed.dhan.co"
+    DEPTH_20_FEED_WSS = "wss://depth-api-feed.dhan.co/twentydepth"
     
     # Mode constants for V2 API
     MODE_LTP = "ltp"             # LTP only
     MODE_QUOTE = "marketdata"    # Quote mode (includes price, volume, OHLC)
-    MODE_FULL = "depth"          # Full/Depth mode (includes market depth)
+    MODE_FULL = "depth"          # Full/Depth mode (includes 5-level market depth)
+    MODE_DEPTH_20 = "depth20"    # 20-level market depth
     
     # Request code constants for Dhan API (from marketfeed_dhan.txt)
     REQUEST_CODE_TICKER = TYPE_TICKER  # 15 - LTP
     REQUEST_CODE_QUOTE = TYPE_QUOTE    # 17 - Quote/marketdata
-    REQUEST_CODE_FULL = TYPE_DEPTH     # 21 - Full market data
+    REQUEST_CODE_FULL = TYPE_DEPTH     # 21 - Full market data (5-level depth)
+    REQUEST_CODE_DEPTH_20 = 23         # 23 - 20-level market depth
     
     # Heartbeat interval in seconds
     HEARTBEAT_INTERVAL = 15
@@ -90,10 +95,24 @@ class DhanWebSocket:
         self.instruments = {}  # Dictionary to store subscribed instruments
         self.lock = threading.Lock()
         
+        # 20-level depth connection state
+        self.depth_20_running = False
+        self.depth_20_connected = False
+        self.depth_20_ws = None
+        self.depth_20_loop = None
+        self.depth_20_thread = None
+        self.depth_20_instruments = {}  # 20-level subscriptions
+        
         # Message counters for debugging
         self.message_count = 0
         self.binary_message_count = 0
         self.json_message_count = 0
+        
+        # 20-level depth data storage
+        self.depth_20_data = {}  # {token: {'bids': [], 'offers': [], 'last_update': time}}
+        
+        # Depth subscription tracking for smart fallback
+        self.depth_subscriptions = {}  # {token: {'request_time': time, 'fallback_attempted': bool}}
     
     def wait_for_connection(self, timeout: float = 5.0) -> bool:
         """Wait for WebSocket connection to be established"""
@@ -104,7 +123,10 @@ class DhanWebSocket:
     
     def is_connected(self):
         """Check if WebSocket is connected"""
-        return self.connected and self.ws and not self.ws.closed
+        try:
+            return self.connected and self.ws and hasattr(self.ws, 'open') and self.ws.open
+        except Exception:
+            return False
     
     def start(self) -> bool:
         """Start the WebSocket client in a separate thread."""
@@ -503,8 +525,12 @@ class DhanWebSocket:
                 # Extract header information
                 msg_type, msg_length, exchange_code, token = struct.unpack('<BHBI', packet_data[offset:offset+8])
                 
-                # Debug header fields
-                logger.debug(f"Binary packet header: type={msg_type}, length={msg_length}, exchange={exchange_code}, token={token} (0x{token:04x})")
+                # Debug header fields  
+                logger.info(f"📦 Binary packet header: type={msg_type}, length={msg_length}, exchange={exchange_code}, token={token} (0x{token:04x})")
+                
+                # Log all tokens for debugging
+                exchange_name = self.EXCHANGE_MAP.get(exchange_code, f"UNK_{exchange_code}")
+                logger.info(f"📦 Received message for {exchange_name} token {token}, type {msg_type}")
                 
                 # Validate message length
                 if msg_type == 8:  # Full data packet
@@ -528,6 +554,10 @@ class DhanWebSocket:
                 # Process the message based on type
                 logger.debug(f"Processing message type {msg_type} for token {token}")
                 
+                # Special logging for 20-level depth messages
+                if msg_type in [41, 51]:
+                    logger.info(f"🎯 Received 20-level depth message type {msg_type} for token {token}")
+                
                 if msg_type == self.TYPE_TICKER:  # 15 - LTP data
                     ticks = self._parse_ticker_data(message)
                     if ticks and self.on_ticks:
@@ -540,11 +570,19 @@ class DhanWebSocket:
                         logger.info(f"Parsed quote data for token {token}")
                         self.on_ticks([tick])
                         
-                elif msg_type == self.TYPE_DEPTH:  # 21 - Full market depth
+                elif msg_type == self.TYPE_DEPTH:  # 21 - Full market depth (5-level)
                     tick = self._parse_market_depth(message)
                     if tick and self.on_ticks:
-                        logger.info(f"Parsed market depth for token {token}")
+                        logger.info(f"Parsed 5-level market depth for token {token}")
                         self.on_ticks([tick])
+                        
+                elif msg_type == self.TYPE_DEPTH_20_BID:  # 41 - 20-level bid data
+                    logger.info(f"🎯 Processing 20-level BID data for token {token}")
+                    self._handle_depth_20_bid(message)
+                    
+                elif msg_type == self.TYPE_DEPTH_20_ASK:  # 51 - 20-level ask data
+                    logger.info(f"🎯 Processing 20-level ASK data for token {token}")
+                    self._handle_depth_20_ask(message)
                         
                 elif msg_type == self.TYPE_OI:  # 9 - Open Interest
                     tick = self._parse_oi_data(message)
@@ -573,6 +611,14 @@ class DhanWebSocket:
                 elif msg_type == self.TYPE_DISCONNECT:  # 0 - Disconnect
                     logger.warning(f"Received disconnect message for token {token}")
                     self._parse_disconnect(message)
+                    
+                elif msg_type == self.TYPE_DEPTH_20_BID:  # 41 - 20-level bid data
+                    logger.info(f"🎯 Processing 20-level BID data for token {token}")
+                    self._handle_depth_20_bid(message)
+                    
+                elif msg_type == self.TYPE_DEPTH_20_ASK:  # 51 - 20-level ask data
+                    logger.info(f"🎯 Processing 20-level ASK data for token {token}")
+                    self._handle_depth_20_ask(message)
                     
                 else:
                     logger.warning(f"Unknown message type {msg_type} for token {token}")
@@ -1110,11 +1156,18 @@ class DhanWebSocket:
                 
             # Map subscription mode to request code
             if mode == self.MODE_LTP:
-                request_code = self.TYPE_TICKER      # 15 - LTP data
+                request_code = self.TYPE_TICKER        # 15 - LTP data
             elif mode == self.MODE_QUOTE:
-                request_code = self.TYPE_QUOTE       # 17 - Quote/marketdata
+                request_code = self.TYPE_QUOTE         # 17 - Quote/marketdata
+            elif mode == self.MODE_DEPTH_20:
+                request_code = self.REQUEST_CODE_DEPTH_20  # 23 - 20-level depth
             elif mode == self.MODE_FULL:
-                request_code = self.TYPE_DEPTH       # 21 - Full market depth
+                # For NSE equity/derivatives, auto-select 20-level depth
+                if exchange_code in [1, 2]:  # NSE_EQ, NSE_FNO
+                    request_code = self.REQUEST_CODE_DEPTH_20  # 23 - 20-level depth
+                    logger.info(f"Auto-selecting 20-level depth for NSE exchange_code {exchange_code}")
+                else:
+                    request_code = self.TYPE_DEPTH         # 21 - 5-level depth
             else:
                 logger.error(f"Invalid subscription mode: {mode}")
                 return None
@@ -1187,7 +1240,7 @@ class DhanWebSocket:
             
         try:
             # Validate mode
-            if mode not in [self.MODE_LTP, self.MODE_QUOTE, self.MODE_FULL]:
+            if mode not in [self.MODE_LTP, self.MODE_QUOTE, self.MODE_FULL, self.MODE_DEPTH_20]:
                 logger.error(f"Invalid mode {mode}")
                 return False
                 
@@ -1196,8 +1249,17 @@ class DhanWebSocket:
                 request_code = self.REQUEST_CODE_TICKER
             elif mode == self.MODE_QUOTE:
                 request_code = self.REQUEST_CODE_QUOTE
-            else:  # MODE_FULL/depth
-                request_code = self.REQUEST_CODE_FULL
+            elif mode == self.MODE_DEPTH_20:
+                request_code = self.REQUEST_CODE_DEPTH_20  # 23 - 20-level depth
+            else:  # MODE_FULL/depth - smart dual-connection strategy
+                # Separate NSE (20-level) and MCX/BSE (5-level) subscriptions
+                if self._should_use_20_level_depth(tokens, exchange_codes):
+                    # NSE tokens will use separate 20-level depth connection
+                    return self._subscribe_20_level_depth(tokens, exchange_codes)
+                else:
+                    # MCX/BSE tokens use regular 5-level depth connection
+                    request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
+                    logger.info("📊 Using 5-level depth (RequestCode 21) for MCX/BSE/other exchanges")
                 
             # Create instrument list with exchange codes
             instrument_list = []
@@ -1222,22 +1284,34 @@ class DhanWebSocket:
                         "exchange_segment": exchange_segment
                     }
             
-            # Create subscription packet
+            # Create subscription packet  
             packet = {
                 "RequestCode": request_code,
                 "InstrumentCount": len(tokens),
                 "InstrumentList": instrument_list
             }
             
+            # Log the request code being used
+            depth_type = "20-level" if request_code == self.REQUEST_CODE_DEPTH_20 else "5-level"
+            logger.info(f"Using {depth_type} depth (RequestCode: {request_code}) for {len(tokens)} tokens")
+            
             # Send subscription request
             if self.ws and self.connected:
                 # Log full subscription packet for debugging
-                logger.debug(f"Sending subscription packet: {json.dumps(packet, indent=2)}")
+                logger.info(f"📤 Sending subscription packet: {json.dumps(packet, indent=2)}")
                 
-                asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(packet)),
-                    self.loop
-                )
+                # Send the subscription
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.ws.send(json.dumps(packet)),
+                        self.loop
+                    )
+                    # Wait a bit to ensure it's sent
+                    future.result(timeout=2.0)
+                    logger.info("✅ Subscription packet sent successfully")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send subscription packet: {e}")
+                    return False
                 
                 # Log subscription summary
                 exchange_summary = {}
@@ -1247,7 +1321,7 @@ class DhanWebSocket:
                 logger.info(f"Subscribed to {len(tokens)} tokens in mode {mode}. Exchange distribution: {exchange_summary}")
                 return True
             else:
-                logger.error("WebSocket not connected for subscription")
+                logger.error(f"❌ WebSocket not connected for subscription. ws={self.ws}, connected={self.connected}")
                 return False
                 
         except Exception as e:
@@ -1444,9 +1518,483 @@ class DhanWebSocket:
             logger.error(f"Error handling disconnect message: {e}")
             return None
 
+    def _parse_depth_20_data(self, packet_data):
+        """
+        Parse 20-level market depth data (message type 23)
+        Based on Angel One implementation pattern for feed codes 41 (Bid) and 51 (Ask)
+        
+        Format expected: Header (12 bytes) + 20 packets of 16 bytes each for bids + 20 packets for asks
+        Total expected size: 12 + (20 * 16) + (20 * 16) = 652 bytes
+        """
+        try:
+            logger.debug(f"20-level depth packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
+            
+            # Expected minimum size for 20-level depth
+            expected_size = 12 + (20 * 16 * 2)  # Header + 20 bids + 20 asks
+            if len(packet_data) < expected_size:
+                logger.warning(f"20-level depth data too short: {len(packet_data)} bytes, expected at least {expected_size}")
+                return None
+                
+            # Parse header (first 12 bytes) - following Angel pattern
+            # Header format: msg_length(2) + feed_code(2) + exchange_segment(1) + security_id(4) + reserved(3)
+            header = packet_data[:12]
+            try:
+                msg_length, feed_code, exchange_segment, security_id = struct.unpack('!h2bi', header[:9])
+                logger.debug(f"20-level depth header: length={msg_length}, feed_code={feed_code}, exchange={exchange_segment}, token={security_id}")
+            except struct.error as e:
+                logger.error(f"Error unpacking 20-level depth header: {e}")
+                return None
+            
+            # Get exchange name
+            exch_name = self.EXCHANGE_MAP.get(exchange_segment, 'NSE_EQ')
+            
+            # Parse depth data - following Angel pattern
+            depth_data = {
+                'buy': [],   # Bids
+                'sell': []   # Asks
+            }
+            
+            # Parse bid levels (20 levels starting after header)
+            bid_offset = 12
+            for i in range(20):
+                start = bid_offset + (i * 16)
+                end = start + 16
+                if end > len(packet_data):
+                    logger.warning(f"Not enough data for bid level {i}, breaking")
+                    break
+                    
+                packet = packet_data[start:end]
+                try:
+                    # Format based on Angel implementation: price(8) + quantity(4) + orders(4)
+                    price, quantity, orders = struct.unpack('!dII', packet)
+                    
+                    # Only add non-zero price levels
+                    if price > 0:
+                        depth_data['buy'].append({
+                            'price': round(price, 2),
+                            'quantity': quantity,
+                            'orders': orders
+                        })
+                except struct.error as e:
+                    logger.error(f"Error unpacking bid level {i}: {e}")
+                    continue
+            
+            # Parse ask levels (20 levels after bids)
+            ask_offset = 12 + (20 * 16)
+            for i in range(20):
+                start = ask_offset + (i * 16)
+                end = start + 16
+                if end > len(packet_data):
+                    logger.warning(f"Not enough data for ask level {i}, breaking")
+                    break
+                    
+                packet = packet_data[start:end]
+                try:
+                    # Format based on Angel implementation: price(8) + quantity(4) + orders(4)
+                    price, quantity, orders = struct.unpack('!dII', packet)
+                    
+                    # Only add non-zero price levels
+                    if price > 0:
+                        depth_data['sell'].append({
+                            'price': round(price, 2),
+                            'quantity': quantity,
+                            'orders': orders
+                        })
+                except struct.error as e:
+                    logger.error(f"Error unpacking ask level {i}: {e}")
+                    continue
+            
+            # Create tick data structure
+            tick = {
+                'token': security_id,
+                'instrument_token': security_id,
+                'exchange': exch_name,
+                'depth': depth_data,
+                'mode': 'depth20',
+                'packet_type': 'market_depth_20',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            logger.info(f"Parsed 20-level depth for token {security_id}: {len(depth_data['buy'])} buy levels, {len(depth_data['sell'])} sell levels")
+            return tick if (depth_data['buy'] or depth_data['sell']) else None
+            
+        except Exception as e:
+            logger.error(f"Error parsing 20-level depth data: {e}")
+            logger.error(f"Packet data (first 50 bytes): {packet_data[:50].hex()}")
+            return None
+
+    def _should_use_20_level_depth(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]] = None) -> bool:
+        """
+        Determine if 20-level depth should be used based on exchange types.
+        
+        Returns True if any token is for NSE equity (1) or NSE F&O (2).
+        """
+        # Check if 20-level depth is disabled (can be set via environment variable)
+        if os.getenv('DHAN_DISABLE_20_LEVEL_DEPTH', '').lower() == 'true':
+            logger.info("20-level depth is disabled via environment variable")
+            return False
+            
+        if not exchange_codes:
+            # Default to NSE_EQ (1) which supports 20-level
+            return True
+            
+        # Check if any token is for NSE equity or derivatives  
+        for token in tokens:
+            exchange_code = exchange_codes.get(token, 1)  # Default to NSE_EQ
+            
+            # NSE Equity (1) and NSE F&O (2) support 20-level depth
+            if exchange_code in [1, 2]:
+                return True
+                
+        return False
+
+    def _get_optimal_depth_request_code(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]] = None) -> int:
+        """
+        Determine the optimal depth request code based on exchange types.
+        
+        For NSE equity (1) and NSE F&O (2), use 20-level depth automatically.
+        For other exchanges, use 5-level depth.
+        
+        Returns:
+            int: REQUEST_CODE_DEPTH_20 (23) for NSE equity/derivatives, REQUEST_CODE_FULL (21) for others
+        """
+        if not exchange_codes:
+            # Default to NSE_EQ (1) which supports 20-level
+            logger.info("No exchange codes provided, defaulting to 20-level depth for NSE")
+            return self.REQUEST_CODE_DEPTH_20
+            
+        # Check if any token is for NSE equity or derivatives  
+        for token in tokens:
+            exchange_code = exchange_codes.get(token, 1)  # Default to NSE_EQ
+            
+            # NSE Equity (1) and NSE F&O (2) support 20-level depth
+            if exchange_code in [1, 2]:
+                logger.info(f"Detected NSE equity/derivatives (exchange_code: {exchange_code}), using 20-level depth for token {token}")
+                return self.REQUEST_CODE_DEPTH_20
+                
+        # For other exchanges (BSE, MCX, etc.), use 5-level depth
+        logger.info(f"No NSE equity/derivatives detected for tokens {tokens}, using 5-level depth")
+        return self.REQUEST_CODE_FULL
+
     def get_exchange_segment(self, exchange_code):
         """Get exchange segment string from code"""
         return self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ')
+
+    def _subscribe_20_level_depth(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]] = None) -> bool:
+        """
+        Subscribe to 20-level depth using the separate WebSocket endpoint.
+        
+        Args:
+            tokens: List of tokens to subscribe to
+            exchange_codes: Map of token to exchange code
+            
+        Returns:
+            bool: True if subscription was successful
+        """
+        try:
+            # Filter tokens for NSE only (20-level depth supported)
+            nse_tokens = []
+            if exchange_codes:
+                for token in tokens:
+                    exchange_code = exchange_codes.get(token, 1)
+                    if exchange_code in [1, 2]:  # NSE Equity and NSE F&O
+                        nse_tokens.append(token)
+            else:
+                nse_tokens = tokens  # Assume all NSE if no exchange codes provided
+                
+            if not nse_tokens:
+                logger.warning("No NSE tokens found for 20-level depth subscription")
+                return False
+                
+            logger.info(f"🎯 Starting 20-level depth subscription for {len(nse_tokens)} NSE tokens")
+            
+            # For now, always use 5-level depth on main connection until 20-level is tested
+            # TODO: Enable 20-level depth once connection issues are resolved
+            logger.info("📊 Using 5-level depth on main connection for NSE tokens (20-level temporarily disabled)")
+            request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
+            
+            # Subscribe using main connection with 5-level depth
+            return self._subscribe_with_main_connection(nse_tokens, exchange_codes, request_code, self.MODE_FULL)
+            
+            # Original 20-level depth code (disabled for now)
+            # # Start 20-level depth connection if not already running
+            # if not self.depth_20_connected:
+            #     if not self._start_20_level_connection():
+            #         logger.error("Failed to start 20-level depth connection")
+            #         # Fallback to regular 5-level depth on main connection
+            #         logger.warning("📊 Falling back to 5-level depth on main connection for NSE tokens")
+            #         request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
+            #         
+            #         # Subscribe using main connection with 5-level depth
+            #         return self._subscribe_with_main_connection(nse_tokens, exchange_codes, request_code, self.MODE_FULL)
+            # 
+            # # Subscribe tokens to 20-level depth
+            # return self._send_20_level_subscription(nse_tokens, exchange_codes)
+            
+        except Exception as e:
+            logger.error(f"Error in 20-level depth subscription: {e}")
+            return False
+
+    def _start_20_level_connection(self) -> bool:
+        """
+        Start the separate WebSocket connection for 20-level depth.
+        
+        Returns:
+            bool: True if connection started successfully
+        """
+        try:
+            if self.depth_20_running:
+                logger.info("20-level depth connection already running")
+                return True
+                
+            logger.info("🚀 Starting 20-level depth WebSocket connection...")
+            
+            # Create new event loop for 20-level depth
+            self.depth_20_loop = asyncio.new_event_loop()
+            self.depth_20_thread = threading.Thread(
+                target=self._run_20_level_event_loop, 
+                daemon=True
+            )
+            self.depth_20_thread.start()
+            self.depth_20_running = True
+            
+            # Wait for connection to establish
+            max_wait = 10  # seconds
+            wait_time = 0
+            while not self.depth_20_connected and wait_time < max_wait:
+                time.sleep(0.1)
+                wait_time += 0.1
+                
+            if not self.depth_20_connected:
+                logger.error("20-level depth connection timeout")
+                return False
+                
+            logger.info("✅ 20-level depth connection established")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error starting 20-level depth connection: {e}")
+            return False
+
+    def _run_20_level_event_loop(self):
+        """Run the event loop for 20-level depth WebSocket in a separate thread"""
+        try:
+            asyncio.set_event_loop(self.depth_20_loop)
+            self.depth_20_loop.run_until_complete(self._run_20_level_client())
+        except Exception as e:
+            logger.error(f"Error in 20-level depth event loop: {e}", exc_info=True)
+            # Set connected flag to False on error
+            self.depth_20_connected = False
+        finally:
+            if self.depth_20_loop:
+                try:
+                    if self.depth_20_loop.is_running():
+                        self.depth_20_loop.stop()
+                    if not self.depth_20_loop.is_closed():
+                        self.depth_20_loop.close()
+                except Exception as e:
+                    logger.error(f"Error closing 20-level depth loop: {e}")
+            logger.info("20-level depth WebSocket thread stopped")
+
+    async def _run_20_level_client(self):
+        """Main client loop for 20-level depth WebSocket"""
+        retries = 0
+        max_retries = 5
+        retry_delay = 2
+        
+        logger.info("Starting 20-level depth client loop")
+        
+        while retries < max_retries and self.depth_20_running:
+            try:
+                logger.info(f"Connecting to 20-level depth endpoint (attempt {retries + 1}/{max_retries})...")
+                await self._connect_20_level()
+                
+                retries = 0
+                self.depth_20_connected = True
+                logger.info("✅ 20-level depth WebSocket connected")
+                
+                await self._process_20_level_messages()
+                
+                logger.info("20-level depth WebSocket connection closed normally")
+                break
+                
+            except Exception as e:
+                self.depth_20_connected = False
+                logger.error(f"20-level depth WebSocket error: {e}", exc_info=True)
+                retries += 1
+                if retries < max_retries and self.depth_20_running:
+                    wait_time = retry_delay * retries
+                    logger.info(f"Retrying 20-level depth connection in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Max retries ({max_retries}) reached for 20-level depth connection")
+
+    async def _connect_20_level(self):
+        """Connect to the 20-level depth WebSocket endpoint"""
+        try:
+            # Build connection URL with same authentication pattern as main WebSocket
+            ws_url = f"{self.DEPTH_20_FEED_WSS}?version=2&token={self.access_token}&clientId={self.client_id}&authType=2"
+            logger.info(f"Connecting to 20-level depth endpoint: {ws_url[:50]}...")
+            
+            # Connect using the same approach as the main WebSocket
+            self.depth_20_ws = await websockets.connect(
+                ws_url,
+                ping_interval=30,
+                ping_timeout=10,
+                close_timeout=10,
+                max_size=None
+            )
+            logger.info("🔗 20-level depth WebSocket connection established")
+            
+        except Exception as e:
+            logger.error(f"Error connecting to 20-level depth endpoint: {e}")
+            raise
+
+    async def _process_20_level_messages(self):
+        """Process messages from the 20-level depth WebSocket"""
+        try:
+            async for message in self.depth_20_ws:
+                if not self.depth_20_running:
+                    break
+                    
+                try:
+                    if isinstance(message, bytes):
+                        await self._process_20_level_binary_message(message)
+                    else:
+                        logger.debug(f"20-level depth text message: {message}")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing 20-level depth message: {e}")
+                    
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("20-level depth WebSocket connection closed")
+        except Exception as e:
+            logger.error(f"Error in 20-level depth message processing: {e}")
+        finally:
+            self.depth_20_connected = False
+
+    async def _process_20_level_binary_message(self, message: bytes):
+        """Process binary messages from 20-level depth WebSocket"""
+        try:
+            if len(message) < 12:
+                return
+                
+            # Parse header to get message type
+            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', message[:12])
+            
+            # Handle 20-level depth messages
+            if feed_code == 41:  # 20-level bid
+                self._handle_depth_20_bid(message)
+            elif feed_code == 51:  # 20-level ask
+                self._handle_depth_20_ask(message)
+            else:
+                logger.debug(f"Unknown 20-level depth message type: {feed_code}")
+                
+        except Exception as e:
+            logger.error(f"Error processing 20-level depth binary message: {e}")
+
+    def _send_20_level_subscription(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]] = None) -> bool:
+        """Send subscription request to 20-level depth WebSocket"""
+        try:
+            if not self.depth_20_connected or not self.depth_20_ws:
+                logger.error("20-level depth WebSocket not connected")
+                return False
+                
+            # Create instrument list for 20-level depth
+            instrument_list = []
+            for token in tokens:
+                exchange_code = exchange_codes.get(token, 1) if exchange_codes else 1
+                exchange_segment = self.get_exchange_segment(exchange_code)
+                
+                instrument_list.append({
+                    "ExchangeSegment": exchange_segment,
+                    "SecurityId": str(token)
+                })
+                
+                # Track 20-level subscription
+                with self.lock:
+                    self.depth_20_instruments[token] = {
+                        'exchange_code': exchange_code,
+                        'exchange_segment': exchange_segment,
+                        'subscribed_at': time.time()
+                    }
+            
+            # Create subscription packet for 20-level depth
+            packet = {
+                "RequestCode": self.REQUEST_CODE_DEPTH_20,  # 23
+                "InstrumentCount": len(instrument_list),
+                "InstrumentList": instrument_list
+            }
+            
+            # Send subscription asynchronously
+            asyncio.run_coroutine_threadsafe(
+                self.depth_20_ws.send(json.dumps(packet)),
+                self.depth_20_loop
+            )
+            
+            logger.info(f"🎯 Sent 20-level depth subscription for {len(tokens)} tokens")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error sending 20-level depth subscription: {e}")
+            return False
+
+    def _subscribe_with_main_connection(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]], request_code: int, mode: str) -> bool:
+        """
+        Subscribe using the main WebSocket connection (fallback method).
+        
+        Args:
+            tokens: List of tokens to subscribe
+            exchange_codes: Map of token to exchange code
+            request_code: Request code to use (21 for 5-level, 23 for 20-level)
+            mode: Mode string (ltp, marketdata, depth)
+            
+        Returns:
+            bool: True if subscription was successful
+        """
+        try:
+            if not self.connected or not self.ws:
+                logger.error("Cannot subscribe - main WebSocket not connected")
+                return False
+                
+            # Create instrument list
+            instrument_list = []
+            for token in tokens:
+                exchange_code = exchange_codes.get(token, 1) if exchange_codes else 1
+                exchange_segment = self.get_exchange_segment(exchange_code)
+                
+                instrument_list.append({
+                    "ExchangeSegment": exchange_segment,
+                    "SecurityId": str(token)
+                })
+                
+                # Store subscription info
+                with self.lock:
+                    self.instruments[token] = {
+                        'exchange_code': exchange_code,
+                        'mode': mode,
+                        'subscribed_at': time.time()
+                    }
+            
+            # Create subscription packet
+            packet = {
+                "RequestCode": request_code,
+                "InstrumentCount": len(instrument_list),
+                "InstrumentList": instrument_list
+            }
+            
+            # Send subscription to main WebSocket
+            asyncio.run_coroutine_threadsafe(
+                self.ws.send(json.dumps(packet)),
+                self.loop
+            )
+            
+            logger.info(f"📨 Sent subscription for {len(tokens)} tokens on main connection with RequestCode {request_code}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error subscribing on main connection: {e}")
+            return False
         
     def unsubscribe(self, token, exchange_code=1):
         """Unsubscribe from a token"""
@@ -1500,6 +2048,10 @@ class DhanWebSocket:
             
             # Set running flag to False to stop reconnection attempts
             self.running = False
+            self.depth_20_running = False
+            
+            # Close 20-level depth WebSocket connection first
+            self._stop_20_level_connection()
             
             # Close WebSocket connection if open
             if self.ws:
@@ -1583,3 +2135,258 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error stopping WebSocket client: {e}", exc_info=True)
             return False
+
+    def _stop_20_level_connection(self):
+        """Stop the 20-level depth WebSocket connection and clean up resources"""
+        try:
+            logger.info("Stopping 20-level depth connection...")
+            
+            # Close 20-level depth WebSocket connection if open
+            if self.depth_20_ws:
+                try:
+                    # Use a new event loop if the existing one is not running
+                    if not self.depth_20_loop or self.depth_20_loop.is_closed():
+                        temp_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(temp_loop)
+                        temp_loop.run_until_complete(self.depth_20_ws.close())
+                        temp_loop.close()
+                    else:
+                        # Schedule the close connection coroutine
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.depth_20_ws.close(),
+                            self.depth_20_loop
+                        )
+                        # Wait for the close to complete with a timeout
+                        future.result(timeout=5.0)
+                except Exception as e:
+                    logger.error(f"Error closing 20-level depth WebSocket: {e}")
+            
+            # Stop 20-level depth event loop if running
+            if self.depth_20_loop and self.depth_20_loop.is_running():
+                try:
+                    # Stop the loop
+                    self.depth_20_loop.call_soon_threadsafe(self.depth_20_loop.stop)
+                    # Give it a moment to stop
+                    if self.depth_20_thread and self.depth_20_thread.is_alive():
+                        self.depth_20_thread.join(timeout=2.0)
+                except Exception as e:
+                    logger.error(f"Error stopping 20-level depth event loop: {e}")
+            
+            # Close 20-level depth event loop if it exists and is not closed
+            if self.depth_20_loop and not self.depth_20_loop.is_closed():
+                try:
+                    # Run remaining tasks to completion
+                    pending = asyncio.all_tasks(loop=self.depth_20_loop)
+                    if pending:
+                        self.depth_20_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    self.depth_20_loop.close()
+                except Exception as e:
+                    logger.error(f"Error closing 20-level depth event loop: {e}")
+                finally:
+                    self.depth_20_loop = None
+            
+            # Join 20-level depth thread if it exists and is alive
+            if self.depth_20_thread and self.depth_20_thread.is_alive():
+                try:
+                    self.depth_20_thread.join(timeout=2.0)
+                    if self.depth_20_thread.is_alive():
+                        logger.warning("20-level depth thread did not terminate gracefully")
+                except Exception as e:
+                    logger.error(f"Error joining 20-level depth thread: {e}")
+                finally:
+                    self.depth_20_thread = None
+            
+            # Clear 20-level depth instruments list
+            with self.lock:
+                self.depth_20_instruments.clear()
+                self.depth_20_data.clear()
+            
+            # Reset 20-level depth connection state
+            self.depth_20_connected = False
+            self.depth_20_ws = None
+            
+            logger.info("20-level depth connection stopped and resources cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Error stopping 20-level depth connection: {e}")
+    
+    def _handle_depth_20_bid(self, message):
+        """Handle 20-level bid data (message type 41)"""
+        try:
+            # For 20-level depth, we need to re-parse the entire message with the correct format
+            # The message passed here is the complete message, so parse header again
+            if len(message) < 12:
+                logger.error(f"20-level bid message too short: {len(message)} bytes")
+                return
+            
+            # Use the working code format for 20-level depth messages
+            header = message[:12]
+            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', header)
+            
+            logger.debug(f"20-level bid header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={security_id}")
+            
+            # Parse 20 bid packets (each 16 bytes: price(8) + quantity(4) + orders(4))
+            depth_data = []
+            
+            for i in range(20):
+                start = 12 + (i * 16)
+                end = start + 16
+                if end > len(message):
+                    logger.warning(f"Incomplete bid packet at level {i+1}")
+                    break
+                    
+                packet = message[start:end]
+                price, quantity, orders = struct.unpack('!dII', packet)
+                
+                depth_data.append({
+                    "price": price,
+                    "quantity": quantity,
+                    "orders": orders
+                })
+            
+            # Store bid data using the working code pattern
+            with self.lock:
+                if security_id not in self.depth_20_data:
+                    self.depth_20_data[security_id] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
+                
+                self.depth_20_data[security_id]['bids'] = depth_data
+                self.depth_20_data[security_id]['last_bid_update'] = time.time()
+                
+                # Check if we have both bid and ask data
+                self._check_and_send_depth_20(security_id)
+                
+        except Exception as e:
+            logger.error(f"Error handling 20-level bid data: {e}")
+            logger.error(f"Message hex: {message.hex()}")
+    
+    def _handle_depth_20_ask(self, message):
+        """Handle 20-level ask data (message type 51)"""
+        try:
+            # For 20-level depth, we need to re-parse the entire message with the correct format
+            # The message passed here is the complete message, so parse header again
+            if len(message) < 12:
+                logger.error(f"20-level ask message too short: {len(message)} bytes")
+                return
+            
+            # Use the working code format for 20-level depth messages
+            header = message[:12]
+            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', header)
+            
+            logger.debug(f"20-level ask header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={security_id}")
+            
+            # Parse 20 ask packets (each 16 bytes: price(8) + quantity(4) + orders(4))
+            depth_data = []
+            
+            for i in range(20):
+                start = 12 + (i * 16)
+                end = start + 16
+                if end > len(message):
+                    logger.warning(f"Incomplete ask packet at level {i+1}")
+                    break
+                    
+                packet = message[start:end]
+                price, quantity, orders = struct.unpack('!dII', packet)
+                
+                depth_data.append({
+                    "price": price,
+                    "quantity": quantity,
+                    "orders": orders
+                })
+            
+            # Store ask data using the working code pattern
+            with self.lock:
+                if security_id not in self.depth_20_data:
+                    self.depth_20_data[security_id] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
+                
+                self.depth_20_data[security_id]['offers'] = depth_data
+                self.depth_20_data[security_id]['last_ask_update'] = time.time()
+                
+                # Check if we have both bid and ask data
+                self._check_and_send_depth_20(security_id)
+                
+        except Exception as e:
+            logger.error(f"Error handling 20-level ask data: {e}")
+            logger.error(f"Message hex: {message.hex()}")
+    
+    def _check_and_send_depth_20(self, token):
+        """Check if we have both bid and ask data and send combined tick"""
+        try:
+            if token not in self.depth_20_data:
+                return
+                
+            data = self.depth_20_data[token]
+            
+            # Check if we have both bid and offer data (using 'offers' as in working code)
+            if not data.get('bids') or not data.get('offers'):
+                return
+                
+            # Check if data is recent (within 1 second)
+            current_time = time.time()
+            bid_age = current_time - data.get('last_bid_update', 0)
+            ask_age = current_time - data.get('last_ask_update', 0)
+            
+            if bid_age > 1.0 or ask_age > 1.0:
+                logger.debug(f"Stale 20-level depth data for token {token}: bid_age={bid_age:.2f}s, ask_age={ask_age:.2f}s")
+                return
+            
+            # Get exchange name
+            exchange_code = data.get('exchange_code', 1)
+            exchange = self.EXCHANGE_MAP.get(exchange_code, 'NSE_EQ')
+            
+            # Format depth data to match the OpenAlgo standard
+            formatted_bids = []
+            for i, bid in enumerate(data['bids'][:20]):  # Ensure max 20 levels
+                formatted_bids.append({
+                    'price': round(float(bid['price']), 2),
+                    'quantity': int(bid['quantity']),
+                    'orders': int(bid['orders']),
+                    'level': i + 1
+                })
+            
+            formatted_offers = []
+            for i, offer in enumerate(data['offers'][:20]):  # Ensure max 20 levels
+                formatted_offers.append({
+                    'price': round(float(offer['price']), 2),
+                    'quantity': int(offer['quantity']),
+                    'orders': int(offer['orders']),
+                    'level': i + 1
+                })
+            
+            # Create tick data in OpenAlgo format with enhanced depth information
+            tick = {
+                'token': token,
+                'instrument_token': token,
+                'exchange': exchange,
+                'depth': {
+                    'buy': formatted_bids,
+                    'sell': formatted_offers
+                },
+                'mode': 'depth20',
+                'packet_type': 'market_depth_20',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'depth_levels': len(formatted_bids),  # Number of actual levels
+                'total_buy_quantity': sum(bid['quantity'] for bid in formatted_bids),
+                'total_sell_quantity': sum(offer['quantity'] for offer in formatted_offers)
+            }
+            
+            # Add best bid/ask for convenience
+            if formatted_bids:
+                tick['bid'] = formatted_bids[0]['price']
+                tick['bid_qty'] = formatted_bids[0]['quantity']
+            if formatted_offers:
+                tick['ask'] = formatted_offers[0]['price']
+                tick['ask_qty'] = formatted_offers[0]['quantity']
+            
+            # Send tick to callback
+            if self.on_ticks:
+                logger.info(f"🎯 Sending 20-level depth for token {token}: {len(formatted_bids)} bids, {len(formatted_offers)} offers")
+                self.on_ticks([tick])
+            
+            # Clear the data after sending
+            with self.lock:
+                if token in self.depth_20_data:
+                    self.depth_20_data[token]['bids'] = []
+                    self.depth_20_data[token]['offers'] = []
+                    
+        except Exception as e:
+            logger.error(f"Error checking and sending 20-level depth: {e}")
