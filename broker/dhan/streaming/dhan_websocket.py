@@ -728,69 +728,85 @@ class DhanWebSocket:
     def _parse_market_update(self, packet_data):
         """Parse market data update packet (message type TYPE_MARKET_UPDATE = 4)
         
-        Binary format:
-        - Byte 0: Message type (4)
-        - Bytes 1-2: Message length
-        - Byte 3: Exchange segment
-        - Bytes 4-7: Token
-        - Bytes 8-11: LTP (float)
-        - Bytes 12-15: Volume (int)
-        - Bytes 16-19: Total buy quantity (int)
-        - Bytes 20-23: VWAP (float)
-        - Bytes 24-27: Open price (float)
-        - Bytes 28-31: Close price (float)
-        - Bytes 32-35: High price (float)
-        - Bytes 36-39: Low price (float)
+        Based on official Dhan client - this should use the same format as process_quote
+        since message type 4 in Dhan is actually Quote data, not a separate market update format.
         """
         try:
-            if len(packet_data) < 40:  # Need at least 40 bytes for all fields
-                logger.warning(f"Market update data too short: {len(packet_data)} bytes")
+            # Message type 4 in Dhan uses the same format as Quote (type 17)
+            # Based on official Dhan client process_quote method
+            if len(packet_data) < 50:  # Same minimum length as quote data
+                logger.warning(f"Market update data too short: {len(packet_data)} bytes, need at least 50")
                 return None
                 
-            # Unpack header and basic fields
-            msg_type, msg_len, exchange_code, token = struct.unpack('<BHBI', packet_data[0:8])
+            # Use the same format as official Dhan client process_quote
+            # Format: <BHBIfHIfIIIffff
+            try:
+                unpack_quote = [struct.unpack('<BHBIfHIfIIIffff', packet_data[0:50])]
+                logger.debug(f"Market update unpacked: {unpack_quote[0]}")
+            except struct.error as e:
+                logger.error(f"Error unpacking market update data: {e}")
+                logger.error(f"Data length: {len(packet_data)}, expected at least 50 bytes")
+                logger.error(f"Data (hex): {packet_data.hex()}")
+                return None
             
-            # Unpack market update fields - using little-endian float and int
-            # Format: <fIIfffff (float, int, int, float, float, float, float, float)
-            ltp, volume, total_buy_qty, vwap, open_price, close_price, high_price, low_price = struct.unpack(
-                '<fIIfffff', packet_data[8:40])
+            # Extract fields exactly as in official Dhan client
+            exchange_segment = unpack_quote[0][2]
+            security_id = unpack_quote[0][3]
+            ltp = unpack_quote[0][4]
+            ltq = unpack_quote[0][5]
+            ltt = unpack_quote[0][6]
+            avg_price = unpack_quote[0][7]
+            volume = unpack_quote[0][8]
+            total_sell_quantity = unpack_quote[0][9]
+            total_buy_quantity = unpack_quote[0][10]
+            open_price = unpack_quote[0][11]
+            close_price = unpack_quote[0][12]
+            high_price = unpack_quote[0][13]
+            low_price = unpack_quote[0][14]
             
-            # Map exchange code to string name
-            exch_name = self.EXCHANGE_MAP.get(exchange_code, f'UNK_{exchange_code}')
+            # Get exchange name
+            exch_name = self.EXCHANGE_MAP.get(exchange_segment, 'NSE')
             
-            # Log raw values for debugging
-            logger.debug(f"Market Update - Token: {token}, LTP: {ltp}, Volume: {volume}, "
-                       f"Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
+            # Helper function to convert timestamp like official Dhan client
+            def utc_time(epoch_time):
+                """Converts EPOCH time to UTC time."""
+                try:
+                    return datetime.fromtimestamp(epoch_time).strftime('%H:%M:%S')
+                except:
+                    return datetime.now().strftime('%H:%M:%S')
             
-            # Create tick dictionary with OHLC data
+            # Create tick format matching your expected output structure
             tick = {
-                'token': token,
-                'instrument_token': token,
-                'exchange_segment': exchange_code,
+                'symbol': '',  # Will be set by calling code
                 'exchange': exch_name,
-                'last_price': ltp,
+                'token': security_id,
+                'ltt': utc_time(ltt) if ltt > 0 else None,
+                'timestamp': utc_time(ltt) if ltt > 0 else None,
+                'ltp': round(ltp, 2),
                 'volume': volume,
-                'total_buy_quantity': total_buy_qty,
-                'average_price': vwap,
-                'open': open_price,
-                'high': high_price,
-                'low': low_price,
-                'close': close_price,
-                'ohlc': {
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': close_price
-                },
-                'mode': 'quote',
-                'packet_type': 'market_update'
+                'oi': 0,  # Not available in quote data
+                'open': round(open_price, 2),
+                'high': round(high_price, 2),
+                'low': round(low_price, 2),
+                'close': round(close_price, 2),
+                'mode': 'QUOTE',
+                # Additional fields for OpenAlgo compatibility
+                'instrument_token': security_id,
+                'last_price': round(ltp, 2),
+                'last_quantity': ltq,
+                'average_price': round(avg_price, 2),
+                'total_buy_quantity': total_buy_quantity,
+                'total_sell_quantity': total_sell_quantity
             }
             
-            logger.debug(f"Parsed market update: Token={tick['token']} LTP={tick['last_price']}")
+            logger.debug(f"Parsed market update: Token={tick['token']} LTP={tick['ltp']} "
+                        f"OHLC=({tick['open']}/{tick['high']}/{tick['low']}/{tick['close']}) "
+                        f"Vol={tick['volume']}")
             return tick
             
         except Exception as e:
             logger.error(f"Error parsing market update data: {e}")
+            logger.error(f"Packet data (hex): {packet_data.hex()}")
             return None
             
     def _parse_market_depth(self, packet_data):
@@ -1242,70 +1258,105 @@ class DhanWebSocket:
         """Parse quote data (message type TYPE_QUOTE = 17)"""
         try:
             # Based on official Dhan client, first byte is message type (17), the rest is structured data
-            if len(packet_data) < 51:  # Expected minimum length for quote data
-                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 51")
+            if len(packet_data) < 50:  # Expected minimum length for quote data (official Dhan uses 50)
+                logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 50")
                 return None
                 
-            # Skip the first byte (message type)
-            data = packet_data[1:]
+            # Log raw packet data for debugging
+            logger.debug(f"Raw quote data (hex): {packet_data.hex()}")
             
-            # Unpack 50 bytes of quote data
-            # Format: <BHBIfHIfIIIffff
-            # Breakdown:
-            # B = 1 byte (msg subtype)
+            # Unpack 50 bytes of quote data directly (don't skip first byte)
+            # Format: <BHBIfHIfIIIffff (official Dhan format)
+            # Breakdown exactly as in official Dhan client:
+            # B = 1 byte (message type)
             # H = 2 bytes (message length)
             # B = 1 byte (exchange segment)
             # I = 4 bytes (security id / token)
             # f = 4 bytes (LTP)
             # H = 2 bytes (LTQ)
-            # I = 4 bytes (LTT)
-            # f = 4 bytes (avg price)
+            # I = 4 bytes (LTT - last trade time)
+            # f = 4 bytes (avg_price)
             # I = 4 bytes (volume)
-            # I = 4 bytes (total sell qty)
-            # I = 4 bytes (total buy qty)
+            # I = 4 bytes (total_sell_quantity)
+            # I = 4 bytes (total_buy_quantity)
             # f = 4 bytes (open)
             # f = 4 bytes (close)
             # f = 4 bytes (high)
             # f = 4 bytes (low)
             
-            unpacked = struct.unpack('<BHBIfHIfIIIffff', data[0:50])
+            try:
+                unpacked = struct.unpack('<BHBIfHIfIIIffff', packet_data[0:50])
+                logger.debug(f"Unpacked data: {unpacked}")
+            except struct.error as e:
+                logger.error(f"Error unpacking quote data: {e}")
+                logger.error(f"Data length: {len(packet_data)}, expected at least 50 bytes")
+                logger.error(f"Data (hex): {packet_data.hex()}")
+                return None
             
             # Get exchange name and price scale
             exchange_code = unpacked[2]
             exch_name = self.EXCHANGE_MAP.get(exchange_code, 'UNKNOWN')
             
-            # Create standardized tick format
+            # Note: The official Dhan client shows values are already in correct format
+            # No division by 100 is needed
+                    
+            # Extract values based on official Dhan format
+            # Index mapping:
+            # 0: msg_subtype, 1: msg_length, 2: exchange_segment, 3: security_id
+            # 4: LTP, 5: LTQ, 6: LTT, 7: avg_price
+            # 8: volume, 9: total_sell_quantity, 10: total_buy_quantity
+            # 11: open, 12: close, 13: high, 14: low
+            
+            # Extract OHLC values (no scaling needed - values are already in correct format)
+            open_price = round(unpacked[11], 2)
+            high_price = round(unpacked[13], 2)
+            low_price = round(unpacked[14], 2)
+            close_price = round(unpacked[12], 2)
+            
+            # Log raw and converted values for debugging
+            logger.debug(f"Raw OHLC Values - O:{unpacked[11]} H:{unpacked[13]} L:{unpacked[14]} C:{unpacked[12]}")
+            logger.debug(f"Converted OHLC Values - O:{open_price} H:{high_price} L:{low_price} C:{close_price}")
+            
+            # Helper function to convert timestamp like official Dhan client
+            def utc_time(epoch_time):
+                """Converts EPOCH time to UTC time."""
+                try:
+                    return datetime.fromtimestamp(epoch_time).strftime('%H:%M:%S')
+                except:
+                    return datetime.now().strftime('%H:%M:%S')
+            
+            # Create tick format matching your expected output structure
             tick = {
-                'token': unpacked[3],
-                'instrument_token': unpacked[3],
-                'exchange_segment': exchange_code,
+                'symbol': '',  # Will be set by calling code
                 'exchange': exch_name,
+                'token': unpacked[3],
+                'ltt': utc_time(unpacked[6]) if unpacked[6] > 0 else None,
+                'timestamp': utc_time(unpacked[6]) if unpacked[6] > 0 else None,
+                'ltp': round(unpacked[4], 2),
+                'volume': unpacked[8],
+                'oi': 0,  # Not available in quote data
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'mode': 'QUOTE',
+                # Additional fields for OpenAlgo compatibility
+                'instrument_token': unpacked[3],
                 'last_price': round(unpacked[4], 2),
                 'last_quantity': unpacked[5],
                 'average_price': round(unpacked[7], 2),
-                'volume': unpacked[8],
-                'buy_quantity': unpacked[10],
-                'sell_quantity': unpacked[9],
-                'ohlc': {
-                    'open': round(unpacked[11], 2),
-                    'high': round(unpacked[13], 2),
-                    'low': round(unpacked[14], 2),
-                    'close': round(unpacked[12], 2),
-                },
-                'depth': {
-                    'buy': [],  # not provided in quote packet
-                    'sell': []  # not provided in quote packet
-                },
-                'mode': 'quote',
-                'packet_type': 'quote',
-                'last_trade_time': int(unpacked[6])  # Unix timestamp
+                'total_buy_quantity': unpacked[10],
+                'total_sell_quantity': unpacked[9]
             }
             
-            logger.debug(f"Parsed quote data: Token={tick['token']} LTP={tick['last_price']}")
+            logger.debug(f"Parsed quote data: Token={tick['token']} LTP={tick['last_price']} "
+                        f"OHLC=({tick['open']}/{tick['high']}/{tick['low']}/{tick['close']}) "
+                        f"Vol={tick['volume']}")
             return tick
             
         except Exception as e:
             logger.error(f"Error parsing quote data: {e}")
+            logger.error(f"Packet data (hex): {packet_data.hex()}")
             return None
     def _parse_prev_close(self, packet_data):
         """

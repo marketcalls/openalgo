@@ -628,89 +628,134 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Normalize Dhan tick data to OpenAlgo format.
         
+        This method handles OHLC data that may come in different formats:
+        - Nested under 'ohlc' dictionary
+        - Directly in the tick root
+        - With different field names (e.g., 'traded_volume' vs 'volume')
+        
         Args:
             tick (Dict): Dhan tick data
             
         Returns:
-            Dict: Normalized tick data
+            Dict: Normalized tick data with consistent field names and formats
         """
         try:
+            # Debug log for troubleshooting
+            self.logger.debug(f"Raw tick data: {tick}")
+            
             # Ensure exchange is in OpenAlgo format
             exchange = tick.get("exchange")
             if exchange:
                 openalgo_exchange = get_openalgo_exchange(exchange)
             else:
                 openalgo_exchange = exchange
-                
-            # Get the last price and round to 2 decimal places for cleaner display
-            last_price = tick.get("last_price")
-            if last_price is not None:
-                last_price = round(float(last_price), 2)
-                
+            
+            # Safely get numeric values with validation
+            def safe_float(value, default=0.0):
+                try:
+                    if value is None:
+                        return default
+                    fval = float(value)
+                    # Validate the float is a reasonable price
+                    if abs(fval) > 1e10:  # Arbitrarily large number
+                        self.logger.warning(f"Suspicious price value: {fval}")
+                        return default
+                    return fval
+                except (ValueError, TypeError):
+                    return default
+            
+            # Get the last price with validation
+            last_price = safe_float(tick.get("last_price"), 0.0)
+            
+            # Get timestamp - Dhan uses 'last_trade_time' for quote data
+            timestamp = tick.get("timestamp") or tick.get("last_trade_time")
+            
+            # Create base normalized tick
             normalized = {
                 "symbol": tick.get("symbol"),
                 "exchange": openalgo_exchange,
                 "token": tick.get("token") or tick.get("instrument_token"),
-                "ltt": tick.get("timestamp"),
-                "timestamp": tick.get("timestamp"),
-                "ltp": last_price,  # Use 'ltp' key for compatibility with get_ltp()
-                "volume": tick.get("volume", 0),
-                "oi": tick.get("open_interest", 0)
+                "ltt": timestamp,
+                "timestamp": timestamp,
+                "ltp": round(last_price, 2),  # Use 'ltp' key for compatibility with get_ltp()
+                "volume": int(tick.get("volume", 0)),  # Direct volume field
+                "oi": int(tick.get("open_interest", 0))
             }
             
-            # Add OHLC if available
-            if "ohlc" in tick:
-                ohlc = tick["ohlc"]
-                normalized.update({
-                    "open": round(float(ohlc.get("open", 0)), 2),
-                    "high": round(float(ohlc.get("high", 0)), 2),
-                    "low": round(float(ohlc.get("low", 0)), 2),
-                    "close": round(float(ohlc.get("close", 0)), 2)
-                })
-                
+            # Extract OHLC data - check both nested 'ohlc' and root level
+            ohlc = tick.get("ohlc", {})
+            if not ohlc and any(k in tick for k in ["open", "high", "low", "close"]):
+                ohlc = tick  # Use root level if ohlc dict is empty but fields exist at root
+            
+            # Safely extract and round OHLC values
+            normalized.update({
+                "open": round(safe_float(ohlc.get("open", 0)), 2),
+                "high": round(safe_float(ohlc.get("high", 0)), 2),
+                "low": round(safe_float(ohlc.get("low", 0)), 2),
+                "close": round(safe_float(ohlc.get("close", 0)), 2)
+            })
+            
             # Add market depth if available
             if "depth" in tick:
-                depth_data = tick["depth"]
-                buy_orders = depth_data.get("buy", [])
-                sell_orders = depth_data.get("sell", [])
-                
-                # Format depth data similar to Angel's format
-                normalized["depth"] = {
-                    "buy": [
-                        {
-                            "price": round(float(level.get("price", 0)), 2),
-                            "quantity": int(level.get("quantity", 0)),
-                            "orders": int(level.get("orders", 0))
-                        }
-                        for level in buy_orders[:5]  # Take top 5 levels
-                    ],
-                    "sell": [
-                        {
-                            "price": round(float(level.get("price", 0)), 2),
-                            "quantity": int(level.get("quantity", 0)),
-                            "orders": int(level.get("orders", 0))
-                        }
-                        for level in sell_orders[:5]  # Take top 5 levels
-                    ]
-                }
-                
-                # Calculate total buy/sell quantities from depth
-                normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
-                normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
-                
-                # Set best bid/ask from depth
-                if buy_orders:
-                    normalized["bid"] = round(float(buy_orders[0].get("price", 0)), 2)
-                    normalized["bid_qty"] = int(buy_orders[0].get("quantity", 0))
-                if sell_orders:
-                    normalized["ask"] = round(float(sell_orders[0].get("price", 0)), 2)
-                    normalized["ask_qty"] = int(sell_orders[0].get("quantity", 0))
-                
+                try:
+                    depth_data = tick["depth"]
+                    buy_orders = depth_data.get("buy", [])
+                    sell_orders = depth_data.get("sell", [])
+                    
+                    # Format depth data with validation
+                    def format_levels(levels, side):
+                        formatted = []
+                        for i, level in enumerate(levels[:5]):  # Limit to top 5 levels
+                            try:
+                                formatted.append({
+                                    "price": round(safe_float(level.get("price")), 2),
+                                    "quantity": int(level.get("quantity", 0)),
+                                    "orders": int(level.get("orders", 1)),
+                                    "level": i + 1
+                                })
+                            except Exception as e:
+                                self.logger.warning(f"Error formatting {side} level {i}: {e}")
+                        return formatted
+                    
+                    normalized["depth"] = {
+                        "buy": format_levels(buy_orders, "buy"),
+                        "sell": format_levels(sell_orders, "sell")
+                    }
+                    
+                    # Calculate total buy/sell quantities
+                    normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
+                    normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
+                    
+                    # Set best bid/ask
+                    if buy_orders:
+                        normalized["bid"] = round(safe_float(buy_orders[0].get("price")), 2)
+                        normalized["bid_qty"] = int(buy_orders[0].get("quantity", 0))
+                    if sell_orders:
+                        normalized["ask"] = round(safe_float(sell_orders[0].get("price")), 2)
+                        normalized["ask_qty"] = int(sell_orders[0].get("quantity", 0))
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing depth data: {e}")
+                    # Continue without depth data if there's an error
+            
+            self.logger.debug(f"Normalized tick: {normalized}")
             return normalized
             
         except Exception as e:
-            self.logger.error(f"Error normalizing tick data: {e}")
-            return tick  # Return original tick if normalization fails
+            self.logger.error(f"Error normalizing tick data: {e}\nOriginal tick: {tick}", exc_info=True)
+            # Return minimal valid data with error flag
+            return {
+                "symbol": tick.get("symbol", "UNKNOWN"),
+                "exchange": tick.get("exchange", "UNKNOWN"),
+                "token": tick.get("token") or tick.get("instrument_token", 0),
+                "error": str(e),
+                "ltp": 0.0,
+                "open": 0.0,
+                "high": 0.0,
+                "low": 0.0,
+                "close": 0.0,
+                "volume": 0
+            }
     
     def _try_reconnect(self):
         """
