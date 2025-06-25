@@ -108,14 +108,14 @@ class BrokerData:
             
             if response.get('status') != 'success':
                 error_msg = response.get('message', 'Unknown error')
-                if 'errors' in response:
+                if 'errors' in response and response['errors']:
                     error = response['errors'][0]
                     error_msg = error.get('message', error_msg)
                     error_code = error.get('errorCode', 'NO_CODE')
                 else:
                     error_code = response.get('code', 'NO_CODE')
                 full_error_msg = f"API Error - Code: {error_code}, Message: {error_msg}"
-                logger.error(f"Failed to get quotes for {instrument_key}: {full_error_msg} | Response: {response}")
+                logger.exception(f"Failed to get quotes for {instrument_key}: {full_error_msg} | Response: {response}")
                 raise Exception(full_error_msg)
             
             # Get quote data for the symbol
@@ -123,15 +123,11 @@ class BrokerData:
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
             
-            # Find the quote data - Upstox uses exchange:symbol format for the key
-            quote = None
-            for key, value in quote_data.items():
-                if value.get('instrument_token') == instrument_key:
-                    quote = value
-                    break
-                    
+            # Upstox API returns data with instrument_key as the key
+            quote = quote_data.get(instrument_key)
+
             if not quote:
-                raise Exception(f"No quote data found for instrument key: {instrument_key}")
+                raise Exception(f"No quote data found for instrument key: {instrument_key} in response: {quote_data}")
             
             # Extract depth data - handle index instruments differently
             depth = quote.get('depth', {})
@@ -396,73 +392,52 @@ class BrokerData:
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
             
-            # Use quotes endpoint
+            # Use quotes endpoint to get depth
             url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
             response = get_api_response(url, self.auth_token)
             
             if response.get('status') != 'success':
                 error_msg = response.get('message', 'Unknown error')
-                if 'errors' in response:
+                if 'errors' in response and response['errors']:
                     error = response['errors'][0]
                     error_msg = error.get('message', error_msg)
-                    error_code = error.get('errorCode', 'NO_CODE')
-                else:
-                    error_code = response.get('code', 'NO_CODE')
-                full_error_msg = f"API Error - Code: {error_code}, Message: {error_msg}"
-                logger.error(f"Failed to get market depth for {instrument_key}: {full_error_msg} | Response: {response}")
+                full_error_msg = f"API Error: {error_msg}"
+                logger.exception(f"Failed to get market depth for {instrument_key}: {full_error_msg}")
                 raise Exception(full_error_msg)
             
             # Get quote data for the symbol
-            quote_data = response.get('data', {})
-            if not quote_data:
+            data = response.get('data', {}).get(instrument_key, {})
+            if not data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
             
-            # Find the quote data - Upstox uses exchange:symbol format for the key
-            quote = None
-            for key, value in quote_data.items():
-                if value.get('instrument_token') == instrument_key:
-                    quote = value
-                    break
-            
-            if not quote:
-                logger.warning(f"No quote data found for instrument key: {instrument_key}")
-                return {'buy': [], 'sell': []}
-            
             # Extract depth data
-            depth = quote.get('depth', {})
+            depth = data.get('depth', {})
             buy_orders = depth.get('buy', [])
             sell_orders = depth.get('sell', [])
             
-            # Format buy and sell orders
-            buy = [{'quantity': order.get('quantity', 0), 'price': order.get('price', 0), 'orders': order.get('orders', 0)} for order in buy_orders]
-            sell = [{'quantity': order.get('quantity', 0), 'price': order.get('price', 0), 'orders': order.get('orders', 0)} for order in sell_orders]
+            # Format buy and sell orders safely
+            bids = [{'price': b.get('price', 0), 'quantity': b.get('quantity', 0), 'orders': b.get('orders', 0)} for b in buy_orders[:5]]
+            asks = [{'price': s.get('price', 0), 'quantity': s.get('quantity', 0), 'orders': s.get('orders', 0)} for s in sell_orders[:5]]
             
-            return {'buy': buy, 'sell': sell}
-            
-        except Exception as e:
-            logger.exception(f"Error fetching market depth for {symbol} on {exchange}")
-            raise
-                error_msg = response.get('message', 'Unknown error')
-                if 'errors' in response:
             # Return standard depth data format
             return {
                 'asks': asks,
                 'bids': bids,
-                'high': quote.get('ohlc', {}).get('high', 0),
-                'low': quote.get('ohlc', {}).get('low', 0),
-                'ltp': quote.get('last_price', 0),
-                'ltq': quote.get('last_quantity', 0),
-                'oi': quote.get('oi', 0),
-                'open': quote.get('ohlc', {}).get('open', 0),
-                'prev_close': quote.get('ohlc', {}).get('close', 0),
-                'totalbuyqty': quote.get('total_buy_quantity', 0),
-                'totalsellqty': quote.get('total_sell_quantity', 0),
-                'volume': quote.get('volume', 0)
+                'high': data.get('ohlc', {}).get('high', 0),
+                'low': data.get('ohlc', {}).get('low', 0),
+                'ltp': data.get('last_price', 0),
+                'ltq': data.get('last_quantity', 0),
+                'oi': data.get('oi', 0),
+                'open': data.get('ohlc', {}).get('open', 0),
+                'prev_close': data.get('ohlc', {}).get('close', 0),
+                'totalbuyqty': data.get('total_buy_quantity', 0),
+                'totalsellqty': data.get('total_sell_quantity', 0),
+                'volume': data.get('volume', 0)
             }
             
         except Exception as e:
-            logger.info("Exception in get_depth: %s", str(e))
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            logger.exception(f"Error fetching market depth for {symbol} on {exchange}")
+            raise
 
     # Alias for get_depth to maintain compatibility
     get_market_depth = get_depth
