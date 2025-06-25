@@ -218,12 +218,22 @@ class WebSocketProxy:
                     is_last_client = False
                     break
             
-            # If this was the last client for this user, disconnect the broker adapter
+            # If this was the last client for this user, handle the adapter state
             if is_last_client and user_id in self.broker_adapters:
-                self.broker_adapters[user_id].disconnect()
-                del self.broker_adapters[user_id]
-                if user_id in self.user_broker_mapping:
-                    del self.user_broker_mapping[user_id]
+                adapter = self.broker_adapters[user_id]
+                broker_name = self.user_broker_mapping.get(user_id)
+
+                # For Flattrade, keep the connection alive and just unsubscribe from data
+                if broker_name == 'flattrade' and hasattr(adapter, 'unsubscribe_all'):
+                    logger.info(f"Flattrade adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting.")
+                    adapter.unsubscribe_all()
+                else:
+                    # For all other brokers, disconnect the adapter completely
+                    logger.info(f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter.")
+                    adapter.disconnect()
+                    del self.broker_adapters[user_id]
+                    if user_id in self.user_broker_mapping:
+                        del self.user_broker_mapping[user_id]
             
             del self.user_mapping[client_id]
     
