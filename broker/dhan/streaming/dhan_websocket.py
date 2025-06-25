@@ -468,7 +468,17 @@ class DhanWebSocket:
                 # More detailed binary message logging
                 if len(message) > 0:
                     msg_type = message[0]
-                    logger.debug(f"Received binary message #{self.binary_message_count} (type={msg_type}, size={len(message)} bytes, hex={message[:16].hex()})")
+                    logger.info(f"📨 Received binary message #{self.binary_message_count} (type={msg_type}, size={len(message)} bytes, hex={message[:16].hex()})")
+                    
+                    # Log specific message types for debugging
+                    if msg_type == 5:  # Market depth message
+                        logger.info(f"🔍 DEPTH MESSAGE RECEIVED: size={len(message)}, full_hex={message.hex()}")
+                    elif msg_type == 15:  # LTP message
+                        logger.debug(f"📈 LTP message received: size={len(message)}")
+                    elif msg_type == 17:  # Quote message
+                        logger.debug(f"📊 Quote message received: size={len(message)}")
+                    else:
+                        logger.info(f"❓ Unknown message type {msg_type}: size={len(message)}")
                 else:
                     logger.debug(f"Received empty binary message #{self.binary_message_count}")
                 await self._process_binary_packet(message)
@@ -787,31 +797,37 @@ class DhanWebSocket:
             # Use the same format as official Dhan client process_quote
             # Format: <BHBIfHIfIIIffff
             try:
-                unpack_quote = [struct.unpack('<BHBIfHIfIIIffff', packet_data[0:50])]
-                logger.debug(f"Market update unpacked: {unpack_quote[0]}")
+                unpacked = struct.unpack('<BHBIfHIfIIIffff', packet_data[0:50])
+                logger.debug(f"Market update unpacked: {unpacked}")
             except struct.error as e:
                 logger.error(f"Error unpacking market update data: {e}")
                 logger.error(f"Data length: {len(packet_data)}, expected at least 50 bytes")
                 logger.error(f"Data (hex): {packet_data.hex()}")
                 return None
             
-            # Extract fields exactly as in official Dhan client
-            exchange_segment = unpack_quote[0][2]
-            security_id = unpack_quote[0][3]
-            ltp = unpack_quote[0][4]
-            ltq = unpack_quote[0][5]
-            ltt = unpack_quote[0][6]
-            avg_price = unpack_quote[0][7]
-            volume = unpack_quote[0][8]
-            total_sell_quantity = unpack_quote[0][9]
-            total_buy_quantity = unpack_quote[0][10]
-            open_price = unpack_quote[0][11]
-            close_price = unpack_quote[0][12]
-            high_price = unpack_quote[0][13]
-            low_price = unpack_quote[0][14]
+            # Get exchange name and price scale
+            exchange_code = unpacked[2]
+            exch_name = self.EXCHANGE_MAP.get(exchange_code, 'UNKNOWN')
             
-            # Get exchange name
-            exch_name = self.EXCHANGE_MAP.get(exchange_segment, 'NSE')
+            # Note: The official Dhan client shows values are already in correct format
+            # No division by 100 is needed
+                    
+            # Extract values based on official Dhan format
+            # Index mapping:
+            # 0: msg_subtype, 1: msg_length, 2: exchange_segment, 3: security_id
+            # 4: LTP, 5: LTQ, 6: LTT, 7: avg_price
+            # 8: volume, 9: total_sell_quantity, 10: total_buy_quantity
+            # 11: open, 12: close, 13: high, 14: low
+            
+            # Extract OHLC values (no scaling needed - values are already in correct format)
+            open_price = round(unpacked[11], 2)
+            high_price = round(unpacked[13], 2)
+            low_price = round(unpacked[14], 2)
+            close_price = round(unpacked[12], 2)
+            
+            # Log raw and converted values for debugging
+            logger.debug(f"Raw OHLC Values - O:{unpacked[11]} H:{unpacked[13]} L:{unpacked[14]} C:{unpacked[12]}")
+            logger.debug(f"Converted OHLC Values - O:{open_price} H:{high_price} L:{low_price} C:{close_price}")
             
             # Helper function to convert timestamp like official Dhan client
             def utc_time(epoch_time):
@@ -825,24 +841,24 @@ class DhanWebSocket:
             tick = {
                 'symbol': '',  # Will be set by calling code
                 'exchange': exch_name,
-                'token': security_id,
-                'ltt': utc_time(ltt) if ltt > 0 else None,
-                'timestamp': utc_time(ltt) if ltt > 0 else None,
-                'ltp': round(ltp, 2),
-                'volume': volume,
+                'token': unpacked[3],
+                'ltt': utc_time(unpacked[6]) if unpacked[6] > 0 else None,
+                'timestamp': utc_time(unpacked[6]) if unpacked[6] > 0 else None,
+                'ltp': round(unpacked[4], 2),
+                'volume': unpacked[8],
                 'oi': 0,  # Not available in quote data
-                'open': round(open_price, 2),
-                'high': round(high_price, 2),
-                'low': round(low_price, 2),
-                'close': round(close_price, 2),
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
                 'mode': 'QUOTE',
                 # Additional fields for OpenAlgo compatibility
-                'instrument_token': security_id,
-                'last_price': round(ltp, 2),
-                'last_quantity': ltq,
-                'average_price': round(avg_price, 2),
-                'total_buy_quantity': total_buy_quantity,
-                'total_sell_quantity': total_sell_quantity
+                'instrument_token': unpacked[3],
+                'last_price': round(unpacked[4], 2),
+                'last_quantity': unpacked[5],
+                'average_price': round(unpacked[7], 2),
+                'total_buy_quantity': unpacked[10],
+                'total_sell_quantity': unpacked[9]
             }
             
             logger.debug(f"Parsed market update: Token={tick['token']} LTP={tick['ltp']} "
@@ -982,7 +998,7 @@ class DhanWebSocket:
             
         try:
             # Unpack the entire packet according to Dhan's format
-            # Format: <BHBIIHIIIIIIIIIIIIII100s>
+            # Format: <BHBIIHIIIIIIIIIIIIIIII100s>
             # B: message type (1)
             # H: message length (2)
             # B: exchange code (1)
@@ -1130,67 +1146,6 @@ class DhanWebSocket:
             logger.error(f"Packet data (hex): {packet_data.hex()}")
             return None
     
-    def _parse_full_payload(self, payload):
-        """Legacy parsing method - redirects to _parse_full_data"""
-        try:
-            # Convert the payload to a proper packet by adding message type byte
-            packet = bytes([8]) + payload
-            return self._parse_full_data(packet)
-        except Exception as e:
-            logger.error(f"Error in legacy full payload parsing: {e}")
-            return None
-    
-    def _create_subscription_packet(self, token, mode=MODE_FULL):
-        """Create a subscription packet for Dhan V2 API"""
-        try:
-            # Get exchange code for this token
-            exchange_code = None
-            for token_info in self.instruments.values():
-                if token_info['token'] == token:
-                    exchange_code = token_info['exchange_code']
-                    break
-                    
-            if exchange_code is None:
-                logger.warning(f"No exchange code found for token {token}, using default 1 (NSE_EQ)")
-                exchange_code = 1  # Default to NSE_EQ
-                
-            # Map subscription mode to request code
-            if mode == self.MODE_LTP:
-                request_code = self.TYPE_TICKER        # 15 - LTP data
-            elif mode == self.MODE_QUOTE:
-                request_code = self.TYPE_QUOTE         # 17 - Quote/marketdata
-            elif mode == self.MODE_DEPTH_20:
-                request_code = self.REQUEST_CODE_DEPTH_20  # 23 - 20-level depth
-            elif mode == self.MODE_FULL:
-                # For NSE equity/derivatives, auto-select 20-level depth
-                if exchange_code in [1, 2]:  # NSE_EQ, NSE_FNO
-                    request_code = self.REQUEST_CODE_DEPTH_20  # 23 - 20-level depth
-                    logger.info(f"Auto-selecting 20-level depth for NSE exchange_code {exchange_code}")
-                else:
-                    request_code = self.TYPE_DEPTH         # 21 - 5-level depth
-            else:
-                logger.error(f"Invalid subscription mode: {mode}")
-                return None
-                
-            # Create subscription packet according to Dhan V2 format
-            packet = {
-                "RequestCode": request_code,
-                "InstrumentCount": 1,
-                "InstrumentList": [
-                    {
-                        "ExchangeSegment": self.get_exchange_segment(exchange_code),
-                        "SecurityId": str(token)
-                    }
-                ]
-            }
-            
-            logger.debug(f"Created subscription packet: {packet}")
-            return packet
-            
-        except Exception as e:
-            logger.error(f"Error creating subscription packet: {e}")
-            return None
-        
     def _parse_oi_data(self, packet_data):
         """
         Parse message type 5: Open Interest data
@@ -1200,7 +1155,7 @@ class DhanWebSocket:
         logger.debug(f"OI data packet: {packet_data.hex()}, size: {len(packet_data)} bytes")
         
         # Adjust minimum size
-        if len(packet_data) < 13:  # At minimum need type(1) + token(4) + oi(4) + timestamp
+        if len(packet_data) < 13:  # At minimum need type(1) + token(4) + oi(4) + some timestamp
             logger.warning(f"OI data packet too small: {len(packet_data)} bytes")
             return None
             
@@ -1331,7 +1286,7 @@ class DhanWebSocket:
     def _parse_quote_data(self, packet_data):
         """Parse quote data (message type TYPE_QUOTE = 17)"""
         try:
-            # Based on official Dhan client, first byte is message type (17), the rest is structured data
+            # Based on official Dhan client, first byte is message type, the rest is structured data
             if len(packet_data) < 50:  # Expected minimum length for quote data (official Dhan uses 50)
                 logger.warning(f"Quote data too short: {len(packet_data)} bytes, need at least 50")
                 return None
@@ -1539,7 +1494,7 @@ class DhanWebSocket:
             # Header format: msg_length(2) + feed_code(2) + exchange_segment(1) + security_id(4) + reserved(3)
             header = packet_data[:12]
             try:
-                msg_length, feed_code, exchange_segment, security_id = struct.unpack('!h2bi', header[:9])
+                msg_length, feed_code, exchange_segment, security_id, reserved = struct.unpack('!h2bi', header[:9])
                 logger.debug(f"20-level depth header: length={msg_length}, feed_code={feed_code}, exchange={exchange_segment}, token={security_id}")
             except struct.error as e:
                 logger.error(f"Error unpacking 20-level depth header: {e}")
@@ -1566,7 +1521,7 @@ class DhanWebSocket:
                 packet = packet_data[start:end]
                 try:
                     # Format based on Angel implementation: price(8) + quantity(4) + orders(4)
-                    price, quantity, orders = struct.unpack('!dII', packet)
+                    price, quantity, orders = struct.unpack('<dII', packet)
                     
                     # Only add non-zero price levels
                     if price > 0:
@@ -1591,7 +1546,7 @@ class DhanWebSocket:
                 packet = packet_data[start:end]
                 try:
                     # Format based on Angel implementation: price(8) + quantity(4) + orders(4)
-                    price, quantity, orders = struct.unpack('!dII', packet)
+                    price, quantity, orders = struct.unpack('<dII', packet)
                     
                     # Only add non-zero price levels
                     if price > 0:
@@ -1708,28 +1663,19 @@ class DhanWebSocket:
                 
             logger.info(f"🎯 Starting 20-level depth subscription for {len(nse_tokens)} NSE tokens")
             
-            # For now, always use 5-level depth on main connection until 20-level is tested
-            # TODO: Enable 20-level depth once connection issues are resolved
-            logger.info("📊 Using 5-level depth on main connection for NSE tokens (20-level temporarily disabled)")
-            request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
+            # Start 20-level depth connection if not already running
+            if not self.depth_20_connected:
+                if not self._start_20_level_connection():
+                    logger.error("Failed to start 20-level depth connection")
+                    # Fallback to regular 5-level depth on main connection
+                    logger.warning("📊 Falling back to 5-level depth on main connection for NSE tokens")
+                    request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
+                    
+                    # Subscribe using main connection with 5-level depth
+                    return self._subscribe_with_main_connection(nse_tokens, exchange_codes, request_code, self.MODE_FULL)
             
-            # Subscribe using main connection with 5-level depth
-            return self._subscribe_with_main_connection(nse_tokens, exchange_codes, request_code, self.MODE_FULL)
-            
-            # Original 20-level depth code (disabled for now)
-            # # Start 20-level depth connection if not already running
-            # if not self.depth_20_connected:
-            #     if not self._start_20_level_connection():
-            #         logger.error("Failed to start 20-level depth connection")
-            #         # Fallback to regular 5-level depth on main connection
-            #         logger.warning("📊 Falling back to 5-level depth on main connection for NSE tokens")
-            #         request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
-            #         
-            #         # Subscribe using main connection with 5-level depth
-            #         return self._subscribe_with_main_connection(nse_tokens, exchange_codes, request_code, self.MODE_FULL)
-            # 
-            # # Subscribe tokens to 20-level depth
-            # return self._send_20_level_subscription(nse_tokens, exchange_codes)
+            # Subscribe tokens to 20-level depth
+            return self._send_20_level_subscription(nse_tokens, exchange_codes)
             
         except Exception as e:
             logger.error(f"Error in 20-level depth subscription: {e}")
@@ -1781,6 +1727,13 @@ class DhanWebSocket:
         try:
             asyncio.set_event_loop(self.depth_20_loop)
             self.depth_20_loop.run_until_complete(self._run_20_level_client())
+        except RuntimeError as e:
+            if "Event loop stopped before Future completed" in str(e):
+                logger.info("20-level depth event loop was stopped during shutdown - this is expected")
+            else:
+                logger.error(f"Runtime error in 20-level depth event loop: {e}", exc_info=True)
+            # Set connected flag to False on error
+            self.depth_20_connected = False
         except Exception as e:
             logger.error(f"Error in 20-level depth event loop: {e}", exc_info=True)
             # Set connected flag to False on error
@@ -1813,7 +1766,23 @@ class DhanWebSocket:
                 self.depth_20_connected = True
                 logger.info("✅ 20-level depth WebSocket connected")
                 
-                await self._process_20_level_messages()
+                # Start heartbeat task for 20-level depth
+                heartbeat_task = asyncio.create_task(self._depth_20_heartbeat_task())
+                
+                # Wait a moment to see if we get initial messages
+                await asyncio.sleep(0.5)
+                logger.info("Starting message processing loop for 20-level depth")
+                
+                try:
+                    # Process messages
+                    await self._process_20_level_messages()
+                finally:
+                    # Cancel heartbeat task
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
                 
                 logger.info("20-level depth WebSocket connection closed normally")
                 break
@@ -1829,11 +1798,24 @@ class DhanWebSocket:
                 else:
                     logger.error(f"Max retries ({max_retries}) reached for 20-level depth connection")
 
+    async def _depth_20_heartbeat_task(self):
+        """
+        Periodically send heartbeat to keep the 20-level depth connection alive
+        """
+        while self.depth_20_running:
+            if self.depth_20_ws and hasattr(self.depth_20_ws, 'open') and self.depth_20_ws.open:
+                try:
+                    await self.depth_20_ws.send(json.dumps({"a": "h"}))
+                    logger.debug("20-level depth heartbeat sent")
+                except Exception as e:
+                    logger.error(f"Error sending 20-level depth heartbeat: {e}")
+            await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+    
     async def _connect_20_level(self):
         """Connect to the 20-level depth WebSocket endpoint"""
         try:
-            # Build connection URL with same authentication pattern as main WebSocket
-            ws_url = f"{self.DEPTH_20_FEED_WSS}?version=2&token={self.access_token}&clientId={self.client_id}&authType=2"
+            # Build connection URL - try without version parameter like in working example
+            ws_url = f"{self.DEPTH_20_FEED_WSS}?token={self.access_token}&clientId={self.client_id}&authType=2"
             logger.info(f"Connecting to 20-level depth endpoint: {ws_url[:50]}...")
             
             # Connect using the same approach as the main WebSocket
@@ -1853,45 +1835,127 @@ class DhanWebSocket:
     async def _process_20_level_messages(self):
         """Process messages from the 20-level depth WebSocket"""
         try:
+            logger.info("Starting to process 20-level depth messages")
+            message_count = 0
             async for message in self.depth_20_ws:
                 if not self.depth_20_running:
                     break
                     
                 try:
+                    message_count += 1
                     if isinstance(message, bytes):
+                        logger.info(f"Received 20-level depth binary message #{message_count}, size: {len(message)} bytes")
+                        # Log first few bytes for debugging
+                        if len(message) >= 12:
+                            logger.debug(f"Message header (hex): {message[:12].hex()}")
                         await self._process_20_level_binary_message(message)
                     else:
-                        logger.debug(f"20-level depth text message: {message}")
+                        logger.info(f"20-level depth text message: {message}")
                         
                 except Exception as e:
-                    logger.error(f"Error processing 20-level depth message: {e}")
+                    logger.error(f"Error processing 20-level depth message: {e}", exc_info=True)
                     
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("20-level depth WebSocket connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning(f"20-level depth WebSocket connection closed: {e}")
         except Exception as e:
-            logger.error(f"Error in 20-level depth message processing: {e}")
+            logger.error(f"Error in 20-level depth message processing: {e}", exc_info=True)
         finally:
+            logger.info(f"20-level depth message processing ended. Total messages received: {message_count}")
             self.depth_20_connected = False
 
     async def _process_20_level_binary_message(self, message: bytes):
-        """Process binary messages from 20-level depth WebSocket"""
+        """Process binary messages from 20-level depth WebSocket - may contain multiple concatenated messages"""
         try:
             if len(message) < 12:
+                logger.warning(f"20-level depth message too short: {len(message)} bytes")
                 return
-                
-            # Parse header to get message type
-            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', message[:12])
             
-            # Handle 20-level depth messages
-            if feed_code == 41:  # 20-level bid
-                self._handle_depth_20_bid(message)
-            elif feed_code == 51:  # 20-level ask
-                self._handle_depth_20_ask(message)
-            else:
-                logger.debug(f"Unknown 20-level depth message type: {feed_code}")
+            # Log first few bytes to understand the format
+            logger.info(f"20-level depth message first 16 bytes (hex): {message[:16].hex()}")
+            
+            # Process multiple messages that may be concatenated in the buffer
+            offset = 0
+            message_count = 0
+            
+            while offset + 12 <= len(message):
+                try:
+                    # Parse the header for each individual message
+                    header = message[offset:offset+12]
+                    msg_length, feed_code, exchange_segment, security_id, reserved = struct.unpack('!h2bi', header)
+                    
+                    # security_id needs to be converted from bytes if it's returned as bytes
+                    if isinstance(security_id, bytes):
+                        token = int.from_bytes(security_id, 'big')
+                    else:
+                        token = security_id
+                    
+                    message_count += 1
+                    
+                    # Check if the parsed token matches our subscriptions
+                    if token not in [2885, 1594, 11536]:
+                        # Try to find the correct token in the message
+                        logger.info(f"Token mismatch {token}, searching for correct token...")
+                        found_token = None
+                        
+                        # Search for our subscribed tokens in the first 20 bytes
+                        for search_token in [2885, 1594, 11536]:
+                            token_bytes = struct.pack('>I', search_token)  # Big endian
+                            if token_bytes in message[offset:offset+20]:
+                                found_token = search_token
+                                logger.info(f"Found token {search_token} in message")
+                                break
+                            
+                            token_bytes = struct.pack('<I', search_token)  # Little endian
+                            if token_bytes in message[offset:offset+20]:
+                                found_token = search_token
+                                logger.info(f"Found token {search_token} in message (little endian)")
+                                break
+                        
+                        if found_token:
+                            token = found_token
+                        else:
+                            logger.warning(f"No matching token found, using parsed value {token}")
+                    
+                    logger.info(f"Message #{message_count} - length: {msg_length}, feed_code: {feed_code}, exchange: {exchange_segment}, token: {token}")
+                    
+                    # For 20-level depth, the messages are fixed size based on the working example
+                    # 20 levels × 16 bytes each for bid/ask + 12 byte header = 332 bytes per message
+                    # But let's try a more conservative approach using the buffer size
+                    
+                    # Check if this looks like a reasonable message length
+                    if msg_length > len(message):
+                        # The parsed length is too large, this suggests fragmented/multiple messages
+                        # For now, let's use the remaining buffer size
+                        total_msg_length = len(message) - offset
+                        logger.info(f"Using remaining buffer size {total_msg_length} instead of parsed length {msg_length}")
+                    else:
+                        total_msg_length = msg_length
+                    
+                    # Extract the individual message
+                    individual_message = message[offset:offset + total_msg_length]
+                    
+                    # Handle 20-level depth messages - pass the correct token
+                    if feed_code == 41:  # 20-level bid
+                        self._handle_depth_20_bid(individual_message, token)
+                    elif feed_code == 51:  # 20-level ask
+                        self._handle_depth_20_ask(individual_message, token)
+                    else:
+                        logger.warning(f"Unknown 20-level depth message type: {feed_code} (hex: {feed_code:04x})")
+                    
+                    # Move to next message
+                    offset += total_msg_length
+                    
+                except struct.error as e:
+                    logger.error(f"Error parsing message at offset {offset}: {e}")
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing individual message at offset {offset}: {e}")
+                    break
+            
+            logger.info(f"Processed {message_count} individual messages from {len(message)} byte buffer")
                 
         except Exception as e:
-            logger.error(f"Error processing 20-level depth binary message: {e}")
+            logger.error(f"Error processing 20-level depth binary message: {e}", exc_info=True)
 
     def _send_20_level_subscription(self, tokens: List[int], exchange_codes: Optional[Dict[int, int]] = None) -> bool:
         """Send subscription request to 20-level depth WebSocket"""
@@ -1906,10 +1970,13 @@ class DhanWebSocket:
                 exchange_code = exchange_codes.get(token, 1) if exchange_codes else 1
                 exchange_segment = self.get_exchange_segment(exchange_code)
                 
+                # Ensure SecurityId is a string as in working example
                 instrument_list.append({
                     "ExchangeSegment": exchange_segment,
                     "SecurityId": str(token)
                 })
+                
+                logger.debug(f"Adding to 20-level subscription: token={token}, exchange_segment={exchange_segment}")
                 
                 # Track 20-level subscription
                 with self.lock:
@@ -1926,11 +1993,16 @@ class DhanWebSocket:
                 "InstrumentList": instrument_list
             }
             
+            # Log the subscription packet
+            logger.info(f"Sending 20-level depth subscription packet: {json.dumps(packet, indent=2)}")
+            
             # Send subscription asynchronously
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self.depth_20_ws.send(json.dumps(packet)),
                 self.depth_20_loop
             )
+            # Wait for send to complete
+            future.result(timeout=2.0)
             
             logger.info(f"🎯 Sent 20-level depth subscription for {len(tokens)} tokens")
             return True
@@ -2043,174 +2115,117 @@ class DhanWebSocket:
         4. Thread
         5. Internal state
         """
+        logger.info("Stopping WebSocket client and cleaning up all resources")
+        
+        # Set running flags to False to stop all loops
+        self.running = False
+        self.depth_20_running = False
+        
         try:
-            logger.info("Stopping WebSocket client...")
-            
-            # Set running flag to False to stop reconnection attempts
-            self.running = False
-            self.depth_20_running = False
-            
-            # Close 20-level depth WebSocket connection first
-            self._stop_20_level_connection()
-            
-            # Close WebSocket connection if open
-            if self.ws:
+            # If we have an event loop, schedule cleanup on it
+            if self.loop and not self.loop.is_closed():
+                # Schedule cleanup on the event loop
+                future = asyncio.run_coroutine_threadsafe(self._cleanup_all_connections(), self.loop)
                 try:
-                    # Use a new event loop if the existing one is not running
-                    if not self.loop or self.loop.is_closed():
-                        temp_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(temp_loop)
-                        temp_loop.run_until_complete(self._close_connection())
-                        temp_loop.close()
-                    else:
-                        # Schedule the close connection coroutine
-                        future = asyncio.run_coroutine_threadsafe(
-                            self._close_connection(),
-                            self.loop
-                        )
-                        # Wait for the close to complete with a timeout
-                        future.result(timeout=5.0)
+                    # Wait for cleanup to complete with timeout
+                    future.result(timeout=10.0)
                 except Exception as e:
-                    logger.error(f"Error closing WebSocket: {e}", exc_info=True)
+                    logger.error(f"Error during async cleanup: {e}")
             
-            # Cancel all pending tasks
-            if hasattr(self, 'pending_tasks') and self.pending_tasks:
-                for task in self.pending_tasks:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            task.result()
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as e:
-                            logger.error(f"Error cancelling task: {e}", exc_info=True)
-                self.pending_tasks.clear()
-            
-            # Stop event loop if running
-            if self.loop and self.loop.is_running():
-                try:
-                    # Stop the loop
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                    # Give it a moment to stop
-                    if self.thread and self.thread.is_alive():
-                        self.thread.join(timeout=2.0)
-                except Exception as e:
-                    logger.error(f"Error stopping event loop: {e}", exc_info=True)
-            
-            # Close event loop if it exists and is not closed
+            # Stop the event loop
             if self.loop and not self.loop.is_closed():
                 try:
-                    # Run remaining tasks to completion
-                    pending = asyncio.all_tasks(loop=self.loop)
-                    if pending:
-                        self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    self.loop.close()
+                    self.loop.call_soon_threadsafe(self.loop.stop)
                 except Exception as e:
-                    logger.error(f"Error closing event loop: {e}", exc_info=True)
-                finally:
-                    self.loop = None
+                    logger.error(f"Error stopping event loop: {e}")
             
-            # Join thread if it exists and is alive
+            # Wait for thread to finish
             if self.thread and self.thread.is_alive():
                 try:
-                    self.thread.join(timeout=2.0)
+                    self.thread.join(timeout=5.0)
                     if self.thread.is_alive():
-                        logger.warning("Thread did not terminate gracefully")
+                        logger.warning("WebSocket thread did not terminate within timeout")
                 except Exception as e:
-                    logger.error(f"Error joining thread: {e}", exc_info=True)
-                finally:
-                    self.thread = None
+                    logger.error(f"Error joining WebSocket thread: {e}")
             
-            # Clear instruments list
-            with self.lock:
-                self.instruments.clear()
-            
-            # Reset connection state
-            self.connected = False
-            self.ws = None
-            
-            logger.info("WebSocket client stopped and resources cleaned up")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error stopping WebSocket client: {e}", exc_info=True)
-            return False
-
-    def _stop_20_level_connection(self):
-        """Stop the 20-level depth WebSocket connection and clean up resources"""
-        try:
-            logger.info("Stopping 20-level depth connection...")
-            
-            # Close 20-level depth WebSocket connection if open
-            if self.depth_20_ws:
-                try:
-                    # Use a new event loop if the existing one is not running
-                    if not self.depth_20_loop or self.depth_20_loop.is_closed():
-                        temp_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(temp_loop)
-                        temp_loop.run_until_complete(self.depth_20_ws.close())
-                        temp_loop.close()
-                    else:
-                        # Schedule the close connection coroutine
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.depth_20_ws.close(),
-                            self.depth_20_loop
-                        )
-                        # Wait for the close to complete with a timeout
-                        future.result(timeout=5.0)
-                except Exception as e:
-                    logger.error(f"Error closing 20-level depth WebSocket: {e}")
-            
-            # Stop 20-level depth event loop if running
-            if self.depth_20_loop and self.depth_20_loop.is_running():
-                try:
-                    # Stop the loop
-                    self.depth_20_loop.call_soon_threadsafe(self.depth_20_loop.stop)
-                    # Give it a moment to stop
-                    if self.depth_20_thread and self.depth_20_thread.is_alive():
-                        self.depth_20_thread.join(timeout=2.0)
-                except Exception as e:
-                    logger.error(f"Error stopping 20-level depth event loop: {e}")
-            
-            # Close 20-level depth event loop if it exists and is not closed
-            if self.depth_20_loop and not self.depth_20_loop.is_closed():
-                try:
-                    # Run remaining tasks to completion
-                    pending = asyncio.all_tasks(loop=self.depth_20_loop)
-                    if pending:
-                        self.depth_20_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    self.depth_20_loop.close()
-                except Exception as e:
-                    logger.error(f"Error closing 20-level depth event loop: {e}")
-                finally:
-                    self.depth_20_loop = None
-            
-            # Join 20-level depth thread if it exists and is alive
+            # Wait for 20-level depth thread to finish
             if self.depth_20_thread and self.depth_20_thread.is_alive():
                 try:
-                    self.depth_20_thread.join(timeout=2.0)
+                    self.depth_20_thread.join(timeout=5.0)
                     if self.depth_20_thread.is_alive():
-                        logger.warning("20-level depth thread did not terminate gracefully")
+                        logger.warning("20-level depth thread did not terminate within timeout")
                 except Exception as e:
                     logger.error(f"Error joining 20-level depth thread: {e}")
-                finally:
-                    self.depth_20_thread = None
-            
-            # Clear 20-level depth instruments list
-            with self.lock:
-                self.depth_20_instruments.clear()
-                self.depth_20_data.clear()
-            
-            # Reset 20-level depth connection state
-            self.depth_20_connected = False
-            self.depth_20_ws = None
-            
-            logger.info("20-level depth connection stopped and resources cleaned up")
-            
+                    
         except Exception as e:
-            logger.error(f"Error stopping 20-level depth connection: {e}")
+            logger.error(f"Error during WebSocket client shutdown: {e}")
+        finally:
+            # Reset all state
+            self.connected = False
+            self.depth_20_connected = False
+            self.ws = None
+            self.depth_20_ws = None
+            self.loop = None
+            self.depth_20_loop = None
+            self.thread = None
+            self.depth_20_thread = None
+            
+            logger.info("WebSocket client stopped and all resources cleaned up")
+
+    async def _cleanup_all_connections(self):
+        """
+        Clean up both main WebSocket and 20-level depth WebSocket connections.
+        """
+        logger.info("Cleaning up all WebSocket connections")
+        
+        try:
+            # Create cleanup tasks for both connections
+            cleanup_tasks = []
+            
+            # Main WebSocket cleanup
+            if self.ws:
+                cleanup_tasks.append(self._close_connection())
+            
+            # 20-level depth WebSocket cleanup
+            if self.depth_20_ws:
+                cleanup_tasks.append(self._close_depth_20_connection())
+            
+            # Wait for all cleanup tasks to complete
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+                
+        except Exception as e:
+            logger.error(f"Error during connection cleanup: {e}")
+
+    async def _close_depth_20_connection(self):
+        """
+        Close the 20-level depth WebSocket connection and clean up resources.
+        """
+        logger.info("Closing 20-level depth WebSocket connection")
+        
+        # Store the current ws reference and set to None to prevent race conditions
+        ws = self.depth_20_ws
+        self.depth_20_ws = None
+        
+        try:
+            # Close WebSocket connection if it exists and is open
+            if ws and hasattr(ws, 'open') and ws.open:
+                try:
+                    await asyncio.wait_for(ws.close(), timeout=5.0)
+                    logger.info("20-level depth WebSocket connection closed successfully")
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout closing 20-level depth WebSocket connection")
+                except Exception as e:
+                    logger.error(f"Error closing 20-level depth WebSocket: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error during 20-level depth connection close: {e}")
+        finally:
+            # Ensure we always reset connection state
+            self.depth_20_connected = False
+            logger.info("20-level depth connection cleanup completed")
     
-    def _handle_depth_20_bid(self, message):
+    def _handle_depth_20_bid(self, message, token=None):
         """Handle 20-level bid data (message type 41)"""
         try:
             # For 20-level depth, we need to re-parse the entire message with the correct format
@@ -2219,47 +2234,70 @@ class DhanWebSocket:
                 logger.error(f"20-level bid message too short: {len(message)} bytes")
                 return
             
-            # Use the working code format for 20-level depth messages
+            # Always parse the header to get exchange_segment
             header = message[:12]
-            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', header)
+            msg_length, feed_code, exchange_segment, security_id, reserved = struct.unpack('!h2bi4s', header)
             
-            logger.debug(f"20-level bid header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={security_id}")
+            # Use the token passed from the main parser, or use the parsed one
+            if token is not None:
+                logger.info(f"20-level bid processing for token: {token}")
+            else:
+                token = security_id
+                logger.info(f"20-level bid header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={token}")
             
-            # Parse 20 bid packets (each 16 bytes: price(8) + quantity(4) + orders(4))
+            # Log the raw binary data for debugging
+            logger.debug(f"Raw bid message hex (first 64 bytes): {message[:64].hex()}")
+            
+            # Parse 20 bid packets using the correct format from working solution
             depth_data = []
             
-            for i in range(20):
-                start = 12 + (i * 16)
-                end = start + 16
-                if end > len(message):
-                    logger.warning(f"Incomplete bid packet at level {i+1}")
-                    break
+            try:
+                for i in range(20):
+                    start = 12 + (i * 16)  # 12-byte header + 16 bytes per level
+                    end = start + 16
+                    if end > len(message):
+                        break
+                        
+                    packet = message[start:end]
                     
-                packet = message[start:end]
-                price, quantity, orders = struct.unpack('!dII', packet)
-                
-                depth_data.append({
-                    "price": price,
-                    "quantity": quantity,
-                    "orders": orders
-                })
+                    # Use correct format from working solution: double (8 bytes) + 2 unsigned ints (4 bytes each)
+                    price, quantity, orders = struct.unpack('<dII', packet)
+                    
+                    # Validate the parsed data
+                    if price > 0 and quantity > 0:
+                        depth_data.append({
+                            "price": round(price, 2),
+                            "quantity": int(quantity),
+                            "orders": int(orders)
+                        })
+                        logger.debug(f"Valid bid level {i+1}: price={price}, qty={quantity}, orders={orders}")
+                    
+            except Exception as parse_error:
+                logger.error(f"Error parsing bid packets: {parse_error}")
+                # Create empty depth data to avoid crashes
+                depth_data = []
+            
+            # Only proceed if we have valid data
+            if not depth_data:
+                logger.warning(f"No valid bid depth data parsed for token {token}")
+                return
             
             # Store bid data using the working code pattern
             with self.lock:
-                if security_id not in self.depth_20_data:
-                    self.depth_20_data[security_id] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
+                if token not in self.depth_20_data:
+                    self.depth_20_data[token] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
                 
-                self.depth_20_data[security_id]['bids'] = depth_data
-                self.depth_20_data[security_id]['last_bid_update'] = time.time()
+                self.depth_20_data[token]['bids'] = depth_data
+                self.depth_20_data[token]['last_bid_update'] = time.time()
                 
                 # Check if we have both bid and ask data
-                self._check_and_send_depth_20(security_id)
+                self._check_and_send_depth_20(token)
                 
         except Exception as e:
-            logger.error(f"Error handling 20-level bid data: {e}")
+            logger.error(f"Error handling 20-level bid data: {e}", exc_info=True)
             logger.error(f"Message hex: {message.hex()}")
     
-    def _handle_depth_20_ask(self, message):
+    def _handle_depth_20_ask(self, message, token=None):
         """Handle 20-level ask data (message type 51)"""
         try:
             # For 20-level depth, we need to re-parse the entire message with the correct format
@@ -2268,44 +2306,67 @@ class DhanWebSocket:
                 logger.error(f"20-level ask message too short: {len(message)} bytes")
                 return
             
-            # Use the working code format for 20-level depth messages
+            # Always parse the header to get exchange_segment
             header = message[:12]
-            msg_length, feed_code, exchange_segment, security_id, _ = struct.unpack('!h2bi4s', header)
+            msg_length, feed_code, exchange_segment, security_id, reserved = struct.unpack('!h2bi4s', header)
             
-            logger.debug(f"20-level ask header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={security_id}")
+            # Use the token passed from the main parser, or use the parsed one
+            if token is not None:
+                logger.info(f"20-level ask processing for token: {token}")
+            else:
+                token = security_id
+                logger.info(f"20-level ask header: feed_code={feed_code}, length={msg_length}, exchange={exchange_segment}, token={token}")
             
-            # Parse 20 ask packets (each 16 bytes: price(8) + quantity(4) + orders(4))
+            # Log the raw binary data for debugging
+            logger.debug(f"Raw ask message hex (first 64 bytes): {message[:64].hex()}")
+            
+            # Parse 20 ask packets using the correct format from working solution
             depth_data = []
             
-            for i in range(20):
-                start = 12 + (i * 16)
-                end = start + 16
-                if end > len(message):
-                    logger.warning(f"Incomplete ask packet at level {i+1}")
-                    break
+            try:
+                for i in range(20):
+                    start = 12 + (i * 16)  # 12-byte header + 16 bytes per level
+                    end = start + 16
+                    if end > len(message):
+                        break
+                        
+                    packet = message[start:end]
                     
-                packet = message[start:end]
-                price, quantity, orders = struct.unpack('!dII', packet)
-                
-                depth_data.append({
-                    "price": price,
-                    "quantity": quantity,
-                    "orders": orders
-                })
+                    # Use correct format from working solution: double (8 bytes) + 2 unsigned ints (4 bytes each)
+                    price, quantity, orders = struct.unpack('<dII', packet)
+                    
+                    # Validate the parsed data
+                    if price > 0 and quantity > 0:
+                        depth_data.append({
+                            "price": round(price, 2),
+                            "quantity": int(quantity),
+                            "orders": int(orders)
+                        })
+                        logger.debug(f"Valid ask level {i+1}: price={price}, qty={quantity}, orders={orders}")
+                    
+            except Exception as parse_error:
+                logger.error(f"Error parsing ask packets: {parse_error}")
+                # Create empty depth data to avoid crashes
+                depth_data = []
+            
+            # Only proceed if we have valid data
+            if not depth_data:
+                logger.warning(f"No valid ask depth data parsed for token {token}")
+                return
             
             # Store ask data using the working code pattern
             with self.lock:
-                if security_id not in self.depth_20_data:
-                    self.depth_20_data[security_id] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
+                if token not in self.depth_20_data:
+                    self.depth_20_data[token] = {'bids': [], 'offers': [], 'exchange_code': exchange_segment}
                 
-                self.depth_20_data[security_id]['offers'] = depth_data
-                self.depth_20_data[security_id]['last_ask_update'] = time.time()
+                self.depth_20_data[token]['offers'] = depth_data
+                self.depth_20_data[token]['last_ask_update'] = time.time()
                 
                 # Check if we have both bid and ask data
-                self._check_and_send_depth_20(security_id)
+                self._check_and_send_depth_20(token)
                 
         except Exception as e:
-            logger.error(f"Error handling 20-level ask data: {e}")
+            logger.error(f"Error handling 20-level ask data: {e}", exc_info=True)
             logger.error(f"Message hex: {message.hex()}")
     
     def _check_and_send_depth_20(self, token):
@@ -2316,16 +2377,17 @@ class DhanWebSocket:
                 
             data = self.depth_20_data[token]
             
-            # Check if we have both bid and offer data (using 'offers' as in working code)
-            if not data.get('bids') or not data.get('offers'):
+            # Check if we have either bid or offer data (don't require both)
+            if not data.get('bids') and not data.get('offers'):
                 return
                 
-            # Check if data is recent (within 1 second)
+            # Check if data is recent (within 1 second) - only check ages for data that exists
             current_time = time.time()
-            bid_age = current_time - data.get('last_bid_update', 0)
-            ask_age = current_time - data.get('last_ask_update', 0)
+            bid_age = current_time - data.get('last_bid_update', 0) if data.get('bids') else 0
+            ask_age = current_time - data.get('last_ask_update', 0) if data.get('offers') else 0
             
-            if bid_age > 1.0 or ask_age > 1.0:
+            # Only check freshness for data that exists
+            if (data.get('bids') and bid_age > 1.0) or (data.get('offers') and ask_age > 1.0):
                 logger.debug(f"Stale 20-level depth data for token {token}: bid_age={bid_age:.2f}s, ask_age={ask_age:.2f}s")
                 return
             
@@ -2335,22 +2397,24 @@ class DhanWebSocket:
             
             # Format depth data to match the OpenAlgo standard
             formatted_bids = []
-            for i, bid in enumerate(data['bids'][:20]):  # Ensure max 20 levels
-                formatted_bids.append({
-                    'price': round(float(bid['price']), 2),
-                    'quantity': int(bid['quantity']),
-                    'orders': int(bid['orders']),
-                    'level': i + 1
-                })
+            if data.get('bids'):
+                for i, bid in enumerate(data['bids'][:20]):  # Ensure max 20 levels
+                    formatted_bids.append({
+                        'price': round(float(bid['price']), 2),
+                        'quantity': int(bid['quantity']),
+                        'orders': int(bid['orders']),
+                        'level': i + 1
+                    })
             
             formatted_offers = []
-            for i, offer in enumerate(data['offers'][:20]):  # Ensure max 20 levels
-                formatted_offers.append({
-                    'price': round(float(offer['price']), 2),
-                    'quantity': int(offer['quantity']),
-                    'orders': int(offer['orders']),
-                    'level': i + 1
-                })
+            if data.get('offers'):
+                for i, offer in enumerate(data['offers'][:20]):  # Ensure max 20 levels
+                    formatted_offers.append({
+                        'price': round(float(offer['price']), 2),
+                        'quantity': int(offer['quantity']),
+                        'orders': int(offer['orders']),
+                        'level': i + 1
+                    })
             
             # Create tick data in OpenAlgo format with enhanced depth information
             tick = {
@@ -2380,13 +2444,22 @@ class DhanWebSocket:
             # Send tick to callback
             if self.on_ticks:
                 logger.info(f"🎯 Sending 20-level depth for token {token}: {len(formatted_bids)} bids, {len(formatted_offers)} offers")
+                
+                # Log a few levels for debugging
+                if formatted_bids:
+                    logger.info(f"Best bid: {formatted_bids[0]['price']} qty: {formatted_bids[0]['quantity']}")
+                if formatted_offers:
+                    logger.info(f"Best offer: {formatted_offers[0]['price']} qty: {formatted_offers[0]['quantity']}")
+                    
                 self.on_ticks([tick])
             
-            # Clear the data after sending
+            # Clear the data after sending (only clear what we sent)
             with self.lock:
                 if token in self.depth_20_data:
-                    self.depth_20_data[token]['bids'] = []
-                    self.depth_20_data[token]['offers'] = []
+                    if data.get('bids'):
+                        self.depth_20_data[token]['bids'] = []
+                    if data.get('offers'):
+                        self.depth_20_data[token]['offers'] = []
                     
         except Exception as e:
-            logger.error(f"Error checking and sending 20-level depth: {e}")
+            logger.error(f"Error checking and sending 20-level depth for token {token}: {e}", exc_info=True)

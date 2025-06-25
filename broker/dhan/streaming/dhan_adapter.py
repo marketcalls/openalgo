@@ -631,21 +631,21 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing ticks: {e}")
     
-    def _generate_topic(self, symbol: str, subscription_exchange: str, mode_str: str) -> str:
+    def _generate_topic(self, symbol: str, exchange: str, mode_str: str) -> str:
         """
         Generate topic for market data publishing.
         Uses the newer format including broker name for maximum client compatibility.
         
         Args:
             symbol: The trading symbol
-            subscription_exchange: The exchange code in OpenAlgo format
+            exchange: The exchange code in OpenAlgo format
             mode_str: The subscription mode (LTP, QUOTE, DEPTH)
             
         Returns:
             str: Properly formatted topic string
         """
         # Use new format with broker name: BROKER_EXCHANGE_SYMBOL_MODE
-        return f"{self.broker_name}_{subscription_exchange}_{symbol}_{mode_str}"
+        return f"{self.broker_name}_{exchange}_{symbol}_{mode_str}"
     
     def _map_data_exchange(self, subscription_exchange: str) -> str:
         """
@@ -742,41 +742,64 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     buy_orders = depth_data.get("buy", [])
                     sell_orders = depth_data.get("sell", [])
                     
+                    # Debug log for depth data processing
+                    self.logger.info(f"Processing depth data for {normalized.get('symbol')}: buy_levels={len(buy_orders)}, sell_levels={len(sell_orders)}")
+                    
                     # Format depth data with validation
                     def format_levels(levels, side):
                         formatted = []
-                        for i, level in enumerate(levels[:5]):  # Limit to top 5 levels
+                        for i, level in enumerate(levels[:20]):  # Support up to 20 levels for 20-level depth
                             try:
-                                formatted.append({
-                                    "price": round(safe_float(level.get("price")), 2),
-                                    "quantity": int(level.get("quantity", 0)),
-                                    "orders": int(level.get("orders", 1)),
-                                    "level": i + 1
-                                })
+                                price = safe_float(level.get("price"))
+                                quantity = int(level.get("quantity", 0))
+                                orders = int(level.get("orders", 1))
+                                
+                                # Only add valid levels (price > 0 and quantity > 0)
+                                if price > 0 and quantity > 0:
+                                    formatted.append({
+                                        "price": round(price, 2),
+                                        "quantity": quantity,
+                                        "orders": orders,
+                                        "level": i + 1
+                                    })
+                                    self.logger.debug(f"Added {side} level {i+1}: price={price}, qty={quantity}, orders={orders}")
                             except Exception as e:
                                 self.logger.warning(f"Error formatting {side} level {i}: {e}")
+                        
+                        self.logger.info(f"Formatted {len(formatted)} valid {side} levels")
                         return formatted
                     
-                    normalized["depth"] = {
-                        "buy": format_levels(buy_orders, "buy"),
-                        "sell": format_levels(sell_orders, "sell")
-                    }
+                    buy_levels = format_levels(buy_orders, "buy")
+                    sell_levels = format_levels(sell_orders, "sell")
                     
-                    # Calculate total buy/sell quantities
-                    normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
-                    normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
-                    
-                    # Set best bid/ask
-                    if buy_orders:
-                        normalized["bid"] = round(safe_float(buy_orders[0].get("price")), 2)
-                        normalized["bid_qty"] = int(buy_orders[0].get("quantity", 0))
-                    if sell_orders:
-                        normalized["ask"] = round(safe_float(sell_orders[0].get("price")), 2)
-                        normalized["ask_qty"] = int(sell_orders[0].get("quantity", 0))
+                    # Only add depth if we have valid levels
+                    if buy_levels or sell_levels:
+                        normalized["depth"] = {
+                            "buy": buy_levels,
+                            "sell": sell_levels
+                        }
+                        
+                        # Calculate total buy/sell quantities
+                        normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
+                        normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
+                        
+                        # Set best bid/ask
+                        if buy_levels:
+                            normalized["bid"] = buy_levels[0]["price"]
+                            normalized["bid_qty"] = buy_levels[0]["quantity"]
+                        if sell_levels:
+                            normalized["ask"] = sell_levels[0]["price"]
+                            normalized["ask_qty"] = sell_levels[0]["quantity"]
+                        
+                        self.logger.info(f"✅ Depth data added to normalized tick for {normalized.get('symbol')}: {len(buy_levels)} buy, {len(sell_levels)} sell levels")
+                    else:
+                        self.logger.warning(f"❌ No valid depth levels found for {normalized.get('symbol')}")
                         
                 except Exception as e:
-                    self.logger.error(f"Error processing depth data: {e}")
+                    self.logger.error(f"Error processing depth data for {normalized.get('symbol')}: {e}")
                     # Continue without depth data if there's an error
+            else:
+                self.logger.debug(f"No depth data in tick for {normalized.get('symbol')}")
             
             self.logger.debug(f"Normalized tick: {normalized}")
             return normalized
