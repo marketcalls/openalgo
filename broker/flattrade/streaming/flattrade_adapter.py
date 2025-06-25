@@ -6,14 +6,19 @@ logger = get_logger(__name__)
 Flattrade WebSocket adapter for OpenAlgo WebSocket proxy
 """
 import threading
+import sys
 import os
 from typing import Dict, Any, Optional
 import json
 import time
+import logging
 
 from broker.flattrade.streaming.flattrade_websocket import FlattradeWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+
+# Add parent directory to path to allow imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
