@@ -23,7 +23,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Flattrade-specific implementation of the WebSocket adapter"""
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("flattrade_websocket_adapter")
+        self.logger = get_logger("flattrade_websocket_adapter")
         self.ws_client = None
         self.user_id = None
         self.actid = None
@@ -47,7 +47,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # susertoken from DB for OpenAlgo username (not broker user)
         self.logger.info(f"[DEBUG] Fetching susertoken for OpenAlgo username: {user_id}")
         self.susertoken = get_auth_token(user_id)
-        logger.info("[Flattrade Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: %s", self.susertoken)
+        self.logger.info(f"[Flattrade Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: {self.susertoken}")
         if not self.actid or not self.susertoken:
             raise ValueError("Missing Flattrade actid or susertoken for user")
         self.ws_client = FlattradeWebSocket(

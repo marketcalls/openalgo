@@ -20,7 +20,7 @@ class FlattradeWebSocket:
         self.susertoken = susertoken
         self.ws = None
         self.connected = False
-        self.logger = logging.getLogger("flattrade_websocket")
+        self.logger = get_logger("flattrade_websocket")
         self.on_message = on_message
         self.on_error = on_error
         self.on_close = on_close
