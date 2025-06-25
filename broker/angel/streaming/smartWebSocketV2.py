@@ -298,7 +298,8 @@ class SmartWebSocketV2(object):
                                                 on_error=self._on_error, on_close=self._on_close, on_data=self._on_data,
                                                 on_ping=self._on_ping,
                                                 on_pong=self._on_pong)
-            self.wsapp.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL)
+            self.wsapp.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL,
+                                   ping_payload=self.HEART_BEAT_MESSAGE)
         except Exception as e:
             logger.error(f"Error occurred during WebSocket connection: {e}")
             raise e
@@ -341,7 +342,8 @@ class SmartWebSocketV2(object):
             else:
                 logger.warning("Connection closed due to max retry attempts reached.")
 
-    def _on_close(self, wsapp):
+    def _on_close(self, wsapp, close_status_code=None, close_msg=None):
+        # Pass only the wsapp to the on_close handler to maintain backward compatibility
         self.on_close(wsapp)
 
     def _parse_binary_data(self, binary_data):
