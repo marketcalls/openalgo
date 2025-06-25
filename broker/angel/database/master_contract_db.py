@@ -11,10 +11,6 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -42,16 +38,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    logger.info("Initializing Master Contract DB")
+    print("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    logger.info("Deleting Symtoken Table")
+    print("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    logger.info("Performing Bulk Insert")
+    print("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -66,25 +62,25 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            logger.info("No new records to insert.")
+            print("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        print(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 def download_json_angel_data(url, output_path):
     """
     Downloads a JSON file from the specified URL and saves it to the specified path.
     """
-    logger.info("Downloading JSON data")
+    print("Downloading JSON data")
     response = requests.get(url, timeout=10)  # timeout after 10 seconds
     if response.status_code == 200:  # Successful download
         with open(output_path, 'wb') as f:
             f.write(response.content)
-        logger.info("Download complete")
+        print("Download complete")
     else:
-        logger.error("Failed to download data. Status code: %s", response.status_code)
+        print(f"Failed to download data. Status code: {response.status_code}")
 
 
 def reformat_symbol(row):
@@ -207,15 +203,15 @@ def delete_angel_temp_data(output_path):
         if os.path.exists(output_path):
             # Delete the file
             os.remove(output_path)
-            logger.info("The temporary file %s has been deleted.", output_path)
+            print(f"The temporary file {output_path} has been deleted.")
         else:
-            logger.info("The temporary file %s does not exist.", output_path)
+            print(f"The temporary file {output_path} does not exist.")
     except Exception as e:
-        logger.error("An error occurred while deleting the file: %s", e)
+        print(f"An error occurred while deleting the file: {e}")
 
 
 def master_contract_download():
-    logger.info("Downloading Master Contract")
+    print("Downloading Master Contract")
     url = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json'
     output_path = 'tmp/angel.json'
     try:
@@ -233,7 +229,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        print(str(e))
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 
