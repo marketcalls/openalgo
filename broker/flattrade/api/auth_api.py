@@ -41,7 +41,7 @@ def authenticate_broker(code, password=None, totp_code=None):
             'api_secret': security_hash
         }
         
-        logger.debug("Request Data: %s", data)  # Debug print
+        logger.debug(f"Request Data: {data}")  # Debug print
         
         # Get the shared httpx client
         client = get_httpx_client()
