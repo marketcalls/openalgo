@@ -34,7 +34,8 @@ def get_history_with_auth(
     exchange: str, 
     interval: str, 
     start_date: str, 
-    end_date: str
+    end_date: str,
+    include_oi: bool = False
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get historical data for a symbol using provided auth tokens.
@@ -80,7 +81,8 @@ def get_history_with_auth(
             exchange,
             interval,
             start_date,
-            end_date
+            end_date,
+            include_oi
         )
         
         if not isinstance(df, pd.DataFrame):
@@ -107,7 +109,8 @@ def get_history(
     api_key: Optional[str] = None, 
     auth_token: Optional[str] = None, 
     feed_token: Optional[str] = None, 
-    broker: Optional[str] = None
+    broker: Optional[str] = None,
+    include_oi: bool = False
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get historical data for a symbol.
@@ -146,7 +149,8 @@ def get_history(
             exchange, 
             interval, 
             start_date, 
-            end_date
+            end_date,
+            include_oi
         )
     
     # Case 2: Direct internal call with auth_token and broker
@@ -159,7 +163,8 @@ def get_history(
             exchange, 
             interval, 
             start_date, 
-            end_date
+            end_date,
+            include_oi
         )
     
     # Case 3: Invalid parameters

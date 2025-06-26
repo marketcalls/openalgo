@@ -358,8 +358,11 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
             
-            # Log the market data we're sending
-            self.logger.info(f"Publishing market data: {market_data}")
+            # Log the market data we're sending (including OI if present)
+            if 'oi' in market_data:
+                self.logger.info(f"Publishing market data with OI: {market_data['oi']}, Full data: {market_data}")
+            else:
+                self.logger.info(f"Publishing market data: {market_data}")
             
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
@@ -407,16 +410,22 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             return result
         elif mode == 3:  # Snap Quote mode (includes depth data)
+            # Log the raw message to see if OI is present
+            if 'open_interest' in message:
+                self.logger.info(f"SNAP_QUOTE raw OI value: {message.get('open_interest')}")
+            else:
+                self.logger.warning(f"No open_interest field in SNAP_QUOTE message. Available fields: {list(message.keys())}")
+            
             # For snap quote mode, extract the depth data if available
             result = {
                 'ltp': message.get('last_traded_price', 0) / 100,  # Divide by 100 for correct price
                 'ltt': message.get('exchange_timestamp', 0),
                 'volume': message.get('volume_trade_for_the_day', 0),
-                'open': message.get('open_price', 0) / 100,
-                'high': message.get('high_price', 0) / 100,
-                'low': message.get('low_price', 0) / 100,
-                'close': message.get('close_price', 0) / 100,
-                'oi': message.get('open_interest', 0),
+                'open': message.get('open_price_of_the_day', 0) / 100,  # Use same field names as mode 2
+                'high': message.get('high_price_of_the_day', 0) / 100,
+                'low': message.get('low_price_of_the_day', 0) / 100,
+                'close': message.get('closed_price', 0) / 100,
+                'oi': message.get('open_interest', 0),  # OI is not divided by 100 as it's a quantity
                 'upper_circuit': message.get('upper_circuit_limit', 0) / 100,
                 'lower_circuit': message.get('lower_circuit_limit', 0) / 100
             }
