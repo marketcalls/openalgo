@@ -382,7 +382,6 @@
 </div>
 
 {% block scripts %}
-{{ csrf_token() }}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
