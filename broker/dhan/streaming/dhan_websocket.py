@@ -1890,15 +1890,23 @@ class DhanWebSocket:
             
             # We received raw message with first 16 bytes: 4c012901450b00000000000066666666
             
-            # Simplified robust parsing (skip complex header parsing that's causing errors)
             try:
-                # Fixed size approach - don't parse header details that might cause errors
-                msg_length = 332  # Fixed size for Dhan 20-level depth message
+                # Extract token from binary message header (bytes 4-7)
+                try:
+                    # Extract token from bytes 4-7 using little-endian format
+                    token = struct.unpack('<I', message[4:8])[0]
+                    logger.info(f"Extracted token from message header: {token}")
+                except struct.error:
+                    logger.warning("Failed to extract token from message header")
+                    # Fallback: use the first token from subscribed instruments
+                    if self.depth_20_instruments:
+                        token = next(iter(self.depth_20_instruments.keys()))
+                        logger.info(f"Using fallback token from subscriptions: {token}")
+                    else:
+                        token = 0  # Default token if no subscriptions
+                        logger.warning("No subscribed instruments found for fallback token")
                 
-                # Default to RELIANCE token
-                token = 2885
-                
-                # Check the third byte to identify if this is a bid or ask message
+                # Extract feed code from message
                 if len(message) > 2:
                     feed_byte = message[2]
                     if feed_byte == 41 or feed_byte == 0x29:
@@ -1912,6 +1920,8 @@ class DhanWebSocket:
                     
                 exchange_segment = 1  # Default to NSE_EQ
                 
+                # Calculate message length for logging
+                msg_length = len(message)
                 logger.info(f"Processing message: feed_code={feed_code}, length={msg_length}, token={token}")
                 
                 # For 20-level depth messages:
@@ -2079,13 +2089,76 @@ class DhanWebSocket:
             return False
         
     def unsubscribe(self, token, exchange_code=1):
-        """Unsubscribe from a token"""
+        """Unsubscribe from a token on both main and 20-level depth WebSockets"""
         try:
-            if not self.connected or not self.ws:
-                logger.error("Cannot unsubscribe - WebSocket not connected")
+            success_main = True
+            success_depth20 = True
+            
+            # First unsubscribe from main WebSocket
+            if self.connected and self.ws:
+                # Create unsubscription packet
+                packet = {
+                    "RequestCode": 0,  # 0 = Unsubscribe
+                    "InstrumentCount": 1,
+                    "InstrumentList": [
+                        {
+                            "ExchangeSegment": self.get_exchange_segment(exchange_code),
+                            "SecurityId": str(token)
+                        }
+                    ]
+                }
+                
+                # Send unsubscribe request
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws.send(json.dumps(packet)),
+                        self.loop
+                    )
+                    
+                    # Remove from instruments dict
+                    with self.lock:
+                        if token in self.instruments:
+                            del self.instruments[token]
+                            
+                    logger.info(f'Unsubscribed token {token} from main WebSocket')
+                except Exception as e:
+                    logger.error(f'Error unsubscribing token {token} from main WebSocket: {e}')
+                    success_main = False
+            else:
+                logger.warning(f"Cannot unsubscribe from main WebSocket - not connected")
+                success_main = False
+                
+            # Then unsubscribe from 20-level depth if appropriate
+            # Check if token is subscribed to 20-level depth
+            with self.lock:
+                is_depth20_subscribed = token in self.depth_20_instruments
+            
+            if is_depth20_subscribed:
+                success_depth20 = self._unsubscribe_20_level_depth(token, exchange_code)
+                
+            return success_main and success_depth20
+            
+        except Exception as e:
+            logger.error(f"Error in unsubscribe method for token {token}: {e}")
+            return False
+            
+    def _unsubscribe_20_level_depth(self, token, exchange_code=1):
+        """
+        Unsubscribe from a token on the 20-level depth WebSocket.
+        
+        Args:
+            token (int): Token to unsubscribe from
+            exchange_code (int, optional): Exchange code. Defaults to 1 (NSE).
+            
+        Returns:
+            bool: True if unsubscription was successful
+        """
+        try:
+            if not self.depth_20_connected or not self.depth_20_ws:
+                logger.warning(f"Cannot unsubscribe from 20-level depth - WebSocket not connected")
                 return False
                 
-            # Create unsubscribe packet
+            # Create unsubscription packet
             packet = {
                 "RequestCode": 0,  # 0 = Unsubscribe
                 "InstrumentCount": 1,
@@ -2098,20 +2171,57 @@ class DhanWebSocket:
             }
             
             # Send unsubscribe request
-            asyncio.run_coroutine_threadsafe(
-                self.ws.send(json.dumps(packet)),
-                self.loop
-            )
-            
-            # Remove from instruments dict
-            with self.lock:
-                if token in self.instruments:
-                    del self.instruments[token]
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.depth_20_ws.send(json.dumps(packet)),
+                    self.depth_20_loop
+                )
+                # Wait for send to complete
+                future.result(timeout=2.0)
+                
+                # Remove from instruments dict
+                with self.lock:
+                    if token in self.depth_20_instruments:
+                        logger.info(f'Removing token {token} from depth_20_instruments tracking dictionary')
+                        del self.depth_20_instruments[token]
+                    else:
+                        logger.warning(f'Token {token} not found in depth_20_instruments during unsubscription')
                     
-            return True
-            
+                    # Clean up any stored depth data
+                    if token in self.depth_20_data:
+                        logger.info(f'Removing token {token} from depth_20_data cache')
+                        del self.depth_20_data[token]
+                    
+                    # Log remaining subscriptions
+                    remaining_tokens = list(self.depth_20_instruments.keys()) if self.depth_20_instruments else []
+                    logger.info(f'Remaining 20-level depth subscriptions after unsubscribe: {remaining_tokens}')
+                    
+                    # Check if no more tokens are subscribed, if so close the connection
+                    if not self.depth_20_instruments:
+                        logger.info(f'No more tokens subscribed to 20-level depth, initiating connection termination')
+                        # Schedule connection close in the event loop
+                        try:
+                            future = asyncio.run_coroutine_threadsafe(
+                                self._close_depth_20_connection(),
+                                self.depth_20_loop
+                            )
+                            # Log that the termination task was scheduled
+                            logger.info('Successfully scheduled 20-level depth connection termination')
+                        except Exception as e:
+                            logger.error(f'Error scheduling connection termination: {str(e)}')
+                        
+                logger.info(f'Successfully unsubscribed token {token} from 20-level depth WebSocket')
+                return True
+                
+            except asyncio.TimeoutError:
+                logger.error(f'Timeout unsubscribing token {token} from 20-level depth WebSocket')
+                return False
+            except Exception as e:
+                logger.error(f'Error sending 20-level depth unsubscription: {e}')
+                return False
+                
         except Exception as e:
-            logger.error(f"Error unsubscribing from token {token}: {e}")
+            logger.error(f"Error unsubscribing from 20-level depth for token {token}: {e}")
             return False
             
     def stop(self):
