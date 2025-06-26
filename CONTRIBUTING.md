@@ -129,10 +129,21 @@ python app.py
 
 # Test specific features
 # For API endpoints, use the built-in Swagger UI at /api/docs
+```
 
-# If you've modified CSS
+#### Important: CSS Compilation for UI Changes
+
+If you're making any UI changes using Tailwind or DaisyUI classes, you MUST compile the CSS:
+
+```bash
+# For development (watches for changes and auto-compiles)
+npm run dev
+
+# For production (minified build)
 npm run build
 ```
+
+**Note**: The compiled CSS files are in `/static/css/`. Never edit these directly - always modify the source in `/src/css/styles.css` and Tailwind classes in templates.
 
 ### 4. Commit Your Changes
 ```bash
@@ -199,6 +210,37 @@ openalgo/
 ├── docs/            # Documentation
 └── app.py           # Main application entry point
 ```
+
+## 🎨 UI Development with Tailwind & DaisyUI
+
+When working on the user interface:
+
+### CSS Workflow
+1. **Never edit** `/static/css/main.css` directly - it's auto-generated
+2. **Make changes** in:
+   - `/src/css/styles.css` for custom CSS
+   - HTML templates in `/templates/` for Tailwind/DaisyUI classes
+3. **Run the compiler**:
+   ```bash
+   # Development mode - watches for changes
+   npm run dev
+   
+   # Keep this running in a separate terminal while developing
+   ```
+4. **Before committing**, run production build:
+   ```bash
+   npm run build
+   ```
+
+### Using DaisyUI Components
+- Check [DaisyUI documentation](https://daisyui.com/components/) for available components
+- The project uses three themes: light, dark, and garden (for analyzer)
+- Use theme-aware classes like `bg-base-100` instead of hardcoded colors
+
+### Tailwind Tips
+- Use utility classes directly in templates
+- Custom styles go in `/src/css/styles.css`
+- The Tailwind config is in `tailwind.config.js`
 
 ## 🏗️ Adding a New Broker
 
