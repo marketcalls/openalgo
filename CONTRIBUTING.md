@@ -21,7 +21,6 @@ Before diving in, here's what powers OpenAlgo:
 - **Jinja2** - Templating engine
 - **TailwindCSS** - Utility-first CSS framework
 - **DaisyUI** - Component library
-- **Alpine.js** - Lightweight JavaScript framework
 
 ### Trading & Data
 - **pandas** - Data manipulation
