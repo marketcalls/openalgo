@@ -69,7 +69,7 @@ def load_and_check_env_variables():
         pass
     
     # Validate 5paisa API key format
-    if broker_name == '5paisa':
+    if broker_name == 'fivepaisa':
         if ':::' not in broker_api_key or broker_api_key.count(':::') != 2:
             print("\nError: Invalid 5paisa API key format detected!")
             print("The BROKER_API_KEY for 5paisa must be in the format:")
