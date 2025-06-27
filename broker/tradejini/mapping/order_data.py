@@ -15,7 +15,7 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated fields
     """
-    logger.debug("map_order_data - Input order_data: %s", order_data)
+    logger.debug(f"map_order_data - Input order_data: {order_data}")
     
     # Check if response status is ok
     if order_data.get('stat') != 'Ok':
@@ -32,7 +32,7 @@ def map_order_data(order_data):
         for order in orders_data:
             # Get the actual order data from the nested structure
             order_info = order.get('data', {})
-           # logger.info("[DEBUG] map_order_data - Processing order info: %s", order_info)
+           # logger.info(f"[DEBUG] map_order_data - Processing order info: {order_info}")
             
             # Update fields in place
             order['action'] = "BUY" if order_info.get('side') == 'buy' else "SELL"
@@ -536,7 +536,7 @@ def map_portfolio_data(portfolio_data):
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get('stat') != 'Ok':
-            logger.error("Error: %s", portfolio.get('emsg', 'Unknown error occurred.'))
+            logger.error(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Process the 'exch_tsym' list inside each portfolio entry
@@ -550,7 +550,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                logger.warning("Zebu Portfolio - Product Value for %s Not Found or Changed.", symbol)
+                logger.warning(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
     return portfolio_data
 
@@ -574,7 +574,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if holding.get('stat') != 'Ok':
-            logger.error("Error: %s", holding.get('emsg', 'Unknown error occurred.'))
+            logger.error(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Filter out the NSE entry and ignore BSE for the same symbol
@@ -610,8 +610,8 @@ def calculate_portfolio_statistics(holdings_data):
 
         # Valuation formula from API
         valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        logger.debug("test valuation: %s", str(npoadqty))
-        logger.debug("test valuation: %s", str(upload_price))
+        logger.debug(f"test valuation: {str(npoadqty)}")
+        logger.debug(f"test valuation: {str(upload_price)}")
         # Accumulate total valuation
         totalholdingvalue += valuation
 
