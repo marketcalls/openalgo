@@ -21,7 +21,7 @@ def authenticate_broker(code, password=None, totp_code=None):
         logger.debug("Full API Key: %s", full_api_key)  # Debug print
         
         # Split the API key to get the actual key part
-        BROKER_API_KEY = full_api_key.split(':::')[1]
+        BROKER_API_KEY = full_api_key.split(':::')[0]
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         
         logger.debug("Using API Key: %s", BROKER_API_KEY)  # Debug print
