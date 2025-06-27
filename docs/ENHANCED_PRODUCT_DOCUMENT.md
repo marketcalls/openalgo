@@ -1,9 +1,9 @@
-# OpenAlgo Enhanced - Professional Multi-Account Trading Platform
-## Product Requirements Document v2.0
+# OpenAlgo+ - Professional Multi-Account Trading Platform
+## Product Requirements Document v1.0
 
 ### Executive Summary
 
-OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, transforming it from a single-user trading bridge into a comprehensive multi-account trading execution platform. Built with modern technologies (FastAPI, NextJS, PostgreSQL, Redis, QuestDB, Docker), it provides institutional-grade trading infrastructure for individual traders managing multiple accounts across different brokers. The platform focuses on real-time trade execution, advanced option strategy deployment, risk controls, and professional-grade automation capabilities.
+OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming it from a single-user trading bridge into a comprehensive multi-account trading execution platform. Built with modern technologies (FastAPI, NextJS, PostgreSQL, Redis, QuestDB, Docker), it provides institutional-grade trading infrastructure for individual traders and families managing unlimited accounts across different brokers. The platform focuses on real-time trade execution, advanced option strategy deployment, risk controls, and professional-grade automation capabilities.
 
 ### Technology Stack
 
@@ -40,15 +40,27 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Super Admin: Platform management, system configuration
   - Admin: User management, broker configuration
   - Trader: Full trading capabilities with multi-account support
+  - Family Member: Access to designated family accounts
   - Viewer: Read-only access for monitoring
 
-- **Multi-Account Features**:
-  - Support for 3-4+ trading accounts per user
+- **Unlimited Account Management**:
+  - **Self Accounts**: Unlimited personal trading accounts
+  - **Family Accounts**: Unlimited family member accounts
   - Different broker integration per account
   - Master-slave account configuration
-  - Account grouping and labeling
+  - Account grouping and labeling (Personal, Family, Strategy-specific)
   - Individual account authentication
-  - Consolidated portfolio view
+  - Consolidated portfolio view across all accounts
+  - No artificial limits on number of accounts
+
+- **Family Account Support**:
+  - **Relationship Mapping**: Spouse, Parents, Children
+  - **Account Ownership**: Clear ownership and access rights
+  - **Shared Access**: Controlled access to family member accounts
+  - **Consent Management**: Digital consent for account access
+  - **Verification System**: Identity and relationship verification
+  - **Separate Risk Controls**: Individual limits per family member
+  - **Combined Reporting**: Family-wide portfolio analysis
 
 - **Self Copy Trading**:
   - One-click signal replication across accounts
@@ -64,6 +76,8 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - JWT-based authentication with refresh tokens
   - OAuth2 social login (Google, GitHub)
   - Session management with Redis
+  - SEBI-compliant automatic logout at 3:00 AM IST
+  - Configurable session expiry time
   - IP whitelisting per user/role
   - Rate limiting per user/IP/endpoint
   - API key management with scopes
@@ -75,6 +89,15 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Key derivation from user password + server secret
   - Automatic credential rotation reminders
   - Secure credential storage per account
+
+- **SEBI-Compliant Session Management**:
+  - **Automatic Logout**: All users logged out at 3:00 AM IST daily
+  - **Timezone Handling**: Proper IST timezone management
+  - **Session Validation**: Real-time session validity checks
+  - **Configurable Expiry**: Admin-configurable logout time
+  - **Session Tracking**: Login time tracking for compliance
+  - **Decorator-based Protection**: Route-level session validation
+  - **Clean Session Termination**: Automatic session clearing
 
 - **Security Features**:
   - CSRF protection with double-submit cookies
@@ -494,7 +517,43 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Memory and CPU usage
   - Custom alert thresholds
 
-#### 11. Market Data Management
+#### 11. Regulatory Compliance & Security
+
+- **SEBI Compliance Features**:
+  - **Mandatory Session Expiry**: All users automatically logged out at 3:00 AM IST
+  - **Timezone Compliance**: Proper IST (Indian Standard Time) handling
+  - **Session Tracking**: Complete audit trail of login/logout times
+  - **Configurable Expiry**: Admin can modify logout time via environment variable
+  - **Real-time Validation**: Continuous session validity checks
+  - **Decorator Protection**: Route-level session validation for all endpoints
+
+- **Session Management Implementation**:
+  ```python
+  # Environment Configuration
+  SESSION_EXPIRY_TIME=03:00  # Configurable logout time
+  
+  # Key Functions
+  - get_session_expiry_time(): Calculate remaining session time
+  - set_session_login_time(): Track login time in IST
+  - is_session_valid(): Real-time session validation
+  - check_session_validity(): Route decorator protection
+  ```
+
+- **Compliance Monitoring**:
+  - **Login Time Tracking**: ISO format timestamp in IST
+  - **Automatic Session Clearing**: Clean session termination
+  - **Pre-logout Warnings**: Telegram alerts 15 minutes before expiry
+  - **Forced Logout Capability**: Admin can force logout all users
+  - **Session Analytics**: Active session monitoring dashboard
+
+- **Regulatory Audit Trail**:
+  - Complete session lifecycle logging
+  - Login/logout event tracking
+  - Session expiry compliance reports
+  - User activity correlation with session validity
+  - Compliance dashboard for regulatory review
+
+#### 12. Market Data Management
 
 - **Master Contract Management**:
   - Automated weekly/monthly downloads
@@ -520,23 +579,108 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Data quality checks
   - Missing data handling
 
-#### 12. Communication & Alerts
+#### 12. Communication & Telegram Alerts
 
-- **Telegram Bot Integration**:
-  - Trade execution alerts
-  - P&L updates
-  - Risk breach notifications
-  - Strategy performance
-  - Quick commands
-  - Two-way communication
+- **Comprehensive Telegram Bot Integration**:
+  
+  - **Critical Trade Alerts**:
+    - Order execution confirmations with details (symbol, quantity, price, time)
+    - Order rejections with error reasons
+    - Position entry/exit notifications
+    - Large order execution (above threshold)
+    - Failed order retry notifications
+    - Slippage alerts (when beyond threshold)
+    - Order modification confirmations
+    - GTT order trigger notifications
+  
+  - **P&L Monitoring & Updates**:
+    - Real-time P&L updates (configurable frequency)
+    - Daily P&L summary at market close
+    - Strategy-wise P&L breakdown
+    - Account-wise P&L reporting
+    - MTM alerts when crossing thresholds
+    - Profit/Loss milestone notifications
+    - Weekly/Monthly P&L summaries
+    - Top performing/losing strategies alerts
+  
+  - **Risk & Safety Alerts**:
+    - Risk limit breach warnings
+    - Margin call notifications
+    - Stop-loss trigger alerts
+    - Target achievement notifications
+    - Strategy panic button activations
+    - Overall panic button events
+    - Exposure limit warnings
+    - Unusual trading activity alerts
+  
+  - **Strategy Performance Notifications**:
+    - Strategy activation/deactivation alerts
+    - Strategy performance milestones
+    - Signal reception confirmations
+    - Walk forward test results
+    - Strategy error notifications
+    - TradingView signal failures
+    - Multi-account sync status
+  
+  - **Market & System Alerts**:
+    - Market open/close notifications
+    - Broker connection status changes
+    - System maintenance alerts
+    - Data feed interruptions
+    - High latency warnings
+    - Account authentication issues
+    - Session expiry warnings (15 min before 3:00 AM IST)
+    - Automatic logout notifications
+  
+  - **Interactive Bot Commands**:
+    - `/pnl` - Get current P&L status
+    - `/positions` - View open positions
+    - `/orders` - Check pending orders
+    - `/strategies` - List active strategies
+    - `/panic` - Emergency stop all trading
+    - `/status` - System health check
+    - `/help` - Command reference
+    - `/settings` - Alert preferences
 
-- **Alert System**:
-  - Multi-channel alerts (Email, SMS, Push)
-  - Customizable alert rules
-  - Priority-based routing
-  - Alert aggregation
-  - Do-not-disturb modes
-  - Alert history
+- **Advanced Alert System**:
+  - **Multi-Channel Delivery**:
+    - Telegram (primary channel)
+    - Email backup alerts
+    - SMS for critical alerts
+    - Push notifications (mobile app)
+    - WhatsApp integration (optional)
+  
+  - **Smart Alert Management**:
+    - Priority-based alert routing
+    - Alert frequency controls
+    - Do-not-disturb time windows
+    - Alert escalation rules
+    - Duplicate alert suppression
+    - Custom alert templates
+  
+  - **Alert Customization**:
+    - User-defined alert thresholds
+    - Custom message templates
+    - Alert grouping and batching
+    - Conditional alert rules
+    - Alert scheduling
+    - Rich formatting with charts/tables
+
+- **Telegram Bot Features**:
+  - **Security**:
+    - Bot token encryption
+    - User verification system
+    - Command authorization
+    - Rate limiting
+    - Secure chat validation
+  
+  - **Formatting & Rich Content**:
+    - Formatted P&L tables
+    - Position summary cards
+    - Strategy performance charts
+    - Market status indicators
+    - Emoji-based status indicators
+    - Inline keyboard interactions
 
 #### 13. TradingView Strategy Management System
 
@@ -664,9 +808,9 @@ This comprehensive system automates trading strategies based on TradingView indi
 
 #### 14. API & Integration Features
 
-- **RESTful API v2**:
+- **RESTful API v1**:
   ```
-  /api/v2/
+  /api/v1/
   ├── auth/          # Authentication endpoints
   ├── accounts/      # Multi-account management
   ├── trading/       # Order & position management
@@ -684,192 +828,228 @@ This comprehensive system automates trading strategies based on TradingView indi
 
 #### Authentication & User Management
 ```
-POST   /api/v2/auth/login
-POST   /api/v2/auth/logout
-POST   /api/v2/auth/refresh
-POST   /api/v2/auth/register
-POST   /api/v2/auth/forgot-password
-POST   /api/v2/auth/reset-password
-POST   /api/v2/auth/verify-email
-GET    /api/v2/auth/profile
-PUT    /api/v2/auth/profile
-POST   /api/v2/auth/change-password
-POST   /api/v2/auth/enable-2fa
-POST   /api/v2/auth/verify-2fa
-DELETE /api/v2/auth/disable-2fa
+POST   /api/v1/auth/login
+POST   /api/v1/auth/logout
+POST   /api/v1/auth/refresh
+POST   /api/v1/auth/register
+POST   /api/v1/auth/forgot-password
+POST   /api/v1/auth/reset-password
+POST   /api/v1/auth/verify-email
+GET    /api/v1/auth/profile
+PUT    /api/v1/auth/profile
+POST   /api/v1/auth/change-password
+POST   /api/v1/auth/enable-2fa
+POST   /api/v1/auth/verify-2fa
+DELETE /api/v1/auth/disable-2fa
+GET    /api/v1/auth/session/status
+GET    /api/v1/auth/session/expiry
+PUT    /api/v1/auth/session/extend
+POST   /api/v1/auth/logout-all
 ```
 
 #### Multi-Account Management
 ```
-GET    /api/v2/accounts/
-POST   /api/v2/accounts/
-GET    /api/v2/accounts/{account_id}
-PUT    /api/v2/accounts/{account_id}
-DELETE /api/v2/accounts/{account_id}
-POST   /api/v2/accounts/{account_id}/test-connection
-POST   /api/v2/accounts/{account_id}/credentials
-PUT    /api/v2/accounts/{account_id}/credentials
-GET    /api/v2/accounts/{account_id}/status
-POST   /api/v2/accounts/{account_id}/activate
-POST   /api/v2/accounts/{account_id}/deactivate
-GET    /api/v2/accounts/brokers/supported
+GET    /api/v1/accounts/
+POST   /api/v1/accounts/
+GET    /api/v1/accounts/{account_id}
+PUT    /api/v1/accounts/{account_id}
+DELETE /api/v1/accounts/{account_id}
+POST   /api/v1/accounts/{account_id}/test-connection
+POST   /api/v1/accounts/{account_id}/credentials
+PUT    /api/v1/accounts/{account_id}/credentials
+GET    /api/v1/accounts/{account_id}/status
+POST   /api/v1/accounts/{account_id}/activate
+POST   /api/v1/accounts/{account_id}/deactivate
+GET    /api/v1/accounts/brokers/supported
+GET    /api/v1/accounts/family/
+POST   /api/v1/accounts/family/invite
+PUT    /api/v1/accounts/family/{relationship_id}/verify
+DELETE /api/v1/accounts/family/{relationship_id}
+GET    /api/v1/accounts/family/permissions
+PUT    /api/v1/accounts/family/permissions/{account_id}
 ```
 
 #### Trading Operations
 ```
-POST   /api/v2/trading/orders/place
-POST   /api/v2/trading/orders/modify
-POST   /api/v2/trading/orders/cancel
-POST   /api/v2/trading/orders/cancel-all
-GET    /api/v2/trading/orders/
-GET    /api/v2/trading/orders/{order_id}
-GET    /api/v2/trading/orders/{order_id}/status
-POST   /api/v2/trading/orders/basket
-POST   /api/v2/trading/orders/bracket
-POST   /api/v2/trading/orders/cover
-POST   /api/v2/trading/orders/gtt
+POST   /api/v1/trading/orders/place
+POST   /api/v1/trading/orders/modify
+POST   /api/v1/trading/orders/cancel
+POST   /api/v1/trading/orders/cancel-all
+GET    /api/v1/trading/orders/
+GET    /api/v1/trading/orders/{order_id}
+GET    /api/v1/trading/orders/{order_id}/status
+POST   /api/v1/trading/orders/basket
+POST   /api/v1/trading/orders/bracket
+POST   /api/v1/trading/orders/cover
+POST   /api/v1/trading/orders/gtt
 
-GET    /api/v2/trading/positions/
-GET    /api/v2/trading/positions/{account_id}
-POST   /api/v2/trading/positions/close
-POST   /api/v2/trading/positions/close-all
-POST   /api/v2/trading/positions/convert
-GET    /api/v2/trading/positions/pnl
+GET    /api/v1/trading/positions/
+GET    /api/v1/trading/positions/{account_id}
+POST   /api/v1/trading/positions/close
+POST   /api/v1/trading/positions/close-all
+POST   /api/v1/trading/positions/convert
+GET    /api/v1/trading/positions/pnl
 
-GET    /api/v2/trading/holdings/
-GET    /api/v2/trading/holdings/{account_id}
-GET    /api/v2/trading/tradebook/
-GET    /api/v2/trading/tradebook/{account_id}
-GET    /api/v2/trading/funds/
-GET    /api/v2/trading/funds/{account_id}
+GET    /api/v1/trading/holdings/
+GET    /api/v1/trading/holdings/{account_id}
+GET    /api/v1/trading/tradebook/
+GET    /api/v1/trading/tradebook/{account_id}
+GET    /api/v1/trading/funds/
+GET    /api/v1/trading/funds/{account_id}
 ```
 
 #### Strategy Management
 ```
-GET    /api/v2/strategies/
-POST   /api/v2/strategies/
-GET    /api/v2/strategies/{strategy_id}
-PUT    /api/v2/strategies/{strategy_id}
-DELETE /api/v2/strategies/{strategy_id}
-POST   /api/v2/strategies/{strategy_id}/activate
-POST   /api/v2/strategies/{strategy_id}/deactivate
-POST   /api/v2/strategies/{strategy_id}/panic
-GET    /api/v2/strategies/{strategy_id}/performance
-GET    /api/v2/strategies/{strategy_id}/positions
-GET    /api/v2/strategies/{strategy_id}/orders
-POST   /api/v2/strategies/{strategy_id}/clone
-GET    /api/v2/strategies/templates/
-POST   /api/v2/strategies/templates/
+GET    /api/v1/strategies/
+POST   /api/v1/strategies/
+GET    /api/v1/strategies/{strategy_id}
+PUT    /api/v1/strategies/{strategy_id}
+DELETE /api/v1/strategies/{strategy_id}
+POST   /api/v1/strategies/{strategy_id}/activate
+POST   /api/v1/strategies/{strategy_id}/deactivate
+POST   /api/v1/strategies/{strategy_id}/panic
+GET    /api/v1/strategies/{strategy_id}/performance
+GET    /api/v1/strategies/{strategy_id}/positions
+GET    /api/v1/strategies/{strategy_id}/orders
+POST   /api/v1/strategies/{strategy_id}/clone
+GET    /api/v1/strategies/templates/
+POST   /api/v1/strategies/templates/
 ```
 
 #### TradingView Signal Management
 ```
-GET    /api/v2/signals/
-POST   /api/v2/signals/
-GET    /api/v2/signals/{signal_id}
-PUT    /api/v2/signals/{signal_id}
-DELETE /api/v2/signals/{signal_id}
-POST   /api/v2/signals/{signal_id}/activate
-POST   /api/v2/signals/{signal_id}/deactivate
-GET    /api/v2/signals/{signal_id}/logs
-GET    /api/v2/signals/{signal_id}/analytics
-POST   /api/v2/signals/{signal_id}/test
+GET    /api/v1/signals/
+POST   /api/v1/signals/
+GET    /api/v1/signals/{signal_id}
+PUT    /api/v1/signals/{signal_id}
+DELETE /api/v1/signals/{signal_id}
+POST   /api/v1/signals/{signal_id}/activate
+POST   /api/v1/signals/{signal_id}/deactivate
+GET    /api/v1/signals/{signal_id}/logs
+GET    /api/v1/signals/{signal_id}/analytics
+POST   /api/v1/signals/{signal_id}/test
 ```
 
 #### Trading Algo Configuration
 ```
-GET    /api/v2/algos/
-POST   /api/v2/algos/
-GET    /api/v2/algos/{algo_id}
-PUT    /api/v2/algos/{algo_id}
-DELETE /api/v2/algos/{algo_id}
-POST   /api/v2/algos/{algo_id}/activate
-POST   /api/v2/algos/{algo_id}/deactivate
-GET    /api/v2/algos/{algo_id}/performance
-POST   /api/v2/algos/{algo_id}/test
-GET    /api/v2/algos/strike-helpers
+GET    /api/v1/algos/
+POST   /api/v1/algos/
+GET    /api/v1/algos/{algo_id}
+PUT    /api/v1/algos/{algo_id}
+DELETE /api/v1/algos/{algo_id}
+POST   /api/v1/algos/{algo_id}/activate
+POST   /api/v1/algos/{algo_id}/deactivate
+GET    /api/v1/algos/{algo_id}/performance
+POST   /api/v1/algos/{algo_id}/test
+GET    /api/v1/algos/strike-helpers
 ```
 
 #### Walk Forward Testing
 ```
-GET    /api/v2/walkforward/sessions/
-POST   /api/v2/walkforward/sessions/
-GET    /api/v2/walkforward/sessions/{session_id}
-DELETE /api/v2/walkforward/sessions/{session_id}
-POST   /api/v2/walkforward/sessions/{session_id}/start
-POST   /api/v2/walkforward/sessions/{session_id}/stop
-POST   /api/v2/walkforward/sessions/{session_id}/square-off
-GET    /api/v2/walkforward/sessions/{session_id}/trades
-GET    /api/v2/walkforward/sessions/{session_id}/positions
-GET    /api/v2/walkforward/sessions/{session_id}/analytics
-GET    /api/v2/walkforward/sessions/{session_id}/export
+GET    /api/v1/walkforward/sessions/
+POST   /api/v1/walkforward/sessions/
+GET    /api/v1/walkforward/sessions/{session_id}
+DELETE /api/v1/walkforward/sessions/{session_id}
+POST   /api/v1/walkforward/sessions/{session_id}/start
+POST   /api/v1/walkforward/sessions/{session_id}/stop
+POST   /api/v1/walkforward/sessions/{session_id}/square-off
+GET    /api/v1/walkforward/sessions/{session_id}/trades
+GET    /api/v1/walkforward/sessions/{session_id}/positions
+GET    /api/v1/walkforward/sessions/{session_id}/analytics
+GET    /api/v1/walkforward/sessions/{session_id}/export
 ```
 
 #### Market Data
 ```
-GET    /api/v2/market/quotes/{symbol}
-POST   /api/v2/market/quotes/bulk
-GET    /api/v2/market/depth/{symbol}
-GET    /api/v2/market/history/{symbol}
-GET    /api/v2/market/option-chain/{symbol}
-GET    /api/v2/market/contracts/search
-GET    /api/v2/market/contracts/download
-GET    /api/v2/market/exchanges
-GET    /api/v2/market/indices
-GET    /api/v2/market/intervals
+GET    /api/v1/market/quotes/{symbol}
+POST   /api/v1/market/quotes/bulk
+GET    /api/v1/market/depth/{symbol}
+GET    /api/v1/market/history/{symbol}
+GET    /api/v1/market/option-chain/{symbol}
+GET    /api/v1/market/contracts/search
+GET    /api/v1/market/contracts/download
+GET    /api/v1/market/exchanges
+GET    /api/v1/market/indices
+GET    /api/v1/market/intervals
 ```
 
 #### Risk Management
 ```
-GET    /api/v2/risk/limits/
-POST   /api/v2/risk/limits/
-PUT    /api/v2/risk/limits/{limit_id}
-DELETE /api/v2/risk/limits/{limit_id}
-GET    /api/v2/risk/exposure/
-GET    /api/v2/risk/exposure/{account_id}
-POST   /api/v2/risk/panic/global
-POST   /api/v2/risk/panic/strategy/{strategy_id}
-POST   /api/v2/risk/panic/account/{account_id}
-GET    /api/v2/risk/violations/
-POST   /api/v2/risk/limits/validate
+GET    /api/v1/risk/limits/
+POST   /api/v1/risk/limits/
+PUT    /api/v1/risk/limits/{limit_id}
+DELETE /api/v1/risk/limits/{limit_id}
+GET    /api/v1/risk/exposure/
+GET    /api/v1/risk/exposure/{account_id}
+POST   /api/v1/risk/panic/global
+POST   /api/v1/risk/panic/strategy/{strategy_id}
+POST   /api/v1/risk/panic/account/{account_id}
+GET    /api/v1/risk/violations/
+POST   /api/v1/risk/limits/validate
 ```
 
 #### Analytics & Reporting
 ```
-GET    /api/v2/analytics/dashboard/
-GET    /api/v2/analytics/pnl/{account_id}
-GET    /api/v2/analytics/performance/{strategy_id}
-GET    /api/v2/analytics/reports/daily
-GET    /api/v2/analytics/reports/monthly
-GET    /api/v2/analytics/reports/custom
-POST   /api/v2/analytics/export/trades
-POST   /api/v2/analytics/export/pnl
-GET    /api/v2/analytics/metrics/latency
-GET    /api/v2/analytics/metrics/execution
+GET    /api/v1/analytics/dashboard/
+GET    /api/v1/analytics/pnl/{account_id}
+GET    /api/v1/analytics/performance/{strategy_id}
+GET    /api/v1/analytics/reports/daily
+GET    /api/v1/analytics/reports/monthly
+GET    /api/v1/analytics/reports/custom
+POST   /api/v1/analytics/export/trades
+POST   /api/v1/analytics/export/pnl
+GET    /api/v1/analytics/metrics/latency
+GET    /api/v1/analytics/metrics/execution
 ```
 
 #### Webhook Endpoints
 ```
-POST   /api/v2/webhooks/tradingview
-POST   /api/v2/webhooks/custom/{webhook_id}
-GET    /api/v2/webhooks/logs/
-GET    /api/v2/webhooks/{webhook_id}/test
-POST   /api/v2/webhooks/{webhook_id}/replay
+POST   /api/v1/webhooks/tradingview
+POST   /api/v1/webhooks/custom/{webhook_id}
+GET    /api/v1/webhooks/logs/
+GET    /api/v1/webhooks/{webhook_id}/test
+POST   /api/v1/webhooks/{webhook_id}/replay
+```
+
+#### Telegram & Alerts
+```
+POST   /api/v1/telegram/setup
+PUT    /api/v1/telegram/config
+GET    /api/v1/telegram/status
+POST   /api/v1/telegram/test
+DELETE /api/v1/telegram/disconnect
+GET    /api/v1/telegram/chat/verify
+POST   /api/v1/telegram/send-message
+GET    /api/v1/telegram/message-history
+
+GET    /api/v1/alerts/settings/
+PUT    /api/v1/alerts/settings/
+GET    /api/v1/alerts/templates/
+POST   /api/v1/alerts/templates/
+PUT    /api/v1/alerts/templates/{template_id}
+DELETE /api/v1/alerts/templates/{template_id}
+GET    /api/v1/alerts/history/
+POST   /api/v1/alerts/test/{alert_type}
+GET    /api/v1/alerts/statistics/
 ```
 
 #### System & Admin
 ```
-GET    /api/v2/system/health
-GET    /api/v2/system/status
-GET    /api/v2/system/version
-GET    /api/v2/system/brokers/status
-GET    /api/v2/system/performance
-POST   /api/v2/system/restart-services
-GET    /api/v2/admin/users/
-GET    /api/v2/admin/users/{user_id}
-PUT    /api/v2/admin/users/{user_id}
-POST   /api/v2/admin/users/{user_id}/suspend
-GET    /api/v2/admin/logs/
+GET    /api/v1/system/health
+GET    /api/v1/system/status
+GET    /api/v1/system/version
+GET    /api/v1/system/brokers/status
+GET    /api/v1/system/performance
+POST   /api/v1/system/restart-services
+GET    /api/v1/admin/users/
+GET    /api/v1/admin/users/{user_id}
+PUT    /api/v1/admin/users/{user_id}
+POST   /api/v1/admin/users/{user_id}/suspend
+GET    /api/v1/admin/logs/
+GET    /api/v1/admin/session-config/
+PUT    /api/v1/admin/session-config/
+POST   /api/v1/admin/force-logout-all
+GET    /api/v1/admin/active-sessions/
 ```
 
 - **WebSocket Streams**:
@@ -940,12 +1120,30 @@ CREATE TABLE users (
 CREATE TABLE trading_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id),
+    owner_user_id UUID REFERENCES users(id), -- For family accounts
     broker VARCHAR(50) NOT NULL,
     account_name VARCHAR(100) NOT NULL,
+    account_type VARCHAR(20) DEFAULT 'self', -- 'self', 'family'
+    relationship_type VARCHAR(50), -- 'spouse', 'parent', 'child' for family accounts
     encrypted_credentials JSONB NOT NULL,
     is_master BOOLEAN DEFAULT false,
     is_active BOOLEAN DEFAULT true,
+    account_limit INTEGER DEFAULT NULL, -- NULL for unlimited
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Family Relationships
+CREATE TABLE family_relationships (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    primary_user_id UUID REFERENCES users(id),
+    family_member_id UUID REFERENCES users(id),
+    relationship_type VARCHAR(50) NOT NULL, -- 'spouse', 'parent', 'child'
+    consent_document_path VARCHAR(500),
+    verification_status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'verified', 'rejected'
+    verified_at TIMESTAMP,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(primary_user_id, family_member_id)
 );
 
 -- Strategy Templates
@@ -1234,11 +1432,12 @@ volumes:
 
 ### Key Differentiators
 
-1. **Multi-Account Self Trading**:
-   - Manage 3-4+ accounts seamlessly
+1. **Multi-Account Self & Family Trading**:
+   - Manage unlimited accounts seamlessly (self + family)
    - Cross-broker order replication
    - Account-specific risk management
-   - Consolidated reporting
+   - Family account relationship mapping
+   - Consolidated reporting across all accounts
 
 2. **Professional Option Trading**:
    - Visual strategy builder
@@ -1277,6 +1476,7 @@ volumes:
    - 10,000+ concurrent users
    - 100,000+ orders per minute
    - 1M+ WebSocket messages per minute
+   - Unlimited accounts per user
    - 50+ strategies per user
 
 3. **Reliability**:
@@ -1333,4 +1533,4 @@ volumes:
 
 ### Conclusion
 
-OpenAlgo Enhanced represents a significant evolution from a single-user trading bridge to a professional multi-account trading platform. By focusing on the needs of serious individual traders managing multiple accounts, implementing advanced option strategies, and providing institutional-grade risk controls, the platform will empower traders to execute sophisticated strategies with confidence. The modern architecture ensures scalability, reliability, and performance that matches professional trading desks while remaining accessible to individual traders.
+OpenAlgo+ represents a significant evolution from a single-user trading bridge to a professional multi-account trading platform. By focusing on the needs of serious individual traders and families managing unlimited accounts, implementing advanced option strategies, and providing institutional-grade risk controls, the platform empowers traders to execute sophisticated strategies with confidence. The modern architecture ensures scalability, reliability, and performance that matches professional trading desks while remaining accessible to individual traders.
