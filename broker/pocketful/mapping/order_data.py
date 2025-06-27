@@ -37,7 +37,7 @@ def map_order_data(order_data):
         if 'exchange' in order:
             exchange = order['exchange']
         else:
-            logger.info("Warning: Order missing 'exchange' field: %s", order)
+            logger.warning(f"Warning: Order missing 'exchange' field: {order}")
             continue
             
         # Safely extract symbol (handle both possible field names)
@@ -49,7 +49,7 @@ def map_order_data(order_data):
         elif 'tradingsymbol' in order:
             symbol = order['tradingsymbol']
         else:
-            logger.info("Warning: Order missing symbol fields (tried 'trading_symbol' and 'tradingsymbol'): %s", order)
+            logger.warning(f"Warning: Order missing symbol fields (tried 'trading_symbol' and 'tradingsymbol'): {order}")
             continue
         
         # Check if symbol was found; if so, update with OpenAlgo format
@@ -61,7 +61,7 @@ def map_order_data(order_data):
             if 'trading_symbol' in order:
                 order['trading_symbol'] = oa_symbol
         else:
-            logger.info("Symbol is empty for exchange %s. Keeping original symbol.", exchange)
+            logger.info(f"Symbol is empty for exchange {exchange}. Keeping original symbol.")
     
     # Return processed orders
     return orders
@@ -175,7 +175,7 @@ def transform_order_data(orders):
     for order in orders:
         # Skip non-dict items
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
         
         # Map order status
@@ -260,14 +260,14 @@ def map_trade_data(trade_data):
     elif isinstance(trade_data, list):
         trades = trade_data
     else:
-        logger.info("Unexpected trade data format: %s", type(trade_data))
+        logger.info(f"Unexpected trade data format: {type(trade_data)}")
         return []
     
     if not trades:
         logger.info("No trades found in data.")
         return []
     
-    logger.info("Processing %s trades", len(trades))
+    logger.info(f"Processing {len(trades)} trades")
     
     # Process each trade
     processed_trades = []
@@ -369,11 +369,11 @@ def map_position_data(position_data):
     
     # Handle different possible structures:
     positions = []
-    logger.debug("DEBUG - Position data type: %s", type(position_data))
+    logger.debug(f"DEBUG - Position data type: {type(position_data)}")
     
     # Case 1: data is already the positions array (when coming from get_positions)
     if isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], list):
-        logger.info("DEBUG - Using Case 1: data is a list with %s positions", len(position_data['data']))
+        logger.info(f"DEBUG - Using Case 1: data is a list with {len(position_data['data'])} positions")
         positions = position_data['data']
     # Case 2: nested structure (when directly handling API response)
     elif isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], dict) and 'positions' in position_data['data']:
@@ -381,28 +381,28 @@ def map_position_data(position_data):
         positions = position_data['data']['positions']
     # Case 3: direct array of positions
     elif isinstance(position_data, list):
-        logger.debug("DEBUG - Using Case 3: direct array with %s positions", len(position_data))
+        logger.debug(f"DEBUG - Using Case 3: direct array with {len(position_data)} positions")
         positions = position_data
     # Case 4: Legacy structure with 'net' key
     elif isinstance(position_data, dict) and 'data' in position_data and isinstance(position_data['data'], dict) and 'net' in position_data['data']:
         logger.debug("DEBUG - Using Case 4: data.net structure")
         positions = position_data['data']['net'] if position_data['data']['net'] is not None else []
     else:
-        logger.debug("DEBUG - Unexpected position data format: %s", type(position_data))
+        logger.debug(f"DEBUG - Unexpected position data format: {type(position_data)}")
         # For debugging, try to print more details about the structure
         if isinstance(position_data, dict):
-            logger.debug("DEBUG - Dict keys: %s", position_data.keys())
+            logger.debug(f"DEBUG - Dict keys: {position_data.keys()}")
             if 'data' in position_data:
-                logger.info("DEBUG - Data type: %s", type(position_data['data']))
+                logger.info(f"DEBUG - Data type: {type(position_data['data'])}")
                 if isinstance(position_data['data'], dict):
-                    logger.info("DEBUG - Data dict keys: %s", position_data['data'].keys())
+                    logger.info(f"DEBUG - Data dict keys: {position_data['data'].keys()}")
         return []
     
     if not positions:
         logger.info("No positions found in data.")
         return []
     
-    logger.info("Processing %s positions", len(positions))
+    logger.info(f"Processing {len(positions)} positions")
     
     # Process each position
     processed_positions = []
@@ -425,7 +425,7 @@ def map_position_data(position_data):
                 if oa_symbol:
                     processed_position['tradingsymbol'] = oa_symbol
                 else:
-                    logger.info("Symbol {symbol} not found in database for exchange %s. Keeping original symbol.", exchange)
+                    logger.info(f"Symbol {symbol} not found in database for exchange {exchange}. Keeping original symbol.")
         
         # Map Pocketful-specific fields to standard format
         
@@ -507,9 +507,9 @@ def transform_holdings_data(holdings_data):
         logger.info("No holdings data available")
         return []
         
-    logger.debug("DEBUG - Transforming %s holdings entries", len(holdings_data))
+    logger.debug(f"DEBUG - Transforming {len(holdings_data)} holdings entries")
     if holdings_data and len(holdings_data) > 0:
-        logger.debug("DEBUG - Sample holding data: %s", holdings_data[0])
+        logger.debug(f"DEBUG - Sample holding data: {holdings_data[0]}")
     
     # Check if this data has already been transformed (called twice in the pipeline)
     # If the first item has 'symbol' and 'product' fields, it's likely already been transformed
@@ -532,25 +532,25 @@ def transform_holdings_data(holdings_data):
         for field in ['tradingsymbol', 'trading_symbol', 'symbol']:
             if field in holding and holding[field]:
                 tradingsymbol = holding[field]
-                logger.info("DEBUG - Found symbol in '%s' field: %s", field, tradingsymbol)
+                logger.info(f"DEBUG - Found symbol in '{field}' field: {tradingsymbol}")
                 break
                 
         # If still not found, check in instrument_details if available
         if not tradingsymbol and 'instrument_details' in holding and isinstance(holding['instrument_details'], dict):
             if 'trading_symbol' in holding['instrument_details']:
                 tradingsymbol = holding['instrument_details']['trading_symbol']
-                logger.debug("DEBUG - Found symbol in instrument_details.trading_symbol: %s", tradingsymbol)
+                logger.debug(f"DEBUG - Found symbol in instrument_details.trading_symbol: {tradingsymbol}")
             elif 'symbol' in holding['instrument_details']:
                 tradingsymbol = holding['instrument_details']['symbol']
-                logger.debug("DEBUG - Found symbol in instrument_details.symbol: %s", tradingsymbol)
+                logger.debug(f"DEBUG - Found symbol in instrument_details.symbol: {tradingsymbol}")
                 
         # Last fallback - check the 'symbol' field directly
         if not tradingsymbol and 'symbol' in holding:
             tradingsymbol = holding['symbol']
-            logger.info("DEBUG - Using 'symbol' field directly: %s", tradingsymbol)
+            logger.info(f"DEBUG - Using 'symbol' field directly: {tradingsymbol}")
             
         if not tradingsymbol:
-            logger.warning("WARNING: Could not find trading symbol in holding: %s", holding)
+            logger.warning(f"WARNING: Could not find trading symbol in holding: {holding}")
             continue
             
         # Get exchange with fallbacks
@@ -561,21 +561,21 @@ def transform_holdings_data(holdings_data):
             # Clean up the symbol if it has -EQ suffix
             if tradingsymbol.endswith('-EQ'):
                 tradingsymbol = tradingsymbol.replace('-EQ', '')
-                logger.debug("DEBUG - Removed -EQ suffix, symbol is now: %s", tradingsymbol)
+                logger.debug(f"DEBUG - Removed -EQ suffix, symbol is now: {tradingsymbol}")
             
             # Try to convert to OpenAlgo symbol format
             try:
-                logger.info("DEBUG - Converting symbol '%s' for exchange '%s' to OpenAlgo format", tradingsymbol, exchange)
+                logger.info(f"DEBUG - Converting symbol '{tradingsymbol}' for exchange '{exchange}' to OpenAlgo format")
                 oa_symbol = get_oa_symbol(symbol=tradingsymbol, exchange=exchange)
                 if oa_symbol:
                     tradingsymbol = oa_symbol
-                    logger.debug("DEBUG - Converted to OpenAlgo symbol: %s", tradingsymbol)
+                    logger.debug(f"DEBUG - Converted to OpenAlgo symbol: {tradingsymbol}")
                 else:
-                    logger.debug("DEBUG - Could not convert to OpenAlgo symbol, using original: %s", tradingsymbol)
+                    logger.debug(f"DEBUG - Could not convert to OpenAlgo symbol, using original: {tradingsymbol}")
             except Exception as e:
-                logger.error("DEBUG - Error converting symbol to OpenAlgo format: %s", str(e))
+                logger.error(f"DEBUG - Error converting symbol to OpenAlgo format: {e}")
                 # If conversion fails, still use the cleaned symbol
-                logger.debug("DEBUG - Using original symbol: %s", tradingsymbol)
+                logger.debug(f"DEBUG - Using original symbol: {tradingsymbol}")
         
         # Get quantity with fallbacks for different field names
         quantity = 0
@@ -583,7 +583,7 @@ def transform_holdings_data(holdings_data):
             if field in holding and holding[field] is not None:
                 try:
                     quantity = int(float(holding[field]))
-                    logger.info("DEBUG - Found quantity in '%s' field: %s", field, quantity)
+                    logger.info(f"DEBUG - Found quantity in '{field}' field: {quantity}")
                     break
                 except (ValueError, TypeError):
                     continue
@@ -594,7 +594,7 @@ def transform_holdings_data(holdings_data):
             if field in holding and holding[field] is not None:
                 try:
                     average_price = float(holding[field])
-                    logger.info("DEBUG - Found average price in '%s' field: %s", field, average_price)
+                    logger.info(f"DEBUG - Found average price in '{field}' field: {average_price}")
                     break
                 except (ValueError, TypeError):
                     continue
@@ -605,7 +605,7 @@ def transform_holdings_data(holdings_data):
             if field in holding and holding[field] is not None:
                 try:
                     last_price = float(holding[field])
-                    logger.info("DEBUG - Found last price in '%s' field: %s", field, last_price)
+                    logger.info(f"DEBUG - Found last price in '{field}' field: {last_price}")
                     break
                 except (ValueError, TypeError):
                     continue
@@ -634,8 +634,8 @@ def transform_holdings_data(holdings_data):
             # Calculate if not provided
             pnl_percent = ((last_price - average_price) / average_price * 100) if average_price > 0 else 0.0
         
-        logger.debug("DEBUG - Final transformed symbol: %s", tradingsymbol)
-        logger.debug("DEBUG - P&L calculated: %s", pnl)
+        logger.debug(f"DEBUG - Final transformed symbol: {tradingsymbol}")
+        logger.debug(f"DEBUG - P&L calculated: {pnl}")
         
         # Create transformed holding with all available fields
         transformed_holding = {
@@ -660,26 +660,26 @@ def transform_holdings_data(holdings_data):
             # Try using the 'symbol' field directly, which should be available in the Pocketful API response
             if 'symbol' in holding and holding['symbol']:
                 transformed_holding["symbol"] = holding['symbol']
-                logger.info("DEBUG - Using symbol from input directly: %s", transformed_holding['symbol'])
+                logger.info(f"DEBUG - Using symbol from input directly: {transformed_holding['symbol']}")
             # If still no symbol, use trading_symbol
             elif 'trading_symbol' in holding and holding['trading_symbol']:
                 transformed_holding["symbol"] = holding['trading_symbol']
-                logger.info("DEBUG - Using trading_symbol as fallback: %s", transformed_holding['symbol'])
+                logger.info(f"DEBUG - Using trading_symbol as fallback: {transformed_holding['symbol']}")
             # Next try ISIN as a fallback
             elif transformed_holding["isin"]:
                 transformed_holding["symbol"] = f"ISIN_{transformed_holding['isin']}"
-                logger.info("DEBUG - Using ISIN as symbol placeholder: %s", transformed_holding['symbol'])
+                logger.info(f"DEBUG - Using ISIN as symbol placeholder: {transformed_holding['symbol']}")
             # Last resort - use a placeholder with a unique identifier
             else:
                 unique_id = hash(str(holding)) % 10000  # Create a deterministic ID from the holding data
                 transformed_holding["symbol"] = f"UNKNOWN_{unique_id}"
-                logger.info("WARNING: Created placeholder symbol: %s", transformed_holding['symbol'])
+                logger.warning(f"WARNING: Created placeholder symbol: {transformed_holding['symbol']}")
         
         transformed_data.append(transformed_holding)
     
-    logger.debug("DEBUG - Transformed %s holdings entries", len(transformed_data))
+    logger.debug(f"DEBUG - Transformed {len(transformed_data)} holdings entries")
     if transformed_data and len(transformed_data) > 0:
-        logger.debug("DEBUG - Sample transformed holding: %s", transformed_data[0])
+        logger.debug(f"DEBUG - Sample transformed holding: {transformed_data[0]}")
     
     return transformed_data
 
@@ -694,7 +694,7 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - The processed portfolio data with standardized 'product' fields.
     """
-    logger.debug("DEBUG - map_portfolio_data input type: %s", type(portfolio_data))
+    logger.debug(f"DEBUG - map_portfolio_data input type: {type(portfolio_data)}")
     
     # Handle different input formats safely
     processed_data = []
@@ -712,7 +712,7 @@ def map_portfolio_data(portfolio_data):
     
     # Case 3: portfolio_data is a dict but doesn't have 'data' key
     elif isinstance(portfolio_data, dict):
-        logger.debug("DEBUG - Portfolio data keys: %s", portfolio_data.keys())
+        logger.debug(f"DEBUG - Portfolio data keys: {portfolio_data.keys()}")
         # Try to find list data in other common keys
         for key in ['holdings', 'holdingsData', 'portfolio']:
             if key in portfolio_data and isinstance(portfolio_data[key], list):
@@ -730,7 +730,7 @@ def map_portfolio_data(portfolio_data):
         logger.debug("DEBUG - No portfolio data found after processing.")
         return []
         
-    logger.debug("DEBUG - Processing %s portfolio entries", len(processed_data))
+    logger.debug(f"DEBUG - Processing {len(processed_data)} portfolio entries")
     
     # Process each portfolio item
     for item in processed_data:
@@ -739,7 +739,7 @@ def map_portfolio_data(portfolio_data):
             if item['product'] == 'CNC':
                 pass  # Already correct
             else:
-                logger.info("DEBUG - Non-CNC product found: %s", item['product'])
+                logger.info(f"DEBUG - Non-CNC product found: {item['product']}")
         else:
             # If product is missing, default to CNC for holdings
             item['product'] = 'CNC'
@@ -766,7 +766,7 @@ def calculate_portfolio_statistics(holdings_data):
             'totalpnlpercentage': 0.0
         }
         
-    logger.debug("DEBUG - Calculating portfolio statistics for %s holdings entries", len(holdings_data))
+    logger.debug(f"DEBUG - Calculating portfolio statistics for {len(holdings_data)} holdings entries")
     
     try:
         # Calculate total holding value (current market value)
@@ -789,11 +789,11 @@ def calculate_portfolio_statistics(holdings_data):
             'totalpnlpercentage': round(totalpnlpercentage, 2)
         }
         
-        logger.debug("DEBUG - Portfolio statistics: %s", result)
+        logger.debug(f"DEBUG - Portfolio statistics: {result}")
         return result
         
     except Exception as e:
-        logger.error("ERROR - Failed to calculate portfolio statistics: %s", str(e))
+        logger.error(f"ERROR - Failed to calculate portfolio statistics: {e}")
         return {
             'totalholdingvalue': 0.0,
             'totalinvvalue': 0.0,

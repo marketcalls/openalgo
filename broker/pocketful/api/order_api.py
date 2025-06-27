@@ -294,7 +294,7 @@ def get_trade_book(auth):
             return {"status": "error", "message": error_msg}
     except Exception as e:
         error_msg = f"Exception fetching tradebook: {str(e)}"
-        logger.error("DEBUG - %s", error_msg)
+        logger.error(f"DEBUG - {error_msg}")
         return {"status": "error", "message": error_msg}
 
 def get_positions(auth):
@@ -376,7 +376,7 @@ def get_positions(auth):
             return {"status": "error", "message": error_msg}
     except Exception as e:
         error_msg = f"Exception fetching positions: {str(e)}"
-        logger.error("DEBUG - %s", error_msg)
+        logger.error(f"DEBUG - {error_msg}")
         return {"status": "error", "message": error_msg}
 
 def get_holdings(auth):

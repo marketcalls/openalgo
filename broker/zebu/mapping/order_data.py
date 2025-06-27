@@ -58,7 +58,7 @@ def map_order_data(order_data):
                     order['prctyp']="SL"
                 
             else:
-                logger.info("Symbol not found for token %ssymboltoken and exchange %sexchange. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -114,7 +114,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.info("Warning: Expected a dict, but found a %stype(order). Skipping this item.")
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         transformed_order = {
@@ -187,7 +187,7 @@ def map_trade_data(trade_data):
                 
                 
             else:
-                logger.info("Unable to find the symbol %ssymbol and exchange %sexchange. Keeping original trading symbol.")
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return trade_data
 
@@ -250,7 +250,7 @@ def map_position_data(position_data):
                 
                 
             else:
-                logger.info("Unable to find the symbol %ssymbol and exchange %sexchange. Keeping original trading symbol.")
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return position_data
 
@@ -288,7 +288,7 @@ def map_portfolio_data(portfolio_data):
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get('stat') != 'Ok':
-            logger.info("Error: %sportfolio.get('emsg', 'Unknown error occurred.')")
+            logger.info(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Process the 'exch_tsym' list inside each portfolio entry
@@ -302,7 +302,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                logger.info("Zebu Portfolio - Product Value for %ssymbol Not Found or Changed.")
+                logger.info(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
     return portfolio_data
 
@@ -326,7 +326,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if holding.get('stat') != 'Ok':
-            logger.info("Error: %sholding.get('emsg', 'Unknown error occurred.')")
+            logger.info(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Filter out the NSE entry and ignore BSE for the same symbol
@@ -362,8 +362,8 @@ def calculate_portfolio_statistics(holdings_data):
 
         # Valuation formula from API
         valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        logger.info("%s", "test valuation :"+str(npoadqty))
-        logger.info("%s", "test valuation :"+str(upload_price))
+        logger.info(f"test valuation :{npoadqty}")
+        logger.info(f"test valuation :{upload_price}")
         # Accumulate total valuation
         totalholdingvalue += valuation
 
