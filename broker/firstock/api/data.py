@@ -59,7 +59,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
     except Exception as e:
         logger.error(f"API Error: {e}")
-        logger.info("Traceback: %s", traceback.format_exc())
+        logger.info(f"Traceback: {traceback.format_exc()}")
         raise
 
 class BrokerData:
@@ -267,12 +267,12 @@ class BrokerData:
                                 continue
                 except Exception as e:
                     logger.error(f"Error in get_history: {e}")
-                    logger.info("Traceback: %s", traceback.format_exc())
+                    logger.info(f"Traceback: {traceback.format_exc()}")
                     raise Exception(f"Error fetching historical data: {str(e)}")
             else:
                 # For intraday data
                 # Add market hours to timestamps (9:15 AM to 3:30 PM IST)
-{{ ... }}
+                start_time = start_dt.replace(hour=9, minute=15, second=0)
                 end_time = end_dt.replace(hour=15, minute=30, second=0)
                 
                 # Format for API
@@ -332,5 +332,5 @@ class BrokerData:
             
         except Exception as e:
             logger.error(f"Error in get_history: {e}")
-            logger.info("Traceback: %s", traceback.format_exc())
+            logger.info(f"Traceback: {traceback.format_exc()}")
             raise Exception(f"Error fetching historical data: {str(e)}")

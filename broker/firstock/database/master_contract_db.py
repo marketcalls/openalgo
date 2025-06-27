@@ -60,7 +60,7 @@ def copy_from_dataframe(df):
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Firstock URLs for downloading symbol files
@@ -88,7 +88,7 @@ def download_firstock_data(output_path):
     downloaded_files = []
     for exchange, url in firstock_urls.items():
         try:
-            logger.info("Downloading {exchange} data from %s", url)
+            logger.info(f"Downloading {{exchange}} data from {url}")
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
@@ -96,12 +96,12 @@ def download_firstock_data(output_path):
                 with open(file_path, 'w') as f:
                     f.write(response.text)
                 downloaded_files.append(f"{exchange}_symbols.csv")
-                logger.info("Successfully downloaded %s data", exchange)
+                logger.info(f"Successfully downloaded {exchange} data")
             else:
-                logger.error("Failed to download {exchange} data. Status code: %s", response.status_code)
+                logger.error(f"Failed to download {{exchange}} data. Status code: {response.status_code}")
                 
         except Exception as e:
-            logger.error("Error downloading {exchange} data: %s", e)
+            logger.error(f"Error downloading {{exchange}} data: {e}")
             
     return downloaded_files
 
@@ -213,7 +213,7 @@ def process_firstock_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -348,7 +348,7 @@ def process_firstock_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -400,7 +400,7 @@ def delete_firstock_temp_data(output_path):
         if filename.endswith("_symbols.csv"):
             file_path = os.path.join(output_path, filename)
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
 
 def master_contract_download():
     """Downloads and processes Firstock contract data."""
@@ -445,5 +445,5 @@ def master_contract_download():
             socketio.emit('download_progress', 'Download failed')
             
     except Exception as e:
-        logger.error("Error in master contract download: %s", e)
+        logger.error(f"Error in master contract download: {e}")
         socketio.emit('download_progress', f'Error: {str(e)}')

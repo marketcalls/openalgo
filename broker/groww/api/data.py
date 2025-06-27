@@ -981,7 +981,7 @@ class BrokerData:
                         debug=True
                     )
                     
-                    logger.info("Groww API response: %s", response)
+                    logger.info(f"Groww API response: {response}")
                     elapsed = time.time() - start_time
                     logger.info(f"Got response from Groww API in {elapsed:.2f}s")
                     
@@ -994,7 +994,7 @@ class BrokerData:
                         # Extract payload which contains the actual quote data
                         if response.get('status') == 'SUCCESS' and isinstance(response.get('payload'), dict):
                             response = response.get('payload', {})
-                            logger.info("response: %s", response)
+                            logger.info(f"response: {response}")
                             logger.info(f"Extracted payload data with keys: {list(response.keys())[:10]}")
                             
                             # Extract OHLC data from the nested structure
@@ -1026,14 +1026,14 @@ class BrokerData:
                             
                             # Create quote_item in OpenAlgo format
                             # Print each field being extracted for debugging
-                            logger.info("last_price: %s", response.get('last_price'))
-                            logger.info("ohlc: %s", ohlc)
-                            logger.info("volume: %s", response.get('volume'))
+                            logger.info(f"last_price: {response.get('last_price')}")
+                            logger.info(f"ohlc: {ohlc}")
+                            logger.info(f"volume: {response.get('volume')}")
                             
                             # CRITICAL: Build the quote item directly with values extracted from the response, using field names that OpenAlgo understands
                             # The quote_item should use the frontend-compatible field names
                             last_price = safe_float(response.get('last_price'))
-                            logger.info("EXTRACTED last_price = %s", last_price)
+                            logger.info(f"EXTRACTED last_price = {last_price}")
                             
                             quote_item = {
                                 'symbol': symbol,
@@ -1102,7 +1102,7 @@ class BrokerData:
                             
                             # Add to quote data
                             quote_data.append(quote_item)
-                            logger.info("Added quote_item: %s", quote_item)
+                            logger.info(f"Added quote_item: {quote_item}")
                         else:
                             logger.warning(f"Invalid response format for {symbol} on {exchange}")
                             response = {}
@@ -1164,7 +1164,7 @@ class BrokerData:
                 })
     
         # Debug output of the final quote_data
-        logger.info("FINAL QUOTE DATA: %s", quote_data)
+        logger.info(f"FINAL QUOTE DATA: {quote_data}")
         
         # No data case
         if not quote_data:
@@ -1232,7 +1232,7 @@ class BrokerData:
     #    # Extract first (and only) item in single quote request    
     #    quote = quote_data[0] if isinstance(quote_data, list) and len(quote_data) > 0 else {}
         
-        logger.info("EXTRACTED QUOTE: %s", quote)
+        logger.info(f"EXTRACTED QUOTE: {quote}")
         logger.info(f"Formatting single quote response for OpenAlgo frontend: {quote}")
         
         # Based on the sample response, OpenAlgo expects exactly these fields
@@ -1296,7 +1296,7 @@ class BrokerData:
         # Debug output
         logger.info("FINAL SIMPLE FORMAT:")
         for key, value in simple_data.items():
-            logger.info("{key}: %s", value)
+            logger.info(f"{{key}}: {value}")
         
         # Return exact structure expected by OpenAlgo
         result = {
@@ -1304,7 +1304,7 @@ class BrokerData:
             "data": simple_data
         }
         
-        logger.info("FINAL FORMATTED RESULT: %s", result)
+        logger.info(f"FINAL FORMATTED RESULT: {result}")
         logger.info(f"Formatted result for OpenAlgo frontend: {result}")
         
         return result
