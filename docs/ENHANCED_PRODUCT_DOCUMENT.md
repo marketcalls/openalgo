@@ -3,7 +3,7 @@
 
 ### Executive Summary
 
-OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, transforming it from a single-user trading bridge into a comprehensive multi-account trading platform. Built with modern technologies (FastAPI, NextJS, PostgreSQL, Redis, QuestDB, Docker), it provides institutional-grade trading infrastructure for individual traders managing multiple accounts across different brokers. The platform features advanced option strategy building, real-time risk controls, paper trading with exact market replication, and professional-grade automation capabilities.
+OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, transforming it from a single-user trading bridge into a comprehensive multi-account trading execution platform. Built with modern technologies (FastAPI, NextJS, PostgreSQL, Redis, QuestDB, Docker), it provides institutional-grade trading infrastructure for individual traders managing multiple accounts across different brokers. The platform focuses on real-time trade execution, advanced option strategy deployment, risk controls, and professional-grade automation capabilities.
 
 ### Technology Stack
 
@@ -27,11 +27,10 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 
 #### Infrastructure
 - **Containerization**: Docker + Docker Compose
-- **Orchestration**: Kubernetes-ready manifests
 - **Reverse Proxy**: Nginx / Traefik
-- **Monitoring**: Prometheus + Grafana
-- **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
-- **APM**: OpenTelemetry
+- **Monitoring**: Built-in performance metrics
+- **Logging**: Application-level logging system
+- **Deployment**: Single-node and multi-node support
 
 ### Core Features
 
@@ -102,8 +101,8 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Error handling with retry logic
   - Latency monitoring per broker
   - Master contract auto-download
-  - Sandbox environment support for testing
-  - Live/Sandbox mode switching per broker
+  - Real API integration for testing
+  - Virtual execution mode for walk forward testing
 
 #### 4. Advanced Order Management
 
@@ -216,22 +215,21 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Real-time margin calculation
   - Risk-reward visualization
   - One-click position entry
-  - Hedge position suggestions
-  - Strategy P&L projections
+  - Multi-leg order placement
 
 #### 6. Advanced Testing & Walk Forward Testing
 
 - **Walk Forward Testing System**:
   - Real-time strategy validation without capital risk
-  - Live market data from broker feeds (real-time, not delayed)
-  - Crucial intermediate step between backtesting and live trading
+  - Live market data from real broker APIs (real-time)
+  - Virtual order execution with real market prices
+  - Strategy execution testing before live deployment
   - Confidence building for strategy deployment
-  - Real-time behavior observation
-  - Performance validation on unseen data
+  - Real-time behavior observation using actual market conditions
 
 - **Core Testing Features**:
   - **Strategy Activation**:
-    - One-click deployment from backtested strategies
+    - One-click deployment from created strategies
     - Real-time performance monitoring during market hours
     - Multiple strategy concurrent testing
     - Strategy search and filtering
@@ -254,9 +252,9 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 - **Walk Forward Testing Workflow**:
   ```
   1. Navigate to Walk Forward Testing Dashboard
-     ├── View available backtested strategies
+     ├── View available created strategies
      ├── Search and filter strategies
-     └── Review strategy performance history
+     └── Review strategy execution history
 
   2. Strategy Activation
      ├── Select strategy from list
@@ -323,19 +321,19 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 
 - **Data & Accuracy**:
   - **Market Data Feed**:
-    - Real-time market data from broker APIs
-    - Live bid-ask spread and depth
+    - Real-time market data from live broker APIs
+    - Live bid-ask spread and market depth
     - Actual volume and liquidity data
     - Real market microstructure effects
     - Live corporate action updates
-    - Broker sandbox environments for testing
+    - Direct connection to exchange data via brokers
   
-  - **Execution Simulation**:
-    - Broker sandbox order execution
-    - Real market condition simulation
-    - Actual latency from broker systems
-    - Live slippage calculation
-    - Market impact based on real conditions
+  - **Virtual Execution Engine**:
+    - Internal order simulation with real market data
+    - Real market condition replication
+    - Actual broker API latency simulation
+    - Live slippage calculation based on market depth
+    - Market impact estimation using real order book
 
 - **Reporting & Analysis**:
   - **Real-time Reports**:
@@ -347,10 +345,10 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   
   - **Historical Analysis**:
     - Past walk forward test results
-    - Strategy performance comparison
+    - Strategy execution comparison
     - Trade-by-trade analysis
-    - Risk-adjusted returns
-    - Benchmark comparisons
+    - Return metrics
+    - Performance comparisons
   
   - **Export Capabilities**:
     - Detailed trade logs
@@ -362,17 +360,17 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 - **Safety & Risk Controls**:
   - **Built-in Safeguards**:
     - No real money at risk
-    - Broker sandbox environment usage
-    - Isolated testing with real data
+    - Virtual order execution only
+    - Real market data with simulated trades
     - Strategy validation checks
     - Real risk limit testing
   
-  - **Broker Sandbox Integration**:
-    - Direct integration with broker sandbox APIs
-    - Real-time data with simulated execution
-    - Actual margin calculations
-    - Live market condition testing
-    - Seamless sandbox-to-live transition
+  - **Virtual Trading Engine**:
+    - Internal order matching using real market data
+    - No actual orders sent to broker/exchange
+    - Real-time price discovery simulation
+    - Actual margin requirement calculations
+    - Live market condition replication
   
   - **Manual Controls**:
     - Individual strategy square-off
@@ -470,31 +468,31 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Risk-adjusted returns
   - Benchmark comparison
 
-#### 10. Advanced Monitoring
+#### 10. Built-in Monitoring & Analytics
 
-- **Latency Monitoring**:
+- **Performance Monitoring**:
   - End-to-end latency tracking
-  - Stage-wise breakdown
+  - Stage-wise breakdown analysis
   - Broker API response times
-  - WebSocket latency
-  - Database performance
-  - Alert on degradation
+  - WebSocket connection monitoring
+  - Database query performance
+  - Real-time performance alerts
 
-- **Traffic Analysis**:
-  - API usage patterns
+- **Usage Analytics**:
+  - API endpoint usage patterns
   - User activity tracking
-  - Resource utilization
-  - Cost analysis
-  - Capacity planning
-  - Performance optimization
+  - Resource utilization metrics
+  - Trading volume analysis
+  - Strategy performance metrics
+  - System capacity monitoring
 
-- **System Health**:
-  - Real-time health dashboard
-  - Service status monitoring
-  - Error rate tracking
-  - Automatic issue detection
-  - Self-healing mechanisms
-  - Incident management
+- **Health Dashboard**:
+  - Real-time system status
+  - Service health indicators
+  - Error rate monitoring
+  - Connection status tracking
+  - Memory and CPU usage
+  - Custom alert thresholds
 
 #### 11. Market Data Management
 
@@ -676,12 +674,203 @@ This comprehensive system automates trading strategies based on TradingView indi
   ├── signals/       # TradingView signal management
   ├── algos/         # Trading algo configuration
   ├── walkforward/   # Walk forward testing management
-  ├── backtesting/   # Historical strategy testing
   ├── market/        # Market data endpoints
   ├── risk/          # Risk management
   ├── analytics/     # Reports & analytics
   └── webhooks/      # Signal reception & processing
   ```
+
+### Complete API Functions List
+
+#### Authentication & User Management
+```
+POST   /api/v2/auth/login
+POST   /api/v2/auth/logout
+POST   /api/v2/auth/refresh
+POST   /api/v2/auth/register
+POST   /api/v2/auth/forgot-password
+POST   /api/v2/auth/reset-password
+POST   /api/v2/auth/verify-email
+GET    /api/v2/auth/profile
+PUT    /api/v2/auth/profile
+POST   /api/v2/auth/change-password
+POST   /api/v2/auth/enable-2fa
+POST   /api/v2/auth/verify-2fa
+DELETE /api/v2/auth/disable-2fa
+```
+
+#### Multi-Account Management
+```
+GET    /api/v2/accounts/
+POST   /api/v2/accounts/
+GET    /api/v2/accounts/{account_id}
+PUT    /api/v2/accounts/{account_id}
+DELETE /api/v2/accounts/{account_id}
+POST   /api/v2/accounts/{account_id}/test-connection
+POST   /api/v2/accounts/{account_id}/credentials
+PUT    /api/v2/accounts/{account_id}/credentials
+GET    /api/v2/accounts/{account_id}/status
+POST   /api/v2/accounts/{account_id}/activate
+POST   /api/v2/accounts/{account_id}/deactivate
+GET    /api/v2/accounts/brokers/supported
+```
+
+#### Trading Operations
+```
+POST   /api/v2/trading/orders/place
+POST   /api/v2/trading/orders/modify
+POST   /api/v2/trading/orders/cancel
+POST   /api/v2/trading/orders/cancel-all
+GET    /api/v2/trading/orders/
+GET    /api/v2/trading/orders/{order_id}
+GET    /api/v2/trading/orders/{order_id}/status
+POST   /api/v2/trading/orders/basket
+POST   /api/v2/trading/orders/bracket
+POST   /api/v2/trading/orders/cover
+POST   /api/v2/trading/orders/gtt
+
+GET    /api/v2/trading/positions/
+GET    /api/v2/trading/positions/{account_id}
+POST   /api/v2/trading/positions/close
+POST   /api/v2/trading/positions/close-all
+POST   /api/v2/trading/positions/convert
+GET    /api/v2/trading/positions/pnl
+
+GET    /api/v2/trading/holdings/
+GET    /api/v2/trading/holdings/{account_id}
+GET    /api/v2/trading/tradebook/
+GET    /api/v2/trading/tradebook/{account_id}
+GET    /api/v2/trading/funds/
+GET    /api/v2/trading/funds/{account_id}
+```
+
+#### Strategy Management
+```
+GET    /api/v2/strategies/
+POST   /api/v2/strategies/
+GET    /api/v2/strategies/{strategy_id}
+PUT    /api/v2/strategies/{strategy_id}
+DELETE /api/v2/strategies/{strategy_id}
+POST   /api/v2/strategies/{strategy_id}/activate
+POST   /api/v2/strategies/{strategy_id}/deactivate
+POST   /api/v2/strategies/{strategy_id}/panic
+GET    /api/v2/strategies/{strategy_id}/performance
+GET    /api/v2/strategies/{strategy_id}/positions
+GET    /api/v2/strategies/{strategy_id}/orders
+POST   /api/v2/strategies/{strategy_id}/clone
+GET    /api/v2/strategies/templates/
+POST   /api/v2/strategies/templates/
+```
+
+#### TradingView Signal Management
+```
+GET    /api/v2/signals/
+POST   /api/v2/signals/
+GET    /api/v2/signals/{signal_id}
+PUT    /api/v2/signals/{signal_id}
+DELETE /api/v2/signals/{signal_id}
+POST   /api/v2/signals/{signal_id}/activate
+POST   /api/v2/signals/{signal_id}/deactivate
+GET    /api/v2/signals/{signal_id}/logs
+GET    /api/v2/signals/{signal_id}/analytics
+POST   /api/v2/signals/{signal_id}/test
+```
+
+#### Trading Algo Configuration
+```
+GET    /api/v2/algos/
+POST   /api/v2/algos/
+GET    /api/v2/algos/{algo_id}
+PUT    /api/v2/algos/{algo_id}
+DELETE /api/v2/algos/{algo_id}
+POST   /api/v2/algos/{algo_id}/activate
+POST   /api/v2/algos/{algo_id}/deactivate
+GET    /api/v2/algos/{algo_id}/performance
+POST   /api/v2/algos/{algo_id}/test
+GET    /api/v2/algos/strike-helpers
+```
+
+#### Walk Forward Testing
+```
+GET    /api/v2/walkforward/sessions/
+POST   /api/v2/walkforward/sessions/
+GET    /api/v2/walkforward/sessions/{session_id}
+DELETE /api/v2/walkforward/sessions/{session_id}
+POST   /api/v2/walkforward/sessions/{session_id}/start
+POST   /api/v2/walkforward/sessions/{session_id}/stop
+POST   /api/v2/walkforward/sessions/{session_id}/square-off
+GET    /api/v2/walkforward/sessions/{session_id}/trades
+GET    /api/v2/walkforward/sessions/{session_id}/positions
+GET    /api/v2/walkforward/sessions/{session_id}/analytics
+GET    /api/v2/walkforward/sessions/{session_id}/export
+```
+
+#### Market Data
+```
+GET    /api/v2/market/quotes/{symbol}
+POST   /api/v2/market/quotes/bulk
+GET    /api/v2/market/depth/{symbol}
+GET    /api/v2/market/history/{symbol}
+GET    /api/v2/market/option-chain/{symbol}
+GET    /api/v2/market/contracts/search
+GET    /api/v2/market/contracts/download
+GET    /api/v2/market/exchanges
+GET    /api/v2/market/indices
+GET    /api/v2/market/intervals
+```
+
+#### Risk Management
+```
+GET    /api/v2/risk/limits/
+POST   /api/v2/risk/limits/
+PUT    /api/v2/risk/limits/{limit_id}
+DELETE /api/v2/risk/limits/{limit_id}
+GET    /api/v2/risk/exposure/
+GET    /api/v2/risk/exposure/{account_id}
+POST   /api/v2/risk/panic/global
+POST   /api/v2/risk/panic/strategy/{strategy_id}
+POST   /api/v2/risk/panic/account/{account_id}
+GET    /api/v2/risk/violations/
+POST   /api/v2/risk/limits/validate
+```
+
+#### Analytics & Reporting
+```
+GET    /api/v2/analytics/dashboard/
+GET    /api/v2/analytics/pnl/{account_id}
+GET    /api/v2/analytics/performance/{strategy_id}
+GET    /api/v2/analytics/reports/daily
+GET    /api/v2/analytics/reports/monthly
+GET    /api/v2/analytics/reports/custom
+POST   /api/v2/analytics/export/trades
+POST   /api/v2/analytics/export/pnl
+GET    /api/v2/analytics/metrics/latency
+GET    /api/v2/analytics/metrics/execution
+```
+
+#### Webhook Endpoints
+```
+POST   /api/v2/webhooks/tradingview
+POST   /api/v2/webhooks/custom/{webhook_id}
+GET    /api/v2/webhooks/logs/
+GET    /api/v2/webhooks/{webhook_id}/test
+POST   /api/v2/webhooks/{webhook_id}/replay
+```
+
+#### System & Admin
+```
+GET    /api/v2/system/health
+GET    /api/v2/system/status
+GET    /api/v2/system/version
+GET    /api/v2/system/brokers/status
+GET    /api/v2/system/performance
+POST   /api/v2/system/restart-services
+GET    /api/v2/admin/users/
+GET    /api/v2/admin/users/{user_id}
+PUT    /api/v2/admin/users/{user_id}
+POST   /api/v2/admin/users/{user_id}/suspend
+GET    /api/v2/admin/logs/
+```
 
 - **WebSocket Streams**:
   - Real-time order updates
@@ -1064,11 +1253,11 @@ volumes:
    - Real-time MTM tracking
 
 4. **Professional Walk Forward Testing**:
-   - Real-time market data from broker feeds
-   - Live market conditions with broker sandbox
-   - MTM calculation on actual market movements
-   - Real margin requirement calculation
-   - Seamless transition to live trading
+   - Real-time market data from live broker APIs
+   - Virtual execution with actual market conditions
+   - MTM calculation on real market movements
+   - Actual margin requirement calculation
+   - Zero-risk validation before live deployment
 
 5. **Enterprise-Grade Infrastructure**:
    - Sub-50ms latency
