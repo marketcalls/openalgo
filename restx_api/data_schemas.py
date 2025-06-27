@@ -12,6 +12,7 @@ class HistorySchema(Schema):
     interval = fields.Str(required=True)  # 1m, 5m, 15m, 30m, 1h, 1d
     start_date = fields.Str(required=True)  # YYYY-MM-DD
     end_date = fields.Str(required=True)    # YYYY-MM-DD
+    include_oi = fields.Bool(required=False, missing=False)  # Include open interest data
 
 class DepthSchema(Schema):
     apikey = fields.Str(required=True)

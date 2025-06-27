@@ -33,6 +33,7 @@ class History(Resource):
             interval = history_data['interval']
             start_date = history_data['start_date']
             end_date = history_data['end_date']
+            include_oi = history_data.get('include_oi', False)
             
             # Call the service function to get historical data with API key
             success, response_data, status_code = get_history(
@@ -41,7 +42,8 @@ class History(Resource):
                 interval=interval,
                 start_date=start_date,
                 end_date=end_date,
-                api_key=api_key
+                api_key=api_key,
+                include_oi=include_oi
             )
             
             return make_response(jsonify(response_data), status_code)

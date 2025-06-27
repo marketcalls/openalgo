@@ -134,14 +134,15 @@ class BrokerData:
                 'low': float(quote.get('low', 0)),
                 'ltp': float(quote.get('ltp', 0)),
                 'prev_close': float(quote.get('close', 0)),
-                'volume': int(quote.get('tradeVolume', 0))
+                'volume': int(quote.get('tradeVolume', 0)),
+                'oi': int(quote.get('opnInterest', 0))
             }
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, 
-                   start_date: str, end_date: str) -> pd.DataFrame:
+                   start_date: str, end_date: str, include_oi: bool = False) -> pd.DataFrame:
         """
         Get historical data for given symbol
         Args:
@@ -150,8 +151,9 @@ class BrokerData:
             interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
+            include_oi: Include open interest data (only for F&O contracts)
         Returns:
-            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
+            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi (if requested)]
         """
         try:
             # Convert symbol to broker format and get token
@@ -290,14 +292,157 @@ class BrokerData:
             # Sort by timestamp and remove duplicates
             df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
+            # If OI is requested and this is an F&O contract, fetch OI data
+            if include_oi and exchange in ['NFO', 'BFO', 'CDS', 'MCX']:
+                try:
+                    oi_df = self.get_oi_history(symbol, exchange, interval, start_date, end_date)
+                    if not oi_df.empty:
+                        # Merge OI data with candle data
+                        df = pd.merge(df, oi_df, on='timestamp', how='left')
+                        # Fill any missing OI values with 0
+                        df['oi'] = df['oi'].fillna(0).astype(int)
+                    else:
+                        # Add empty OI column if no data available
+                        df['oi'] = 0
+                except Exception as oi_error:
+                    logger.error("Debug - Error fetching OI data: %s", str(oi_error))
+                    # Add empty OI column on error
+                    df['oi'] = 0
+            
             # Reorder columns to match REST API format
-            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume']]
+            if include_oi and 'oi' in df.columns:
+                df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+            else:
+                df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume']]
             
             return df
             
         except Exception as e:
             logger.error("Debug - Error: %s", str(e))
             raise Exception(f"Error fetching historical data: {str(e)}")
+
+    def get_oi_history(self, symbol: str, exchange: str, interval: str, 
+                       start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Get historical OI data for given symbol
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NFO, BFO, CDS, MCX)
+            interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+        Returns:
+            pd.DataFrame: Historical OI data with columns [timestamp, oi]
+        """
+        try:
+            # Get token for the symbol
+            token = get_token(symbol, exchange)
+            
+            # Convert dates to datetime objects
+            from_date = pd.to_datetime(start_date)
+            to_date = pd.to_datetime(end_date)
+            
+            # Set start time to 00:00 for the start date
+            from_date = from_date.replace(hour=0, minute=0)
+            
+            # If end_date is today, set the end time to current time
+            current_time = pd.Timestamp.now()
+            if to_date.date() == current_time.date():
+                to_date = current_time.replace(second=0, microsecond=0)
+            else:
+                # For past dates, set end time to 23:59
+                to_date = to_date.replace(hour=23, minute=59)
+            
+            # Initialize empty list to store DataFrames
+            dfs = []
+            
+            # Set chunk size based on interval (same as candle data)
+            interval_limits = {
+                '1m': 30,    # ONE_MINUTE
+                '3m': 60,    # THREE_MINUTE
+                '5m': 100,   # FIVE_MINUTE
+                '10m': 100,  # TEN_MINUTE
+                '15m': 200,  # FIFTEEN_MINUTE
+                '30m': 200,  # THIRTY_MINUTE
+                '1h': 400,   # ONE_HOUR
+                'D': 2000    # ONE_DAY
+            }
+            
+            chunk_days = interval_limits.get(interval)
+            if not chunk_days:
+                raise Exception(f"Interval '{interval}' not supported for OI data")
+            
+            # Process data in chunks
+            current_start = from_date
+            while current_start <= to_date:
+                # Calculate chunk end date
+                current_end = min(current_start + timedelta(days=chunk_days-1), to_date)
+                
+                # Prepare payload for OI data API
+                payload = {
+                    "exchange": exchange,
+                    "symboltoken": token,
+                    "interval": self.timeframe_map[interval],
+                    "fromdate": current_start.strftime('%Y-%m-%d %H:%M'),
+                    "todate": current_end.strftime('%Y-%m-%d %H:%M')
+                }
+                
+                try:
+                    response = get_api_response("/rest/secure/angelbroking/historical/v1/getOIData",
+                                              self.auth_token,
+                                              "POST",
+                                              payload)
+                    
+                    if not response or not response.get('status'):
+                        logger.debug("Debug - No OI data for chunk {current_start} to %s", current_end)
+                        current_start = current_end + timedelta(days=1)
+                        continue
+                        
+                except Exception as chunk_error:
+                    logger.error("Debug - Error fetching OI chunk: %s", str(chunk_error))
+                    current_start = current_end + timedelta(days=1)
+                    continue
+                
+                # Extract OI data and create DataFrame
+                data = response.get('data', [])
+                if data:
+                    chunk_df = pd.DataFrame(data)
+                    # Rename 'time' to 'timestamp' for consistency
+                    chunk_df.rename(columns={'time': 'timestamp'}, inplace=True)
+                    dfs.append(chunk_df)
+                
+                # Move to next chunk
+                current_start = current_end + timedelta(days=1)
+            
+            # If no data was found, return empty DataFrame
+            if not dfs:
+                return pd.DataFrame(columns=['timestamp', 'oi'])
+            
+            # Combine all chunks
+            df = pd.concat(dfs, ignore_index=True)
+            
+            # Convert timestamp to datetime
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
+            if interval == 'D':
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+            
+            # Convert timestamp to Unix epoch
+            df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+            
+            # Ensure oi column is numeric
+            df['oi'] = pd.to_numeric(df['oi'])
+            
+            # Sort by timestamp and remove duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+            
+            return df
+            
+        except Exception as e:
+            logger.error("Debug - Error fetching OI data: %s", str(e))
+            # Return empty DataFrame on error
+            return pd.DataFrame(columns=['timestamp', 'oi'])
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
