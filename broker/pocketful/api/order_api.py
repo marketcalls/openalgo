@@ -39,35 +39,35 @@ def get_api_response(endpoint, auth_token, method="GET", payload=None):
             full_url = f"{BASE_URL}/{endpoint}"
     
     logger.debug("DEBUG - API Request Details:")
-    logger.debug("DEBUG - Method: %s", method)
-    logger.debug("DEBUG - Endpoint param: %s", endpoint)
-    logger.debug("DEBUG - Constructed URL: %s", full_url)
+    logger.debug(f"DEBUG - Method: {method}")
+    logger.debug(f"DEBUG - Endpoint param: {endpoint}")
+    logger.debug(f"DEBUG - Constructed URL: {full_url}")
     if payload:
-        logger.debug("DEBUG - Payload: %s", json.dumps(payload, indent=2))
+        logger.debug(f"DEBUG - Payload: {json.dumps(payload, indent=2)}")
         if 'oms_order_id' in payload:
-            logger.info("DEBUG - Order ID in payload: %s", payload['oms_order_id'])
+            logger.info(f"DEBUG - Order ID in payload: {payload['oms_order_id']}")
     
     try:
         if method == "GET":
-            logger.debug("DEBUG - Executing GET request to %s", full_url)
+            logger.debug(f"DEBUG - Executing GET request to {full_url}")
             response = client.get(full_url, headers=headers)
         elif method == "POST":
-            logger.debug("DEBUG - Executing POST request to %s", full_url)
+            logger.debug(f"DEBUG - Executing POST request to {full_url}")
             response = client.post(full_url, headers=headers, json=payload)
         elif method == "PUT":
-            logger.debug("DEBUG - Executing PUT request to %s", full_url)
+            logger.debug(f"DEBUG - Executing PUT request to {full_url}")
             response = client.put(full_url, headers=headers, json=payload)
         elif method == "DELETE":
-            logger.debug("DEBUG - Executing DELETE request to %s", full_url)
+            logger.debug(f"DEBUG - Executing DELETE request to {full_url}")
             response = client.delete(full_url, headers=headers)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
             
         # Add status attribute for compatibility
         response.status = response.status_code
-        logger.debug("DEBUG - Response status code: %s", response.status_code)
-        logger.debug("DEBUG - Response URL (final): %s", response.url)
-        logger.debug("DEBUG - Response content: %s", response.text)
+        logger.debug(f"DEBUG - Response status code: {response.status_code}")
+        logger.debug(f"DEBUG - Response URL (final): {response.url}")
+        logger.debug(f"DEBUG - Response content: {response.text}")
         response.raise_for_status()
         
         try:
@@ -78,7 +78,7 @@ def get_api_response(endpoint, auth_token, method="GET", payload=None):
             return {"status": "success" if response.status_code < 400 else "error", 
                     "message": response.text}
     except Exception as e:
-        logger.error("API request error: %s", str(e))
+        logger.error(f"API request error: {e}")
         return {"status": "error", "message": str(e)}
 
 def get_order_book(auth):
@@ -98,18 +98,18 @@ def get_order_book(auth):
     if not client_id:
         return {"status": "error", "message": "Client ID not found"}
     
-    logger.debug("DEBUG - Using client_id: %s", client_id)
+    logger.debug(f"DEBUG - Using client_id: {client_id}")
     
     # Fetch completed orders
     completed_orders = fetch_orders(auth, client_id, "completed")
     if completed_orders.get("status") == "error":
-        logger.info("DEBUG - Error fetching completed orders: %s", completed_orders.get('message'))
+        logger.info(f"DEBUG - Error fetching completed orders: {completed_orders.get('message')}")
         completed_orders = {"data": {"orders": []}}
     
     # Fetch pending orders
     pending_orders = fetch_orders(auth, client_id, "pending")
     if pending_orders.get("status") == "error":
-        logger.info("DEBUG - Error fetching pending orders: %s", pending_orders.get('message'))
+        logger.info(f"DEBUG - Error fetching pending orders: {pending_orders.get('message')}")
         pending_orders = {"data": {"orders": []}}
     
     # Combine the orders
@@ -142,7 +142,7 @@ def get_client_id(auth):
     """
     # Get the username from the session
     username = session.get('username')
-    logger.debug("DEBUG - Session username: %s", username)
+    logger.debug(f"DEBUG - Session username: {username}")
     
     # Get client_id from auth database
     client_id = None
@@ -150,7 +150,7 @@ def get_client_id(auth):
         auth_obj = Auth.query.filter_by(name=username, broker='pocketful').first()
         if auth_obj and auth_obj.user_id:
             client_id = auth_obj.user_id
-            logger.debug("DEBUG - Found client_id in database: %s", client_id)
+            logger.debug(f"DEBUG - Found client_id in database: {client_id}")
     
     # If client_id not in database, try to get it from trading_info endpoint
     if not client_id:
@@ -158,7 +158,7 @@ def get_client_id(auth):
         info_response = get_api_response(f"{BASE_URL}/api/v1/user/trading_info", auth)
         if info_response.get('status') == 'success':
             client_id = info_response.get('data', {}).get('client_id')
-            logger.debug("DEBUG - Got client_id from API: %s", client_id)
+            logger.debug(f"DEBUG - Got client_id from API: {client_id}")
             
             # Store the client_id in the database for future use
             if client_id and username:
@@ -183,7 +183,7 @@ def fetch_orders(auth, client_id, order_type):
     Returns:
         API response with orders data
     """
-    logger.debug("DEBUG - Fetching {order_type} orders for client_id: %s", client_id)
+    logger.debug(f"DEBUG - Fetching {order_type} orders for client_id: {client_id}")
     
     # API endpoint for orders
     endpoint = f"{BASE_URL}/api/v1/orders"
@@ -201,14 +201,14 @@ def fetch_orders(auth, client_id, order_type):
     }
     
     try:
-        logger.debug("DEBUG - Making GET request to {endpoint} with params: %s", params)
+        logger.debug(f"DEBUG - Making GET request to {endpoint} with params: {params}")
         client = get_httpx_client()
         response = client.get(endpoint, headers=headers, params=params)
-        logger.debug("DEBUG - Response status for {order_type} orders: %s", response.status_code)
+        logger.debug(f"DEBUG - Response status for {order_type} orders: {response.status_code}")
         
         # Show limited response data to avoid overwhelming logs
         preview = response.text[:200] + "..." if len(response.text) > 200 else response.text
-        logger.debug("DEBUG - {order_type} orders response preview: %s", preview)
+        logger.debug(f"DEBUG - {order_type} orders response preview: {preview}")
         
         response.raise_for_status()
         
@@ -217,7 +217,7 @@ def fetch_orders(auth, client_id, order_type):
         except ValueError:
             return {"status": "error", "message": f"Invalid JSON response for {order_type} orders"}
     except Exception as e:
-        logger.error("DEBUG - API request error for {order_type} orders: %s", str(e))
+        logger.error(f"DEBUG - API request error for {order_type} orders: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -239,7 +239,7 @@ def get_trade_book(auth):
     if not client_id:
         return {"status": "error", "message": "Client ID not found"}
     
-    logger.debug("DEBUG - Using client_id: %s", client_id)
+    logger.debug(f"DEBUG - Using client_id: {client_id}")
     
     # API endpoint for tradebook
     endpoint = f"{BASE_URL}/api/v1/trades"
@@ -250,7 +250,7 @@ def get_trade_book(auth):
     }
     
     try:
-        logger.debug("DEBUG - Making GET request to {endpoint} with params: %s", params)
+        logger.debug(f"DEBUG - Making GET request to {endpoint} with params: {params}")
         client = get_httpx_client()
         
         # Set up headers with authorization token
@@ -262,13 +262,13 @@ def get_trade_book(auth):
         # Make the request
         response = client.get(endpoint, headers=headers, params=params)
         response.status = response.status_code
-        logger.debug("DEBUG - Response status code: %s", response.status_code)
+        logger.debug(f"DEBUG - Response status code: {response.status_code}")
         
         # Check if request was successful
         if response.status_code == 200:
             try:
                 trade_data = response.json()
-                logger.debug("DEBUG - Trade data received: %s", json.dumps(trade_data, indent=2))
+                logger.debug(f"DEBUG - Trade data received: {json.dumps(trade_data, indent=2)}")
                 
                 # Extract trades directly from the nested structure to make processing easier
                 trades = []
@@ -286,11 +286,11 @@ def get_trade_book(auth):
                 return response_data
             except ValueError:
                 error_msg = "Invalid JSON response from Pocketful API"
-                logger.error("DEBUG - %s", error_msg)
+                logger.error(f"DEBUG - {error_msg}")
                 return {"status": "error", "message": error_msg}
         else:
             error_msg = f"Error fetching tradebook: {response.text}"
-            logger.error("DEBUG - %s", error_msg)
+            logger.error(f"DEBUG - {error_msg}")
             return {"status": "error", "message": error_msg}
     except Exception as e:
         error_msg = f"Exception fetching tradebook: {str(e)}"
@@ -314,7 +314,7 @@ def get_positions(auth):
     if not client_id:
         return {"status": "error", "message": "Client ID not found"}
     
-    logger.debug("DEBUG - Using client_id: %s", client_id)
+    logger.debug(f"DEBUG - Using client_id: {client_id}")
     
     # API endpoint for positions - using the netwise position endpoint
     endpoint = f"{BASE_URL}/api/v1/positions"
@@ -326,7 +326,7 @@ def get_positions(auth):
     }
     
     try:
-        logger.debug("DEBUG - Making GET request to {endpoint} with params: %s", params)
+        logger.debug(f"DEBUG - Making GET request to {endpoint} with params: {params}")
         client = get_httpx_client()
         
         # Set up headers with authorization token
@@ -338,13 +338,13 @@ def get_positions(auth):
         # Make the request
         response = client.get(endpoint, headers=headers, params=params)
         response.status = response.status_code
-        logger.debug("DEBUG - Response status code: %s", response.status_code)
+        logger.debug(f"DEBUG - Response status code: {response.status_code}")
         
         # Check if request was successful
         if response.status_code == 200:
             try:
                 position_data = response.json()
-                logger.debug("DEBUG - Position data received: %s", json.dumps(position_data, indent=2))
+                logger.debug(f"DEBUG - Position data received: {json.dumps(position_data, indent=2)}")
                 
                 # The response structure is different - positions are directly in the 'data' array
                 positions = []
@@ -356,7 +356,7 @@ def get_positions(auth):
                     elif isinstance(position_data['data'], dict) and 'positions' in position_data['data']:
                         positions = position_data['data']['positions']
                 
-                logger.debug("DEBUG - Found %s positions in response", len(positions))
+                logger.debug(f"DEBUG - Found {len(positions)} positions in response")
                 
                 # Create a response in the expected format
                 response_data = {
@@ -368,11 +368,11 @@ def get_positions(auth):
                 return response_data
             except ValueError:
                 error_msg = "Invalid JSON response from Pocketful API"
-                logger.error("DEBUG - %s", error_msg)
+                logger.error(f"DEBUG - {error_msg}")
                 return {"status": "error", "message": error_msg}
         else:
             error_msg = f"Error fetching positions: {response.text}"
-            logger.error("DEBUG - %s", error_msg)
+            logger.error(f"DEBUG - {error_msg}")
             return {"status": "error", "message": error_msg}
     except Exception as e:
         error_msg = f"Exception fetching positions: {str(e)}"
@@ -396,12 +396,12 @@ def get_holdings(auth):
     if not client_id:
         return {"status": "error", "message": "Client ID not found"}
     
-    logger.debug("DEBUG - Using client_id: %s", client_id)
+    logger.debug(f"DEBUG - Using client_id: {client_id}")
     
     # The Pocketful holdings endpoint with client_id parameter
     endpoint = f"{BASE_URL}/api/v1/holdings?client_id={client_id}"
     
-    logger.debug("DEBUG - Using holdings endpoint: %s", endpoint)
+    logger.debug(f"DEBUG - Using holdings endpoint: {endpoint}")
     
     # Make the API request
     holdings_response = get_api_response(endpoint, auth)
@@ -413,15 +413,15 @@ def get_holdings(auth):
     
     # Check if there was an error in the API response
     if holdings_response.get("status") == "error":
-        logger.info("DEBUG - Error fetching holdings: %s", holdings_response.get('message'))
+        logger.info(f"DEBUG - Error fetching holdings: {holdings_response.get('message')}")
         return holdings_response
     
     # Transform the holdings data into the standard format
     from broker.pocketful.mapping.order_data import transform_holdings_data
     
     # Print debug information about the response
-    logger.debug("DEBUG - Holdings response type: %s", type(holdings_response))
-    logger.info("DEBUG - Holdings response keys: %s", holdings_response.keys() if isinstance(holdings_response, dict) else 'Not a dictionary')
+    logger.debug(f"DEBUG - Holdings response type: {type(holdings_response)}")
+    logger.info(f"DEBUG - Holdings response keys: {holdings_response.keys() if isinstance(holdings_response, dict) else 'Not a dictionary'}")
     
     # Handle different possible response structures
     holdings_data = []
@@ -436,17 +436,17 @@ def get_holdings(auth):
                 isinstance(holdings_response["data"]["holdings"], list)):
                 
                 holdings_data = holdings_response["data"]["holdings"]
-                logger.debug("DEBUG - Found %s holdings in data.holdings path", len(holdings_data))
+                logger.debug(f"DEBUG - Found {len(holdings_data)} holdings in data.holdings path")
                 
             # Case 2: data -> array
             elif "data" in holdings_response and isinstance(holdings_response["data"], list):
                 holdings_data = holdings_response["data"]
-                logger.debug("DEBUG - Found %s holdings in data path (list)", len(holdings_data))
+                logger.debug(f"DEBUG - Found {len(holdings_data)} holdings in data path (list)")
                 
             # Case 3: holdings -> array
             elif "holdings" in holdings_response and isinstance(holdings_response["holdings"], list):
                 holdings_data = holdings_response["holdings"]
-                logger.debug("DEBUG - Found %s holdings in holdings path", len(holdings_data))
+                logger.debug(f"DEBUG - Found {len(holdings_data)} holdings in holdings path")
                 
             # Case 4: data -> other field containing holdings
             elif "data" in holdings_response and isinstance(holdings_response["data"], dict):
@@ -455,12 +455,12 @@ def get_holdings(auth):
                 for key, value in data_obj.items():
                     if isinstance(value, list):
                         holdings_data = value
-                        logger.debug("DEBUG - Found {len(holdings_data)} holdings in data.%s path", key)
+                        logger.debug(f"DEBUG - Found {len(holdings_data)} holdings in data.{key} path")
                         found = True
                         break
                         
                 if not found:
-                    logger.debug("DEBUG - No list data found in data object. Keys: %s", data_obj.keys())
+                    logger.debug(f"DEBUG - No list data found in data object. Keys: {data_obj.keys()}")
         
         # Handle direct list response
         if not holdings_data and isinstance(holdings_response, list):
@@ -468,17 +468,17 @@ def get_holdings(auth):
             logger.debug("DEBUG - Using direct list response for holdings")
     
     except Exception as e:
-        logger.error("DEBUG - Error extracting holdings data: %s", str(e))
-        logger.debug("DEBUG - Response structure: %s", type(holdings_response))
+        logger.error(f"DEBUG - Error extracting holdings data: {e}")
+        logger.debug(f"DEBUG - Response structure: {type(holdings_response)}")
         if isinstance(holdings_response, dict):
-            logger.debug("DEBUG - Response keys: %s", holdings_response.keys())
+            logger.debug(f"DEBUG - Response keys: {holdings_response.keys()}")
         return {"status": "error", "message": f"Failed to extract holdings data: {str(e)}", "data": []}
     
     # Direct list response is already handled in the try block above
     
-    logger.debug("DEBUG - Extracted %s holdings entries", len(holdings_data))
+    logger.debug(f"DEBUG - Extracted {len(holdings_data)} holdings entries")
     if holdings_data and len(holdings_data) > 0:
-        logger.debug("DEBUG - Sample holding: %s", holdings_data[0])
+        logger.debug(f"DEBUG - Sample holding: {holdings_data[0]}")
     else:
         logger.debug("DEBUG - No holdings data found or empty array")
         # Return empty data to avoid errors in the UI
@@ -506,7 +506,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     
-    logger.debug("DEBUG - Fetching open position for {tradingsymbol} on {exchange} with product %s", product)
+    logger.debug(f"DEBUG - Fetching open position for {tradingsymbol} on {exchange} with product {product}")
     
     # Get positions data
     positions_data = get_positions(auth)
@@ -519,7 +519,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             position_exchange = position.get('exchange', '')
             position_product = position.get('product', '')
             
-            logger.debug("DEBUG - Comparing with position: symbol={position_symbol}, exchange={position_exchange}, product=%s", position_product)
+            logger.debug(f"DEBUG - Comparing with position: symbol={position_symbol}, exchange={position_exchange}, product={position_product}")
             
             # Match based on all criteria
             if (position_symbol == tradingsymbol and 
@@ -532,7 +532,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 elif 'net_quantity' in position:
                     net_qty = str(position['net_quantity'])
                     
-                logger.debug("DEBUG - Found match! Net Quantity: %s", net_qty)
+                logger.debug(f"DEBUG - Found match! Net Quantity: {net_qty}")
                 break  # Found the position, no need to continue
 
     return net_qty
@@ -568,10 +568,10 @@ def place_order_api(data, auth_token):
                 return None, {"status": "error", "message": "Client ID not found"}, None
         else:
             return None, info_response, None
-    logger.info("Client ID: %s", client_id)
+    logger.info(f"Client ID: {client_id}")
     # Transform OpenAlgo order format to Pocketful format
     newdata = transform_data(data, client_id=client_id)
-    logger.info("Transformed data: %s", newdata)
+    logger.info(f"Transformed data: {newdata}")
     # Make the API request
     response_data = get_api_response(ORDER_ENDPOINT, auth_token, method="POST", payload=newdata)
     
@@ -609,8 +609,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    logger.info("position_size : %s", position_size) 
-    logger.info("Open Position : %s", current_position) 
+    logger.info(f"position_size : {position_size}") 
+    logger.info(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -635,11 +635,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #logger.info("smart buy quantity : %s", quantity)
+            #logger.info(f"smart buy quantity : {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #logger.info("smart sell quantity : %s", quantity)
+            #logger.info(f"smart sell quantity : {quantity}")
 
 
 
@@ -650,11 +650,11 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #logger.info("%s", order_data)
+        #logger.info(f"{order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
+        #logger.info(f"{res}")
+        #logger.info(f"{response}")
         
         return res , response, orderid
     
@@ -680,7 +680,7 @@ def close_all_positions(current_api_key, auth):
         logger.error("DEBUG - Failed to get client_id")
         return {"status": "error", "message": "Client ID not found"}, 400
     
-    logger.debug("DEBUG - Using client_id: %s", client_id)
+    logger.debug(f"DEBUG - Using client_id: {client_id}")
     
     # Direct API call to get positions to avoid any intermediate processing
     endpoint = f"{BASE_URL}/api/v1/positions"
@@ -694,16 +694,16 @@ def close_all_positions(current_api_key, auth):
             'Content-Type': 'application/json'
         }
         
-        logger.debug("DEBUG - Making direct GET request to {endpoint} with params: %s", params)
+        logger.debug(f"DEBUG - Making direct GET request to {endpoint} with params: {params}")
         response = client.get(endpoint, headers=headers, params=params)
         
         if response.status_code != 200:
-            logger.error("DEBUG - Error response: {response.status_code} - %s", response.text)
+            logger.error(f"DEBUG - Error response: {response.status_code} - {response.text}")
             return {"status": "error", "message": f"API returned status {response.status_code}"}, 500
         
         # Parse JSON response
         response_data = response.json()
-        logger.info("DEBUG - Response status: %s", response_data.get('status'))
+        logger.info(f"DEBUG - Response status: {response_data.get('status')}")
         
         # Early return if no data or error status
         if response_data.get('status') != 'success' or 'data' not in response_data:
@@ -716,7 +716,7 @@ def close_all_positions(current_api_key, auth):
             logger.debug("DEBUG - Positions is not a list or is empty")
             return {"message": "No Open Positions Found"}, 200
         
-        logger.debug("DEBUG - Found %s positions", len(positions))
+        logger.debug(f"DEBUG - Found {len(positions)}")
         closed_count = 0
         successful_closes = []
         failed_closes = []
@@ -724,13 +724,13 @@ def close_all_positions(current_api_key, auth):
         # Process each position
         for position in positions:
             try:
-                logger.debug("DEBUG - Position details: %s", position)
+                logger.debug(f"DEBUG - Position details: {position}")
                 # Check if we have net quantity that's non-zero
                 net_quantity = position.get('net_quantity', 0)
                 symbol = position.get('trading_symbol', '')
                 
                 if int(net_quantity) == 0:
-                    logger.debug("DEBUG - Skipping position %s with zero quantity", symbol)
+                    logger.debug(f"DEBUG - Skipping position {symbol} with zero quantity")
                     continue
                 
                 # Determine action based on net quantity
@@ -753,12 +753,12 @@ def close_all_positions(current_api_key, auth):
                     "quantity": str(quantity)
                 }
                 
-                logger.debug("DEBUG - Placing order to close position: %s", place_order_payload)
+                logger.debug(f"DEBUG - Placing order to close position: {place_order_payload}")
                 
                 # Try to place the order
                 try:
                     status, api_response, orderid = place_order_api(place_order_payload, auth)
-                    logger.debug("DEBUG - Order response: %s", api_response)
+                    logger.debug(f"DEBUG - Order response: {api_response}")
                     
                     if status:
                         closed_count += 1
@@ -774,13 +774,13 @@ def close_all_positions(current_api_key, auth):
                             "error": api_response.get('message', 'Unknown error')
                         })
                 except Exception as order_error:
-                    logger.error("DEBUG - Error placing order: %s", str(order_error))
+                    logger.error(f"DEBUG - Error placing order: {order_error}")
                     failed_closes.append({
                         "symbol": symbol,
                         "error": str(order_error)
                     })
             except Exception as pos_error:
-                logger.error("DEBUG - Error processing position: %s", str(pos_error))
+                logger.error(f"DEBUG - Error processing position: {pos_error}")
                 failed_closes.append({
                     "symbol": position.get('trading_symbol', 'Unknown'),
                     "error": str(pos_error)
@@ -799,7 +799,7 @@ def close_all_positions(current_api_key, auth):
             return {"status": "success", "message": "No positions to close"}, 200
             
     except Exception as e:
-        logger.error("DEBUG - Unexpected error: %s", str(e))
+        logger.error(f"DEBUG - Unexpected error: {e}")
         return {"status": "error", "message": f"Unexpected error: {str(e)}"}, 500
 
 
@@ -836,8 +836,8 @@ def cancel_order(orderid, auth):
     # }
     
     # Add debug information
-    logger.debug("DEBUG - Cancelling order {orderid} for client %s", client_id)
-    logger.debug("DEBUG - Using endpoint: %s", CANCEL_ORDER_ENDPOINT)
+    logger.debug(f"DEBUG - Cancelling order {orderid} for client {client_id}")
+    logger.debug(f"DEBUG - Using endpoint: {CANCEL_ORDER_ENDPOINT}")
     
     # Make the DELETE request using the httpx client
     response = get_api_response(CANCEL_ORDER_ENDPOINT, AUTH_TOKEN, method="DELETE")
@@ -846,7 +846,7 @@ def cancel_order(orderid, auth):
     if response.get("status") == "success":
         # Return a success response with the order ID
         oms_order_id = response.get("data", {}).get("oms_order_id", orderid)
-        logger.debug("DEBUG - Order {orderid} cancelled successfully, oms_order_id: %s", oms_order_id)
+        logger.debug(f"DEBUG - Order {orderid} cancelled successfully, oms_order_id: {oms_order_id}")
         return {
             "status": "success", 
             "orderid": oms_order_id,
@@ -855,7 +855,7 @@ def cancel_order(orderid, auth):
     else:
         # Return an error response
         error_message = response.get("message", "Failed to cancel order")
-        logger.error("DEBUG - Failed to cancel order {orderid}: %s", error_message)
+        logger.error(f"DEBUG - Failed to cancel order {orderid}: {error_message}")
         return {"status": "error", "message": error_message}, 400
 
 
@@ -891,12 +891,12 @@ def modify_order(data, auth):
         else:
             return info_response, 400
     
-    logger.info("Client ID: %s", client_id)
-    logger.info("Original order data: %s", data)
+    logger.info(f"Client ID: {client_id}")
+    logger.info(f"Original order data: {data}")
     
     # Transform OpenAlgo modify order format to Pocketful format
     transformed_data = transform_modify_order_data(data, client_id=client_id)
-    logger.info("Transformed order data: %s", transformed_data)
+    logger.info(f"Transformed order data: {transformed_data}")
     
     # Use manual httpx client request to avoid URL path manipulation issues
     client = get_httpx_client()
@@ -908,15 +908,15 @@ def modify_order(data, auth):
         'Content-Type': 'application/json'
     }
     
-    logger.info("Making direct PUT request to: %s", url)
-    logger.info("With payload: %s", json.dumps(transformed_data, indent=2))
+    logger.info(f"Making direct PUT request to: {url}")
+    logger.info(f"With payload: {json.dumps(transformed_data, indent=2)}")
     
     try:
         # Make direct request using httpx client - bypass get_api_response to have more control
         response = client.put(url, headers=headers, json=transformed_data)
-        logger.info("Response status: %s", response.status_code)
-        logger.info("Response URL: %s", response.url)
-        logger.info("Response content: %s", response.text)
+        logger.info(f"Response status: {response.status_code}")
+        logger.info(f"Response URL: {response.url}")
+        logger.info(f"Response content: {response.text}")
         
         response.raise_for_status()
         
@@ -930,7 +930,7 @@ def modify_order(data, auth):
             return {"status": "error", "message": "Invalid JSON response: " + response.text}, 400
     
     except Exception as e:
-        logger.error("Error making request: %s", str(e))
+        logger.error(f"Error making request: {e}")
         return {"status": "error", "message": f"Request error: {str(e)}"}, 400
     
 
@@ -955,7 +955,7 @@ def cancel_all_orders_api(data, auth):
         logger.error("DEBUG - Failed to get client_id for cancelling all orders")
         return [], []
         
-    logger.debug("DEBUG - Cancelling all open orders for client: %s", client_id)
+    logger.debug(f"DEBUG - Cancelling all open orders for client: {client_id}")
     
     # Make a direct GET request to get pending orders
     endpoint = f"{BASE_URL}/api/v1/orders"
@@ -965,24 +965,24 @@ def cancel_all_orders_api(data, auth):
     }
     
     try:
-        logger.debug("DEBUG - Fetching pending orders for client_id: %s", client_id)
+        logger.debug(f"DEBUG - Fetching pending orders for client_id: {client_id}")
         client = get_httpx_client()
         headers = {
             'Authorization': f'Bearer {AUTH_TOKEN}',
             'Content-Type': 'application/json'
         }
         
-        logger.debug("DEBUG - Making GET request to {endpoint} with params: %s", params)
+        logger.debug(f"DEBUG - Making GET request to {endpoint} with params: {params}")
         response = client.get(endpoint, headers=headers, params=params)
-        logger.debug("DEBUG - Response status for pending orders: %s", response.status_code)
+        logger.debug(f"DEBUG - Response status for pending orders: {response.status_code}")
         
         if response.status_code != 200:
-            logger.error("DEBUG - Error response: %s", response.text)
+            logger.error(f"DEBUG - Error response: {response.text}")
             return [], []  # Return empty lists if unable to fetch orders
             
         # Parse response to get pending orders
         response_data = response.json()
-        logger.debug("DEBUG - pending orders response preview: %s...", str(response_data)[:200])
+        logger.debug(f"DEBUG - pending orders response preview: {str(response_data)[:200]}...")
         
         # Handle different possible response structures
         pending_orders = []
@@ -990,11 +990,11 @@ def cancel_all_orders_api(data, auth):
             # Case 1: Orders in data.orders array
             if 'data' in response_data and isinstance(response_data['data'], dict) and 'orders' in response_data['data']:
                 pending_orders = response_data['data']['orders']
-                logger.debug("DEBUG - Found %s orders in data.orders structure", len(pending_orders))
+                logger.debug(f"DEBUG - Found {len(pending_orders)} orders in data.orders structure")
             # Case 2: Orders directly in data array
             elif 'data' in response_data and isinstance(response_data['data'], list):
                 pending_orders = response_data['data']
-                logger.debug("DEBUG - Found %s orders in data array structure", len(pending_orders))
+                logger.debug(f"DEBUG - Found {len(pending_orders)} orders in data array structure")
         
         # Log order statuses to better understand what we're working with
         if pending_orders:
@@ -1003,10 +1003,10 @@ def cancel_all_orders_api(data, auth):
                 status = order.get('status')
                 if status:
                     statuses[status] = statuses.get(status, 0) + 1
-            logger.debug("DEBUG - Order statuses found: %s", statuses)
+            logger.debug(f"DEBUG - Order statuses found: {statuses}")
             
             # Print a sample order to understand structure
-            logger.info("DEBUG - Sample order structure: %s", pending_orders[0] if pending_orders else 'No orders')
+            logger.info(f"DEBUG - Sample order structure: {pending_orders[0] if pending_orders else 'No orders'}")
         
         # Accept more status values as cancelable
         valid_cancel_statuses = [
@@ -1024,18 +1024,18 @@ def cancel_all_orders_api(data, auth):
                             
         # Print orders with mode=NEW for debugging
         mode_new_orders = [order for order in pending_orders if order.get('mode', '').upper() == 'NEW']
-        logger.debug("DEBUG - Found %s orders with mode=NEW", len(mode_new_orders))
+        logger.debug(f"DEBUG - Found {len(mode_new_orders)} orders with mode=NEW")
         if mode_new_orders:
             for idx, order in enumerate(mode_new_orders):
-                logger.info("DEBUG - Mode=NEW order %s: status=%s, id=%s", idx+1, order.get('status'), order.get('order_id') or order.get('id') or 'unknown')
+                logger.info(f"DEBUG - Mode=NEW order {idx+1}: status={order.get('status')}, id={order.get('order_id') or order.get('id') or 'unknown'}")
                             
     except Exception as e:
-        logger.error("DEBUG - Error fetching pending orders: %s", str(e))
+        logger.error(f"DEBUG - Error fetching pending orders: {e}")
         return [], []
     
-    logger.debug("DEBUG - Found %s open orders to cancel", len(orders_to_cancel))
+    logger.debug(f"DEBUG - Found {len(orders_to_cancel)} open orders to cancel")
     if orders_to_cancel:
-        logger.info("DEBUG - Order IDs to cancel: %s", [order.get('order_id', 'Unknown') for order in orders_to_cancel])
+        logger.info(f"DEBUG - Order IDs to cancel: {[order.get('order_id', 'Unknown') for order in orders_to_cancel]}")
     
     canceled_orders = []
     failed_cancellations = []
@@ -1047,38 +1047,38 @@ def cancel_all_orders_api(data, auth):
         
         # Log available fields for debugging
         order_fields = set(order.keys())
-        logger.debug("DEBUG - Available order fields: %s", order_fields)
+        logger.debug(f"DEBUG - Available order fields: {order_fields}")
         
         # Find the first valid order ID
         orderid = None
         for field in possible_order_id_fields:
             if field in order and order[field]:
                 orderid = order[field]
-                logger.info("DEBUG - Using order ID from field '%s': %s", field, orderid)
+                logger.info(f"DEBUG - Using order ID from field '{field}': {orderid}")
                 break
                 
         if not orderid:
-            logger.debug("DEBUG - Could not find valid order ID in order: %s", order)
+            logger.debug(f"DEBUG - Could not find valid order ID in order: {order}")
             failed_cancellations.append("unknown_id")
             continue
             
-        logger.debug("DEBUG - Attempting to cancel order: %s", orderid)
+        logger.debug(f"DEBUG - Attempting to cancel order: {orderid}")
         try:
             cancel_response, status_code = cancel_order(orderid, AUTH_TOKEN)
             
             # Check both status code and response status
             if status_code == 200 and (cancel_response.get('status') == 'success' or 'success' in str(cancel_response).lower()):
-                logger.debug("DEBUG - Successfully cancelled order: %s", orderid)
+                logger.debug(f"DEBUG - Successfully cancelled order: {orderid}")
                 canceled_orders.append(orderid)
             else:
                 error_msg = cancel_response.get('message', 'Unknown error')
-                logger.error("DEBUG - Failed to cancel order {orderid}: %s", error_msg)
+                logger.error(f"DEBUG - Failed to cancel order {orderid}: {error_msg}")
                 failed_cancellations.append(orderid)
                 
         except Exception as e:
-            logger.debug("DEBUG - Exception while cancelling order {orderid}: %s", str(e))
+            logger.debug(f"DEBUG - Exception while cancelling order {orderid}: {e}")
             failed_cancellations.append(orderid)
     
-    logger.error("DEBUG - Cancel all orders summary: {len(canceled_orders)} cancelled, %s failed", len(failed_cancellations))
+    logger.error(f"DEBUG - Cancel all orders summary: {len(canceled_orders)} cancelled, {len(failed_cancellations)} failed")
     return canceled_orders, failed_cancellations
 

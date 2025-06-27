@@ -512,7 +512,7 @@ def calculate_portfolio_statistics(holdings_data):
             }
     
     if not holdings_data or not isinstance(holdings_data, list):
-        logger.info("Invalid holdings data format: %s", holdings_data)
+        logger.info(f"Invalid holdings data format: {holdings_data}")
         return {
             'totalholdingvalue': 0.0,
             'totalinvvalue': 0.0,
@@ -527,7 +527,7 @@ def calculate_portfolio_statistics(holdings_data):
     
     for holding in holdings_data:
         if not isinstance(holding, dict):
-            logger.info("Invalid holding format: %s", holding)
+            logger.info(f"Invalid holding format: {holding}")
             continue
         
         try:    
@@ -543,7 +543,7 @@ def calculate_portfolio_statistics(holdings_data):
             total_current_value += position_current_value
             total_pnl += float(holding.get('pnl', 0.0))
         except (ValueError, TypeError) as e:
-            logger.error("Error converting values in holding: {holding}, Error: %s", e)
+            logger.error(f"Error converting values in holding: {holding}, Error: {e}")
             continue
     
     total_pnl_percentage = (total_pnl / total_investment * 100) if total_investment > 0 else 0.0
