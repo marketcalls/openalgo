@@ -209,4 +209,10 @@ if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
+    # Log the OpenAlgo access URL
+    logger.info("="*60)
+    logger.info(f"OpenAlgo is running!")
+    logger.info(f"Access the application at: http://{host_ip}:{port}")
+    logger.info("="*60)
+
     socketio.run(app, host=host_ip, port=port, debug=debug)

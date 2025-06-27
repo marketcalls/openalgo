@@ -66,11 +66,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Define the shoonya URLs for downloading the symbol files
@@ -102,16 +102,16 @@ def download_and_unzip_shoonya_data(output_path):
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
-                logger.info("Successfully downloaded {key} from %s", url)
+                logger.info(f"Successfully downloaded {{key}} from {url}")
                 
                 # Use in-memory file to handle the downloaded zip file
                 z = zipfile.ZipFile(io.BytesIO(response.content))
                 z.extractall(output_path)
                 downloaded_files.append(f"{key}.txt")
             else:
-                logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
+                logger.error(f"Failed to download {{key}} from {{url}}. Status code: {response.status_code}")
         except Exception as e:
-            logger.error("Error downloading {key} from {url}: %s", e)
+            logger.error(f"Error downloading {{key}} from {{url}}: {e}")
 
     return downloaded_files
 

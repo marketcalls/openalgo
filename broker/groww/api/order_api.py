@@ -10,10 +10,6 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_symbol
 from broker.groww.database.master_contract_db import format_openalgo_to_groww_symbol, format_groww_to_openalgo_symbol
 from utils.httpx_client import get_httpx_client
 from broker.groww.mapping.transform_data import (
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
     # Functions
     transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data,
     map_exchange_type, map_exchange, map_segment_type, map_validity, map_order_type, map_transaction_type,
@@ -26,6 +22,9 @@ logger = get_logger(__name__)
     TRANSACTION_TYPE_BUY, TRANSACTION_TYPE_SELL,
     ORDER_STATUS_NEW, ORDER_STATUS_ACKED, ORDER_STATUS_APPROVED, ORDER_STATUS_CANCELLED
 )
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # API Endpoints
 GROWW_BASE_URL = 'https://api.groww.in'
@@ -160,14 +159,14 @@ def direct_get_order_book(auth):
                     
                     # Approach 1: Look up by token (most accurate)
                     token = order.get('token')
-                    logger.info("Token: %s", token)
+                    logger.info(f"Token: {token}")
                     symbol_converted = False
                     
                     try:
                         from database.token_db import get_oa_symbol
                         if token:
                             openalgo_symbol = get_oa_symbol(token, 'NFO')
-                            logger.info("OpenAlgo Symbol: %s", openalgo_symbol)
+                            logger.info(f"OpenAlgo Symbol: {openalgo_symbol}")
                             if openalgo_symbol:
                                 order['symbol'] = openalgo_symbol
                                 logger.info(f"Converted NFO symbol by token: {groww_symbol} -> {openalgo_symbol}")
@@ -257,10 +256,10 @@ def direct_get_order_book(auth):
         
         # Print detailed response for debugging
         logger.info("\n===== GROWW ORDER BOOK RESPONSE (DIRECT API) =====")
-        logger.info("Total orders: %s", len(all_orders))
+        logger.info(f"Total orders: {len(all_orders)}")
         if all_orders:
-            logger.info("First order sample: %s...", json.dumps(all_orders[0], indent=2)[:500])
-        logger.info("Response keys: %s", list(response.keys()))
+            logger.info(f'First order sample: {json.dumps(all_orders[0], indent=2)[:500]}...')
+        logger.info(f"Response keys: {list(response.keys())}")
         logger.info("============================================\n")
         
         logger.debug(f"Final response structure: {list(response.keys())}")
@@ -690,7 +689,7 @@ def get_positions(auth):
         logger.info(f"-------- GET POSITIONS REQUEST --------")
         logger.info(f"API URL: {positions_url}")
         logger.info(f"Request parameters: {params}")
-        logger.info("Request headers: %s", \n  \"Authorization\": \"Bearer ***REDACTED***\",\n  \"Accept\": \"application/json\",\n  \"Content-Type\": \"application/json\"\n)
+        logger.info(f'Request headers: {{\n  "Authorization": "Bearer ***REDACTED***",\n  "Accept": "application/json",\n  "Content-Type": "application/json"\n}}')
         
         # Make the API call for CASH segment
         response_obj = client.get(
@@ -1457,9 +1456,9 @@ def direct_place_order(auth_token, symbol, quantity, price=None, order_type="MAR
             if len(order_reference_id) < 8:
                 order_reference_id = order_reference_id.ljust(8, '0')
         
-        logger.info("Placing %s order for %s of %s at %s", transaction_type, quantity, symbol, price if price else 'MARKET')
-        logger.info("SDK Parameters: exchange={exchange}, segment={segment}, product={product}, order_type=%s", order_type)
-        logger.info("Using order reference ID: %s", order_reference_id)
+        logger.info(f"Placing {transaction_type} order for {quantity} of {symbol} at {price if price else 'MARKET'}")
+        logger.info(f"SDK Parameters: exchange={{exchange}}, segment={{segment}}, product={{product}}, order_type={order_type}")
+        logger.info(f"Using order reference ID: {order_reference_id}")
         
         # Place order using SDK
         response = groww.place_order(
@@ -1474,11 +1473,11 @@ def direct_place_order(auth_token, symbol, quantity, price=None, order_type="MAR
             transaction_type=transaction_type,
             order_reference_id=order_reference_id
         )
-        logger.info("Direct order response: %s", response)
+        logger.info(f"Direct order response: {response}")
         return response
     
     except Exception as e:
-        logger.error("Direct order error: %s", e)
+        logger.error(f"Direct order error: {e}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
@@ -1540,11 +1539,11 @@ def place_smartorder_api(data, auth):
         if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
             action = data['action']
             quantity = data['quantity']
-            #logger.info("action : %s", action)
-            #logger.info("Quantity : %s", quantity)
+            #logger.info(f"action : {action}")
+            #logger.info(f"Quantity : {quantity}")
             res, response, orderid = place_order_api(data,AUTH_TOKEN)
-            #logger.info("%s", res)
-            #logger.info("%s", response)
+            #logger.info(f"{res}")
+            #logger.info(f"{response}")
             
             return res , response, orderid
             

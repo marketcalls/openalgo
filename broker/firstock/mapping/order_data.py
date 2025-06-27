@@ -37,7 +37,7 @@ def map_order_data(order_data):
         if symbol_from_db:
             mapped_order['tsym'] = symbol_from_db
         else:
-            logger.info("Symbol not found for token %s and exchange %s.", order.get('token'), order.get('exchange'))
+            logger.info(f"Symbol not found for token {order.get('token')} and exchange {order.get('exchange')}.")
             mapped_order['tsym'] = order.get('tradingSymbol', '')
 
         # Map transaction type (will be converted to BUY/SELL in calculate_order_statistics)
@@ -128,14 +128,14 @@ def transform_order_data(orders):
     Returns:
     - List of transformed orders in the format expected by orderbook.html
     """
-    logger.info("Input orders: %s", orders)
+    logger.info(f"Input orders: {orders}")
     if not orders:
         return []
 
     # First map the Firstock response to intermediate format
     mapped_orders = map_order_data(orders)
 
-    logger.info("Mapped orders: %s", mapped_orders)
+    logger.info(f"Mapped orders: {mapped_orders}")
     
     # Calculate statistics and transform order fields
     calculate_order_statistics(mapped_orders)
@@ -163,7 +163,7 @@ def transform_order_data(orders):
         }
         transformed_orders.append(transformed_order)
 
-    logger.info("Final transformed orders: %s", transformed_orders)
+    logger.info(f"Final transformed orders: {transformed_orders}")
     return transformed_orders
 
 def map_trade_data(trade_data):
@@ -198,7 +198,7 @@ def map_trade_data(trade_data):
         if symbol_from_db:
             mapped_trade['tsym'] = symbol_from_db
         else:
-            logger.info("Symbol not found for token %s and exchange %s.", trade.get('token'), trade.get('exchange'))
+            logger.info(f"Symbol not found for token {trade.get('token')} and exchange {trade.get('exchange')}.")
             mapped_trade['tsym'] = trade.get('tradingSymbol', '')
 
         # Map transaction type (will be converted to BUY/SELL)
@@ -228,13 +228,13 @@ def transform_tradebook_data(trades):
     Returns:
     - List of transformed trades in the format expected by tradebook.html
     """
-    logger.info("Input trades: %s", trades)
+    logger.info(f"Input trades: {trades}")
     if not trades:
         return []
 
     # First map the Firstock response to intermediate format
     mapped_trades = map_trade_data(trades)
-    logger.info("Mapped trades: %s", mapped_trades)
+    logger.info(f"Mapped trades: {mapped_trades}")
     
     # Transform to final format
     transformed_trades = []
@@ -271,7 +271,7 @@ def transform_tradebook_data(trades):
         }
         transformed_trades.append(transformed_trade)
 
-    logger.info("Final transformed trades: %s", transformed_trades)
+    logger.info(f"Final transformed trades: {transformed_trades}")
     return transformed_trades
 
 def map_portfolio_data(portfolio_data):
@@ -284,7 +284,7 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - List of mapped holdings in OpenAlgo format
     """
-    logger.info("Raw portfolio data: %s", json.dumps(portfolio_data, indent=2))
+    logger.info(f"Raw portfolio data: {json.dumps(portfolio_data, indent=2)}")
     
     # If it's a list, data is already mapped
     if isinstance(portfolio_data, list):
@@ -328,7 +328,7 @@ def map_portfolio_data(portfolio_data):
         if symbol_from_db:
             mapped_holding['tsym'] = symbol_from_db
         else:
-            logger.info("Symbol not found for token %s and exchange %s.", trading_entry.get('token'), trading_entry.get('exchange'))
+            logger.info(f"Symbol not found for token {trading_entry.get('token')} and exchange {trading_entry.get('exchange')}.")
             mapped_holding['tsym'] = mapped_holding['trading_symbol']
 
         # Map holding fields
@@ -426,13 +426,13 @@ def transform_holdings_data(holdings):
     Returns:
     - List of transformed holdings in the format expected by holdings.html
     """
-    logger.info("Input holdings: %s", holdings)
+    logger.info(f"Input holdings: {holdings}")
     if not holdings:
         return []
 
     # First map the Firstock response to intermediate format
     mapped_holdings = map_portfolio_data(holdings)
-    logger.info("Mapped holdings: %s", mapped_holdings)
+    logger.info(f"Mapped holdings: {mapped_holdings}")
     
     # Transform to final format
     transformed_holdings = []
@@ -465,7 +465,7 @@ def transform_holdings_data(holdings):
         }
         transformed_holdings.append(transformed_holding)
 
-    logger.info("Final transformed holdings: %s", transformed_holdings)
+    logger.info(f"Final transformed holdings: {transformed_holdings}")
     return transformed_holdings
 
 def map_position_data(position_data):
@@ -481,43 +481,43 @@ def map_position_data(position_data):
     # If it's a list, data is already mapped
     if isinstance(position_data, list):
         logger.debug("Position data is already mapped, returning as is")
-        logger.debug("Number of positions: %s", len(position_data))
+        logger.debug(f"Number of positions: {len(position_data)}")
         return position_data
 
     # If it's a dict with status/data, it's raw API response
     if isinstance(position_data, dict):
         logger.debug("Raw position data received:")
-        logger.info("DEBUG: Status: %s", position_data.get('status'))
-        logger.info("DEBUG: Data type: %s", type(position_data.get('data')))
+        logger.info(f"DEBUG: Status: {position_data.get('status')}")
+        logger.info(f"DEBUG: Data type: {type(position_data.get('data'))}")
         if position_data.get('status') != 'success':
             logger.info("No data available or invalid response.")
-            logger.info("DEBUG: Error message: %s", position_data.get('message', 'No error message'))
+            logger.info(f"DEBUG: Error message: {position_data.get('message', 'No error message')}")
             return []
         positions = position_data.get('data', [])  # Firstock returns list of positions
-        logger.debug("Number of positions extracted: %s", len(positions))
+        logger.debug(f"Number of positions extracted: {len(positions)}")
     else:
-        logger.debug("Invalid position data format. Type received: %s", type(position_data))
+        logger.debug(f"Invalid position data format. Type received: {type(position_data)}")
         return []
 
     mapped_positions = []
     for position in positions:
         logger.debug("\nDEBUG: Processing position:")
-        logger.debug("Raw position data: %s", json.dumps(position, indent=2))
+        logger.debug(f"Raw position data: {json.dumps(position, indent=2)}")
         mapped_position = {}
         # Get OpenAlgo symbol from token
         symbol_from_db = get_symbol(position.get('token'), position.get('exchange'))
-        logger.info("DEBUG: Looking up symbol - Token: %s, Exchange: %s", position.get('token'), position.get('exchange'))
+        logger.info(f"DEBUG: Looking up symbol - Token: {position.get('token')}, Exchange: {position.get('exchange')}")
         if symbol_from_db:
             mapped_position['tsym'] = symbol_from_db
-            logger.debug("Symbol found in DB: %s", symbol_from_db)
+            logger.debug(f"Symbol found in DB: {symbol_from_db}")
         else:
-            logger.info("DEBUG: Symbol not found for token %s and exchange %s.", position.get('token'), position.get('exchange'))
+            logger.info(f"DEBUG: Symbol not found for token {position.get('token')} and exchange {position.get('exchange')}.")
             mapped_position['tsym'] = position.get('tradingSymbol', '')
-            logger.info("DEBUG: Using trading symbol from response: %s", mapped_position['tsym'])
+            logger.info(f"DEBUG: Using trading symbol from response: {mapped_position['tsym']}")
 
         # Map product type (will be converted to CNC/MIS/NRML)
         mapped_position['prd'] = position.get('product', '')
-        logger.info("DEBUG: Product type: %s", mapped_position['prd'])
+        logger.info(f"DEBUG: Product type: {mapped_position['prd']}")
         
         # Map other fields
         mapped_position['exch'] = position.get('exchange', '')
@@ -531,10 +531,10 @@ def map_position_data(position_data):
         mapped_position['unrealizedmtom'] = position.get('unrealizedMTOM', '0.00')
         mapped_position['realizedpnl'] = position.get('RealizedPNL', '0.00')
         
-        logger.debug("Mapped position data: %s", json.dumps(mapped_position, indent=2))
+        logger.debug(f"Mapped position data: {json.dumps(mapped_position, indent=2)}")
         mapped_positions.append(mapped_position)
 
-    logger.debug("\nDEBUG: Total positions mapped: %s", len(mapped_positions))
+    logger.debug(f"\nDEBUG: Total positions mapped: {len(mapped_positions)}")
     return mapped_positions
 
 def transform_positions_data(positions):
@@ -547,13 +547,13 @@ def transform_positions_data(positions):
     Returns:
     - List of transformed positions in the format expected by positionbook.html
     """
-    logger.info("Input positions: %s", positions)
+    logger.info(f"Input positions: {positions}")
     if not positions:
         return []
 
     # First map the Firstock response to intermediate format
     mapped_positions = map_position_data(positions)
-    logger.info("Mapped positions: %s", mapped_positions)
+    logger.info(f"Mapped positions: {mapped_positions}")
     
     # Transform to final format
     transformed_positions = []
@@ -585,5 +585,5 @@ def transform_positions_data(positions):
         }
         transformed_positions.append(transformed_position)
 
-    logger.info("Final transformed positions: %s", transformed_positions)
+    logger.info(f"Final transformed positions: {transformed_positions}")
     return transformed_positions

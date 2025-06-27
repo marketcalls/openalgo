@@ -93,7 +93,7 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        logger.info("exchange: %s", exchange)
+        logger.info(f"exchange: {exchange}")
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
@@ -273,12 +273,12 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            logger.info("exchange: %s", exchange)
+            logger.info(f"exchange: {exchange}")
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-            logger.info("exchange segment: %s", exchange_segment)
+            logger.info(f"exchange segment: {exchange_segment}")
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []

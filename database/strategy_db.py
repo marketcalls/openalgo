@@ -139,15 +139,15 @@ def toggle_strategy(strategy_id):
     try:
         strategy = get_strategy(strategy_id)
         if not strategy:
-            return False
+            return None
         
         strategy.is_active = not strategy.is_active
         db_session.commit()
-        return True
+        return strategy
     except Exception as e:
         logger.error(f"Error toggling strategy {strategy_id}: {str(e)}")
         db_session.rollback()
-        return False
+        return None
 
 def update_strategy_times(strategy_id, start_time=None, end_time=None, squareoff_time=None):
     """Update strategy trading times"""

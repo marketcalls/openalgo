@@ -53,6 +53,47 @@ def load_and_check_env_variables():
         print("\nSolution: Check .sample.env for the latest configuration format")
         sys.exit(1)
 
+    # Special validation for broker-specific API key formats
+    broker_api_key = os.getenv('BROKER_API_KEY', '')
+    broker_api_secret = os.getenv('BROKER_API_SECRET', '')
+    redirect_url = os.getenv('REDIRECT_URL', '')
+    
+    # Extract broker name from redirect URL for validation
+    broker_name = None
+    try:
+        import re
+        match = re.search(r'/([^/]+)/callback$', redirect_url)
+        if match:
+            broker_name = match.group(1).lower()
+    except:
+        pass
+    
+    # Validate 5paisa API key format
+    if broker_name == 'fivepaisa':
+        if ':::' not in broker_api_key or broker_api_key.count(':::') != 2:
+            print("\nError: Invalid 5paisa API key format detected!")
+            print("The BROKER_API_KEY for 5paisa must be in the format:")
+            print("  BROKER_API_KEY = 'User_Key:::User_ID:::client_id'")
+            print("\nExample:")
+            print("  BROKER_API_KEY = 'abc123xyz:::12345678:::5P12345678'")
+            print("  BROKER_API_SECRET = 'your_encryption_key'")
+            print("\nFor detailed instructions, please refer to:")
+            print("  https://docs.openalgo.in/connect-brokers/brokers/5paisa")
+            sys.exit(1)
+            
+    # Validate flattrade API key format
+    elif broker_name == 'flattrade':
+        if ':::' not in broker_api_key or broker_api_key.count(':::') != 1:
+            print("\nError: Invalid Flattrade API key format detected!")
+            print("The BROKER_API_KEY for Flattrade must be in the format:")
+            print("  BROKER_API_KEY = 'client_id:::api_key'")
+            print("\nExample:")
+            print("  BROKER_API_KEY = 'FT123456:::your_api_key_here'")
+            print("  BROKER_API_SECRET = 'your_api_secret'")
+            print("\nFor detailed instructions, please refer to:")
+            print("  https://docs.openalgo.in/connect-brokers/brokers/flattrade")
+            sys.exit(1)
+
     # Validate environment variable values
     flask_debug = os.getenv('FLASK_DEBUG', '').lower()
     if flask_debug not in ['true', 'false', '1', '0', 't', 'f']:

@@ -394,19 +394,23 @@ def toggle_strategy_route(strategy_id):
         
     try:
         strategy = toggle_strategy(strategy_id)
-        if strategy.is_active:
-            # Schedule squareoff if being activated
-            schedule_squareoff(strategy_id)
-            flash('Strategy activated successfully', 'success')
-        else:
-            # Remove squareoff job if being deactivated
-            try:
-                scheduler.remove_job(f'squareoff_{strategy_id}')
-            except Exception:
-                pass
-            flash('Strategy deactivated successfully', 'success')
+        if strategy:
+            if strategy.is_active:
+                # Schedule squareoff if being activated
+                schedule_squareoff(strategy_id)
+                flash('Strategy activated successfully', 'success')
+            else:
+                # Remove squareoff job if being deactivated
+                try:
+                    scheduler.remove_job(f'squareoff_{strategy_id}')
+                except Exception:
+                    pass
+                flash('Strategy deactivated successfully', 'success')
             
-        return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+            return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+        else:
+            flash('Error toggling strategy: Strategy not found', 'error')
+            return redirect(url_for('strategy_bp.index'))
     except Exception as e:
         flash(f'Error toggling strategy: {str(e)}', 'error')
         return redirect(url_for('strategy_bp.index'))
