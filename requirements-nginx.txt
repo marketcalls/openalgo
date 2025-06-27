@@ -61,7 +61,7 @@ matplotlib-inline==0.1.7
 mdurl==0.1.2
 nest-asyncio==1.6.0
 numpy==2.2.4
-openalgo==1.0.13
+openalgo==1.0.18
 ordered-set==4.1.0
 packaging==24.1
 pandas==2.2.3
