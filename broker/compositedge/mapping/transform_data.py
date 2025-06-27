@@ -13,7 +13,7 @@ def transform_data(data,token):
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
     #token = get_token(data['symbol'], data['exchange'])
-    #logger.info("token: %s", token)
+    #logger.info(f"token: {token}")
     # Basic mapping
     transformed = {
         "exchangeSegment": map_exchange(data['exchange']),
@@ -28,7 +28,7 @@ def transform_data(data,token):
         "stopPrice": data.get("trigger_price", "0"),
         "orderUniqueIdentifier": "openalgo"
     }
-    logger.info("transformed data: %s", transformed)
+    logger.info(f"transformed data: {transformed}")
     return transformed
 
 
