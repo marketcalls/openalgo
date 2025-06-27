@@ -236,7 +236,8 @@ class BrokerData:
                 'ltp': quote.get('last_price', 0),
                 'open': quote.get('ohlc', {}).get('open', 0),
                 'prev_close': quote.get('ohlc', {}).get('close', 0),
-                'volume': quote.get('volume', 0)
+                'volume': quote.get('volume', 0),
+                'oi': quote.get('oi', 0)
             }
             
         except ZerodhaPermissionError as e:
@@ -311,7 +312,7 @@ class BrokerData:
                 logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
                 
                 # Construct endpoint
-                endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}"
+                endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}&oi=1"
                 logger.info(f"Making request to endpoint: {endpoint}")
                 
                 # Use get_api_response
@@ -324,7 +325,7 @@ class BrokerData:
                 # Convert to DataFrame
                 candles = response.get('data', {}).get('candles', [])
                 if candles:
-                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                     dfs.append(df)
                 
                 # Move to next chunk
@@ -332,7 +333,7 @@ class BrokerData:
                 
             # If no data was found, return empty DataFrame
             if not dfs:
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
             # Combine all chunks
             final_df = pd.concat(dfs, ignore_index=True)
@@ -346,6 +347,7 @@ class BrokerData:
             
             # Ensure volume is integer
             final_df['volume'] = final_df['volume'].astype(int)
+            final_df['oi'] = final_df['oi'].astype(int)
             
             return final_df
                 

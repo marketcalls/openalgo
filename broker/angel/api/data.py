@@ -142,7 +142,7 @@ class BrokerData:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, 
-                   start_date: str, end_date: str, include_oi: bool = False) -> pd.DataFrame:
+                   start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
         Args:
@@ -292,8 +292,8 @@ class BrokerData:
             # Sort by timestamp and remove duplicates
             df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
-            # If OI is requested and this is an F&O contract, fetch OI data
-            if include_oi and exchange in ['NFO', 'BFO', 'CDS', 'MCX']:
+            # Always fetch OI data for F&O contracts
+            if exchange in ['NFO', 'BFO', 'CDS', 'MCX']:
                 try:
                     oi_df = self.get_oi_history(symbol, exchange, interval, start_date, end_date)
                     if not oi_df.empty:
@@ -310,10 +310,12 @@ class BrokerData:
                     df['oi'] = 0
             
             # Reorder columns to match REST API format
-            if include_oi and 'oi' in df.columns:
+            if 'oi' in df.columns:
                 df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
             else:
-                df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume']]
+                # Add OI column with zeros if not present
+                df['oi'] = 0
+                df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
             
             return df
             
