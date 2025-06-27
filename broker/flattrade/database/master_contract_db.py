@@ -74,11 +74,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            logger.info("No new records to insert.")
+            logger.info(f"No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Define the Flattrade URLs for downloading the symbol files
@@ -108,15 +108,15 @@ def download_csv_data(output_path):
         try:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
-                logger.info("Successfully downloaded {key} from %s", url)
+                logger.info(f"Successfully downloaded {key} from {url}")
                 output_file = os.path.join(output_path, f"{key}.csv")
                 with open(output_file, 'wb') as f:
                     f.write(response.content)
                 downloaded_files.append(f"{key}.csv")
             else:
-                logger.error("Failed to download {key} from {url}. Status code: %s", response.status_code)
+                logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
         except Exception as e:
-            logger.error("Error downloading {key} from {url}: %s", e)
+            logger.error(f"Error downloading {key} from {url}: {e}")
 
     # Combine NFO and BFO files
     combine_nfo_files(output_path)
@@ -142,7 +142,7 @@ def process_flattrade_nse_data(output_path):
             logger.warning("Warning: NSE CSV file is empty")
             return pd.DataFrame()  # Return empty DataFrame if file is empty
             
-        logger.info("Available columns in NSE CSV: %s", df.columns.tolist())
+        logger.info(f"Available columns in NSE CSV: {df.columns.tolist()}")
 
         # Validate required columns
         required_columns = ['Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument']
@@ -232,11 +232,11 @@ def process_flattrade_nse_data(output_path):
         })
 
       
-        logger.info("Successfully processed %s NSE records", len(df_filtered))
+        logger.info(f"Successfully processed {len(df_filtered)} NSE records")
         return df_filtered
         
     except Exception as e:
-        logger.error("Error processing NSE data: %s", str(e))
+        logger.error(f"Error processing NSE data: {e}")
         raise  # Re-raise the exception after logging
 
 def process_flattrade_nfo_data(output_path):
@@ -249,7 +249,7 @@ def process_flattrade_nfo_data(output_path):
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    logger.info("Available columns in NFO CSV: %s", df.columns.tolist())
+    logger.info(f"Available columns in NFO CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -277,7 +277,7 @@ def process_flattrade_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -334,7 +334,7 @@ def process_flattrade_cds_data(output_path):
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    logger.info("Available columns in CDS CSV: %s", df.columns.tolist())
+    logger.info(f"Available columns in CDS CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -362,7 +362,7 @@ def process_flattrade_cds_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -419,7 +419,7 @@ def process_flattrade_mcx_data(output_path):
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    logger.info("Available columns in MCX CSV: %s", df.columns.tolist())
+    logger.info(f"Available columns in MCX CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -447,7 +447,7 @@ def process_flattrade_mcx_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -504,7 +504,7 @@ def process_flattrade_bse_data(output_path):
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    logger.info("Available columns in BSE CSV: %s", df.columns.tolist())
+    logger.info(f"Available columns in BSE CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -568,7 +568,7 @@ def process_flattrade_bfo_data(output_path):
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    logger.info("Available columns in BFO CSV: %s", df.columns.tolist())
+    logger.info(f"Available columns in BFO CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -596,7 +596,7 @@ def process_flattrade_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -667,7 +667,7 @@ def delete_flattrade_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
 
 def master_contract_download():
     """
@@ -702,7 +702,7 @@ def master_contract_download():
             logger.info("Successfully downloaded and processed all contracts")
     except Exception as e:
         error_msg = f"Error in master contract download: {e}"
-        logger.error("%s", error_msg)
+        logger.error(f"{error_msg}")
         if socketio:
             return socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
         raise e

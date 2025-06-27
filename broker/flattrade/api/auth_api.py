@@ -18,21 +18,21 @@ def authenticate_broker(code, password=None, totp_code=None):
     """
     try:
         full_api_key = os.getenv('BROKER_API_KEY')
-        logger.debug("Full API Key: %s", full_api_key)  # Debug print
+        logger.debug(f"Full API Key: {full_api_key}")  # Debug print
         
         # Split the API key to get the actual key part
         BROKER_API_KEY = full_api_key.split(':::')[1]
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         
-        logger.debug("Using API Key: %s", BROKER_API_KEY)  # Debug print
-        logger.debug("Request Code: %s", code)  # Debug print
+        logger.debug(f"Using API Key: {BROKER_API_KEY}")  # Debug print
+        logger.debug(f"Request Code: {code}")  # Debug print
         
         # Create the security hash as per Flattrade docs
         hash_input = f"{BROKER_API_KEY}{code}{BROKER_API_SECRET}"
         security_hash = hashlib.sha256(hash_input.encode()).hexdigest()
         
-        logger.debug("Hash Input: %s", hash_input)  # Debug print
-        logger.debug("Security Hash: %s", security_hash)  # Debug print
+        logger.debug(f"Hash Input: {hash_input}")  # Debug print
+        logger.debug(f"Security Hash: {security_hash}")  # Debug print
         
         url = 'https://authapi.flattrade.in/trade/apitoken'
         data = {
@@ -48,8 +48,8 @@ def authenticate_broker(code, password=None, totp_code=None):
         
         response = client.post(url, json=data)
         
-        logger.debug("Response Status: %s", response.status_code)  # Debug print
-        logger.debug("Response Content: %s", response.text)  # Debug print
+        logger.debug(f"Response Status: {response.status_code}")  # Debug print
+        logger.debug(f"Response Content: {response.text}")  # Debug print
         
         if response.status_code == 200:
             response_data = response.json()
@@ -57,7 +57,7 @@ def authenticate_broker(code, password=None, totp_code=None):
                 return response_data['token'], None
             else:
                 error_msg = response_data.get('emsg', 'Authentication failed without specific error')
-                logger.error("Auth Error: %s", error_msg)  # Debug print
+                logger.error(f"Auth Error: {error_msg}")  # Debug print
                 return None, error_msg
         else:
             try:
@@ -65,11 +65,11 @@ def authenticate_broker(code, password=None, totp_code=None):
                 error_msg = f"API error: {error_detail.get('emsg', 'Unknown error')}"
             except:
                 error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
-            logger.error("Request Error: %s", error_msg)  # Debug print
+            logger.error(f"Request Error: {error_msg}")  # Debug print
             return None, error_msg
             
     except Exception as e:
-        logger.debug("Exception: %s", str(e))  # Debug print
+        logger.debug(f"Exception: {e}")  # Debug print
         return None, f"An exception occurred: {str(e)}"
 
 def authenticate_broker_oauth(code):
