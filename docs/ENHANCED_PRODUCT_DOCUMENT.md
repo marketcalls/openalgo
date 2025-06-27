@@ -29,7 +29,7 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
 - **Containerization**: Docker + Docker Compose
 - **Reverse Proxy**: Nginx / Traefik
 - **Monitoring**: Built-in performance metrics
-- **Logging**: Application-level logging system
+- **Logging**: Application-level logging system (IST timestamps)
 - **Deployment**: Single-node and multi-node support
 
 ### Core Features
@@ -107,10 +107,22 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - Request signing for critical operations
   - Comprehensive audit logging
 
-#### 3. Multi-Broker Support (Enhanced)
+#### 3. Multi-Broker Support
 
-- **Supported Brokers** (21+):
-  - All original brokers with unified interface
+- **Initial Phase Brokers** (4):
+  - **Zerodha**: Complete integration with KiteConnect API
+  - **Dhan**: Full trading and market data support
+  - **Angel One (AngelBroking)**: Comprehensive API integration
+  - **Upstox**: Complete trading functionality
+  
+- **Upcoming Phase Brokers** (17+ additional):
+  - 5paisa, AliceBlue, Firstock, Flattrade, Fyers
+  - ICICI Direct, Jainam, Kotak, Paytm, Pocketful, Shoonya
+  - Tradejini, Wisdom Capital, Zebu, and others
+  - Migration planned in subsequent releases
+
+- **Broker Architecture**:
+  - Unified interface across all brokers
   - Adapter pattern for easy integration
   - Broker-specific configuration UI
   - Health monitoring per broker
@@ -119,7 +131,7 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
 
 - **Broker Features**:
   - Dynamic broker addition/removal
-  - Real-time broker status dashboard
+  - Real-time broker status monitoring
   - Rate limit management
   - Error handling with retry logic
   - Latency monitoring per broker
@@ -194,7 +206,6 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - Strike selection helpers (ATM/OTM/ITM)
   - Dynamic strike selection based on spot/premium
   - Greeks calculation and visualization
-  - Payoff diagrams with break-even points
   - Quick adjustments feature
   - Pre-defined templates (Straddle, Strangle, Spreads)
 
@@ -313,9 +324,9 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
     - Parameter adjustment tools
     - Real-time alerts configuration
   
-  - **Analytics Dashboard**:
+  - **Analytics Views**:
     - Detailed performance analytics
-    - Payoff charts and Greeks
+    - Greeks analysis
     - Trade execution logs
     - Risk metrics visualization
     - Strategy comparison tools
@@ -338,7 +349,6 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - **Option Strategy Testing**:
     - Multi-leg option strategy validation
     - Greeks behavior monitoring
-    - Payoff diagram real-time updates
     - Volatility impact analysis
     - Time decay observation
 
@@ -420,11 +430,11 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - Emergency override
   - Signal analytics
 
-- **Comprehensive Logging**:
-  - **Signal Logs**: All incoming signals with timestamps
-  - **Sandbox Logs**: Test execution details
-  - **Order/Event Logs**: Complete order lifecycle
-  - **Execution Analytics**: Success/failure analysis
+- **Comprehensive Logging** (IST Timestamps):
+  - **Signal Logs**: All incoming signals with IST timestamps
+  - **Sandbox Logs**: Test execution details with IST logging
+  - **Order/Event Logs**: Complete order lifecycle in IST
+  - **Execution Analytics**: Success/failure analysis with IST tracking
 
 #### 8. Risk Management & Safety Features
 
@@ -468,7 +478,7 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
 #### 9. Analytics & Reporting
 
 - **Real-time Analytics**:
-  - Live P&L dashboard
+  - Live P&L monitoring
   - Strategy performance metrics
   - Account-wise analytics
   - Risk exposure monitoring
@@ -493,29 +503,29 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
 
 #### 10. Built-in Monitoring & Analytics
 
-- **Performance Monitoring**:
-  - End-to-end latency tracking
+- **Performance Monitoring** (IST Timestamps):
+  - End-to-end latency tracking with IST timestamps
   - Stage-wise breakdown analysis
-  - Broker API response times
-  - WebSocket connection monitoring
-  - Database query performance
-  - Real-time performance alerts
+  - Broker API response times (logged in IST)
+  - WebSocket connection monitoring (IST timestamps)
+  - Database query performance (IST logging)
+  - Real-time performance alerts with IST timestamps
 
-- **Usage Analytics**:
-  - API endpoint usage patterns
-  - User activity tracking
-  - Resource utilization metrics
-  - Trading volume analysis
-  - Strategy performance metrics
-  - System capacity monitoring
+- **Usage Analytics** (IST-based):
+  - API endpoint usage patterns (IST time-series)
+  - User activity tracking (IST session logs)
+  - Resource utilization metrics (IST intervals)
+  - Trading volume analysis (IST market hours)
+  - Strategy performance metrics (IST-based periods)
+  - System capacity monitoring (IST time-based)
 
-- **Health Dashboard**:
-  - Real-time system status
-  - Service health indicators
-  - Error rate monitoring
-  - Connection status tracking
-  - Memory and CPU usage
-  - Custom alert thresholds
+- **Health Monitoring** (IST Display):
+  - Real-time system status (IST current time)
+  - Service health indicators (IST last check)
+  - Error rate monitoring (IST error logs)
+  - Connection status tracking (IST connection times)
+  - Memory and CPU usage (IST sampling)
+  - Custom alert thresholds (IST-based triggers)
 
 #### 11. Regulatory Compliance & Security
 
@@ -539,21 +549,51 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - check_session_validity(): Route decorator protection
   ```
 
+- **IST Timezone Standardization**:
+  - **All Timestamps in IST**: Database, logs, WebSocket, API responses
+  - **Centralized Timezone Management**: Single timezone configuration
+  - **WebSocket Timestamps**: All real-time updates with IST timestamps
+  - **API Response Timestamps**: Consistent IST formatting across all endpoints
+  - **Log File Timestamps**: Application and system logs in IST
+  - **Database Timestamps**: All database operations use IST timezone
+
 - **Compliance Monitoring**:
   - **Login Time Tracking**: ISO format timestamp in IST
   - **Automatic Session Clearing**: Clean session termination
   - **Pre-logout Warnings**: Telegram alerts 15 minutes before expiry
   - **Forced Logout Capability**: Admin can force logout all users
-  - **Session Analytics**: Active session monitoring dashboard
+  - **Session Analytics**: Active session monitoring
 
 - **Regulatory Audit Trail**:
   - Complete session lifecycle logging
   - Login/logout event tracking
-  - Session expiry compliance reports
+  - Session expiry compliance logs
   - User activity correlation with session validity
-  - Compliance dashboard for regulatory review
+  - Regulatory audit log storage
 
 #### 12. Market Data Management
+
+- **Master Contract Download Dashboard**:
+  - **Scheduled Downloads**:
+    - Configurable download schedule (daily/weekly/monthly)
+    - Custom time configuration for each broker
+    - Automatic retry on failure
+    - Download success/failure notifications
+    - Historical download logs
+  
+  - **Manual Download Control**:
+    - One-click manual download trigger
+    - Broker-specific download options
+    - Bulk download for all brokers
+    - Download progress monitoring
+    - Real-time download status
+  
+  - **Download Management**:
+    - Download queue management
+    - Priority-based downloading
+    - Concurrent download limits
+    - Download cancellation capability
+    - Scheduled vs manual download tracking
 
 - **Master Contract Management**:
   - Automated weekly/monthly downloads
@@ -562,6 +602,7 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
   - Corporate action adjustments
   - Custom symbol creation
   - Expiry management
+  - Download verification and validation
 
 - **Real-time Data**:
   - Multi-source data aggregation
@@ -631,6 +672,8 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
     - Account authentication issues
     - Session expiry warnings (15 min before 3:00 AM IST)
     - Automatic logout notifications
+    - Master contract download status (success/failure)
+    - Scheduled download completion alerts
   
   - **Interactive Bot Commands**:
     - `/pnl` - Get current P&L status
@@ -639,6 +682,8 @@ OpenAlgo+ is a complete rebuild of the original OpenAlgo platform, transforming 
     - `/strategies` - List active strategies
     - `/panic` - Emergency stop all trading
     - `/status` - System health check
+    - `/contracts` - Master contract download status
+    - `/download` - Trigger manual contract download
     - `/help` - Command reference
     - `/settings` - Alert preferences
 
@@ -971,6 +1016,17 @@ GET    /api/v1/market/contracts/download
 GET    /api/v1/market/exchanges
 GET    /api/v1/market/indices
 GET    /api/v1/market/intervals
+
+GET    /api/v1/market/contracts/schedule/
+POST   /api/v1/market/contracts/schedule/
+PUT    /api/v1/market/contracts/schedule/{schedule_id}
+DELETE /api/v1/market/contracts/schedule/{schedule_id}
+POST   /api/v1/market/contracts/download/manual
+POST   /api/v1/market/contracts/download/bulk
+GET    /api/v1/market/contracts/download/status
+GET    /api/v1/market/contracts/download/history
+POST   /api/v1/market/contracts/download/cancel/{download_id}
+GET    /api/v1/market/contracts/download/logs
 ```
 
 #### Risk Management
@@ -990,7 +1046,7 @@ POST   /api/v1/risk/limits/validate
 
 #### Analytics & Reporting
 ```
-GET    /api/v1/analytics/dashboard/
+GET    /api/v1/analytics/overview/
 GET    /api/v1/analytics/pnl/{account_id}
 GET    /api/v1/analytics/performance/{strategy_id}
 GET    /api/v1/analytics/reports/daily
@@ -1053,13 +1109,13 @@ GET    /api/v1/admin/active-sessions/
 ```
 
 - **WebSocket Streams**:
-  - Real-time order updates
-  - Position changes
-  - Market data feed
-  - Strategy alerts
-  - Signal notifications
-  - Account updates
-  - System notifications
+  - Real-time order updates (IST timestamps)
+  - Position changes (IST timestamps)
+  - Market data feed (IST timestamps)
+  - Strategy alerts (IST timestamps)
+  - Signal notifications (IST timestamps)
+  - Account updates (IST timestamps)
+  - System notifications (IST timestamps)
 
 - **Webhook Support**:
   - TradingView integration
@@ -1072,7 +1128,57 @@ GET    /api/v1/admin/active-sessions/
 
 ### Technical Architecture
 
-#### 1. Microservices Architecture
+#### 1. IST Timezone Implementation
+
+**Centralized Timezone Management**: All components of OpenAlgo+ use IST (Indian Standard Time) for consistency and regulatory compliance.
+
+- **Application Configuration**:
+  ```python
+  # Environment Configuration
+  TIMEZONE = 'Asia/Kolkata'
+  DEFAULT_TIMEZONE = '+05:30'
+  
+  # Python timezone handling
+  import pytz
+  IST = pytz.timezone('Asia/Kolkata')
+  ```
+
+- **Database Configuration**:
+  ```sql
+  -- PostgreSQL timezone setting
+  SET timezone = 'Asia/Kolkata';
+  ALTER DATABASE openalgo SET timezone = 'Asia/Kolkata';
+  
+  -- QuestDB timezone configuration
+  SET time.zone = 'Asia/Kolkata';
+  ```
+
+- **API Response Format**:
+  ```json
+  {
+    "timestamp": "2024-01-15T10:30:00+05:30",
+    "timezone": "IST",
+    "server_time": "2024-01-15T10:30:00+05:30"
+  }
+  ```
+
+- **WebSocket Message Format**:
+  ```json
+  {
+    "event": "order_update",
+    "data": {...},
+    "timestamp": "2024-01-15T10:30:00+05:30",
+    "server_time_ist": "10:30:00"
+  }
+  ```
+
+- **Log Format**:
+  ```
+  2024-01-15 10:30:00.123 IST [INFO] Order executed successfully
+  2024-01-15 10:30:00.124 IST [DEBUG] Position updated
+  ```
+
+#### 2. Microservices Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -1103,7 +1209,14 @@ GET    /api/v1/admin/active-sessions/
 
 #### 2. Database Schema (Key Tables)
 
+**Important Note**: All timestamps across the platform are stored and handled in IST (Indian Standard Time) for regulatory compliance and consistency.
+
 ```sql
+-- Database Configuration for IST timezone
+SET timezone = 'Asia/Kolkata';
+-- OR SET timezone = '+05:30';
+
+-- Ensure all timestamp operations use IST
 -- Users and Authentication
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1113,7 +1226,7 @@ CREATE TABLE users (
     role VARCHAR(50) NOT NULL,
     is_active BOOLEAN DEFAULT true,
     mfa_secret VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Trading Accounts
@@ -1129,7 +1242,7 @@ CREATE TABLE trading_accounts (
     is_master BOOLEAN DEFAULT false,
     is_active BOOLEAN DEFAULT true,
     account_limit INTEGER DEFAULT NULL, -- NULL for unlimited
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Family Relationships
@@ -1142,7 +1255,7 @@ CREATE TABLE family_relationships (
     verification_status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'verified', 'rejected'
     verified_at TIMESTAMP,
     is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone,
     UNIQUE(primary_user_id, family_member_id)
 );
 
@@ -1156,7 +1269,7 @@ CREATE TABLE strategy_templates (
     risk_params JSONB NOT NULL,
     is_active BOOLEAN DEFAULT true,
     version INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Strategy Instances
@@ -1171,7 +1284,7 @@ CREATE TABLE strategy_instances (
     trailing_sl_config JSONB,
     is_active BOOLEAN DEFAULT true,
     panic_triggered BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Orders with Enhanced Tracking
@@ -1191,7 +1304,7 @@ CREATE TABLE orders (
     parent_order_id UUID,
     is_gtt BOOLEAN DEFAULT false,
     execution_time BIGINT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Position Tracking
@@ -1224,7 +1337,7 @@ CREATE TABLE trading_algos (
     product_type VARCHAR(20) NOT NULL,
     algo_type VARCHAR(20) DEFAULT 'signal', -- 'signal', 'scheduled', 'manual'
     is_active BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Signal Groups for TradingView Alerts
@@ -1238,7 +1351,7 @@ CREATE TABLE signal_groups (
     max_signals_per_day INTEGER DEFAULT 10,
     expiry_date DATE,
     is_active BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Algo-Signal Mappings
@@ -1248,7 +1361,7 @@ CREATE TABLE algo_signal_mappings (
     algo_id UUID REFERENCES trading_algos(id),
     entry_json_template JSONB NOT NULL,
     exit_json_template JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Signal Reception Logs
@@ -1274,7 +1387,7 @@ CREATE TABLE tradingview_alerts (
     last_triggered TIMESTAMP,
     trigger_count INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Walk Forward Testing Sessions
@@ -1293,7 +1406,7 @@ CREATE TABLE walkforward_sessions (
     max_drawdown DECIMAL(15,2) DEFAULT 0,
     include_costs BOOLEAN DEFAULT false,
     brokerage_rate DECIMAL(5,4) DEFAULT 0.0003,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Walk Forward Test Trades
@@ -1314,7 +1427,7 @@ CREATE TABLE walkforward_trades (
     taxes DECIMAL(10,2) DEFAULT 0,
     status VARCHAR(50) DEFAULT 'open', -- 'open', 'closed', 'partial'
     order_type VARCHAR(20), -- 'market', 'limit', 'sl', 'sl-m'
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 
 -- Walk Forward Test Analytics
@@ -1330,7 +1443,7 @@ CREATE TABLE walkforward_analytics (
     margin_used DECIMAL(15,2) DEFAULT 0,
     volatility DECIMAL(8,4) DEFAULT 0,
     sharpe_ratio DECIMAL(8,4) DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone,
     UNIQUE(session_id, date)
 );
 
@@ -1346,6 +1459,36 @@ CREATE TABLE walkforward_positions (
     margin_required DECIMAL(15,2) DEFAULT 0,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(session_id, symbol)
+);
+
+-- Master Contract Download Schedules
+CREATE TABLE contract_download_schedules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    broker VARCHAR(50) NOT NULL,
+    schedule_type VARCHAR(20) NOT NULL, -- 'daily', 'weekly', 'monthly'
+    schedule_time TIME NOT NULL, -- IST time for download
+    schedule_day INTEGER, -- Day of week (1-7) for weekly, day of month for monthly
+    is_active BOOLEAN DEFAULT true,
+    last_run TIMESTAMP,
+    next_run TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
+);
+
+-- Master Contract Download History
+CREATE TABLE contract_download_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    schedule_id UUID REFERENCES contract_download_schedules(id),
+    broker VARCHAR(50) NOT NULL,
+    download_type VARCHAR(20) NOT NULL, -- 'scheduled', 'manual', 'bulk'
+    status VARCHAR(20) NOT NULL, -- 'pending', 'running', 'completed', 'failed', 'cancelled'
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    total_contracts INTEGER DEFAULT 0,
+    processed_contracts INTEGER DEFAULT 0,
+    error_message TEXT,
+    file_size BIGINT,
+    triggered_by UUID REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- IST timezone
 );
 ```
 
@@ -1443,7 +1586,6 @@ volumes:
    - Visual strategy builder
    - Multi-leg order support
    - Greeks-based analytics
-   - Real-time payoff diagrams
 
 3. **Advanced Risk Controls**:
    - Multi-level stop-loss system
@@ -1487,15 +1629,16 @@ volumes:
 
 ### Success Metrics
 
-1. **User Experience**:
+1. **User Experience** (Initial Phase - 4 Brokers):
    - Setup time < 5 minutes
    - Strategy creation < 2 minutes
    - Order execution success > 99.5%
    - User satisfaction > 4.5/5
+   - Seamless multi-broker account management
 
 2. **Platform Performance**:
    - System uptime > 99.9%
-   - Order latency < 100ms
+   - Order latency < 100ms (across Zerodha, Dhan, Angel, Upstox)
    - Data accuracy > 99.99%
    - Error rate < 0.1%
 
@@ -1503,33 +1646,37 @@ volumes:
    - User retention > 80%
    - Daily active users growth
    - Strategy adoption rate
-   - Trading volume growth
+   - Trading volume growth across 4 initial brokers
 
 ### Migration Strategy
 
-1. **Phase 1: Core Platform** (Month 1-2)
+1. **Phase 1: Core Platform & Initial Brokers** (Month 1-2)
    - Multi-account architecture
-   - Authentication system
-   - Basic trading APIs
-   - Broker integrations
+   - Authentication system with IST compliance
+   - Core trading APIs
+   - **Initial Broker Integration**: Zerodha, Dhan, Angel One, Upstox
+   - Basic strategy management
+   - Walk forward testing
 
 2. **Phase 2: Advanced Features** (Month 3-4)
-   - Strategy builder
-   - Risk management
-   - Paper trading
+   - TradingView strategy automation
+   - Advanced risk management
    - Real-time analytics
+   - Telegram alerts integration
+   - **Additional Brokers**: 5paisa, AliceBlue, Firstock, Flattrade
 
-3. **Phase 3: Professional Tools** (Month 5-6)
-   - Option strategies
-   - Advanced monitoring
-   - Reporting system
+3. **Phase 3: Extended Broker Support** (Month 5-6)
+   - **Broker Expansion**: Fyers, ICICI Direct, Jainam, Kotak
+   - Advanced option strategies
    - Performance optimization
+   - **More Brokers**: Paytm, Pocketful, Shoonya, Tradejini
 
-4. **Phase 4: Production Ready** (Month 7-8)
+4. **Phase 4: Complete Platform** (Month 7-8)
+   - **Final Brokers**: Wisdom Capital, Zebu, and remaining brokers
    - Security audit
    - Load testing
-   - Documentation
-   - Deployment automation
+   - Production deployment
+   - Documentation completion
 
 ### Conclusion
 
