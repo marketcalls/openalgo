@@ -41,13 +41,13 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     data = response.text
     
     # Print raw response for debugging
-    logger.info("Raw Response: %s", data)
+    logger.info(f"Raw Response: {data}")
     
     try:
         return json.loads(data)
     except json.JSONDecodeError as e:
-        logger.error("Error decoding JSON: %s", e)
-        logger.info("Response data: %s", data)
+        logger.error(f"Error decoding JSON: {e}")
+        logger.info(f"Response data: {data}")
         raise
 
 class BrokerData:
@@ -96,7 +96,7 @@ class BrokerData:
             response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
                 
             if response.get('stat') != 'Ok':
-                logger.info("Error in quote: %s", response.get('emsg', 'Unknown error'))
+                logger.info(f"Error in quote: {response.get('emsg', 'Unknown error')}")
                 return []  # Return empty list instead of continue
             
             # Return simplified quote data
@@ -223,12 +223,12 @@ class BrokerData:
                     "from": str(start_ts),  # Use epoch timestamp
                     "to": str(end_ts)       # Use epoch timestamp
                 }
-                logger.debug("EOD Payload: %s", payload)  # Debug print
+                logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response("/PiConnectTP/EODChartData", self.auth_token, payload=payload)
-                    logger.debug("EOD Response: %s", response)  # Debug print
+                    logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
-                    logger.error("Error in EOD request: %s", str(e))
+                    logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
             else:
                 # For intraday data, use TPSeries endpoint
@@ -240,9 +240,9 @@ class BrokerData:
                     "et": str(end_ts),    # End time in epoch
                     "intrv": self.timeframe_map[interval]  # Changed to intrv
                 }
-                logger.debug("Intraday Payload: %s", payload)  # Debug print
+                logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response("/PiConnectTP/TPSeries", self.auth_token, payload=payload)
-                logger.debug("Intraday Response: %s", response)  # Debug print
+                logger.debug(f"Intraday Response: {response}")  # Debug print
            
             # Check if response is a dict (error case) or list (success case)
             if isinstance(response, dict):
@@ -275,7 +275,7 @@ class BrokerData:
                         try:
                             timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
                         except ValueError:
-                            logger.info("Error parsing timestamp: %s", candle['time'])
+                            logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
                         # Skip candles with all zero values
@@ -294,7 +294,7 @@ class BrokerData:
                             'volume': float(candle.get('intv', 0))  # Intraday also uses 'intv' for volume
                         })
                 except (KeyError, ValueError) as e:
-                    logger.error("Error parsing candle data: {e}, Candle: %s", candle)
+                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
             if df.empty:
@@ -320,14 +320,14 @@ class BrokerData:
                                     'close': float(quote.get('ltp', 0)),  # Use LTP as close
                                     'volume': float(quote.get('volume', 0))
                                 }
-                                logger.info("Today's quote data: %s", today_data)
+                                logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
                                 logger.info("Added today's data from quotes", )
                         except Exception as e:
-                            logger.info("Error fetching today's data from quotes: %s", e)
+                            logger.info(f"Error fetching today's data from quotes: {e}")
                 else:
-                    logger.info("Today ({today_ts}) is outside requested range ({start_ts} to %s)", end_ts)
+                    logger.info(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
             
             # Sort by timestamp
             df = df.sort_values('timestamp')
