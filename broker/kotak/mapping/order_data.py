@@ -51,7 +51,7 @@ def map_order_data(order_data):
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
             else:
-                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)         
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")         
     return order_data
 
 
@@ -111,7 +111,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
         if order.get('prcTp') == 'MKT':
             order['prcTp'] = 'MARKET'
@@ -174,11 +174,11 @@ def map_trade_data(trade_data):
             symbol = order['tok']
             exchange = map_exchange(order['exSeg'])
             order['exSeg'] = exchange
-            logger.info("%s", symbol)
-            logger.info("%s", exchange)
+            logger.info(f"{symbol}")
+            logger.info(f"{exchange}")
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symbol, exchange)
-            logger.info("%s", symbol_from_db)
+            logger.info(f"{symbol_from_db}")
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
@@ -188,8 +188,8 @@ def map_trade_data(trade_data):
                     order['trnsTp'] = 'SELL'
                     
             else:
-                logger.info("Unable to find the symbol {symbol} and exchange %s. Keeping original trading symbol.", exchange)
-    logger.info("%s", trade_data)           
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+    logger.info(f"{trade_data}")           
     return trade_data
 
 
@@ -239,7 +239,7 @@ def transform_positions_data(positions_data):
 def transform_holdings_data(holdings_data):
     transformed_data = []
     logger.info("Holdings Data")
-    logger.info("%s", holdings_data)
+    logger.info(f"{holdings_data}")
     for holding in holdings_data:
         transformed_position = {
             "symbol": holding.get('displaySymbol', ''),
@@ -258,7 +258,7 @@ def transform_holdings_data(holdings_data):
 
         transformed_data.append(transformed_position)
     logger.info("Holdings Data")
-    logger.info("%s", transformed_data)
+    logger.info(f"{transformed_data}")
     return transformed_data
 
 def map_portfolio_data(portfolio_data):

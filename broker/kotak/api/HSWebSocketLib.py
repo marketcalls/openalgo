@@ -267,7 +267,7 @@ class ByteData:
         self.startOfMsg = 0
 
     def lenth(self):
-        # logger.info("%s", "lenght of the bytes", self.bytes, len(self.bytes))
+        # logger.info(f"lenght of the bytes {self.bytes} {len(self.bytes)}")
         pass
 
     def markStartOfMsg(self):
@@ -289,11 +289,11 @@ class ByteData:
         return self.bytes
 
     def appendByte(self, d):
-        # logger.info("%s", "in append Bytes POS", self.pos)
-        # logger.info("%s", "in append Bytes d", d)
+        # logger.info(f"in append Bytes POS {self.pos}")
+        # logger.info(f"in append Bytes d {d}")
         self.bytes[self.pos] = d
         self.pos += 1
-        # logger.info("%s", "in append Bytes", self.bytes)
+        # logger.info(f"in append Bytes {self.bytes}")
 
     def appendByteAtPos(self, e, d):
         self.bytes[e] = d
@@ -430,7 +430,7 @@ class DepthTopicData(TopicData):
     def prepareData(self):
         # logger.info("INSIDE prepareData")
         self.prepareCommonData()
-        # logger.info("%s", "\nDepth:", self.feedType, self.exchange, self.symbol)
+        # logger.info(f"\nDepth: {self.feedType} {self.exchange} {self.symbol}")
         json_res = {}
         for d in range(len(DEPTH_MAPPING)):
             c = DEPTH_MAPPING[d]
@@ -440,10 +440,10 @@ class DepthTopicData(TopicData):
                     e = round(e / (self.multiplier * self.precisionValue), self.precision)
                 elif c["type"] == FieldTypes.get("DATE"):
                     e = getFormatDate(e)
-                # logger.info("%s", d, ":", c["name"], ":", e)
+                # logger.info(f"{d} : {c['name']} : {e}")
                 json_res[c["name"]] = str(e)
         self.updatedFieldsArray = [None] * 100
-        # logger.info("%s", "INSIDE Parse Data", json_res)
+        # logger.info(f"INSIDE Parse Data {json_res}")
         return json_res
 
 
@@ -504,7 +504,7 @@ def prepareConnectionRequest2(a, c):
 def is_scrip_ok(a):
     scrips_count = len(a.split("&"))
     if scrips_count > MAX_SCRIPS:
-        logger.info("%s", "Maximum scrips allowed per request is " + str(MAX_SCRIPS))
+        logger.info(f"Maximum scrips allowed per request is {str(MAX_SCRIPS)}")
         return False
     return True
 
@@ -518,7 +518,7 @@ def getScripByteArray(c, a):
     for index in range(scripsCount):
         scripArray[index] = a + "|" + scripArray[index]
         dataLen += len(scripArray[index]) + 1
-    # logger.info("%s", "Data len ", dataLen)
+    # logger.info(f"Data len {dataLen}")
     bytes = [0] * (dataLen + 2)
     pos = 0
     bytes[pos] = (scripsCount >> 8) & 255
@@ -533,7 +533,7 @@ def getScripByteArray(c, a):
         for strIndex in range(scripLen):
             bytes[pos] = ord(currScrip[strIndex])
             pos += 1
-    # logger.info("%s", "Bytes ", bytes)
+    # logger.info(f"Bytes {bytes}")
     return bytes
 
 
@@ -543,7 +543,7 @@ def prepareSubsUnSubsRequest(scrips, subscribe_type, scrip_prefix, channel_num):
         return
 
     dataArr = getScripByteArray(scrips, scrip_prefix)
-    # logger.info("%s", "Length Arr", dataArr)
+    # logger.info(f"Length Arr {dataArr}")
     # buffer = [0] * (len(dataArr) + 11) #ByteData(len(dataArr) + 11)
     buffer = ByteData(len(dataArr) + 11)
     buffer.markStartOfMsg()
@@ -560,11 +560,11 @@ def prepareSubsUnSubsRequest(scrips, subscribe_type, scrip_prefix, channel_num):
 
 
 def prepareSnapshotRequest(a, c, d):
-    # logger.info("%s", "INTO prepareSnapshotRequest", a, c, d)
+    # logger.info(f"INTO prepareSnapshotRequest {a} {c} {d}")
     if not is_scrip_ok(a):
         return
     dataArr = getScripByteArray(a, d)
-    # logger.info("%s", "DATA ARRAY", dataArr)
+    # logger.info(f"DATA ARRAY {dataArr}")
     buffer = ByteData(len(dataArr) + 7)
     buffer.markStartOfMsg()
     buffer.appendByte(c)
@@ -754,7 +754,7 @@ class ScripTopicData(TopicData):
             if volume is not None and vwap is not None:
                 self.fieldDataArray[SCRIP_INDEX["TURNOVER"]] = volume * vwap
                 self.updatedFieldsArray[SCRIP_INDEX["TURNOVER"]] = True
-        # logger.info("%s", "\nScrip::" + self.feedType + "|" + self.exchange + "|" + self.symbol)
+        # logger.info(f"\nScrip::{self.feedType}|{self.exchange}|{self.symbol}")
         jsonRes = {}
         for index in range(len(SCRIP_MAPPING)):
             dataType = SCRIP_MAPPING[index]
@@ -764,7 +764,7 @@ class ScripTopicData(TopicData):
                     val = "{:.2f}".format(val / (self.multiplier * self.precisionValue))
                 elif dataType["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
-                # logger.info("%s", str(index) + ":" + dataType["name"] + ":" + str(val))
+                # logger.info(f'{str(index)}:{dataType["name"]}:{str(val)}')
                 jsonRes[dataType["name"]] = str(val)
         self.updatedFieldsArray = [None] * 100
         return jsonRes
@@ -798,7 +798,7 @@ class IndexTopicData(TopicData):
                 per_change = round(change / close * 100, self.precision)
                 self.fieldDataArray[INDEX_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[INDEX_INDEX["PERCHANGE"]] = True
-        # logger.info("%s", "\nIndex::" + self.feedType + "|" + self.exchange + "|" + self.symbol)
+        # logger.info(f"\nIndex::{self.feedType}|{self.exchange}|{self.symbol}")
         json_res = {}
         for index in range(len(INDEX_MAPPING)):
             data_type = INDEX_MAPPING[index]
@@ -808,7 +808,7 @@ class IndexTopicData(TopicData):
                     val = round(val / (self.multiplier * self.precisionValue), self.precision)
                 elif data_type["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
-                # logger.info("%s", str(index) + ":" + data_type["name"] + ":" + str(val))
+                # logger.info(f'{str(index)}:{data_type["name"]}:{str(val)}')
                 json_res[data_type["name"]] = str(val)
         self.updatedFieldsArray = [None] * 100
         return json_res
@@ -820,7 +820,7 @@ class HSWrapper:
         self.ack_num = 0
 
     def getNewTopicData(self, c):
-        # logger.info("%s", "INPUT ", c)
+        # logger.info(f"INPUT {c}")
         feed_type, *_ = c.split("|")
         topic = None
         if feed_type == TopicTypes.get("SCRIP"):
@@ -847,14 +847,14 @@ class HSWrapper:
 
     def parseData(self, e):
         pos = 0
-        # logger.info("%s", "INTO Parse Data", e)
+        # logger.info(f"INTO Parse Data {e}")
         packetsCount = buf2long(e[pos:2])
         pos += 2
         type = int.from_bytes(e[pos:pos + 1], 'big')
         pos += 1
-        # logger.info("%s", "Type in HSWebsocket", type)
-        # logger.info("%s", "parse data ", e)
-        # logger.info("%s", "parse data len", len(e))
+        # logger.info(f"Type in HSWebsocket {type}")
+        # logger.info(f"parse data {e}")
+        # logger.info(f"parse data len {len(e)}")
         if type == BinRespTypes.get("CONNECTION_TYPE"):
             jsonRes = {}
             fCount = int.from_bytes(e[pos:pos + 1], 'big')
@@ -871,7 +871,7 @@ class HSWrapper:
                 valLen = int.from_bytes(e[pos:pos + 2], 'big')
                 pos += 2
                 ackCount = int.from_bytes(e[pos:pos + valLen], 'big')
-                # logger.info("%s", "STATUS", status)
+                # logger.info(f"STATUS {status}")
                 if status == BinRespStat.get("OK"):
                     jsonRes['stat'] = STAT.get("OK")
                     jsonRes['type'] = RespTypeValues.get("CONN")
@@ -909,10 +909,10 @@ class HSWrapper:
         else:
             if type == BinRespTypes.get("DATA_TYPE"):
                 # logger.info("IN By Datatype ")
-                # logger.info("%s", "IN By self.ack_num ", self.ack_num)
+                # logger.info(f"IN By self.ack_num {self.ack_num}")
                 msg_num = 0
                 if self.ack_num > 0:
-                    # logger.info("%s", "ack_num", self.ack_num)
+                    # logger.info(f"ack_num {self.ack_num}")
                     self.counter += 1
                     msg_num = buf2long(e[pos: pos + 4])
                     pos += 4
@@ -921,31 +921,31 @@ class HSWrapper:
                         if ws:
                             ws.send(req, 0x2)
                             self.counter = 0
-                        # logger.info("%s", "Acknowledgement sent for message num:", msg_num)
+                        # logger.info(f"Acknowledgement sent for message num: {msg_num}")
                 h = []
                 g = buf2long(e[pos: pos + 2])
-                # logger.info("%s", "G in ", g)
+                # logger.info(f"G in {g}")
                 pos += 2
                 for n in range(g):
                     pos += 2
                     c = buf2long(e[pos: pos + 1])
-                    # logger.info("%s", "ResponseType:", c)
+                    # logger.info(f"ResponseType: {c}")
                     pos += 1
                     if c == ResponseTypes.get("SNAP"):
                         f = buf2long(e[pos: pos + 4])
                         pos += 4
-                        # logger.info("%s", "topic Id:", f)
+                        # logger.info(f"topic Id: {f}")
                         name_len = buf2long(e[pos: pos + 1])
                         pos += 1
                         topic_name = buf2string(e[pos: pos + name_len])
-                        # logger.info("%s", "TOPIC Name ", topic_name)
+                        # logger.info(f"TOPIC Name {topic_name}")
                         pos += name_len
                         d = self.getNewTopicData(topic_name)
                         if d:
                             topic_list[f] = d
                             fcount = buf2long(e[pos: pos + 1])
                             pos += 1
-                            # logger.info("%s", "fcount1:", fcount)
+                            # logger.info(f"fcount1: {fcount}")
                             for index in range(fcount):
                                 fvalue = buf2long(e[pos: pos + 4])
                                 d.setLongValues(index, fvalue)
@@ -954,7 +954,7 @@ class HSWrapper:
                             d.setMultiplierAndPrec()
                             fcount = buf2long(e[pos: pos + 1])
                             pos += 1
-                            # logger.info("%s", "fcount2:", fcount)
+                            # logger.info(f"fcount2: {fcount}")
                             for index in range(fcount):
                                 fid = buf2long(e[pos: pos + 1])
                                 pos += 1
@@ -963,7 +963,7 @@ class HSWrapper:
                                 str_val = buf2string(e[pos: pos + data_len])
                                 pos += data_len
                                 d.setStringValues(fid, str_val)
-                                # logger.info("%s", fid, ":", str_val)
+                                # logger.info(f"{fid} : {str_val}")
                             h.append(d.prepareData())
                         else:
                             logger.info("Invalid topic feed type !")
@@ -971,7 +971,7 @@ class HSWrapper:
                         if c == ResponseTypes.get("UPDATE"):
                             logger.info("updates ......")
                             f = buf2long(e[pos: pos + 4])
-                            # logger.info("%s", "topic Id:", f)
+                            # logger.info(f"topic Id: {f}")
                             pos += 4
                             d = topic_list[f]
                             if not d:
@@ -980,16 +980,16 @@ class HSWrapper:
                                 # logger.info("INSIDE Else COndition ")
                                 fcount = buf2long(e[pos:pos + 1])
                                 pos += 1
-                                # logger.info("%s", "fcount1:", fcount)
+                                # logger.info(f"fcount1: {fcount}")
                                 for index in range(fcount):
                                     fvalue = buf2long(e[pos:pos + 4])
                                     d.setLongValues(index, fvalue)
                                     # d[index] = fvalue
-                                    # logger.info("%s", "index:", index, "val:", fvalue)
+                                    # logger.info(f"index: {index} val: {fvalue}")
                                     pos += 4
                             h.append(d.prepareData())
                         else:
-                            logger.info("%s", "Invalid ResponseType: " + c)
+                            logger.info(f"Invalid ResponseType: {c}")
                 return h
             else:
                 if type == BinRespTypes.get("SUBSCRIBE_TYPE") or type == BinRespTypes.get("UNSUBSCRIBE_TYPE"):
@@ -1125,7 +1125,7 @@ class StartServer:
         outData = None
         if isinstance(inData, bytes):
             jsonData = self.hsWrapper.parseData(inData)
-            # logger.info("%s", "JSON DATA in HSWEBSOCKE ON MESSAGE", jsonData)
+            # logger.info(f"JSON DATA in HSWEBSOCKE ON MESSAGE {jsonData}")
             if jsonData:
                 outData = json.dumps(jsonData) if isEncyptOut else jsonData
         else:
@@ -1134,12 +1134,12 @@ class StartServer:
             self.onmessage(outData)
 
     def on_close(self, ws, close_status_code, close_msg):
-        # logger.info("%s", "[OnClose]: Function is running HSWebsocket", close_status_code)
+        # logger.info(f"[OnClose]: Function is running HSWebsocket {close_status_code}")
         self.onclose()
 
     def on_error(self, ws, error):
         self.onerror(error)
-        logger.info("%s", 'ERROR in HSWebscoket', error)
+        logger.info(f"ERROR in HSWebscoket {error}")
         logger.info("[OnError]: Function is running HSWebsocket")
 
 
@@ -1176,13 +1176,13 @@ class HSWebSocket:
     def hs_send(self, d):
         req_json = json.loads(d)
         req_type = req_json[Keys.get("TYPE")]
-        # logger.info("%s", "Req Type", req_type)
+        # logger.info(f"Req Type {req_type}")
         req = {}
         if Keys.get("SCRIPS") in req_json:
             scrips = req_json[Keys.get("SCRIPS")]
-            # logger.info("%s", "scrips ", scrips)
+            # logger.info(f"scrips {scrips}")
             channelnum = req_json[Keys.get("CHANNEL_NUM")]
-            # logger.info("%s", "CHANNEL NUM ", channelnum)
+            # logger.info(f"CHANNEL NUM {channelnum}")
         else:
             scrips = None
             channelnum = 1
@@ -1209,7 +1209,7 @@ class HSWebSocket:
                 logger.info("Invalid conn mode !")
         elif req_type == ReqTypeValues.get("SCRIP_SUBS"):
             req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
-            # logger.info("%s", "*********** SUB SCRIPS req", req)
+            # logger.info(f"*********** SUB SCRIPS req {req}")
         elif req_type == ReqTypeValues.get("SCRIP_UNSUBS"):
             req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
         elif req_type == ReqTypeValues.get("INDEX_SUBS"):
@@ -1271,10 +1271,10 @@ class HSWebSocket:
 #         self.hsiWs.run_forever()
 #
 #     def on_message(self, ws, message):
-#         logger.info("%s", "Received message:", message)
+#         logger.info(f"Received message: {message}")
 #
 #     def on_error(self, ws, error):
-#         logger.info("%s", "Error:", error)
+#         logger.info(f"Error: {error}")
 #
 #     def on_close(self, ws):
 #         logger.info("Connection closed")
@@ -1316,7 +1316,7 @@ class HSWebSocket:
 #             else:
 #                 logger.info("Invalid Request !")
 #         if self.hsiWs and req:
-#             logger.info("%s", "REQ", req)
+#             logger.info(f"REQ {req}")
 #             self.hsiWs.send(json.dumps(req))
 #         else:
 #             logger.info("Unable to send request! Reason: Connection faulty or request not valid!")
@@ -1351,11 +1351,11 @@ class StartHSIServer:
         hsiws.run_forever()
 
     def on_message(self, ws, message):
-        # logger.info("%s", "Received message:", message)
+        # logger.info(f"Received message: {message}")
         self.onmessage(message)
 
     def on_error(self, ws, error):
-        logger.info("%s", "Error:", error)
+        logger.info(f"Error: {error}")
         self.onerror(error)
 
     def on_close(self, ws, close_status_code, close_msg):

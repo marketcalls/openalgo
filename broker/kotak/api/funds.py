@@ -30,10 +30,10 @@ def get_margin_data(auth_token):
     try:
         res = conn.getresponse()
         data = res.read()
-        logger.info("%s", data.decode("utf-8"))
+        logger.info(f"{data.decode('utf-8')}")
         margin_data = json.loads(data.decode("utf-8"))
 
-        #logger.info("Margin Data %s", margin_data)
+        #logger.info(f"Margin Data {margin_data}")
 
         # Process and return the 'data' key from margin_data if it exists and is not None
         
@@ -47,5 +47,5 @@ def get_margin_data(auth_token):
             }
         return processed_margin_data
     except Exception as e:
-        logger.error("Error fetching margin data: %s", e)
+        logger.error(f"Error fetching margin data: {e}")
         return {}
