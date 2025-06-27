@@ -34,8 +34,7 @@ def get_history_with_auth(
     exchange: str, 
     interval: str, 
     start_date: str, 
-    end_date: str,
-    include_oi: bool = False
+    end_date: str
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get historical data for a symbol using provided auth tokens.
@@ -77,60 +76,22 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
-        # Check if the broker's get_history method supports include_oi parameter
-        get_history_method = getattr(data_handler, 'get_history', None)
-        if get_history_method and hasattr(get_history_method, '__code__'):
-            param_count = get_history_method.__code__.co_argcount
-            # Check if the method accepts include_oi (7 params including self)
-            if param_count >= 7:  # self + 6 standard params
-                # Broker supports include_oi parameter
-                df = data_handler.get_history(
-                    symbol,
-                    exchange,
-                    interval,
-                    start_date,
-                    end_date,
-                    include_oi
-                )
-            else:
-                # Broker doesn't support include_oi parameter
-                df = data_handler.get_history(
-                    symbol,
-                    exchange,
-                    interval,
-                    start_date,
-                    end_date
-                )
-        else:
-            # Fallback if we can't inspect the method
-            try:
-                # Try with include_oi first
-                df = data_handler.get_history(
-                    symbol,
-                    exchange,
-                    interval,
-                    start_date,
-                    end_date,
-                    include_oi
-                )
-            except TypeError as e:
-                # If we get a TypeError about too many arguments, try without include_oi
-                if "takes" in str(e) and "arguments" in str(e):
-                    logger.warning(f"Broker {broker} doesn't support include_oi parameter, trying without it")
-                    df = data_handler.get_history(
-                        symbol,
-                        exchange,
-                        interval,
-                        start_date,
-                        end_date
-                    )
-                else:
-                    # Re-raise if it's a different TypeError
-                    raise
+        # Call the broker's get_history method
+        df = data_handler.get_history(
+            symbol,
+            exchange,
+            interval,
+            start_date,
+            end_date
+        )
         
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid data format returned from broker")
-
+            
+        # Ensure all responses include 'oi' field, set to 0 if not present
+        if 'oi' not in df.columns:
+            df['oi'] = 0
+            
         return True, {
             'status': 'success',
             'data': df.to_dict(orient='records')
@@ -152,8 +113,7 @@ def get_history(
     api_key: Optional[str] = None, 
     auth_token: Optional[str] = None, 
     feed_token: Optional[str] = None, 
-    broker: Optional[str] = None,
-    include_oi: bool = False
+    broker: Optional[str] = None
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get historical data for a symbol.
@@ -192,8 +152,7 @@ def get_history(
             exchange, 
             interval, 
             start_date, 
-            end_date,
-            include_oi
+            end_date
         )
     
     # Case 2: Direct internal call with auth_token and broker
@@ -206,8 +165,7 @@ def get_history(
             exchange, 
             interval, 
             start_date, 
-            end_date,
-            include_oi
+            end_date
         )
     
     # Case 3: Invalid parameters
