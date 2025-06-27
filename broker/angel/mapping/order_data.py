@@ -24,7 +24,7 @@ def map_order_data(order_data):
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
-        logger.info("%s", order_data)
+        logger.info(f"{order_data}")
         
 
 
@@ -49,7 +49,7 @@ def map_order_data(order_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
                     order['producttype'] = 'NRML'
             else:
-                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -106,7 +106,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         ordertype = order.get("ordertype", "")
@@ -178,7 +178,7 @@ def map_trade_data(trade_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
                     order['producttype'] = 'NRML'
             else:
-                logger.info("Unable to find the symbol {symbol} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return trade_data
 
