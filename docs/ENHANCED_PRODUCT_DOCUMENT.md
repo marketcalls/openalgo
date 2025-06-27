@@ -102,6 +102,8 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
   - Error handling with retry logic
   - Latency monitoring per broker
   - Master contract auto-download
+  - Sandbox environment support for testing
+  - Live/Sandbox mode switching per broker
 
 #### 4. Advanced Order Management
 
@@ -221,7 +223,7 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 
 - **Walk Forward Testing System**:
   - Real-time strategy validation without capital risk
-  - Live market data simulation with delayed feed
+  - Live market data from broker feeds (real-time, not delayed)
   - Crucial intermediate step between backtesting and live trading
   - Confidence building for strategy deployment
   - Real-time behavior observation
@@ -321,18 +323,19 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 
 - **Data & Accuracy**:
   - **Market Data Feed**:
-    - Delayed market data (regulatory compliance)
-    - Realistic bid-ask spread simulation
-    - Volume and liquidity modeling
-    - Market microstructure effects
-    - Corporate action adjustments
+    - Real-time market data from broker APIs
+    - Live bid-ask spread and depth
+    - Actual volume and liquidity data
+    - Real market microstructure effects
+    - Live corporate action updates
+    - Broker sandbox environments for testing
   
   - **Execution Simulation**:
-    - Order matching algorithm
-    - Partial fill simulation
-    - Realistic latency modeling
-    - Slippage calculation
-    - Market impact estimation
+    - Broker sandbox order execution
+    - Real market condition simulation
+    - Actual latency from broker systems
+    - Live slippage calculation
+    - Market impact based on real conditions
 
 - **Reporting & Analysis**:
   - **Real-time Reports**:
@@ -359,10 +362,17 @@ OpenAlgo Enhanced is a complete rebuild of the original OpenAlgo platform, trans
 - **Safety & Risk Controls**:
   - **Built-in Safeguards**:
     - No real money at risk
-    - No actual order transmission
-    - Isolated testing environment
+    - Broker sandbox environment usage
+    - Isolated testing with real data
     - Strategy validation checks
-    - Risk limit simulation
+    - Real risk limit testing
+  
+  - **Broker Sandbox Integration**:
+    - Direct integration with broker sandbox APIs
+    - Real-time data with simulated execution
+    - Actual margin calculations
+    - Live market condition testing
+    - Seamless sandbox-to-live transition
   
   - **Manual Controls**:
     - Individual strategy square-off
@@ -1054,11 +1064,11 @@ volumes:
    - Real-time MTM tracking
 
 4. **Professional Walk Forward Testing**:
-   - Real market conditions simulation
-   - MTM calculation on candle close
-   - Margin requirement estimation
-   - Cost simulation with brokerage/taxes
-   - One-click deployment to live trading
+   - Real-time market data from broker feeds
+   - Live market conditions with broker sandbox
+   - MTM calculation on actual market movements
+   - Real margin requirement calculation
+   - Seamless transition to live trading
 
 5. **Enterprise-Grade Infrastructure**:
    - Sub-50ms latency

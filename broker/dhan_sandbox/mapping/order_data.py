@@ -50,7 +50,7 @@ def map_order_data(order_data):
                 elif order['exchangeSegment'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['productType'] == 'MARGIN':
                     order['productType'] = 'NRML'
             else:
-                logger.info("Symbol not found for token {instrument_token} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Symbol not found for token {{instrument_token}} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -112,7 +112,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         if order['orderType'] == 'MARKET':
