@@ -56,7 +56,7 @@ def copy_from_dataframe(df):
         if filtered_data_dict:
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:

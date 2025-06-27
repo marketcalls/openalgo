@@ -27,8 +27,8 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
             data["userId"] = api_key
 
         # Debug print
-        logger.info("Endpoint: %s", endpoint)
-        logger.info("Payload: %s", json.dumps(data, indent=2))
+        logger.info(f"Endpoint: {endpoint}")
+        logger.info(f"Payload: {json.dumps(data, indent=2)}")
 
         conn = http.client.HTTPSConnection("connect.thefirstock.com")
         headers = {
@@ -47,18 +47,18 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         
         # Debug print
         response_text = data.decode("utf-8")
-        logger.info("Raw Response: %s", response_text)
+        logger.info(f"Raw Response: {response_text}")
         
         if not response_text:
             return {"status": "error", "message": "Empty response from server"}
             
         response = json.loads(response_text)
-        logger.info("Response: %s", json.dumps(response, indent=2))
+        logger.info(f"Response: {json.dumps(response, indent=2)}")
         
         return response
 
     except Exception as e:
-        logger.error("API Error: %s", str(e))
+        logger.error(f"API Error: {e}")
         logger.info("Traceback: %s", traceback.format_exc())
         raise
 
@@ -123,7 +123,7 @@ class BrokerData:
             }
             
         except Exception as e:
-            logger.error("Error fetching quotes: %s", str(e))
+            logger.error(f"Error fetching quotes: {e}")
             return {"status": "error", "message": str(e)}
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -185,7 +185,7 @@ class BrokerData:
             }
             
         except Exception as e:
-            logger.error("Error fetching market depth: %s", str(e))
+            logger.error(f"Error fetching market depth: {e}")
             return {"status": "error", "message": str(e)}
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -229,7 +229,7 @@ class BrokerData:
                 # Handle special characters in symbol
                 encoded_symbol = br_symbol.replace('&', '%26')
                 
-                logger.info("Getting daily data for {encoded_symbol} from {start_str} to %s", end_str)
+                logger.info(f"Getting daily data for {encoded_symbol} from {start_str} to {end_str}")
                 
                 payload = {
                     "userId": os.getenv('BROKER_API_KEY')[:-4],
@@ -263,23 +263,23 @@ class BrokerData:
                                         'volume': float(candle.get('intv', 0))
                                     })
                             except (ValueError, TypeError) as e:
-                                logger.error("Error processing candle: %s", e)
+                                logger.error(f"Error processing candle: {e}")
                                 continue
                 except Exception as e:
-                    logger.error("Error in get_history: %s", str(e))
+                    logger.error(f"Error in get_history: {e}")
                     logger.info("Traceback: %s", traceback.format_exc())
                     raise Exception(f"Error fetching historical data: {str(e)}")
             else:
                 # For intraday data
                 # Add market hours to timestamps (9:15 AM to 3:30 PM IST)
-                start_time = start_dt.replace(hour=9, minute=15, second=0)
+{{ ... }}
                 end_time = end_dt.replace(hour=15, minute=30, second=0)
                 
                 # Format for API
                 start_str = start_time.strftime('%d/%m/%Y %H:%M:%S')
                 end_str = end_time.strftime('%d/%m/%Y %H:%M:%S')
                 
-                logger.info("Getting intraday data from {start_str} to %s", end_str)
+                logger.info(f"Getting intraday data from {start_str} to {end_str}")
                 
                 payload = {
                     "userId": os.getenv('BROKER_API_KEY')[:-4],
@@ -313,7 +313,7 @@ class BrokerData:
                                 'volume': int(candle.get('intv', 0))
                             })
                         except (ValueError, TypeError) as e:
-                            logger.error("Error processing candle: %s", e)
+                            logger.error(f"Error processing candle: {e}")
                             continue
             
             if not data:
@@ -325,12 +325,12 @@ class BrokerData:
             df = df.sort_values('timestamp')
             
             # Debug print
-            logger.info("Data shape: %s", df.shape)
-            logger.info("Date range: %s to %s", datetime.fromtimestamp(df['timestamp'].min()), datetime.fromtimestamp(df['timestamp'].max()))
+            logger.info(f"Data shape: {df.shape}")
+            logger.info(f"Date range: {datetime.fromtimestamp(df['timestamp'].min())} to {datetime.fromtimestamp(df['timestamp'].max())}")
             
             return df
             
         except Exception as e:
-            logger.error("Error in get_history: %s", str(e))
+            logger.error(f"Error in get_history: {e}")
             logger.info("Traceback: %s", traceback.format_exc())
             raise Exception(f"Error fetching historical data: {str(e)}")

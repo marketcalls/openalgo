@@ -79,7 +79,7 @@ def get_ltp(auth, exchange, token):
 def get_holdings(auth):
     """Get holdings from Firstock"""
     response = get_api_response("/holdings", auth)
-    logger.info("Raw holdings response: %s", json.dumps(response, indent=2))
+    logger.info(f"Raw holdings response: {json.dumps(response, indent=2)}")
     
     # If successful, get LTP for each holding
     if response.get('status') == 'success':
@@ -92,7 +92,7 @@ def get_holdings(auth):
                 if ltp_response.get('status') == 'success':
                     nse_entry['ltp'] = ltp_response.get('data', {}).get('ltp', '0.00')
                 else:
-                    logger.info("Failed to get LTP for %s", nse_entry['tradingSymbol'])
+                    logger.info(f"Failed to get LTP for {nse_entry['tradingSymbol']}")
                     nse_entry['ltp'] = '0.00'
     
     return response
@@ -154,7 +154,7 @@ def place_order_api(data, auth):
         "userId": api_key
     })
 
-    logger.info("%s", transformed_data)
+    logger.info(f"{transformed_data}")
     
     conn = http.client.HTTPSConnection("connect.thefirstock.com")
     headers = {'Content-Type': 'application/json'}
@@ -163,8 +163,8 @@ def place_order_api(data, auth):
         conn.request("POST", "/api/V4/placeOrder", json.dumps(transformed_data), headers)
         res = conn.getresponse()
         response_data = json.loads(res.read().decode("utf-8"))
-        logger.info("Response Status: %s", res.status)
-        logger.info("Response Data: %s", response_data)
+        logger.info(f"Response Status: {res.status}")
+        logger.info(f"Response Data: {response_data}")
         
         if response_data.get('status') == 'success':
             orderid = response_data.get('data', {}).get('orderNumber')
@@ -173,7 +173,7 @@ def place_order_api(data, auth):
             
         return res, response_data, orderid
     except Exception as e:
-        logger.error("Error placing order: %s", str(e))
+        logger.error(f"Error placing order: {e}")
         return None, {"status": "failed", "error": str(e)}, None
     finally:
         conn.close()
@@ -197,8 +197,8 @@ def place_smartorder_api(data,auth):
     current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
 
 
-    logger.info("position_size : %s", position_size) 
-    logger.info("Open Position : %s", current_position) 
+    logger.info(f"position_size : {position_size}") 
+    logger.info(f"Open Position : {current_position}") 
     
     # Determine action based on position_size and current_position
     action = None
@@ -209,11 +209,11 @@ def place_smartorder_api(data,auth):
     if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
         action = data['action']
         quantity = data['quantity']
-        #logger.info("action : %s", action)
-        #logger.info("Quantity : %s", quantity)
+        #logger.info(f"action : {action}")
+        #logger.info(f"Quantity : {quantity}")
         res, response, orderid = place_order_api(data,AUTH_TOKEN)
-        #logger.info("%s", res)
-        #logger.info("%s", response)
+        #logger.info(f"{res}")
+        #logger.info(f"{response}")
         
         return res , response, orderid
         
@@ -240,11 +240,11 @@ def place_smartorder_api(data,auth):
         if position_size > current_position:
             action = "BUY"
             quantity = position_size - current_position
-            #logger.info("smart buy quantity : %s", quantity)
+            #logger.info(f"smart buy quantity : {quantity}")
         elif position_size < current_position:
             action = "SELL"
             quantity = current_position - position_size
-            #logger.info("smart sell quantity : %s", quantity)
+            #logger.info(f"smart sell quantity : {quantity}")
 
 
 
@@ -255,12 +255,12 @@ def place_smartorder_api(data,auth):
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
-        #logger.info("%s", order_data)
+        #logger.info(f"{order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
-        #logger.info("%s", res)
-        logger.info("%s", response)
-        logger.info("%s", orderid)
+        #logger.info(f"{res}")
+        logger.info(f"{response}")
+        logger.info(f"{orderid}")
         
         return res , response, orderid
     
@@ -430,7 +430,7 @@ def cancel_order(orderid, auth):
             }, int(response_data.get("code", 400))
             
     except Exception as e:
-        logger.error("Error cancelling order: %s", str(e))
+        logger.error(f"Error cancelling order: {e}")
         return {
             "status": "error",
             "message": f"Failed to cancel order: {str(e)}"
@@ -495,7 +495,7 @@ def modify_order(data, auth):
             }, res.status or 400
             
     except Exception as e:
-        logger.error("Error modifying order: %s", str(e))
+        logger.error(f"Error modifying order: {e}")
         return {
             "status": "error",
             "message": f"Failed to modify order: {str(e)}"
@@ -511,14 +511,14 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    #logger.info("%s", order_book_response)
+    #logger.info(f"{order_book_response}")
     if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['OPEN', 'TRIGGER_PENDING']]
-    #logger.info("%s", orders_to_cancel)
+    #logger.info(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

@@ -52,9 +52,9 @@ def authenticate_broker(password=None, twofa=None, twofa_type=None):
         response_data = response.json()
         
         # Print the full response for debugging
-        logger.info("%s", 'Tradejini Response Status:', response.status_code)
-        logger.info("%s", 'Tradejini Response Headers:', dict(response.headers))
-        logger.info("%s", 'Tradejini Response Data:', response_data)
+        logger.info(f"Tradejini Response Status: {response.status_code}")
+        logger.info(f"Tradejini Response Headers: {dict(response.headers)}")
+        logger.info(f"Tradejini Response Data: {response_data}")
         
         if response.status_code == 200:
             # API returns: {scope, access_token, token_type, expires_in}

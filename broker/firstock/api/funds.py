@@ -59,5 +59,5 @@ def get_margin_data(auth_token):
             return {}
 
     except Exception as e:
-        logger.error("Error processing margin data: %s", str(e))
+        logger.error(f"Error processing margin data: {e}")
         return {}
