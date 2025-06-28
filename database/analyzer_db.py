@@ -57,7 +57,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 # Executor for asynchronous tasks
-executor = ThreadPoolExecutor(2)
+executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency
 
 def async_log_analyzer(request_data, response_data, api_type='placeorder'):
     """Asynchronously log analyzer request"""

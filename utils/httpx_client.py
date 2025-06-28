@@ -103,9 +103,9 @@ def _create_http_client(http2: bool, http1: bool) -> httpx.Client:
             http1=http1,
             timeout=30.0,
             limits=httpx.Limits(
-                max_keepalive_connections=10,
-                max_connections=20,
-                keepalive_expiry=60.0
+                max_keepalive_connections=50,  # Increased from 10
+                max_connections=100,  # Increased from 20
+                keepalive_expiry=300.0  # Increased from 60 to 300 seconds (5 minutes)
             )
         )
         http_versions = []
