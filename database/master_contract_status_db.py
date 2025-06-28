@@ -14,7 +14,13 @@ DB_PATH = os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')
 os.makedirs(os.path.dirname(DB_PATH.replace('sqlite:///', '')), exist_ok=True)
 
 # Create the engine and session
-engine = create_engine(DB_PATH, echo=False)
+engine = create_engine(
+    DB_PATH, 
+    echo=False,
+    pool_size=50,
+    max_overflow=100,
+    pool_timeout=10
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
