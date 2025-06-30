@@ -571,6 +571,15 @@ def process_aliceblue_indices_csv(path):
         'MCX': 'MCX_INDEX'
     })
     token_df['tick_size'] = 0.01
+    token_df['symbol'] = token_df['symbol'].replace({
+    'NIFTY 50': 'NIFTY',
+    'NIFTY NEXT 50': 'NIFTYNXT50',
+    'NIFTY FIN SERVICE': 'FINNIFTY',
+    'NIFTY BANK': 'BANKNIFTY',
+    'NIFTY MIDCAP SELECT': 'MIDCPNIFTY',
+    'INDIA VIX': 'INDIAVIX',
+    'SNSX50': 'SENSEX50'
+    })
 
     # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
     token_df = token_df.dropna(subset=['symbol'])
