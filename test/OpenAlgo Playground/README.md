@@ -70,4 +70,3 @@ CORS_ENABLED = 'FALSE'
 ## Contributing
 
 This Playground is a living feature. If you have ideas for improvements or find a bug, feel free to open an issue or submit a pull request to the main [OpenAlgo repository](https://github.com/marketcalls/openalgo).
-```
