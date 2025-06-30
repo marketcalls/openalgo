@@ -73,11 +73,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 def download_csv_compositedge_data(output_path):
@@ -136,13 +136,13 @@ def fetch_index_list():
         response = client.get(url, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Failed to fetch index list for segment {segment}. Status: %s", response.status_code)
+            logger.error(f"Failed to fetch index list for segment {{segment}}. Status: {response.status_code}")
             continue
 
         data = response.json()
 
         if "result" not in data or "indexList" not in data["result"]:
-            logger.info("Invalid response format for segment %s", segment)
+            logger.info(f"Invalid response format for segment {segment}")
             continue
 
         for index_entry in data["result"]["indexList"]:
@@ -449,7 +449,7 @@ def process_index_data(index_data):
     df['lotsize'] = 1  # Default index lot size
     df['instrumenttype'] = 'INDEX'
     df['tick_size'] = 0.05 
-    # logger.info("%s", df)
+    # logger.info(f"{df}")
 
     return df
 
@@ -461,7 +461,7 @@ def delete_compositedge_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
     
 
 def master_contract_download():
@@ -497,7 +497,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.info(f"{e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

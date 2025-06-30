@@ -72,11 +72,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -129,7 +129,7 @@ def download_csv_zerodha_data(output_path):
         except:
             pass
             
-        logger.error("Error downloading Zerodha instruments: %s", error_message)
+        logger.error(f"Error downloading Zerodha instruments: {error_message}")
         raise
 
 
@@ -242,11 +242,11 @@ def delete_zerodha_temp_data(output_path):
         if os.path.exists(output_path):
             # Delete the file
             os.remove(output_path)
-            logger.info("The temporary file %s has been deleted.", output_path)
+            logger.info(f"The temporary file {output_path} has been deleted.")
         else:
-            logger.info("The temporary file %s does not exist.", output_path)
+            logger.info(f"The temporary file {output_path} does not exist.")
     except Exception as e:
-        logger.error("An error occurred while deleting the file: %s", e)
+        logger.error(f"An error occurred while deleting the file: {e}")
 
 
 def master_contract_download():
@@ -269,7 +269,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

@@ -75,7 +75,7 @@ def map_order_data(order_data):
                 elif order['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['DelvIntra'] == 'D':
                     order['DelvIntra'] = 'NRML'
             else:
-                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -144,7 +144,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         pricetype = ""
@@ -251,7 +251,7 @@ def map_trade_data(trade_data):
                     order['BuySell'] = 'SELL'
                 
             else:
-                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
           
     return trade_data
 
@@ -304,7 +304,7 @@ def map_position_data(position_data):
     else:
         position_data = position_data['body']['NetPositionDetail'] 
         
-    logger.info("%s", position_data)
+    logger.info(f"{position_data}")
 
     if position_data:
         for position in position_data:
@@ -336,7 +336,7 @@ def map_position_data(position_data):
              
                 
             else:
-                logger.info("Symbol not found for token {symboltoken} and exchange %s. Keeping original trading symbol.", exchange)
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
           
     return position_data
 

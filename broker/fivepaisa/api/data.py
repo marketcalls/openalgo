@@ -59,13 +59,13 @@ def get_api_response(endpoint: str, auth: str, method: str = "GET", payload: str
         return response.json()
         
     except httpx.HTTPStatusError as e:
-        logger.error("HTTP error occurred: {e.response.status_code} - %s", e.response.text)
+        logger.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
         raise
     except httpx.RequestError as e:
-        logger.error("Request error occurred: %s", str(e))
+        logger.error(f"Request error occurred: {e}")
         raise
     except Exception as e:
-        logger.error("An error occurred: %s", str(e))
+        logger.error(f"An error occurred: {e}")
         raise
 
 class BrokerData:
@@ -128,7 +128,7 @@ class BrokerData:
             response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
-                logger.info("Market Depth Error: %s", response['head']['statusDescription'])
+                logger.info(f"Market Depth Error: {response['head']['statusDescription']}")
                 return None
 
             depth_data = response['body']
@@ -151,14 +151,14 @@ class BrokerData:
                 # Get lowest sell price
                 ask = min(float(order['Price']) for order in sell_orders)
             
-            logger.info("Extracted Bid: {bid}, Ask: %s", ask)
+            logger.info(f"Extracted Bid: {bid}, Ask: {ask}")
             return {'bid': bid, 'ask': ask}
 
         except Exception as e:
-            logger.error("Error fetching market depth: %s", str(e))
-            logger.info("Exception type: %s", type(e))
+            logger.error(f"Error fetching market depth: {e}")
+            logger.info(f"Exception type: {type(e)}")
             import traceback
-            logger.info("Traceback: %s", traceback.format_exc())
+            logger.info(f"Traceback: {traceback.format_exc()}")
             return None
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -374,7 +374,7 @@ class BrokerData:
             }
 
         except Exception as e:
-            logger.error("Error in get_quotes: %s", str(e))
+            logger.error(f"Error in get_quotes: {e}")
             return None
 
     def map_interval(self, interval: str) -> str:
@@ -421,7 +421,7 @@ class BrokerData:
         # Reorder columns
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
         
-        logger.info("Processed %s candles from raw data", len(df))
+        logger.info(f"Processed {len(df)} candles from raw data")
         return df
         
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -443,14 +443,14 @@ class BrokerData:
             # First normalize the interval to handle case insensitivity
             if interval.upper() == 'D':
                 interval = '1d'  # Always use 1d internally for daily
-                logger.debug("Debug: Converted interval from {original_interval} to %s", interval)
+                logger.debug(f"Debug: Converted interval from {original_interval} to {interval}")
                 
             # Get token from symbol
             token = get_token(symbol, exchange)
             
             # Map interval
             fivepaisa_interval = self.map_interval(interval)
-            logger.debug("Debug: Mapped {interval} to %s", fivepaisa_interval)
+            logger.debug(f"Debug: Mapped {interval} to {fivepaisa_interval}")
             
             if not fivepaisa_interval:
                 supported = ["1m", "5m", "15m", "30m", "1h", "1d"]
@@ -458,7 +458,7 @@ class BrokerData:
             
             # Convert 5paisa timeframe to our format
             resolution = self.timeframe_map.get(interval, '1D')
-            logger.debug("Debug: Final API resolution: %s", resolution)
+            logger.debug(f"Debug: Final API resolution: {resolution}")
             
             # No special handling needed for 10m interval anymore
             # Just use the native 10m interval from the API
@@ -476,7 +476,7 @@ class BrokerData:
                 logger.debug("Debug: Using daily chunk size (100 days)")
             else:
                 chunk_days = 30  # For intraday data, fetch in 30-day chunks
-                logger.debug("Debug: Using intraday chunk size (30 days) for %s", interval)
+                logger.debug(f"Debug: Using intraday chunk size (30 days) for {interval}")
             
             # Initialize empty list to store DataFrames
             dfs = []
@@ -495,7 +495,7 @@ class BrokerData:
                 url = f"/V2/historical/{map_exchange(exchange)}/{map_exchange_type(exchange)}/{token}/{fivepaisa_interval}"
                 url += f"?from={chunk_start}&end={chunk_end}"
                 
-                logger.debug("Fetching chunk from {chunk_start} to %s", chunk_end)  # Debug log
+                logger.debug(f"Fetching chunk from {chunk_start} to {chunk_end}")  # Debug log
                 
                 try:
                     # Make API request
@@ -513,13 +513,13 @@ class BrokerData:
                     
                     if response.get('status') != 'success':
                         error_msg = response.get('message', 'Unknown error')
-                        logger.error("Error for chunk {chunk_start} to {chunk_end}: %s", error_msg)
+                        logger.error(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
                     
                     candles = response.get('data', {}).get('candles', [])
                     if not candles:
-                        logger.info("No data for chunk {chunk_start} to %s", chunk_end)
+                        logger.info(f"No data for chunk {chunk_start} to {chunk_end}")
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
                     
@@ -587,20 +587,20 @@ class BrokerData:
                             transformed_candles.append(transformed_candle)
                             
                         except Exception as e:
-                            logger.error("Error transforming candle {candle}: %s", str(e))
+                            logger.error(f"Error transforming candle {candle}: {e}")
                             continue
                     
                     if transformed_candles:
                         chunk_df = pd.DataFrame(transformed_candles)
                         # Ensure timestamp column exists and is first
                         if 'timestamp' not in chunk_df.columns:
-                            logger.warning("Warning: Missing timestamp column in chunk. Columns: %s", chunk_df.columns)
+                            logger.warning(f"Warning: Missing timestamp column in chunk. Columns: {chunk_df.columns}")
                             continue
                         dfs.append(chunk_df)
-                        logger.info("Added %s candles from chunk", len(transformed_candles))
+                        logger.info(f"Added {len(transformed_candles)} candles from chunk")
                     
                 except Exception as e:
-                    logger.error("Error processing chunk {chunk_start} to {chunk_end}: %s", str(e))
+                    logger.error(f"Error processing chunk {chunk_start} to {chunk_end}: {e}")
                 
                 # Move to next chunk
                 current_start = current_end + pd.Timedelta(days=1)
@@ -704,12 +704,12 @@ class BrokerData:
                 df = self.fix_timestamps(df, '10m')
             else:
                 # Apply our timestamp fixing function as a final step
-                logger.debug("Debug: Fixing timestamps for %s", interval)
+                logger.debug(f"Debug: Fixing timestamps for {interval}")
                 df = self.fix_timestamps(df, interval)
                 
             # Check after timestamp fixing
             if len(df) > 0:
-                logger.info("Debug: First timestamp after fixing: %s", pd.to_datetime(df['timestamp'].iloc[0], unit='s'))
+                logger.info(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
             
             # Final check for daily data with wrong timestamps (03:45 instead of 09:15)
             # This is a direct fix for the case where uppercase D or lowercase d is used
@@ -743,12 +743,12 @@ class BrokerData:
             # Reorder columns to match expected format
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
             
-            logger.info("Returning %s total candles", len(df))
+            logger.info(f"Returning {len(df)} total candles")
             return df
 
         except Exception as e:
             error_msg = str(e)
-            logger.error("Error in get_history: {error_msg}\nTraceback: %s", traceback.format_exc())  # Debug log
+            logger.error(f"Error in get_history: {error_msg}\nTraceback: {traceback.format_exc()}")  # Debug log
             
             # Check if this is the timestamp conversion error with raw_data available
             if 'non convertible value' in error_msg and 'with the unit' in error_msg and hasattr(e, 'raw_data'):
@@ -756,7 +756,7 @@ class BrokerData:
                 try:
                     return self._process_raw_candles(e.raw_data, interval)
                 except Exception as recovery_error:
-                    logger.error("Recovery attempt failed: %s", str(recovery_error))
+                    logger.error(f"Recovery attempt failed: {recovery_error}")
             
             raise
 
@@ -799,7 +799,7 @@ class BrokerData:
         interval_minutes = 5
         # Standardize how we check for daily interval
         is_daily_interval = interval.upper() == 'D' or interval == '1d' or interval == 'd'
-        logger.debug("Debug: is_daily_interval={is_daily_interval}, is_daily_data={is_daily_data}, interval=%s", interval)
+        logger.debug(f"Debug: is_daily_interval={is_daily_interval}, is_daily_data={is_daily_data}, interval={interval}")
         
         if is_daily_interval or is_daily_data:
             # For daily or data that looks like daily (1 candle per day),

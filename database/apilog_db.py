@@ -42,7 +42,7 @@ def init_db():
 
 
 # Executor for asynchronous tasks
-executor = ThreadPoolExecutor(2)
+executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency
 
 def async_log_order(api_type,request_data, response_data):
     try:

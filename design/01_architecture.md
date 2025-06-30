@@ -17,7 +17,7 @@ Key characteristics:
 *   **Web Framework:** Flask
 *   **API Framework:** Flask-RESTX
 *   **Database ORM:** SQLAlchemy
-*   **Real-time Communication:** Flask-SocketIO
+*   **Real-time Communication:** Flask-SocketIO, WebSocket Proxy Server
 *   **Rate Limiting:** Flask-Limiter
 *   **Cross-Origin Resource Sharing:** Flask-CORS
 *   **Authentication:** Flask-Login, Flask-Bcrypt, PyJWT (likely for API keys/tokens)
@@ -26,6 +26,10 @@ Key characteristics:
 *   **Environment Management:** python-dotenv
 *   **Deployment:** Docker (Dockerfile, docker-compose.yaml), AWS Elastic Beanstalk (`.ebextensions`)
 *   **Frontend (UI Templates):** Jinja2, potentially with Tailwind CSS (based on `tailwind.config.js`)
+*   **Message Broker:** ZeroMQ for internal communication
+*   **WebSocket Infrastructure:** Custom WebSocket proxy with broker-specific adapters
+*   **Logging System:** Centralized colored logging with sensitive data filtering
+*   **Streaming Data:** Real-time market data distribution via WebSocket connections
 
 ## Directory Structure Overview
 
@@ -40,6 +44,7 @@ Key characteristics:
 *   `strategies/`: Implementation of trading strategies.
 *   `templates/`: Jinja2 HTML templates for the web UI.
 *   `utils/`: Common utility functions and classes used across the application (e.g., `env_check.py`, `latency_monitor.py`, `plugin_loader.py`).
+*   `websocket_proxy/`: WebSocket proxy server implementation with broker adapters for real-time market data streaming.
 *   `app.py`: Main Flask application entry point, initializes the app, extensions, and blueprints.
 *   `requirements.txt`: Lists Python package dependencies.
 *   `Dockerfile`, `docker-compose.yaml`: Configuration for building and running the application with Docker.
@@ -49,13 +54,14 @@ Key characteristics:
 
 ```mermaid
 graph TD
-    subgraph "User/Client" 
-        UI[Web Browser UI]
+    subgraph "Client Layer"
+        WebUI[Web Browser UI]
         APIClient[External API Client]
+        WSClient[WebSocket Client]
     end
 
     subgraph "OpenAlgo Application - Flask"
-        direction LR
+        direction TB
         APILayer[API Layer - Flask-RESTX - Blueprints]
         Auth[Auth & Session Mgmt]
         RateLimiter[Rate Limiter]
@@ -65,6 +71,15 @@ graph TD
         BrokerInterface[Broker Interface - broker]
         DBLayer[Database Layer - SQLAlchemy]
         Utils[Utilities - utils]
+        LoggingSystem[Centralized Logging System]
+    end
+
+    subgraph "WebSocket Infrastructure"
+        direction TB
+        WSProxy[WebSocket Proxy Server]
+        BrokerAdapters[Broker WebSocket Adapters]
+        ZMQBroker[ZeroMQ Message Broker]
+        AdapterFactory[Broker Adapter Factory]
     end
 
     subgraph "External Systems"
@@ -72,9 +87,13 @@ graph TD
         BrokerAPI1[Broker A API]
         BrokerAPI2[Broker B API]
         BrokerAPIn[... Broker N API]
+        BrokerWS1[Broker A WebSocket]
+        BrokerWS2[Broker B WebSocket]
+        BrokerWSn[... Broker N WebSocket]
     end
 
-    UI --> APILayer
+    %% Main Application Flow
+    WebUI --> APILayer
     APIClient --> APILayer
     APILayer --> Auth
     APILayer --> RateLimiter
@@ -89,9 +108,32 @@ graph TD
     BrokerInterface --> BrokerAPI2
     BrokerInterface --> BrokerAPIn
     DBLayer --> DB
+    
+    %% WebSocket Flow
+    WSClient --> WSProxy
+    WSProxy --> AdapterFactory
+    AdapterFactory --> BrokerAdapters
+    BrokerAdapters --> ZMQBroker
+    ZMQBroker --> WSProxy
+    WSProxy --> WSClient
+    BrokerAdapters --> BrokerWS1
+    BrokerAdapters --> BrokerWS2
+    BrokerAdapters --> BrokerWSn
+    
+    %% Utility Dependencies
     APILayer --> Utils
     CoreLogic --> Utils
     BrokerInterface --> Utils
     DBLayer --> Utils
     Auth --> Utils
+    WSProxy --> Utils
+    BrokerAdapters --> Utils
+    
+    %% Logging System
+    APILayer --> LoggingSystem
+    CoreLogic --> LoggingSystem
+    BrokerInterface --> LoggingSystem
+    WSProxy --> LoggingSystem
+    BrokerAdapters --> LoggingSystem
+    Utils --> LoggingSystem
 ```

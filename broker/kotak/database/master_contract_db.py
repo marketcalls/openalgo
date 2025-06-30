@@ -76,11 +76,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 def download_csv_kotak_data(output_path):
@@ -409,7 +409,7 @@ def delete_kotak_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
     
 def master_contract_download():
     logger.info("Downloading Master Contract")
@@ -439,7 +439,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

@@ -109,11 +109,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -143,11 +143,11 @@ def download_csv_pocketful_data(output_path):
             downloaded_files.extend([os.path.join(output_path, name) for name in extracted_files])
             logger.info("Extraction successful!")
     except httpx.HTTPError as e:
-        logger.error("Failed to download ZIP archive. HTTP Error: %s", e)
+        logger.error(f"Failed to download ZIP archive. HTTP Error: {e}")
     except zipfile.BadZipFile as e:
-        logger.error("Failed to extract ZIP archive. Error: %s", e)
+        logger.error(f"Failed to extract ZIP archive. Error: {e}")
     except Exception as e:
-        logger.error("Unexpected error during contract download: %s", e)
+        logger.error(f"Unexpected error during contract download: {e}")
 
     return downloaded_files
     
@@ -259,7 +259,7 @@ def process_pocketful_nfo_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            logger.error("Error building symbol: {row}, Error: %s", e)
+            logger.error(f"Error building symbol: {row}, Error: {e}")
             return row['trading_symbol']
 
     # Build the symbol column
@@ -319,7 +319,7 @@ def process_pocketful_bfo_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            logger.error("Error processing row: {row}, Error: %s", e)
+            logger.error(f"Error processing row: {row}, Error: {e}")
             return row['trading_symbol']
 
     # Apply symbol formatting to all types
@@ -384,7 +384,7 @@ def process_pocketful_mcx_csv(path):
             else:
                 return row['trading_symbol']
         except Exception as e:
-            logger.error("Error processing row: {row}, Error: %s", e)
+            logger.error(f"Error processing row: {row}, Error: {e}")
             return row['trading_symbol']  # fallback to just the symbol
 
     # Apply the symbol formatting for all rows based on option_type
@@ -472,10 +472,10 @@ def process_pocketful_indices_csv(path):
     token_df['tick_size'] = 0.01
 
     # logger.info("Unique trading_symbols before replacement:")
-    # logger.info("%s", filter_df['trading_symbol'].unique())
+    # logger.info(f"{filter_df['trading_symbol'].unique()}")
 
     # logger.info("Symbols after replacement:")
-    # logger.info("%s", filter_df['symbol'].unique())
+    # logger.info(f"{filter_df['symbol'].unique()}")
 
     return token_df
 
@@ -490,7 +490,7 @@ def delete_pocketful_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
     
 
 def master_contract_download():
@@ -521,9 +521,9 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.info(f"{e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
-        logger.info("%s", str(e))
+        logger.info(f"{e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

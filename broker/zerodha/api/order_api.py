@@ -403,7 +403,7 @@ def cancel_all_orders_api(data,auth):
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['OPEN', 'TRIGGER PENDING']]
-    logger.info("%s", orders_to_cancel)
+    logger.info(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

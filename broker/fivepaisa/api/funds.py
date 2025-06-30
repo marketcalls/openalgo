@@ -85,11 +85,11 @@ def get_margin_data(auth_token: str) -> Dict[str, Any]:
 
         return processed_margin_data
     except httpx.HTTPStatusError as e:
-        logger.error("HTTP error occurred: {e.response.status_code} - %s", e.response.text)
+        logger.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
         return {}
     except httpx.RequestError as e:
-        logger.error("Request error occurred: %s", str(e))
+        logger.error(f"Request error occurred: {e}")
         return {}
     except Exception as e:
-        logger.error("An error occurred: %s", str(e))
+        logger.error(f"An error occurred: {e}")
         return {}

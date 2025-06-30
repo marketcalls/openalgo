@@ -65,10 +65,15 @@ def broker_login():
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
         broker_name = re.search(r'/([^/]+)/callback$', REDIRECT_URL).group(1)
+        
+        # Import mask function for credential security
+        from utils.auth_utils import mask_api_credential
             
         return render_template('broker.html', 
-                             broker_api_key=BROKER_API_KEY, 
-                             broker_api_secret=BROKER_API_SECRET,
+                             broker_api_key=BROKER_API_KEY,  # Keep original for OAuth redirects
+                             broker_api_key_masked=mask_api_credential(BROKER_API_KEY),
+                             broker_api_secret=BROKER_API_SECRET,  # Keep original for OAuth redirects  
+                             broker_api_secret_masked=mask_api_credential(BROKER_API_SECRET),
                              redirect_url=REDIRECT_URL,
                              broker_name=broker_name)
 
@@ -84,15 +89,15 @@ def reset_password():
         email = request.form.get('email')
         user = find_user_by_email(email)
         
+        # Always show the same response to prevent user enumeration
         if user:
             session['reset_email'] = email
-            return render_template('reset_password.html', 
-                                 email_sent=True, 
-                                 totp_verified=False,
-                                 email=email)
-        else:
-            flash('No account found with that email address.', 'error')
-            return render_template('reset_password.html', email_sent=False)
+        
+        # Show success message regardless of whether email exists
+        return render_template('reset_password.html', 
+                             email_sent=True, 
+                             totp_verified=False,
+                             email=email)
             
     elif step == 'totp':
         email = request.form.get('email')
@@ -132,9 +137,10 @@ def reset_password():
             user.set_password(password)
             db_session.commit()
             
-            # Clear reset session data
+            # Clear reset session data and regenerate session ID for security
             session.pop('reset_token', None)
             session.pop('reset_email', None)
+            session.regenerate()
             
             flash('Your password has been reset successfully.', 'success')
             return redirect(url_for('auth.login'))
@@ -179,8 +185,6 @@ def change_password():
     return render_template('profile.html', username=session['user'])
 
 @auth_bp.route('/logout', methods=['POST'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def logout():
     if session.get('logged_in'):
         username = session['user']

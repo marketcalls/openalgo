@@ -39,5 +39,31 @@ Based on the directory listing, here are some of the key utility modules and the
     *   Used in `app.py` to inject the version into template contexts.
 *   **`utils/api_analyzer.py`:**
     *   A potentially large module containing significant logic related to API analysis features, possibly including data processing, calculations, or report generation tied to the `analyzer` blueprint and `analyzer_db`.
+*   **`utils/logging.py`:**
+    *   Centralized logging system providing colored console output, sensitive data protection, and comprehensive monitoring capabilities.
+    *   Features include automatic log rotation, cross-platform color support, and security-focused data filtering.
+    *   Provides utility functions for highlighting URLs, creating startup banners, and managing log configurations.
+
+## Enhanced Logging System
+
+The logging utility (`utils/logging.py`) represents a significant enhancement to OpenAlgo's infrastructure:
+
+### Key Features
+*   **Colored Output**: Automatic color-coding of log levels and components for enhanced readability
+*   **Sensitive Data Protection**: Automatic redaction of API keys, passwords, tokens, and other sensitive information
+*   **File Rotation**: Daily log rotation with configurable retention periods
+*   **Cross-Platform Support**: Intelligent detection of terminal color capabilities across different environments
+*   **Environment Configuration**: Comprehensive configuration via environment variables
+
+### Security Features
+*   **Pattern-Based Filtering**: Uses regex patterns to identify and redact sensitive information
+*   **Multiple Pattern Support**: Covers API keys, passwords, tokens, secrets, and authorization headers
+*   **Context Preservation**: Maintains log readability while protecting sensitive data
+
+### Utility Functions
+*   **`get_logger(name)`**: Factory function for creating module-specific loggers
+*   **`highlight_url(url, text)`**: Creates visually prominent URL displays with bright colors
+*   **`log_startup_banner(logger, title, url)`**: Generates professional colored startup banners
+*   **`setup_logging()`**: Initializes the complete logging configuration
 
 Using these utilities helps keep the main application logic in blueprints, database modules, and broker adapters cleaner and more focused on their specific tasks.

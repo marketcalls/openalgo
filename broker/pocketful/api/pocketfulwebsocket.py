@@ -182,14 +182,14 @@ class PocketfulSocket(object):
         headers = self.headers
         headers['Authorization'] = f'Bearer {self.access_token}'
         res = requests.post(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        logger.info("%s", res)
+        logger.info(f"{res}")
         return res.json()
 
     def put_request(self, url, data):
         headers = self.headers
         headers['Authorization'] = f'Bearer {self.access_token}'
         res = requests.put(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        logger.info("%s", res)
+        logger.info(f"{res}")
         return res.json()
 
     def delete_request(self, url, params):

@@ -193,7 +193,7 @@ class NxtradStream:
         if not self.token:
             sys.exit('Unable to connect auth token is empty')
         if self.isConnected:
-            logger.info("%s", 'Socket already connected')
+            logger.info('Socket already connected')
             return
         logger.info("Reconnecting...")
         self.__tryConnect()
@@ -368,7 +368,7 @@ class NxtradStream:
             return False
 
         r = json.dumps(req)
-        # logger.info("%s", r);
+        # logger.info(f"{r}")
         self.ws.send(r + "\n")
         return True
 
@@ -401,7 +401,7 @@ class NxtradStream:
         pktType = struct.unpack("b", data[2:3])[0]
         pktSpec = DEFAULT_PKT_INFO["PKT_SPEC"]
         if pktType not in pktSpec:
-            logger.info("%s", "Unknown PktType : ", pktType)
+            logger.info(f"Unknown PktType : {pktType}")
             return
 
         packetType = PKT_TYPE[pktType]
@@ -639,7 +639,7 @@ class NxtradStream:
             pktLen = struct.unpack(
                 "h", dc_data[bufferIndex: (bufferIndex + 2)])[0]
             if pktLen <= 0:
-                logger.info("%s", "Packet Length is wrong exiting the loop" + str(pktLen))
+                logger.info(f"Packet Length is wrong exiting the loop{str(pktLen)}")
                 break
 
             self.__onsinglePacket(
@@ -667,4 +667,4 @@ class NxtradStream:
             try:
                 callback(*args)
             except Exception as e:
-                logger.info("%s", "Error in Calling callback {}: {}".format(callback, e))
+                logger.info(f"Error in Calling callback {callback}: {e}")

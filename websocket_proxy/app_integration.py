@@ -5,7 +5,7 @@ import platform
 import os
 
 from .server import main as websocket_main
-from utils.logging import get_logger
+from utils.logging import get_logger, highlight_url
 
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings
 if platform.system() == 'Windows':

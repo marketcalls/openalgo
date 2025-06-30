@@ -20,12 +20,12 @@ def map_order_data(order_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            logger.info("Error fetching order data: %s", order_data['emsg'])
+            logger.info(f"Error fetching order data: {order_data['emsg']}")
             order_data = {}
     else:
         order_data = order_data
         
-    # logger.info("%s", order_data)
+    # logger.info(f"{order_data}")
 
     if order_data:
         for order in order_data:
@@ -38,7 +38,7 @@ def map_order_data(order_data):
             if symbol:
                 order['Trsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return order_data
 
@@ -91,11 +91,11 @@ def transform_order_data(orders):
         orders = [orders]
 
     transformed_orders = []
-    logger.info("%s", orders)
+    logger.info(f"{orders}")
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
         
         # Check if the necessary keys exist in the order
@@ -155,12 +155,12 @@ def map_trade_data(trade_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            logger.info("Error fetching order data: %s", trade_data['emsg'])
+            logger.info(f"Error fetching order data: {trade_data['emsg']}")
             trade_data = {}
     else:
         trade_data = trade_data
         
-    # logger.info("%s", trade_data)
+    # logger.info(f"{trade_data}")
 
     if trade_data:
         for trade in trade_data:
@@ -172,7 +172,7 @@ def map_trade_data(trade_data):
             if symbol:
                 trade['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return trade_data
 
@@ -219,12 +219,12 @@ def map_position_data(position_data):
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
-            logger.info("Error fetching order data: %s", position_data['emsg'])
+            logger.info(f"Error fetching order data: {position_data['emsg']}")
             position_data = {}
     else:
         position_data = position_data
         
-    # logger.info("%s", order_data)
+    # logger.info(f"{order_data}")
 
     if position_data:
         for position in position_data:
@@ -237,7 +237,7 @@ def map_position_data(position_data):
             if symbol:
                 position['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return position_data
     
@@ -313,7 +313,7 @@ def map_portfolio_data(portfolio_data):
     else:
         portfolio_data = portfolio_data['HoldingVal']
         
-    logger.info("%s", portfolio_data)
+    logger.info(f"{portfolio_data}")
 
     if portfolio_data:
         for portfolio in portfolio_data:
@@ -332,7 +332,7 @@ def calculate_portfolio_statistics(holdings_data):
     totalprofitandloss = sum((float(item['Ltp']) - float(item['Price'])) * int(item['HUqty']) for item in holdings_data)
     
     for item in holdings_data:
-        logger.info("%s", (item['Ltp'],item['Price'],item['HUqty']))
+        logger.info(f"{(item['Ltp'],item['Price'],item['HUqty'])}")
     # To avoid division by zero in the case when totalinvvalue is 0
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
 

@@ -25,7 +25,7 @@ def map_order_data(order_data):
     else:
         order_data = order_data['data']
         
-    #logger.info("%s", order_data)
+    #logger.info(f"{order_data}")
 
     if order_data:
         for order in order_data:
@@ -38,7 +38,7 @@ def map_order_data(order_data):
             if symbol:
                 order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return order_data
 
@@ -95,7 +95,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning("Warning: Expected a dict, but found a %s. Skipping this item.", type(order))
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         if(order.get("status", "")=="COMPLETE"):
@@ -168,7 +168,7 @@ def map_position_data(position_data):
     else:
         position_data = position_data['data']['net']
         
-    #logger.info("%s", order_data)
+    #logger.info(f"{order_data}")
 
     if position_data:
         for position in position_data:
@@ -181,7 +181,7 @@ def map_position_data(position_data):
             if symbol:
                 position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
             else:
-                logger.info("{symbol} and exchange %s not found. Keeping original trading symbol.", exchange)
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return position_data
     

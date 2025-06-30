@@ -23,11 +23,11 @@ def get_hostlookup_response():
         headers = {"Content-Type": "application/json"}
         
         response = client.post(HOSTLOOKUP_URL, json=payload, headers=headers)
-        logger.info("Hostlookup response code: %s", response.status_code)
+        logger.info(f"Hostlookup response code: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
-            logger.info("Hostlookup result: %s", result)
+            logger.info(f"Hostlookup result: {result}")
             if result.get("type") == True and "result" in result:
                 connection_string = result["result"]["connectionString"]
                 unique_key = result["result"]["uniqueKey"]
@@ -36,7 +36,7 @@ def get_hostlookup_response():
         logger.error("Failed to fetch from hostlookup endpoint, using fallback values")
         return "http://ctrade.jainam.in:4100", None, "Hostlookup failed"
     except Exception as e:
-        logger.error("Error in hostlookup: %s", str(e))
+        logger.error(f"Error in hostlookup: {e}")
         return "http://ctrade.jainam.in:4100", None, f"Error: {str(e)}"
 
 # Initialize global variables
@@ -55,5 +55,5 @@ def initialize_urls():
     INTERACTIVE_URL = BASE_URL
     
     if UNIQUE_KEY is not None:
-        logger.info("Base URL set to: %s", BASE_URL)
+        logger.info(f"Base URL set to: {BASE_URL}")
         logger.info("Unique Key available: True")

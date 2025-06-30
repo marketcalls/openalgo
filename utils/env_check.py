@@ -2,7 +2,117 @@ import os
 import sys
 from dotenv import load_dotenv
 
+def check_env_version_compatibility():
+    """
+    Check if .env file version matches .sample.env version
+    Returns True if compatible, False if update needed
+    """
+    base_dir = os.path.dirname(__file__) + '/..'
+    env_path = os.path.join(base_dir, '.env')
+    sample_env_path = os.path.join(base_dir, '.sample.env')
+    
+    # Check if both files exist
+    if not os.path.exists(env_path):
+        print("\nError: .env file not found.")
+        print("Solution: Copy .sample.env to .env and configure your settings")
+        return False
+        
+    if not os.path.exists(sample_env_path):
+        print("\nWarning: .sample.env file not found. Cannot check version compatibility.")
+        return True  # Assume compatible if sample file is missing
+    
+    # Read version from .env file
+    env_version = None
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('ENV_CONFIG_VERSION'):
+                    env_version = line.split('=')[1].strip().strip("'\"")
+                    break
+    except Exception as e:
+        print(f"\nWarning: Could not read .env file: {e}")
+        return True  # Assume compatible if can't read
+    
+    # Read version from .sample.env file
+    sample_version = None
+    try:
+        with open(sample_env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('ENV_CONFIG_VERSION'):
+                    sample_version = line.split('=')[1].strip().strip("'\"")
+                    break
+    except Exception as e:
+        print(f"\nWarning: Could not read .sample.env file: {e}")
+        return True  # Assume compatible if can't read
+    
+    # If either version is missing, warn but continue
+    if not env_version:
+        print("\n" + "="*70)
+        print("⚠️  WARNING: No version found in your .env file")
+        print("   Your .env file may be outdated and missing new configuration options.")
+        print("   Consider updating it with new variables from .sample.env")
+        print("="*70)
+        return True
+        
+    if not sample_version:
+        return True  # Can't compare without sample version
+    
+    # Compare versions using simple string comparison for semantic versions
+    try:
+        def version_tuple(v):
+            """Convert version string to tuple of integers for comparison"""
+            return tuple(map(int, v.split('.')))
+        
+        env_ver = version_tuple(env_version)
+        sample_ver = version_tuple(sample_version)
+        
+        if env_ver < sample_ver:
+            print("\n" + "🔴 " + "="*68)
+            print("🔴  CONFIGURATION UPDATE REQUIRED")
+            print("🔴 " + "="*68)
+            print(f"   Your .env version: {env_version}")
+            print(f"   Required version:  {sample_version}")
+            print("")
+            print("   ACTION NEEDED:")
+            print("   1. Backup your current .env file")
+            print("   2. Compare .env with .sample.env")
+            print("   3. Add any missing configuration variables to your .env")
+            print("   4. Update ENV_CONFIG_VERSION in your .env to match .sample.env")
+            print("")
+            print("   New features may not work properly with an outdated configuration!")
+            print("🔴 " + "="*68)
+            
+            # Give user a chance to continue anyway
+            try:
+                response = input("\n⚠️  Continue anyway? (y/N): ").lower().strip()
+                if response not in ['y', 'yes']:
+                    print("\nApplication startup cancelled. Please update your .env file.")
+                    return False
+            except (KeyboardInterrupt, EOFError):
+                print("\nApplication startup cancelled.")
+                return False
+                
+        elif env_ver > sample_ver:
+            print(f"\n✅ Your .env version ({env_version}) is newer than sample ({sample_version})")
+            
+        else:
+            print(f"\n✅ Configuration version check passed ({env_version})")
+            
+    except Exception as e:
+        print(f"\nWarning: Could not parse version numbers: {e}")
+        print(f"   .env version: {env_version}")
+        print(f"   .sample.env version: {sample_version}")
+        return True  # Continue if version parsing fails
+    
+    return True
+
 def load_and_check_env_variables():
+    # First, check version compatibility
+    if not check_env_version_compatibility():
+        sys.exit(1)
+    
     # Define the path to the .env file in the main application path
     env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 
@@ -17,6 +127,7 @@ def load_and_check_env_variables():
 
     # Define the required environment variables
     required_vars = [
+        'ENV_CONFIG_VERSION',  # Version tracking for configuration compatibility
         'BROKER_API_KEY', 
         'BROKER_API_SECRET', 
         'REDIRECT_URL', 

@@ -39,10 +39,10 @@ def get_encryption_key():
 # Initialize Fernet cipher
 fernet = get_encryption_key()
 
-# Define a cache for the auth tokens with a 30-second TTL
-auth_cache = TTLCache(maxsize=1024, ttl=30)
-# Define a separate cache for feed tokens with a 30-second TTL
-feed_token_cache = TTLCache(maxsize=1024, ttl=30)
+# Define a cache for the auth tokens with a 5-minute TTL (increased from 30 seconds)
+auth_cache = TTLCache(maxsize=1024, ttl=300)
+# Define a separate cache for feed tokens with a 5-minute TTL (increased from 30 seconds)
+feed_token_cache = TTLCache(maxsize=1024, ttl=300)
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
 broker_cache = TTLCache(maxsize=1024, ttl=3000)
 

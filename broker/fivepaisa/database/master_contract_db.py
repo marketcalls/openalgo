@@ -69,11 +69,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            logger.info("Bulk insert completed successfully with %s new records.", len(filtered_data_dict))
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error("Error during bulk insert: %s", e)
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -95,7 +95,7 @@ def download_csv_5paisa_data(url, output_path):
     
     while current_retry < max_retries:
         try:
-            logger.info("Downloading CSV data (attempt {current_retry + 1}/%s)", max_retries)
+            logger.info(f"Downloading CSV data (attempt {current_retry + 1}/{max_retries})")
             
             # Use a custom timeout for this specific request
             client = get_httpx_client()
@@ -120,7 +120,7 @@ def download_csv_5paisa_data(url, output_path):
                             if total_size > 0:
                                 progress = int((bytes_downloaded / total_size) * 100)
                                 if progress >= last_progress_report + 10:
-                                    logger.info("Download progress: {progress}% ({bytes_downloaded} / %s bytes)", total_size)
+                                    logger.info(f"Download progress: {progress}% ({bytes_downloaded} / {total_size} bytes)")
                                     last_progress_report = progress
                     
             logger.info("Download complete")
@@ -128,16 +128,16 @@ def download_csv_5paisa_data(url, output_path):
             
         except httpx.TimeoutException as e:
             current_retry += 1
-            logger.info("Timeout downloading master contract (attempt {current_retry}/{max_retries}): %s", str(e))
+            logger.info(f"Timeout downloading master contract (attempt {current_retry}/{max_retries}): {e}")
             if current_retry >= max_retries:
                 logger.info("Maximum retries reached for master contract download.")
                 raise Exception(f"Failed to download master contract after {max_retries} attempts: {str(e)}")
         except Exception as e:
-            logger.error("Failed to download data: %s", str(e))
+            logger.error(f"Failed to download data: {e}")
             if 'time' in str(e).lower() and current_retry < max_retries:
                 # If it's a timeout-related error, retry
                 current_retry += 1
-                logger.info("Retrying download (attempt {current_retry}/%s)", max_retries)
+                logger.info(f"Retrying download (attempt {current_retry}/{max_retries})")
             else:
                 # For other errors, raise immediately
                 raise
@@ -260,11 +260,11 @@ def delete_5paisa_temp_data(output_path):
         if os.path.exists(output_path):
             # Delete the file
             os.remove(output_path)
-            logger.info("The temporary file %s has been deleted.", output_path)
+            logger.info(f"The temporary file {output_path} has been deleted.")
         else:
-            logger.info("The temporary file %s does not exist.", output_path)
+            logger.info(f"The temporary file {output_path} does not exist.")
     except Exception as e:
-        logger.error("An error occurred while deleting the file: %s", e)
+        logger.error(f"An error occurred while deleting the file: {e}")
 
 
 def master_contract_download():
@@ -276,12 +276,12 @@ def master_contract_download():
     os.makedirs('tmp', exist_ok=True)
     
     try:
-        logger.info("Initiating download from %s", url)
+        logger.info(f"Initiating download from {url}")
         download_csv_5paisa_data(url, output_path)
         
         logger.info("CSV downloaded, processing data...")
         token_df = process_5paisa_csv(output_path)
-        logger.info("Processed %s symbols", len(token_df))
+        logger.info(f"Processed {len(token_df)} symbols")
         
         # Clean up temporary files
         delete_5paisa_temp_data(output_path)
@@ -297,7 +297,7 @@ def master_contract_download():
     
     except Exception as e:
         error_message = str(e)
-        logger.error("Error during master contract download: %s", error_message)
+        logger.error(f"Error during master contract download: {error_message}")
         
         # Check if it's a timeout error and provide more helpful message
         if 'timeout' in error_message.lower() or 'timed out' in error_message.lower():

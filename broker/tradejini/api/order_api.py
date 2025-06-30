@@ -137,8 +137,8 @@ def get_order_book(auth):
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        #logger.debug("[DEBUG] get_order_book - Making request to: %s/v2/api/oms/orders", client.base_url)
-        #logger.debug("[DEBUG] get_order_book - Headers: %s", headers)
+        #logger.debug(f"[DEBUG] get_order_book - Making request to: {client.base_url}/v2/api/oms/orders")
+        #logger.debug(f"[DEBUG] get_order_book - Headers: {headers}")
         #print(f"[DEBUG] get_order_book - Query params: {{'symDetails': 'true'}}")
         
         # Make API request
@@ -148,8 +148,8 @@ def get_order_book(auth):
             params={"symDetails": "true"}
         )
         
-        #logger.debug("[DEBUG] get_order_book - Response status: %s", response.status_code)
-        #logger.debug("[DEBUG] get_order_book - Response headers: %s", dict(response.headers))
+        #logger.debug(f"[DEBUG] get_order_book - Response status: {response.status_code}")
+        #logger.debug(f"[DEBUG] get_order_book - Response headers: {dict(response.headers)}")
         
         response.raise_for_status()
         
@@ -162,7 +162,7 @@ def get_order_book(auth):
             # Transform each order to OpenAlgo format
             transformed_orders = []
             for order in response_data['d']:
-                #logger.debug("[DEBUG] get_order_book - Processing order: %s", order)
+                #logger.debug(f"[DEBUG] get_order_book - Processing order: {order}")
                 try:
                     # Get OpenAlgo symbol using symbol and exchange
                     openalgo_symbol = get_oa_symbol(
@@ -193,7 +193,7 @@ def get_order_book(auth):
                             'valid_till': order['validTill']
                         }
                     }
-                    #logger.debug("[DEBUG] get_order_book - Transformed order: %s", transformed_order)
+                    #logger.debug(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
                     transformed_orders.append(transformed_order)
                 except KeyError as e:
                     logger.error(f"get_order_book - Missing field in order: {str(e)}")

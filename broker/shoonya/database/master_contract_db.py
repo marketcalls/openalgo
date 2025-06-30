@@ -202,7 +202,7 @@ def process_shoonya_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -271,7 +271,7 @@ def process_shoonya_cds_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -339,7 +339,7 @@ def process_shoonya_mcx_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -457,7 +457,7 @@ def process_shoonya_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            logger.info("Invalid expiry date format: %s", date_str)
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -529,7 +529,7 @@ def delete_shoonya_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         if filename.endswith(".txt") and os.path.isfile(file_path):
             os.remove(file_path)
-            logger.info("Deleted %s", file_path)
+            logger.info(f"Deleted {file_path}")
 
 def master_contract_download():
     """
@@ -560,5 +560,5 @@ def master_contract_download():
         
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
     except Exception as e:
-        logger.info("%s", str(e))
+        logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})

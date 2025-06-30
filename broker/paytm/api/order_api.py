@@ -399,13 +399,11 @@ def close_all_positions(current_api_key, auth):
             # rather than trying to look it up in our database
             
             # Print detailed position info
-            logger.info("%s", f"Processing position: security_id={pos_security_id}, exchange={pos_exchange}, "
-                  f"instrument={pos_instrument}, display_name={pos_display_name}, "
-                  f"qty={net_qty}, action={action}")
+            logger.info(f"Processing position: security_id={pos_security_id}, exchange={pos_exchange}, instrument={pos_instrument}, display_name={pos_display_name}, qty={net_qty}, action={action}")
 
             # Skip if no security ID
             if not pos_security_id:
-                logger.info("Skipping position due to missing security_id: %s", position)
+                logger.info(f"Skipping position due to missing security_id: {position}")
                 failed_closes += 1
                 continue
 
@@ -438,7 +436,7 @@ def close_all_positions(current_api_key, auth):
                 "source": "M"
             }
             
-            logger.info("Placing Order: %s", order_payload)
+            logger.info(f"Placing Order: {order_payload}")
             
             # Place the order directly without transform
             response = get_api_response(
@@ -452,7 +450,7 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Response from closing order: {response}")
             
             if response.get('status') == 'success':
-                logger.info("Successfully closed position for {pos_security_id} (%s)", pos_display_name)
+                logger.info(f"Successfully closed position for {pos_security_id} ({pos_display_name})")
                 successful_closes += 1
             else:
                 logger.error(f"Failed to close position for {pos_security_id} ({pos_display_name}): {response.get('message', 'Unknown error')}")
@@ -474,7 +472,7 @@ def cancel_order(orderid, auth):
     for order in orders_list['data']:
         if order['order_no'] == orderid:
             if order['status'] == 'Pending':
-                logger.info("Cancelling order: %s", orderid)
+                logger.info(f"Cancelling order: {orderid}")
                 payload = json.dumps({
                     "order_no": orderid,
                     "source": "N",
@@ -528,7 +526,7 @@ def modify_order(data, auth):
             if order['status'].upper() not in MODIFIABLE_STATUSES:
                 return {"status": "error", "message": f"Order {orderid} cannot be modified. Current status: {order['status']}"}, 400
                 
-            logger.info("Modifying order: %s", orderid)
+            logger.info(f"Modifying order: {orderid}")
             
             # Prepare modification payload
             payload = {
@@ -549,7 +547,7 @@ def modify_order(data, auth):
                 "group_id": order['group_id']
             }
             
-            logger.info("Modification payload: %s", payload)
+            logger.info(f"Modification payload: {payload}")
             
             response = get_api_response(
                 endpoint="/orders/v1/modify/regular",
@@ -558,7 +556,7 @@ def modify_order(data, auth):
                 payload=json.dumps(payload)
             )
             
-            logger.info("Modification response: %s", response)
+            logger.info(f"Modification response: {response}")
 
             if response.get("status") == "success":
                 return {
@@ -585,7 +583,7 @@ def cancel_all_orders_api(data, auth):
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response.get('data', [])
                         if order['status'] in ['Pending']]
-    logger.info("%s", orders_to_cancel)
+    logger.info(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

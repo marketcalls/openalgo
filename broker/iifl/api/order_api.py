@@ -26,9 +26,9 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     
     url = f"{INTERACTIVE_URL}{endpoint}"
 
-    #logger.info("Request URL: %s", url)
-    #logger.info("Headers: %s", headers)
-    #logger.info("Payload: %s", json.dumps(payload, indent=2) if payload else "None")
+    #logger.info(f"Request URL: {url}")
+    #logger.info(f"Headers: {headers}")
+    #logger.info(f"Payload: {json.dumps(payload, indent=2) if payload else 'None'}")
     
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -39,8 +39,8 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    #logger.info("Response Status Code: %s", response.status_code)
-    #logger.info("Response Content: %s", response.text)
+    #logger.info(f"Response Status Code: {response.status_code}")
+    #logger.info(f"Response Content: {response.text}")
     return response.json()
 
 def get_order_book(auth):
@@ -67,7 +67,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
         for position in positions_data['data']:
             if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
                 net_qty = position.get('Quantity', '0')
-                #logger.info("Net Quantity: %s", net_qty)
+                #logger.info(f"Net Quantity: {net_qty}")
                 break  # Assuming you need the first match
         
     return net_qty
@@ -240,9 +240,9 @@ def close_all_positions(current_api_key,auth):
         # Place the order to close the position
         res, response, orderid =   place_order_api(place_order_payload,auth)
 
-        # logger.info("%s", res)
-        # logger.info("%s", response)
-        # logger.info("%s", orderid)
+        # logger.info(f"{res}")
+        # logger.info(f"{response}")
+        # logger.info(f"{orderid}")
 
 
             
@@ -258,7 +258,7 @@ def cancel_order(orderid,auth):
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    #logger.info("%s", orderid)
+    #logger.info(f"{orderid}")
     # Set up the request headers
     headers = {
         'authorization': AUTH_TOKEN,
@@ -341,7 +341,7 @@ def cancel_all_orders_api(data,auth):
     orders = order_book_response.get("result", [])
 
      # Filter orders that are in 'open' or 'trigger_pending' state
-    #logger.info("Orders: %s", orders)
+    #logger.info(f"Orders: {orders}")
     orders_to_cancel = [
         order for order in orders 
         if order["OrderStatus"] in ["New", "Trigger Pending"]

@@ -1,7 +1,7 @@
 import asyncio as aio
 import websockets
 import json
-from utils.logging import get_logger
+from utils.logging import get_logger, highlight_url
 import signal
 import zmq
 import zmq.asyncio
@@ -108,12 +108,21 @@ class WebSocketProxy:
             except RuntimeError:
                 logger.info("No running event loop found for signal handlers")
             
-            logger.info(f"Starting WebSocket server on {self.host}:{self.port}")
+            highlighted_address = highlight_url(f"{self.host}:{self.port}")
+            logger.info(f"Starting WebSocket server on {highlighted_address}")
             
             # Try to start the WebSocket server with more detailed error logging
             try:
                 async with websockets.serve(self.handle_client, self.host, self.port):
-                    logger.info(f"WebSocket server successfully started on {self.host}:{self.port}")
+                    highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
+                    logger.info(f"WebSocket server successfully started on {highlighted_success_address}")
+                    
+                    # Log additional helpful addresses
+                    if self.host == 'localhost':
+                        ipv4_address = highlight_url("127.0.0.1:{}".format(self.port))
+                        ipv6_address = highlight_url("[::1]:{}".format(self.port))
+                        logger.info(f"WebSocket server also accessible at {ipv4_address} (IPv4) and {ipv6_address} (IPv6)")
+                    
                     await stop  # Wait until stopped
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")

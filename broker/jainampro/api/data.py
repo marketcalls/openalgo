@@ -22,7 +22,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     AUTH_TOKEN = auth
     if feed_token:
         FEED_TOKEN = feed_token
-    logger.info("Feed Token: %s", FEED_TOKEN)
+    logger.info(f"Feed Token: {FEED_TOKEN}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -306,7 +306,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    logger.info("Exchange: {exchange}, Segment ID: %s", segment_id)
+                    logger.info(f"Exchange: {exchange}, Segment ID: {segment_id}")
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {

@@ -48,14 +48,14 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         response.status = response.status_code
         
         if response.status_code == 403:
-            logger.debug("Debug - API returned 403 Forbidden. Headers: %s", headers)
-            logger.debug("Debug - Response text: %s", response.text)
+            logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            logger.debug(f"Debug - Response text: {response.text}")
             raise Exception("Authentication failed. Please check your API key and auth token.")
             
         return json.loads(response.text)
     except json.JSONDecodeError:
-        logger.error("Debug - Failed to parse response. Status code: %s", response.status_code)
-        logger.debug("Debug - Response text: %s", response.text)
+        logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
+        logger.debug(f"Debug - Response text: {response.text}")
         raise Exception(f"Failed to parse API response (status {response.status_code})")
 
 class BrokerData:  
@@ -162,7 +162,7 @@ class BrokerData:
             
             
             token = get_token(symbol, exchange)
-            logger.debug("Debug - Broker Symbol: {br_symbol}, Token: %s", token)
+            logger.debug(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
 
             if exchange == 'NSE_INDEX':
                 exchange = 'NSE'
@@ -226,29 +226,29 @@ class BrokerData:
                     "fromdate": current_start.strftime('%Y-%m-%d %H:%M'),
                     "todate": current_end.strftime('%Y-%m-%d %H:%M')
                 }
-                logger.debug("Debug - Fetching chunk from {current_start} to %s", current_end)
-                logger.debug("Debug - API Payload: %s", payload)
+                logger.debug(f"Debug - Fetching chunk from {current_start} to {current_end}")
+                logger.debug(f"Debug - API Payload: {payload}")
                 
                 try:
                     response = get_api_response("/rest/secure/angelbroking/historical/v1/getCandleData",
                                               self.auth_token,
                                               "POST",
                                               payload)
-                    logger.info("Debug - API Response Status: %s", response.get('status'))
+                    logger.info(f"Debug - API Response Status: {response.get('status')}")
                     
                     # Check if response is empty or invalid
                     if not response:
-                        logger.debug("Debug - Empty response for chunk {current_start} to %s", current_end)
+                        logger.debug(f"Debug - Empty response for chunk {current_start} to {current_end}")
                         current_start = current_end + timedelta(days=1)
                         continue
                     
                     if not response.get('status'):
-                        logger.info("Debug - Error response: %s", response.get('message', 'Unknown error'))
+                        logger.info(f"Debug - Error response: {response.get('message', 'Unknown error')}")
                         current_start = current_end + timedelta(days=1)
                         continue
                         
                 except Exception as chunk_error:
-                    logger.error("Debug - Error fetching chunk {current_start} to {current_end}: %s", str(chunk_error))
+                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
                     current_start = current_end + timedelta(days=1)
                     continue
                 
@@ -260,7 +260,7 @@ class BrokerData:
                 if data:
                     chunk_df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     dfs.append(chunk_df)
-                    logger.debug("Debug - Received %s candles for chunk", len(data))
+                    logger.debug(f"Debug - Received {len(data)} candles for chunk")
                 else:
                     logger.debug("Debug - No data received for chunk")
                 
@@ -305,7 +305,7 @@ class BrokerData:
                         # Add empty OI column if no data available
                         df['oi'] = 0
                 except Exception as oi_error:
-                    logger.error("Debug - Error fetching OI data: %s", str(oi_error))
+                    logger.error(f"Debug - Error fetching OI data: {str(oi_error)}")
                     # Add empty OI column on error
                     df['oi'] = 0
             
@@ -320,7 +320,7 @@ class BrokerData:
             return df
             
         except Exception as e:
-            logger.error("Debug - Error: %s", str(e))
+            logger.error(f"Debug - Error: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
 
     def get_oi_history(self, symbol: str, exchange: str, interval: str, 
@@ -396,12 +396,12 @@ class BrokerData:
                                               payload)
                     
                     if not response or not response.get('status'):
-                        logger.debug("Debug - No OI data for chunk {current_start} to %s", current_end)
+                        logger.debug(f"Debug - No OI data for chunk {current_start} to {current_end}")
                         current_start = current_end + timedelta(days=1)
                         continue
                         
                 except Exception as chunk_error:
-                    logger.error("Debug - Error fetching OI chunk: %s", str(chunk_error))
+                    logger.error(f"Debug - Error fetching OI chunk: {str(chunk_error)}")
                     current_start = current_end + timedelta(days=1)
                     continue
                 
@@ -442,7 +442,7 @@ class BrokerData:
             return df
             
         except Exception as e:
-            logger.error("Debug - Error fetching OI data: %s", str(e))
+            logger.error(f"Debug - Error fetching OI data: {str(e)}")
             # Return empty DataFrame on error
             return pd.DataFrame(columns=['timestamp', 'oi'])
 

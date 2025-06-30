@@ -35,3 +35,8 @@ class TickerSchema(Schema):
     to = fields.Str(required=True)          # YYYY-MM-DD or millisecond timestamp
     adjusted = fields.Bool(required=False, default=True)  # Adjust for splits
     sort = fields.Str(required=False, default='asc', validate=lambda x: x in ['asc', 'desc'])  # Sort direction
+
+class SearchSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    query = fields.Str(required=True)       # Search query/symbol name
+    exchange = fields.Str(required=False)   # Optional exchange filter (e.g., NSE, BSE)

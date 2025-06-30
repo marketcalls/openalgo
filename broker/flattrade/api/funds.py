@@ -46,7 +46,7 @@ def get_margin_data(auth_token):
     # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
         # Log the error or return an empty dictionary to indicate failure
-        logger.info("Error fetching margin data: %s", margin_data.get('emsg'))
+        logger.info(f"Error fetching margin data: {margin_data.get('emsg')}")
         return {}
 
     # Fetch position data
@@ -79,5 +79,5 @@ def get_margin_data(auth_token):
         return processed_margin_data
     except KeyError as e:
         # Log the exception and return an empty dictionary if there's an unexpected error
-        logger.error("Error processing margin data: %s", str(e))
+        logger.error(f"Error processing margin data: {e}")
         return {}

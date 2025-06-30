@@ -194,12 +194,12 @@ class BrokerData:
                     "to": str(end_ts)
                 }
                 
-                logger.debug("EOD Payload: %s", payload)  # Debug print
+                logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response("/NorenWClientTP/EODChartData", self.auth_token, payload=payload)
-                    logger.debug("EOD Response: %s", response)  # Debug print
+                    logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
-                    logger.error("Error in EOD request: %s", str(e))
+                    logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
             else:
                 # For intraday data, use TPSeries endpoint
@@ -212,9 +212,9 @@ class BrokerData:
                     "intrv": self.timeframe_map[interval]
                 }
                 
-                logger.debug("Intraday Payload: %s", payload)  # Debug print
+                logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response("/NorenWClientTP/TPSeries", self.auth_token, payload=payload)
-                logger.debug("Intraday Response: %s", response)  # Debug print
+                logger.debug(f"Intraday Response: {response}")  # Debug print
 
             # Convert response to DataFrame
             data = []
@@ -253,7 +253,7 @@ class BrokerData:
                             'volume': float(candle.get('intv', 0))
                         })
                 except (KeyError, ValueError) as e:
-                    logger.error("Error parsing candle data: {e}, Candle: %s", candle)
+                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
 
             df = pd.DataFrame(data)
@@ -274,7 +274,7 @@ class BrokerData:
                                 "token": token
                             }
                             quotes_response = get_api_response("/NorenWClientTP/GetQuotes", self.auth_token, payload=payload)
-                            logger.debug("Quotes Response: %s", quotes_response)  # Debug print
+                            logger.debug(f"Quotes Response: {quotes_response}")  # Debug print
                             
                             if quotes_response and quotes_response.get('stat') == 'Ok':
                                 today_data = {
@@ -285,19 +285,19 @@ class BrokerData:
                                     'close': float(quotes_response.get('lp', 0)),  # Use LTP as close
                                     'volume': float(quotes_response.get('v', 0))
                                 }
-                                logger.info("Today's quote data: %s", today_data)
+                                logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
                                 logger.info("Added today's data from quotes", )
                         except Exception as e:
-                            logger.info("Error fetching today's data from quotes: %s", e)
+                            logger.info(f"Error fetching today's data from quotes: {e}")
                 else:
-                    logger.info("Today ({today_ts}) is outside requested range ({start_ts} to %s)", end_ts)
+                    logger.info(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
 
             # Sort by timestamp
             df = df.sort_values('timestamp')
             return df
             
         except Exception as e:
-            logger.error("Error in get_history: %s", str(e))  # Add debug logging
+            logger.error(f"Error in get_history: {e}")  # Add debug logging
             raise Exception(f"Error fetching historical data: {str(e)}")
