@@ -148,9 +148,15 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
+    
 
-    # Initialize latency monitoring (after registering API blueprint)
+    # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
+        # Exempt webhook endpoints from CSRF protection
+        csrf.exempt(app.view_functions['chartink_bp.webhook'])
+        csrf.exempt(app.view_functions['strategy_bp.webhook'])
+        
+        # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
     @app.errorhandler(404)
