@@ -42,4 +42,16 @@ def dashboard():
         return "Failed to import broker module", 500
 
     margin_data = get_margin_data_func(AUTH_TOKEN)
+    
+    # Check if margin_data is empty (authentication failed)
+    if not margin_data:
+        logger.error(f"Failed to get margin data for user {login_username} - authentication may have expired")
+        return redirect(url_for('auth.logout'))
+    
+    # Check if all values are zero (likely authentication error)
+    if (margin_data.get('availablecash') == '0.00' and 
+        margin_data.get('collateral') == '0.00' and
+        margin_data.get('utiliseddebits') == '0.00'):
+        logger.warning(f"All margin data values are zero for user {login_username} - possible authentication issue")
+    
     return render_template('dashboard.html', margin_data=margin_data)

@@ -113,7 +113,7 @@ def handle_auth_failure(error_message, forward_url='broker.html'):
     Handles common tasks after failed authentication.
     """
     logger.error(f"Authentication error: {error_message}")
-    return render_template(forward_url, error_message="Broker Authentication Failed")
+    return render_template(forward_url, error_message=error_message)
 
 def get_feed_token():
     """

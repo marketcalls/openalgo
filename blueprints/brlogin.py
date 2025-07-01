@@ -258,6 +258,19 @@ def broker_callback(broker,para=None):
         code = 'dhan'
         logger.debug(f'Dhan broker - The code is {code}')
         auth_token, error_message = auth_function(code)
+        
+        # Validate authentication by testing funds API before proceeding
+        if auth_token:
+            # Import the funds function to test authentication
+            from broker.dhan.api.funds import test_auth_token
+            is_valid, validation_error = test_auth_token(auth_token)
+            
+            if not is_valid:
+                logger.error(f"Dhan authentication validation failed: {validation_error}")
+                return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
+            
+            logger.info("Dhan authentication validation successful")
+        
         forward_url = 'broker.html'
 
     elif broker=='dhan_sandbox':
