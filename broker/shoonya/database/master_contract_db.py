@@ -80,7 +80,7 @@ shoonya_urls = {
     "CDS": "https://api.shoonya.com/CDS_symbols.txt.zip",
     "MCX": "https://api.shoonya.com/MCX_symbols.txt.zip",
     "BSE": "https://api.shoonya.com/BSE_symbols.txt.zip",
-    "BFO": "https://go.mynt.in/BFO_symbols.txt.zip"
+    "BFO": "https://api.shoonya.com/BFO_symbols.txt.zip"
 }
 
 def download_and_unzip_shoonya_data(output_path):
