@@ -14,7 +14,7 @@ client = api(
 
 # MCX instruments for testing
 instruments_list = [
-    {"exchange": "NSE_INDEX", "symbol": "NIFTY"},
+    {"exchange": "NSE", "symbol": "SBIN"},
     {"exchange": "NSE", "symbol": "INFY"},
     {"exchange": "NSE", "symbol": "TCS"}
 ]
