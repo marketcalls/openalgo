@@ -124,12 +124,25 @@ def place_order_api(data,auth):
     res = client.post(url, headers=headers, content=payload)
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
-    response_data = json.loads(res.text)
-    logger.info(f"Response: {json.dumps(response_data, indent=2)}")
-    if response_data:
-        orderid = response_data['orderId']
+    
+    try:
+        response_data = json.loads(res.text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response: {e}")
+        return res, {"error": "Invalid JSON response"}, None
+    
+    logger.debug(f"Place order response: {response_data}")
+    
+    # Check if the API call was successful before accessing orderId
+    orderid = None
+    if res.status_code == 200 or res.status_code == 201:
+        if response_data and 'orderId' in response_data:
+            orderid = response_data['orderId']
+        else:
+            logger.error(f"orderId not found in response: {response_data}")
     else:
-        orderid = None
+        logger.error(f"API call failed with status {res.status_code}: {response_data}")
+    
     return res, response_data, orderid
 
 def place_smartorder_api(data,auth):

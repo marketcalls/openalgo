@@ -121,45 +121,27 @@ def place_order_api(data,auth):
     client = get_httpx_client()
     
     url = get_url("/v2/orders")
-    
-    # Log the request details
-    logger.info(f"Dhan place_order_api: Sending request to {url}")
-    logger.info(f"Dhan place_order_api: Headers: {headers}")
-    logger.info(f"Dhan place_order_api: Payload: {payload}")
-    
     res = client.post(url, headers=headers, content=payload)
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
     
-    # Log the raw response
-    logger.info(f"Dhan place_order_api: Response status code: {res.status_code}")
-    logger.info(f"Dhan place_order_api: Raw response text: {res.text}")
-    
     try:
         response_data = json.loads(res.text)
-        logger.info(f"Dhan place_order_api: Parsed response data: {response_data}")
     except json.JSONDecodeError as e:
-        logger.error(f"Dhan place_order_api: Failed to parse JSON response: {e}")
-        logger.error(f"Dhan place_order_api: Raw response text: {res.text}")
+        logger.error(f"Failed to parse JSON response: {e}")
         return res, {"error": "Invalid JSON response"}, None
+    
+    logger.debug(f"Place order response: {response_data}")
     
     # Check if the API call was successful before accessing orderId
     orderid = None
     if res.status_code == 200 or res.status_code == 201:
         if response_data and 'orderId' in response_data:
             orderid = response_data['orderId']
-            logger.info(f"Dhan place_order_api: Order placed successfully with ID: {orderid}")
         else:
-            logger.error(f"Dhan place_order_api: orderId not found in successful response: {response_data}")
+            logger.error(f"orderId not found in response: {response_data}")
     else:
-        logger.error(f"Dhan place_order_api: API call failed with status {res.status_code}")
-        if response_data:
-            logger.error(f"Dhan place_order_api: Error response: {response_data}")
-            # Check for common error fields in Dhan API response
-            if 'errorCode' in response_data:
-                logger.error(f"Dhan place_order_api: Error code: {response_data['errorCode']}")
-            if 'errorMessage' in response_data:
-                logger.error(f"Dhan place_order_api: Error message: {response_data['errorMessage']}")
+        logger.error(f"API call failed with status {res.status_code}: {response_data}")
     
     return res, response_data, orderid
 
