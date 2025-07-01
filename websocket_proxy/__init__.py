@@ -20,11 +20,15 @@ from broker.dhan.streaming.dhan_adapter import DhanWebSocketAdapter
 # Import the flattrade_adapter
 from broker.flattrade.streaming.flattrade_adapter import FlattradeWebSocketAdapter
 
+# Import the shoonya_adapter
+from broker.shoonya.streaming.shoonya_adapter import ShoonyaWebSocketAdapter
+
 # Register adapters
 register_adapter("angel", AngelWebSocketAdapter)
 register_adapter("zerodha", ZerodhaWebSocketAdapter)
 register_adapter("dhan", DhanWebSocketAdapter)
 register_adapter("flattrade", FlattradeWebSocketAdapter)
+register_adapter("shoonya", ShoonyaWebSocketAdapter)
 
 __all__ = [
     'WebSocketProxy',
@@ -34,5 +38,6 @@ __all__ = [
     'AngelWebSocketAdapter',
     'ZerodhaWebSocketAdapter',
     'DhanWebSocketAdapter',
-    'FlattradeWebSocketAdapter'
+    'FlattradeWebSocketAdapter',
+    'ShoonyaWebSocketAdapter'
 ]

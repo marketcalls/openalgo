@@ -1,10 +1,11 @@
-import http.client
+import httpx
 import json
 import os
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -12,7 +13,7 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Shoonya
+    Common function to make API calls to Shoonya using httpx with connection pooling
     """
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
@@ -29,14 +30,24 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
     payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("api.shoonya.com")
-    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-
-    conn.request(method, endpoint, payload_str, headers)
-    res = conn.getresponse()
-    data = res.read()
+    # Get the shared httpx client
+    client = get_httpx_client()
     
-    return json.loads(data.decode("utf-8"))
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    url = f"https://api.shoonya.com{endpoint}"
+
+    response = client.request(method, url, content=payload_str, headers=headers)
+    data = response.text
+    
+    # Print raw response for debugging
+    logger.info(f"Raw Response: {data}")
+    
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON: {e}")
+        logger.info(f"Response data: {data}")
+        raise
 
 class BrokerData:
     def __init__(self, auth_token):

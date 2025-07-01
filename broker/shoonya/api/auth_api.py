@@ -1,7 +1,8 @@
-import requests
+import httpx
 import hashlib
 import json
 import os
+from utils.httpx_client import get_httpx_client
 
 def sha256_hash(text):
     """Generate SHA256 hash."""
@@ -41,8 +42,9 @@ def authenticate_broker(userid, password, totp_code):
             'Content-Type': 'application/x-www-form-urlencoded'
         }
 
-        # Send the POST request to Shoonya's API
-        response = requests.post(url, data=payload_str, headers=headers)
+        # Get the shared httpx client and send the POST request to Shoonya's API
+        client = get_httpx_client()
+        response = client.post(url, data=payload_str, headers=headers)
 
         # Handle the response
         if response.status_code == 200:

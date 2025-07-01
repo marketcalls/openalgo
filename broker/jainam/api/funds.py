@@ -29,7 +29,7 @@ def get_margin_data(auth_token):
     
     margin_data = response.json()
 
-    #logger.info("Funds Details: %s", margin_data)
+    #logger.info(f"Funds Details: {margin_data}")
 
     if (
         margin_data.get("result") and 
@@ -55,7 +55,7 @@ def get_margin_data(auth_token):
                 formatted_value = "0.00"
             
             filtered_data[key] = formatted_value
-            #logger.info("Funds Dashboard: {key} = %s", filtered_data[key])
+            #logger.info(f"Funds Dashboard: {{key}} = {filtered_data[key]}")
 
         processed_margin_data = {
             "availablecash": filtered_data.get('netMarginAvailable'),
@@ -65,7 +65,7 @@ def get_margin_data(auth_token):
             "utiliseddebits": filtered_data.get('marginUtilized'),
         }
         
-        #logger.info("Funds = %s", processed_margin_data)
+        #logger.info(f"Funds = {processed_margin_data}")
         return processed_margin_data
     else:
         return {}
