@@ -26,7 +26,6 @@ def transform_data(data,token):
     # Basic mapping
     transformed = {
         "dhanClientId": data["apikey"],
-        "correlationId": data.get("correlation_id", None),  # Optional correlation ID
         "transactionType": data["action"].upper(),
         "exchangeSegment": map_exchange_type(data["exchange"]),
         "productType": map_product_type(data["product"]),
@@ -37,11 +36,37 @@ def transform_data(data,token):
         "disclosedQuantity": int(data.get("disclosed_quantity", 0)),
         "price": float(data.get("price", 0)),
         "triggerPrice": float(data.get("trigger_price", 0)),
-        "afterMarketOrder": data.get("after_market_order", False),
-        "amoTime": data.get("amo_time", None),  # OPEN/OPEN_30/OPEN_60
-        "boProfitValue": float(data.get("bo_profit_value", 0)) if data.get("bo_profit_value") else None,
-        "boStopLossValue": float(data.get("bo_stop_loss_value", 0)) if data.get("bo_stop_loss_value") else None
+        "afterMarketOrder": data.get("after_market_order", False)
     }
+    
+    # Add correlationId - Dhan API seems to require this field even if optional in docs
+    correlation_id = data.get("correlation_id")
+    if correlation_id is not None and correlation_id != "":
+        transformed["correlationId"] = correlation_id
+    else:
+        # Use a default correlation ID if not provided
+        import uuid
+        transformed["correlationId"] = str(uuid.uuid4())[:8]  # Short UUID for tracking
+    
+    # Handle amoTime - required for after market orders, default for regular orders
+    if data.get("after_market_order", False):
+        amo_time = data.get("amo_time")
+        if amo_time and amo_time in ["OPEN", "OPEN_30", "OPEN_60"]:
+            transformed["amoTime"] = amo_time
+        else:
+            transformed["amoTime"] = "OPEN"  # Default for after market orders
+    else:
+        # Even for regular orders, Dhan API seems to require amoTime field
+        transformed["amoTime"] = "OPEN"
+    
+    # Add bracket order fields only if they have valid values
+    bo_profit = data.get("bo_profit_value")
+    if bo_profit is not None and bo_profit != 0:
+        transformed["boProfitValue"] = float(bo_profit)
+    
+    bo_stop_loss = data.get("bo_stop_loss_value")
+    if bo_stop_loss is not None and bo_stop_loss != 0:
+        transformed["boStopLossValue"] = float(bo_stop_loss)
 
     # Handle validity for IOC orders if specified
     if data.get("validity") == "IOC":
