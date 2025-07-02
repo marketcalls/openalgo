@@ -124,8 +124,11 @@ class AliceBlueMessageMapper:
             
             # For 'tk' (token acknowledgment) messages, we get full data
             if msg_type == "tk":
+                # Extract symbol and clean it (remove suffixes like -EQ for OpenAlgo format)
+                raw_symbol = message.get("ts", "")
+                clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
                 parsed.update({
-                    "symbol": message.get("ts", ""),
+                    "symbol": clean_symbol,
                     "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,
                     "volume": int(message.get("v", 0)) if message.get("v") else 0,
                     "open": float(message.get("o", 0)) if message.get("o") else 0.0,
@@ -186,7 +189,13 @@ class AliceBlueMessageMapper:
                 for src_key, (dest_key, converter) in field_mappings.items():
                     if src_key in message:
                         try:
-                            parsed[dest_key] = converter(message[src_key])
+                            if dest_key == "symbol" and src_key == "ts":
+                                # Clean symbol for OpenAlgo format (remove -EQ suffix)
+                                raw_symbol = message[src_key]
+                                clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
+                                parsed[dest_key] = clean_symbol
+                            else:
+                                parsed[dest_key] = converter(message[src_key])
                         except (ValueError, TypeError):
                             pass  # Skip fields that can't be converted
             

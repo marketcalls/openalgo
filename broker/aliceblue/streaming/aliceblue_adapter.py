@@ -405,11 +405,12 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Acknowledgment message - contains initial market data
                 self.logger.info(f"Received acknowledgment with data: {data}")
                 parsed_data = self.message_mapper.parse_tick_data(data)
+                self.logger.info(f"Parsed acknowledgment data: {parsed_data}")
                 if parsed_data.get('type') != 'error':
                     self._on_data_received(parsed_data)
                 else:
                     self.logger.error(f"Error parsing acknowledgment data: {parsed_data['message']}")
-                return
+                # Don't return here - continue processing other message types
             
             elif msg_type == 'tf':
                 # Tick data
@@ -534,13 +535,16 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data_received(self, parsed_data):
         """Handle received and parsed market data"""
         try:
+            self.logger.info(f"_on_data_received called with parsed_data: {parsed_data}")
             # Extract key identifiers
             token = parsed_data.get('token', '')
-            exchange = parsed_data.get('exchange', 'UNKNOWN')
+            broker_exchange = parsed_data.get('exchange', 'UNKNOWN')
+            # Convert broker exchange back to standard exchange format (default mapping)
+            exchange = self.exchange_mapper.from_broker_exchange(broker_exchange)
             msg_type = parsed_data.get('message_type', '')
             
             # Create a unique key for this symbol
-            symbol_key = f"{exchange}|{token}"
+            symbol_key = f"{broker_exchange}|{token}"
             
             # Handle different message types
             if msg_type == 'tk':
@@ -569,13 +573,37 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Other message types
                 symbol = parsed_data.get('symbol', 'UNKNOWN')
             
-            # Determine mode for topic based on available data
-            if 'depth' in parsed_data:
-                mode = 'DEPTH'
-            elif all(key in parsed_data for key in ['open', 'high', 'low', 'close']):
-                mode = 'QUOTE'
-            else:
-                mode = 'LTP'
+            # Find the original subscription to get the correct exchange
+            # This is important because the client subscribes with NSE_INDEX for NIFTY
+            # but the data comes with NSE exchange
+            sub_key = f"{broker_exchange}|{token}"
+            original_exchange = exchange  # Default to mapped exchange
+            
+            with self.lock:
+                if sub_key in self.subscriptions:
+                    # Use the exchange from the original subscription
+                    original_exchange = self.subscriptions[sub_key]['exchange']
+                    self.logger.info(f"Using subscription exchange: {original_exchange} for {symbol}")
+            
+            # Special handling for NIFTY index based on token (26000 is NIFTY token)
+            if token == '26000' and broker_exchange == 'NSE':
+                symbol = 'NIFTY'
+                # Update the parsed_data with correct symbol
+                parsed_data['symbol'] = symbol
+                
+            # Use the original subscription exchange for topic generation
+            exchange = original_exchange
+            
+            # Get the actual subscription mode from our stored subscriptions
+            sub_mode = 1  # Default to LTP
+            with self.lock:
+                if sub_key in self.subscriptions:
+                    sub_mode = self.subscriptions[sub_key].get('mode', 1)
+                    self.logger.info(f"Using subscription mode: {sub_mode} for {symbol}")
+            
+            # Map numeric mode to string for topic
+            mode_map = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}
+            mode = mode_map.get(sub_mode, 'LTP')
             
             # Create topic for ZMQ publishing
             topic = f"{exchange}_{symbol}_{mode}"
@@ -584,9 +612,34 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if 'timestamp' not in parsed_data:
                 parsed_data['timestamp'] = int(time.time() * 1000)
             
-            # Remove internal fields before publishing
-            publish_data = {k: v for k, v in parsed_data.items() 
-                          if k not in ['message_type']}
+            # Prepare data based on numeric mode (similar to Angel's approach)
+            if sub_mode == 1:  # LTP mode
+                # For LTP mode, only send minimal data
+                publish_data = {
+                    'ltp': parsed_data.get('ltp', 0.0),
+                    'ltt': parsed_data.get('timestamp', '')  # Last traded time
+                }
+            elif sub_mode == 2:  # QUOTE mode
+                # For QUOTE mode, send price and volume data
+                publish_data = {
+                    'ltp': parsed_data.get('ltp', 0.0),
+                    'ltt': parsed_data.get('timestamp', ''),
+                    'volume': parsed_data.get('volume', 0),
+                    'open': parsed_data.get('open', 0.0),
+                    'high': parsed_data.get('high', 0.0),
+                    'low': parsed_data.get('low', 0.0),
+                    'close': parsed_data.get('close', 0.0),
+                    'change_percent': parsed_data.get('change_percent', 0.0),
+                    'average_price': parsed_data.get('average_price', 0.0),
+                    'total_oi': parsed_data.get('total_oi', 0)
+                }
+            else:  # DEPTH mode
+                # For DEPTH mode, send full data including depth
+                publish_data = {k: v for k, v in parsed_data.items() 
+                              if k not in ['message_type', 'type']}
+            
+            # Debug logging for data publishing
+            self.logger.info(f"Publishing data on topic '{topic}': {publish_data}")
             
             # Publish to ZMQ
             self.publish_market_data(topic, publish_data)
