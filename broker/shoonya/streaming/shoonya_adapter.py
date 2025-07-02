@@ -453,22 +453,31 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         # If no existing snapshot and this is a depth update, treat first non-zero update as acknowledgment
         if not snapshot and data.get('t') == 'df':
+            self.logger.info(f"[SNAPSHOT] No existing depth snapshot for token {token}, checking if 'df' update has meaningful data")
             # Check if this update has meaningful data (non-zero prices/quantities)
             has_meaningful_data = False
+            meaningful_fields = []
+            
+            # Check price fields
             for field in ['bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'sp1', 'sp2', 'sp3', 'sp4', 'sp5']:
                 if field in data and self._safe_float(data[field]) > 0:
                     has_meaningful_data = True
-                    break
-            if not has_meaningful_data:
-                for field in ['bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5']:
-                    if field in data and self._safe_int(data[field]) > 0:
-                        has_meaningful_data = True
-                        break
+                    meaningful_fields.append(f"{field}={data[field]}")
+                    
+            # Check quantity fields
+            for field in ['bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5']:
+                if field in data and self._safe_int(data[field]) > 0:
+                    has_meaningful_data = True
+                    meaningful_fields.append(f"{field}={data[field]}")
+            
+            self.logger.info(f"[SNAPSHOT] Token {token} meaningful data check: {has_meaningful_data}, fields: {meaningful_fields[:10]}")
             
             if has_meaningful_data:
                 self.logger.warning(f"[SNAPSHOT] No existing snapshot for token {token}, treating first meaningful 'df' update as acknowledgment")
                 self.depth_snapshots[token] = data.copy()
                 return data
+            else:
+                self.logger.warning(f"[SNAPSHOT] Token {token} 'df' update has no meaningful data, skipping snapshot creation")
         
         # Fields to merge from incremental updates (only if non-zero/non-empty)
         merge_fields = [
@@ -619,14 +628,44 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return  # Handled by the client, no further processing needed here
 
             self.logger.debug(f"[ON_MESSAGE] Message type: {t}, data: {data}")
-            # Determine mode from active subscriptions (default to 1 if not found)
+            # Determine mode from active subscriptions based on message type
             token = data.get('tk')
             mode = None
+            
+            # Find appropriate mode based on message type and active subscriptions
+            matching_modes = []
             for (sym, exch, m), active in self.subscriptions.items():
                 token_info = SymbolMapper.get_token_from_symbol(sym, exch)
                 if token_info and token_info['token'] == token and active:
-                    mode = m
-                    break
+                    matching_modes.append((m, sym, exch))
+            
+            self.logger.debug(f"[MODE_DETECTION] Token {token}, message type {t}, matching modes: {matching_modes}")
+            
+            # Select mode based on message type priority
+            if t in ('df', 'dk'):
+                # Depth messages - prioritize depth mode (3)
+                for m, sym, exch in matching_modes:
+                    if m == 3:
+                        mode = m
+                        break
+            elif t in ('tf', 'tk'):
+                # Quote/touchline messages - prioritize quote mode (2), then LTP (1)
+                for m, sym, exch in matching_modes:
+                    if m == 2:
+                        mode = m
+                        break
+                # If no quote mode found, use LTP mode
+                if mode is None:
+                    for m, sym, exch in matching_modes:
+                        if m == 1:
+                            mode = m
+                            break
+            
+            # Fallback to first matching mode if no priority match found
+            if mode is None and matching_modes:
+                mode = matching_modes[0][0]
+            
+            self.logger.info(f"[MODE_DETECTION] Token {token}, message type {t}, selected mode: {mode}")
             if t in ('tf', 'tk', 'df', 'dk'):
                 # For LTP mode, only process if 'lp' field is present to avoid 0.0 values
                 if mode in [1, None] and 'lp' not in data:
@@ -643,6 +682,8 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Depth mode snapshot management
                     if token:
                         is_acknowledgment = (t == 'dk')
+                        snapshot_exists = token in self.depth_snapshots
+                        self.logger.info(f"[SNAPSHOT] Processing {t} for token {token}, mode={mode}, snapshot_exists={snapshot_exists}")
                         processed_data = self._update_depth_snapshot(token, data, is_acknowledgment)
                         self.logger.info(f"[SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} depth snapshot for token {token}")
                 elif t in ('tf', 'tk') and mode in [1, 2]:
