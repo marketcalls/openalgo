@@ -111,21 +111,85 @@ class AliceBlueMessageMapper:
     def parse_tick_data(message: Dict) -> Dict:
         """Parse tick data message from AliceBlue format to standard format"""
         try:
+            # Get message type to handle different formats
+            msg_type = message.get("t", "")
+            
+            # Common fields that should always be present
             parsed = {
                 "type": "tick_data",
-                "exchange": message.get("e"),
-                "token": message.get("tk"),
-                "symbol": message.get("ts"),
-                "ltp": float(message.get("lp", 0)),
-                "volume": int(message.get("v", 0)),
-                "open": float(message.get("o", 0)),
-                "high": float(message.get("h", 0)),
-                "low": float(message.get("l", 0)),
-                "close": float(message.get("c", 0)),
-                "change": float(message.get("ch", 0)),
-                "change_percent": float(message.get("chp", 0)),
-                "timestamp": message.get("ft", "")
+                "message_type": msg_type,
+                "exchange": message.get("e", ""),
+                "token": message.get("tk", ""),
             }
+            
+            # For 'tk' (token acknowledgment) messages, we get full data
+            if msg_type == "tk":
+                parsed.update({
+                    "symbol": message.get("ts", ""),
+                    "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,
+                    "volume": int(message.get("v", 0)) if message.get("v") else 0,
+                    "open": float(message.get("o", 0)) if message.get("o") else 0.0,
+                    "high": float(message.get("h", 0)) if message.get("h") else 0.0,
+                    "low": float(message.get("l", 0)) if message.get("l") else 0.0,
+                    "close": float(message.get("c", 0)) if message.get("c") else 0.0,
+                    "change_percent": float(message.get("pc", 0)) if message.get("pc") else 0.0,
+                    "change_value": float(message.get("cv", 0)) if message.get("cv") else 0.0,
+                    "average_price": float(message.get("ap", 0)) if message.get("ap") else 0.0,
+                    "timestamp": message.get("ft", ""),
+                    "total_oi": int(message.get("toi", 0)) if message.get("toi") else 0,
+                    "tick_size": float(message.get("ti", 0)) if message.get("ti") else 0.0,
+                    "lot_size": int(message.get("ls", 0)) if message.get("ls") else 0,
+                    "market_lot": int(message.get("ml", 0)) if message.get("ml") else 0,
+                    "price_precision": int(message.get("pp", 0)) if message.get("pp") else 0,
+                })
+            
+            # For 'tf' (tick feed) messages, only include fields that are present
+            elif msg_type == "tf":
+                # Only add fields that exist in the message
+                if "lp" in message:
+                    parsed["ltp"] = float(message["lp"])
+                if "pc" in message:
+                    parsed["change_percent"] = float(message["pc"])
+                if "ft" in message:
+                    parsed["timestamp"] = message["ft"]
+                if "v" in message:
+                    parsed["volume"] = int(message["v"])
+                if "toi" in message:
+                    parsed["total_oi"] = int(message["toi"])
+                # Add any other fields that might be present
+                for key in ["o", "h", "l", "c", "cv", "ap"]:
+                    if key in message:
+                        mapped_key = {
+                            "o": "open", "h": "high", "l": "low", "c": "close",
+                            "cv": "change_value", "ap": "average_price"
+                        }.get(key, key)
+                        parsed[mapped_key] = float(message[key])
+                        
+            # For other message types, parse whatever is available
+            else:
+                # Parse all available fields
+                field_mappings = {
+                    "lp": ("ltp", float),
+                    "v": ("volume", int),
+                    "o": ("open", float),
+                    "h": ("high", float),
+                    "l": ("low", float),
+                    "c": ("close", float),
+                    "pc": ("change_percent", float),
+                    "cv": ("change_value", float),
+                    "ap": ("average_price", float),
+                    "ft": ("timestamp", str),
+                    "toi": ("total_oi", int),
+                    "ts": ("symbol", str)
+                }
+                
+                for src_key, (dest_key, converter) in field_mappings.items():
+                    if src_key in message:
+                        try:
+                            parsed[dest_key] = converter(message[src_key])
+                        except (ValueError, TypeError):
+                            pass  # Skip fields that can't be converted
+            
             return parsed
         except (ValueError, KeyError) as e:
             return {"type": "error", "message": f"Failed to parse tick data: {e}"}
@@ -166,9 +230,11 @@ class AliceBlueMessageMapper:
     @staticmethod
     def create_subscription_message(exchange: str, token: str, feed_type: str = "t") -> Dict:
         """Create subscription message in AliceBlue format"""
+        # AliceBlue expects the subscription key in the format "EXCHANGE|TOKEN"
+        # For multiple subscriptions, they should be separated by # in a single message
         return {
             "k": f"{exchange}|{token}",
-            "t": feed_type
+            "t": feed_type  # "t" for tick data, "d" for depth data
         }
     
     @staticmethod
