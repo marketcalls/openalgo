@@ -10,7 +10,10 @@
       "Bash(LOG_LEVEL=DEBUG python3 test_colored_logging.py)",
       "Bash(rm:*)",
       "Bash(FORCE_COLOR=1 python3 debug_colors.py)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

@@ -38,6 +38,8 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.subscriptions = {}  # {(symbol, exchange, mode): True}
         self.token_symbol_map = {}  # {token: (symbol, exchange)}
+        self.depth_snapshots = {}  # {token: snapshot_data} - for depth mode snapshot management
+        self.quote_snapshots = {}  # {token: snapshot_data} - for quote mode snapshot management
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
         self._reconnect_delay = 2  # seconds, will use exponential backoff
@@ -113,6 +115,8 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.susertoken = None
             self.subscriptions = {}
             self.token_symbol_map = {}
+            self.depth_snapshots = {}
+            self.quote_snapshots = {}
             self._reconnect_attempts = 0
 
             self.logger.info("Shoonya adapter disconnected, reset, and cleaned up.")
@@ -228,6 +232,8 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Clear all subscriptions state
             self.subscriptions.clear()
             self.token_symbol_map.clear()
+            self.depth_snapshots.clear()
+            self.quote_snapshots.clear()
             self.logger.info("All Shoonya subscriptions have been cleared.")
 
     def _resubscribe_all(self):
@@ -429,6 +435,179 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except (ValueError, TypeError):
             return 0
 
+    def _update_depth_snapshot(self, token: str, data: dict, is_acknowledgment: bool = False) -> dict:
+        """
+        Update depth snapshot for incremental updates.
+        For acknowledgment ('dk'), store complete snapshot.
+        For updates ('df'), merge only non-zero values.
+        If no snapshot exists and we get a 'df' update, treat it as acknowledgment.
+        """
+        if is_acknowledgment:
+            # Store complete snapshot from acknowledgment
+            self.depth_snapshots[token] = data.copy()
+            self.logger.info(f"[SNAPSHOT] Stored full snapshot for token {token}")
+            return data
+        
+        # Get existing snapshot or create empty one
+        snapshot = self.depth_snapshots.get(token, {})
+        
+        # If no existing snapshot and this is a depth update, treat first non-zero update as acknowledgment
+        if not snapshot and data.get('t') == 'df':
+            # Check if this update has meaningful data (non-zero prices/quantities)
+            has_meaningful_data = False
+            for field in ['bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'sp1', 'sp2', 'sp3', 'sp4', 'sp5']:
+                if field in data and self._safe_float(data[field]) > 0:
+                    has_meaningful_data = True
+                    break
+            if not has_meaningful_data:
+                for field in ['bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5']:
+                    if field in data and self._safe_int(data[field]) > 0:
+                        has_meaningful_data = True
+                        break
+            
+            if has_meaningful_data:
+                self.logger.warning(f"[SNAPSHOT] No existing snapshot for token {token}, treating first meaningful 'df' update as acknowledgment")
+                self.depth_snapshots[token] = data.copy()
+                return data
+        
+        # Fields to merge from incremental updates (only if non-zero/non-empty)
+        merge_fields = [
+            'lp', 'pc', 'v', 'o', 'h', 'l', 'c', 'ap', 'ltt', 'ltq', 'tbq', 'tsq',
+            'bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'bo1', 'bo2', 'bo3', 'bo4', 'bo5',
+            'sp1', 'sp2', 'sp3', 'sp4', 'sp5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5', 'so1', 'so2', 'so3', 'so4', 'so5',
+            'lc', 'uc', '52h', '52l', 'oi', 'poi', 'toi'
+        ]
+        
+        # Always update these fields (metadata that may be constant)
+        always_update = ['t', 'e', 'tk', 'ts', 'ti', 'ls', 'pp']
+        
+        # Update snapshot with always-update fields
+        for field in always_update:
+            if field in data:
+                snapshot[field] = data[field]
+        
+        # Merge non-zero values from incremental update
+        updated_fields = []
+        for field in merge_fields:
+            if field in data:
+                value = data[field]
+                # Check if value is non-zero/non-empty (but preserve actual 0 values for valid cases)
+                if value is not None and value != '' and value != '-':
+                    # Convert to appropriate type to check if it's truly zero
+                    if field in ['lp', 'pc', 'o', 'h', 'l', 'c', 'ap', 'bp1', 'bp2', 'bp3', 'bp4', 'bp5', 
+                                'sp1', 'sp2', 'sp3', 'sp4', 'sp5', 'lc', 'uc', '52h', '52l']:
+                        # Price fields - update if not 0.0
+                        float_val = self._safe_float(value)
+                        if float_val != 0.0:
+                            snapshot[field] = value
+                            updated_fields.append(field)
+                    elif field in ['v', 'ltq', 'tbq', 'tsq', 'bq1', 'bq2', 'bq3', 'bq4', 'bq5',
+                                  'sq1', 'sq2', 'sq3', 'sq4', 'sq5', 'bo1', 'bo2', 'bo3', 'bo4', 'bo5',
+                                  'so1', 'so2', 'so3', 'so4', 'so5', 'oi', 'poi', 'toi']:
+                        # Quantity/count fields - update if not 0
+                        int_val = self._safe_int(value)
+                        if int_val != 0:
+                            snapshot[field] = value
+                            updated_fields.append(field)
+                    else:
+                        # Other fields like 'ltt' - always update if present
+                        snapshot[field] = value
+                        updated_fields.append(field)
+        
+        # Update stored snapshot
+        self.depth_snapshots[token] = snapshot
+        
+        if updated_fields:
+            self.logger.info(f"[SNAPSHOT] Updated fields for token {token}: {updated_fields}")
+        else:
+            self.logger.debug(f"[SNAPSHOT] No fields updated for token {token} (all zero values)")
+        
+        return snapshot
+
+    def _update_quote_snapshot(self, token: str, data: dict, is_acknowledgment: bool = False) -> dict:
+        """
+        Update quote snapshot for incremental updates.
+        For acknowledgment ('tk'), store complete snapshot.
+        For updates ('tf'), merge only non-zero values.
+        If no snapshot exists and we get a 'tf' update, treat it as acknowledgment.
+        """
+        if is_acknowledgment:
+            # Store complete snapshot from acknowledgment
+            self.quote_snapshots[token] = data.copy()
+            self.logger.info(f"[QUOTE_SNAPSHOT] Stored full snapshot for token {token}")
+            return data
+        
+        # Get existing snapshot or create empty one
+        snapshot = self.quote_snapshots.get(token, {})
+        
+        # If no existing snapshot and this is a quote update, treat first non-zero update as acknowledgment
+        if not snapshot and data.get('t') == 'tf':
+            # Check if this update has meaningful data (non-zero prices)
+            has_meaningful_data = False
+            for field in ['lp', 'o', 'h', 'l', 'c', 'bp1', 'sp1']:
+                if field in data and self._safe_float(data[field]) > 0:
+                    has_meaningful_data = True
+                    break
+            if not has_meaningful_data:
+                for field in ['v', 'bq1', 'sq1']:
+                    if field in data and self._safe_int(data[field]) > 0:
+                        has_meaningful_data = True
+                        break
+            
+            if has_meaningful_data:
+                self.logger.warning(f"[QUOTE_SNAPSHOT] No existing snapshot for token {token}, treating first meaningful 'tf' update as acknowledgment")
+                self.quote_snapshots[token] = data.copy()
+                return data
+        
+        # Fields to merge from incremental updates (only if non-zero/non-empty)
+        merge_fields = [
+            'lp', 'pc', 'v', 'o', 'h', 'l', 'c', 'ap', 'ltt', 'ltq',
+            'bp1', 'bq1', 'sp1', 'sq1', 'oi', 'poi', 'toi'
+        ]
+        
+        # Always update these fields (metadata that may be constant)
+        always_update = ['t', 'e', 'tk', 'ts', 'ti', 'ls', 'pp']
+        
+        # Update snapshot with always-update fields
+        for field in always_update:
+            if field in data:
+                snapshot[field] = data[field]
+        
+        # Merge non-zero values from incremental update
+        updated_fields = []
+        for field in merge_fields:
+            if field in data:
+                value = data[field]
+                # Check if value is non-zero/non-empty (but preserve actual 0 values for valid cases)
+                if value is not None and value != '' and value != '-':
+                    # Convert to appropriate type to check if it's truly zero
+                    if field in ['lp', 'pc', 'o', 'h', 'l', 'c', 'ap', 'bp1', 'sp1']:
+                        # Price fields - update if not 0.0
+                        float_val = self._safe_float(value)
+                        if float_val != 0.0:
+                            snapshot[field] = value
+                            updated_fields.append(field)
+                    elif field in ['v', 'ltq', 'bq1', 'sq1', 'oi', 'poi', 'toi']:
+                        # Quantity/count fields - update if not 0
+                        int_val = self._safe_int(value)
+                        if int_val != 0:
+                            snapshot[field] = value
+                            updated_fields.append(field)
+                    else:
+                        # Other fields like 'ltt' - always update if present
+                        snapshot[field] = value
+                        updated_fields.append(field)
+        
+        # Update stored snapshot
+        self.quote_snapshots[token] = snapshot
+        
+        if updated_fields:
+            self.logger.info(f"[QUOTE_SNAPSHOT] Updated fields for token {token}: {updated_fields}")
+        else:
+            self.logger.debug(f"[QUOTE_SNAPSHOT] No fields updated for token {token} (all zero values)")
+        
+        return snapshot
+
     def _on_message(self, ws, message):
         try:
             self.logger.debug(f"[ON_MESSAGE] Raw message: {message}")
@@ -455,7 +634,25 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return
 
                 self.logger.debug(f"[ON_MESSAGE] Incoming data for {t}: {data}")
-                normalized = self._normalize_market_data(data, t, mode)
+                
+                # Handle snapshot management for both depth and quote modes
+                processed_data = data
+                token = data.get('tk')
+                
+                if t in ('df', 'dk') and mode == 3:
+                    # Depth mode snapshot management
+                    if token:
+                        is_acknowledgment = (t == 'dk')
+                        processed_data = self._update_depth_snapshot(token, data, is_acknowledgment)
+                        self.logger.info(f"[SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} depth snapshot for token {token}")
+                elif t in ('tf', 'tk') and mode in [1, 2]:
+                    # Quote/touchline mode snapshot management
+                    if token:
+                        is_acknowledgment = (t == 'tk')
+                        processed_data = self._update_quote_snapshot(token, data, is_acknowledgment)
+                        self.logger.info(f"[QUOTE_SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} quote snapshot for token {token}")
+                
+                normalized = self._normalize_market_data(processed_data, t, mode)
                 self.logger.debug(f"[ON_MESSAGE] Normalized data: {normalized}")
                 token = normalized.get('token')
                 symbol, exchange = self.token_symbol_map.get(token, (normalized.get('symbol'), normalized.get('exchange')))
