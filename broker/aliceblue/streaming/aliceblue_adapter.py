@@ -421,12 +421,33 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error(f"Error parsing tick data: {parsed_data['message']}")
             
             elif msg_type == 'df':
-                # Depth data
+                # Depth data update (partial)
                 parsed_data = self.message_mapper.parse_depth_data(data)
                 if parsed_data.get('type') != 'error':
+                    # Add message type
+                    parsed_data['message_type'] = 'df'
                     self._on_data_received(parsed_data)
                 else:
                     self.logger.error(f"Error parsing depth data: {parsed_data['message']}")
+            
+            elif msg_type == 'dk':
+                # Depth data acknowledgment (full depth data)
+                parsed_data = self.message_mapper.parse_depth_data(data)
+                if parsed_data.get('type') != 'error':
+                    # Add message type
+                    parsed_data['message_type'] = 'dk'
+                    # Store symbol info from dk message
+                    token = data.get('tk', '')
+                    exchange = data.get('e', '')
+                    symbol_key = f"{exchange}|{token}"
+                    if 'ts' in data:
+                        # Extract and clean symbol name
+                        raw_symbol = data['ts']
+                        clean_symbol = raw_symbol.split('-')[0] if raw_symbol else ""
+                        parsed_data['symbol'] = clean_symbol
+                    self._on_data_received(parsed_data)
+                else:
+                    self.logger.error(f"Error parsing depth acknowledgment: {parsed_data['message']}")
             
             else:
                 self.logger.info(f"Unknown message type: {msg_type}, data: {data}")
@@ -551,6 +572,10 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Token acknowledgment - contains full data, store it
                 self.symbol_state[symbol_key] = parsed_data.copy()
                 symbol = parsed_data.get('symbol', 'UNKNOWN')
+            elif msg_type == 'dk':
+                # Depth acknowledgment - contains full data including symbol, store it
+                self.symbol_state[symbol_key] = parsed_data.copy()
+                symbol = parsed_data.get('symbol', 'UNKNOWN')
             elif msg_type == 'tf':
                 # Tick feed - contains only changed fields, merge with stored state
                 if symbol_key in self.symbol_state:
@@ -569,6 +594,18 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # We don't have initial state, use token as symbol
                     symbol = f"TOKEN_{token}"
                     self.logger.warning(f"Received tick feed for unknown symbol: {symbol_key}")
+            elif msg_type == 'df':
+                # Depth feed - contains only changed fields, merge with stored state
+                if symbol_key in self.symbol_state:
+                    # Get symbol from stored state
+                    symbol = self.symbol_state[symbol_key].get('symbol', f"TOKEN_{token}")
+                    # Update parsed_data with symbol
+                    parsed_data['symbol'] = symbol
+                else:
+                    # We don't have initial state, use token as symbol
+                    symbol = f"TOKEN_{token}"
+                    parsed_data['symbol'] = symbol
+                    self.logger.warning(f"Received depth feed for unknown symbol: {symbol_key}")
             else:
                 # Other message types
                 symbol = parsed_data.get('symbol', 'UNKNOWN')
@@ -634,9 +671,39 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     'total_oi': parsed_data.get('total_oi', 0)
                 }
             else:  # DEPTH mode
-                # For DEPTH mode, send full data including depth
-                publish_data = {k: v for k, v in parsed_data.items() 
-                              if k not in ['message_type', 'type']}
+                # For DEPTH mode, format data to match expected client format
+                if parsed_data.get('type') == 'market_depth':
+                    # Convert bids/asks arrays to buy/sell format expected by client
+                    depth_data = {
+                        'buy': [],
+                        'sell': []
+                    }
+                    
+                    # Convert bids to buy array
+                    for bid in parsed_data.get('bids', []):
+                        depth_data['buy'].append({
+                            'price': bid.get('price', 0),
+                            'quantity': bid.get('quantity', 0),
+                            'orders': 0  # AliceBlue doesn't provide order count
+                        })
+                    
+                    # Convert asks to sell array
+                    for ask in parsed_data.get('asks', []):
+                        depth_data['sell'].append({
+                            'price': ask.get('price', 0),
+                            'quantity': ask.get('quantity', 0),
+                            'orders': 0  # AliceBlue doesn't provide order count
+                        })
+                    
+                    publish_data = {
+                        'ltp': parsed_data.get('ltp', 0),
+                        'timestamp': parsed_data.get('timestamp', ''),
+                        'depth': depth_data
+                    }
+                else:
+                    # Fallback for other data types
+                    publish_data = {k: v for k, v in parsed_data.items() 
+                                  if k not in ['message_type', 'type']}
             
             # Debug logging for data publishing
             self.logger.info(f"Publishing data on topic '{topic}': {publish_data}")

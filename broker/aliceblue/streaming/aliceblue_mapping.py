@@ -213,15 +213,26 @@ class AliceBlueMessageMapper:
             
             # AliceBlue depth data structure parsing
             for i in range(5):  # Assuming 5 levels of depth
-                bid_price = message.get(f"bp{i+1}", 0)
-                bid_qty = message.get(f"bq{i+1}", 0)
-                ask_price = message.get(f"sp{i+1}", 0)
-                ask_qty = message.get(f"sq{i+1}", 0)
+                bid_price = message.get(f"bp{i+1}", "0")
+                bid_qty = message.get(f"bq{i+1}", "0")
+                ask_price = message.get(f"sp{i+1}", "0")
+                ask_qty = message.get(f"sq{i+1}", "0")
                 
-                if bid_price > 0:
-                    bids.append({"price": float(bid_price), "quantity": int(bid_qty)})
-                if ask_price > 0:
-                    asks.append({"price": float(ask_price), "quantity": int(ask_qty)})
+                try:
+                    bid_price_float = float(bid_price)
+                    bid_qty_int = int(bid_qty)
+                    if bid_price_float > 0:
+                        bids.append({"price": bid_price_float, "quantity": bid_qty_int})
+                except (ValueError, TypeError):
+                    pass
+                    
+                try:
+                    ask_price_float = float(ask_price)
+                    ask_qty_int = int(ask_qty)
+                    if ask_price_float > 0:
+                        asks.append({"price": ask_price_float, "quantity": ask_qty_int})
+                except (ValueError, TypeError):
+                    pass
             
             parsed = {
                 "type": "market_depth",
@@ -230,7 +241,8 @@ class AliceBlueMessageMapper:
                 "symbol": message.get("ts"),
                 "bids": bids,
                 "asks": asks,
-                "timestamp": message.get("ft", "")
+                "timestamp": message.get("ft", ""),
+                "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0
             }
             return parsed
         except (ValueError, KeyError) as e:
