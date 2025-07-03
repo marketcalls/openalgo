@@ -272,6 +272,13 @@ def broker_callback(broker,para=None):
             logger.info("Dhan authentication validation successful")
         
         forward_url = 'broker.html'
+    elif broker=='indstocks':
+        code = 'indstocks'
+        logger.debug(f'IndStocks broker - The code is {code}')
+        auth_token, error_message = auth_function(code)
+        
+       
+        forward_url = 'broker.html'
 
     elif broker=='dhan_sandbox':
         code = 'dhan_sandbox'
