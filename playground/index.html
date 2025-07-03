@@ -22,8 +22,11 @@
                     <div class="p-4 shadow menu dropdown-content z-[1] bg-base-200 rounded-box w-80 text-xs">
                         <h4 class="font-bold text-lg mb-2">Important Information</h4>
                         <div class="p-2 bg-base-300 rounded-md">
-                            <p class="font-bold">CORS Configuration:</p>
+                            <p class="font-bold text-red-400">⚠️ SECURITY WARNING:</p>
+                            <p class="text-red-300">This playground is for DEVELOPMENT ONLY. Never use in production servers.</p>
+                            <p class="mt-2 font-bold">CORS Configuration:</p>
                             <p>For this page to work, you must set <code class="bg-gray-900 px-1 rounded">CORS_ENABLED = 'FALSE'</code> in your project's <code>.env</code> file.</p>
+                            <p class="text-yellow-300 mt-2">⚠️ This setting disables CORS protection and should NEVER be used on production servers.</p>
                         </div>
                         <div class="p-2 bg-base-300 rounded-md mt-2">
                             <p class="font-bold">Operating Modes:</p>
@@ -40,18 +43,26 @@
                     <div class="p-4 shadow menu dropdown-content z-[1] bg-base-200 rounded-box w-80">
                          <div class="form-control">
                             <label class="label"><span class="label-text">Host Server</span></label>
-                            <input type="text" id="host-server" value="http://127.0.0.1:5000" class="input input-bordered input-sm">
+                            <input type="text" id="host-server" placeholder="http://127.0.0.1:5000" class="input input-bordered input-sm">
                         </div>
                         <div class="form-control mt-2">
                             <label class="label"><span class="label-text">WebSocket Server</span></label>
-                            <input type="text" id="ws-server" value="ws://127.0.0.1:8765" class="input input-bordered input-sm">
+                            <input type="text" id="ws-server" placeholder="ws://127.0.0.1:8765" class="input input-bordered input-sm">
                         </div>
                         <div class="form-control mt-2">
                             <label class="label"><span class="label-text">API Key</span></label>
                             <input type="text" id="api-key" placeholder="your_api_key" class="input input-bordered input-sm">
                         </div>
                         <button id="connect-btn" class="btn btn-primary btn-sm mt-4">Connect</button>
-                        <div class="mt-2 text-sm">WebSocket Status: <span id="ws-status" class="font-bold text-error">Disconnected</span></div>
+                        <div class="mt-2 text-sm space-y-1">
+                            <div>WebSocket Status: <span id="ws-status" class="font-bold text-error">Disconnected</span></div>
+                            <div id="ws-diagnostics" class="text-xs text-gray-400 hidden">
+                                <div>Connected: <span id="ws-connect-time">-</span></div>
+                                <div>Messages: Sent <span id="ws-sent-count">0</span> | Recv <span id="ws-recv-count">0</span></div>
+                                <div>Last Ping: <span id="ws-last-ping">-</span></div>
+                                <div>Latency: <span id="ws-latency">-</span>ms</div>
+                            </div>
+                        </div>
                     </div>
                 </details>
             </div>
@@ -73,10 +84,19 @@
                 <div id="watchlist" class="flex-grow overflow-y-auto space-y-2 pr-2"></div>
             </div>
 
-            <!-- Right Panel (Logs) -->
+            <!-- Right Panel (WebSocket Inspector & Logs) -->
             <div class="md:col-span-2 flex flex-col h-full overflow-hidden bg-base-200 rounded-lg p-4">
-                 <div class="flex-shrink-0 flex justify-between items-center mb-2">
-                    <h2 class="text-xl font-bold">Logs</h2>
+                <!-- WebSocket Inspector Tabs -->
+                <div class="flex-shrink-0 mb-4">
+                    <div class="tabs tabs-bordered">
+                        <a class="tab tab-active" id="logs-tab">Logs</a>
+                        <a class="tab" id="inspector-tab">WebSocket Inspector</a>
+                    </div>
+                </div>
+                <!-- Logs Panel -->
+                <div id="logs-panel" class="flex-1 flex flex-col overflow-hidden">
+                    <div class="flex-shrink-0 flex justify-between items-center mb-2">
+                        <h2 class="text-xl font-bold">Logs</h2>
                     <div class="flex items-center gap-2">
                         <!-- Log Filter Dropdown -->
                         <div class="dropdown dropdown-end">
@@ -103,8 +123,23 @@
                         </div>
                         <button id="clear-logs-btn" class="btn btn-error btn-xs">Clear</button>
                     </div>
-                 </div>
-                <div id="logs" class="flex-grow font-mono text-xs overflow-y-auto bg-gray-900 rounded p-2"></div>
+                    </div>
+                    <div id="logs" class="flex-grow font-mono text-xs overflow-y-auto bg-gray-900 rounded p-2"></div>
+                </div>
+                
+                <!-- WebSocket Inspector Panel -->
+                <div id="inspector-panel" class="flex-1 flex flex-col overflow-hidden hidden">
+                    <div class="flex-shrink-0 mb-2">
+                        <h2 class="text-xl font-bold">WebSocket Inspector</h2>
+                        <div class="flex gap-2 mt-2">
+                            <button id="clear-inspector-btn" class="btn btn-error btn-xs">Clear</button>
+                            <button id="export-inspector-btn" class="btn btn-info btn-xs">Export JSON</button>
+                            <input type="text" id="inspector-search" placeholder="Search messages..." class="input input-bordered input-xs flex-1">
+                        </div>
+                    </div>
+                    <div id="inspector-content" class="flex-grow overflow-y-auto bg-gray-900 rounded p-2 font-mono text-xs"></div>
+                </div>
+                
             </div>
         </div>
     </div>
@@ -115,7 +150,7 @@
     <!-- Depth Panel Modal (Draggable) -->
     <div id="depth-panel-modal" class="modal">
         <div class="modal-box w-auto max-w-none bg-base-200 p-4 shadow-2xl">
-            <div id="depth-panel-header" class="p-2 -m-4 mb-2"><div data-field="symbol" class="text-xl font-bold">RELIANCE <span data-field="expiry" class="text-lg font-normal"></span></div><div><span data-field="ltp" class="text-2xl font-mono"></span><span data-field="change" class="text-green-400"></span></div></div>
+            <div id="depth-panel-header" class="p-2 -m-4 mb-2"><div data-field="symbol" class="text-xl font-bold">- <span data-field="expiry" class="text-lg font-normal"></span></div><div><span data-field="ltp" class="text-2xl font-mono">-</span><span data-field="change" class="text-green-400"></span></div></div>
             <button id="close-depth-panel-btn" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
             <div class="grid grid-cols-2 gap-4 my-2 text-sm"><div id="depth-panel-bids"></div><div id="depth-panel-asks"></div></div>
             <div class="bg-base-300 p-2 rounded-md text-center grid grid-cols-3 items-center"><span data-field="totalbuyqty" class="font-mono text-green-400 text-left"></span><span class="text-sm text-gray-400">Total Quantity</span><span data-field="totalsellqty" class="font-mono text-red-400 text-right"></span></div>

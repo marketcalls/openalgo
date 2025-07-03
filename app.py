@@ -84,33 +84,35 @@ def create_app():
     USE_HTTPS = HOST_SERVER.startswith('https://')
     
     # Configure session cookie security
+    session_cookie_name = os.getenv('SESSION_COOKIE_NAME', 'session')
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_SECURE=USE_HTTPS,
-        SESSION_COOKIE_NAME='session'
+        SESSION_COOKIE_NAME=session_cookie_name
         # PERMANENT_SESSION_LIFETIME is dynamically set at login to expire at 3:30 AM IST
     )
     
     # Add cookie prefix for HTTPS environments
     if USE_HTTPS:
-        app.config['SESSION_COOKIE_NAME'] = '__Secure-session'
+        app.config['SESSION_COOKIE_NAME'] = f'__Secure-{session_cookie_name}'
     
     # CSRF configuration from environment variables
     csrf_enabled = os.getenv('CSRF_ENABLED', 'TRUE').upper() == 'TRUE'
     app.config['WTF_CSRF_ENABLED'] = csrf_enabled
     
     # Configure CSRF cookie security to match session cookie
+    csrf_cookie_name = os.getenv('CSRF_COOKIE_NAME', 'csrf_token')
     app.config.update(
         WTF_CSRF_COOKIE_HTTPONLY=True,
         WTF_CSRF_COOKIE_SAMESITE='Lax',
         WTF_CSRF_COOKIE_SECURE=USE_HTTPS,
-        WTF_CSRF_COOKIE_NAME='csrf_token'
+        WTF_CSRF_COOKIE_NAME=csrf_cookie_name
     )
     
     # Add cookie prefix for CSRF token in HTTPS environments
     if USE_HTTPS:
-        app.config['WTF_CSRF_COOKIE_NAME'] = '__Secure-csrf_token'
+        app.config['WTF_CSRF_COOKIE_NAME'] = f'__Secure-{csrf_cookie_name}'
     
     # Parse CSRF time limit from environment
     csrf_time_limit = os.getenv('CSRF_TIME_LIMIT', '').strip()

@@ -43,6 +43,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const logFilterWsMarketDataSymbol = document.getElementById('log-filter-ws-market-data-symbol');
     const logFilterApplyBtn = document.getElementById('log-filter-apply-btn');
     const logFilterResetBtn = document.getElementById('log-filter-reset-btn');
+    
+    // WebSocket Inspector Elements
+    const logsTab = document.getElementById('logs-tab');
+    const inspectorTab = document.getElementById('inspector-tab');
+    const logsPanel = document.getElementById('logs-panel');
+    const inspectorPanel = document.getElementById('inspector-panel');
+    const inspectorContent = document.getElementById('inspector-content');
+    const clearInspectorBtn = document.getElementById('clear-inspector-btn');
+    const exportInspectorBtn = document.getElementById('export-inspector-btn');
+    const inspectorSearch = document.getElementById('inspector-search');
+    
+    // WebSocket Diagnostic Elements
+    const wsDiagnostics = document.getElementById('ws-diagnostics');
+    const wsConnectTime = document.getElementById('ws-connect-time');
+    const wsSentCount = document.getElementById('ws-sent-count');
+    const wsRecvCount = document.getElementById('ws-recv-count');
+    const wsLastPing = document.getElementById('ws-last-ping');
+    const wsLatency = document.getElementById('ws-latency');
 
     // --- State ---
     let socket = null;
@@ -50,6 +68,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentDepthSymbol = null;
     let currentQuoteSymbol = null;
     let allLogs = []; // To store all log data objects for filtering
+    
+    // WebSocket Inspector State
+    let wsStats = {
+        connectTime: null,
+        messagesSent: 0,
+        messagesReceived: 0,
+        messageHistory: [],
+        lastPingTime: null
+    };
 
     // --- Utility Functions ---
     const showToast = (message, type = 'success') => {
@@ -71,6 +98,56 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Store log data object with its DOM element for easy filtering
         allLogs.push({ ...logData, element: logElement });
+        
+        // Add to WebSocket inspector if it's a WebSocket message
+        if (logData.type === 'ws' && logData.parsed) {
+            addToInspector(logData);
+        }
+    };
+    
+    const addToInspector = (logData) => {
+        const timestamp = new Date().toISOString();
+        const messageData = {
+            timestamp,
+            direction: logData.direction || 'unknown',
+            type: logData.parsed?.type || logData.parsed?.action || 'unknown',
+            data: logData.parsed,
+            raw: logData.message
+        };
+        
+        wsStats.messageHistory.push(messageData);
+        
+        // Keep only last 1000 messages
+        if (wsStats.messageHistory.length > 1000) {
+            wsStats.messageHistory.shift();
+        }
+        
+        renderInspectorMessages();
+    };
+    
+    const renderInspectorMessages = () => {
+        const searchTerm = inspectorSearch.value.toLowerCase();
+        const filteredMessages = wsStats.messageHistory.filter(msg => {
+            if (!searchTerm) return true;
+            return JSON.stringify(msg).toLowerCase().includes(searchTerm);
+        });
+        
+        inspectorContent.innerHTML = filteredMessages.slice(-100).map(msg => {
+            const directionColor = msg.direction === 'send' ? 'text-blue-400' : 'text-green-400';
+            const typeColor = msg.type === 'market_data' ? 'text-yellow-400' : 'text-gray-300';
+            return `
+                <div class="mb-2 p-2 border-l-2 ${msg.direction === 'send' ? 'border-blue-500' : 'border-green-500'} bg-gray-800">
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="${directionColor}">${msg.direction.toUpperCase()}</span>
+                        <span class="${typeColor}">${msg.type}</span>
+                        <span class="text-gray-500">${new Date(msg.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <pre class="text-xs overflow-x-auto">${JSON.stringify(msg.data, null, 2)}</pre>
+                </div>
+            `;
+        }).join('');
+        
+        inspectorContent.scrollTop = inspectorContent.scrollHeight;
     };
 
     const formatTimestamp = (ts) => {
@@ -86,52 +163,129 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- API & WebSocket Functions ---
     const makeApiRequest = async (endpoint, options = {}) => {
         addLog({type: 'api', message: `Requesting ${endpoint}...`});
-        const host = hostServerInput.value;
+        const host = hostServerInput.value || 'http://127.0.0.1:5000';
         const apiKey = apiKeyInput.value;
         if (!host || !apiKey) { showToast('Host Server and API Key are required.', 'error'); return null; }
+        
+        // Validate API key format
+        if (apiKey.length < 10) { showToast('Invalid API key format.', 'error'); return null; }
+        
         const url = `${host}/api/v1${endpoint}`;
         const headers = { 'Content-Type': 'application/json', ...options.headers };
         const body = options.body ? JSON.parse(options.body) : {};
         if(options.method === 'POST' && !body.apikey) body.apikey = apiKey;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
         try {
-            const response = await fetch(url, { ...options, headers, body: JSON.stringify(body) });
+            const response = await fetch(url, { 
+                ...options, 
+                headers, 
+                body: JSON.stringify(body),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
             const result = await response.json();
-            if (!response.ok || result.status === 'error') throw new Error(result.message || `Request failed`);
+            if (result.status === 'error') throw new Error(result.message || 'Request failed');
             addLog({type: 'api', message: `Success ${endpoint}: ${JSON.stringify(result)}`});
             return result;
         } catch (error) {
-            addLog({type: 'error', message: `API Error ${endpoint}: ${error.message}`});
-            showToast(error.message, 'error');
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                addLog({type: 'error', message: `API Timeout ${endpoint}: Request timed out`});
+                showToast('Request timed out', 'error');
+            } else {
+                addLog({type: 'error', message: `API Error ${endpoint}: ${error.message}`});
+                showToast(error.message, 'error');
+            }
             return null;
         }
     };
     
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    const reconnectDelay = 1000;
+    
+    const updateWebSocketDiagnostics = () => {
+        if (wsStats.connectTime) {
+            wsConnectTime.textContent = new Date(wsStats.connectTime).toLocaleTimeString();
+            wsDiagnostics.classList.remove('hidden');
+        }
+        wsSentCount.textContent = wsStats.messagesSent;
+        wsRecvCount.textContent = wsStats.messagesReceived;
+        
+        if (wsStats.lastPingTime) {
+            wsLastPing.textContent = new Date(wsStats.lastPingTime).toLocaleTimeString();
+        }
+        
+        wsLatency.textContent = '-';
+    };
+    
+    // Removed ping functionality for security
+    
     const connectWebSocket = () => {
         if (socket && socket.readyState === WebSocket.OPEN) { socket.close(); return; }
-        const wsUrl = wsServerInput.value;
+        const wsUrl = wsServerInput.value || 'ws://127.0.0.1:8765';
         const apiKey = apiKeyInput.value;
         if (!wsUrl || !apiKey) { showToast('WebSocket Server and API Key are required.', 'error'); return; }
+        
+        // Validate API key format
+        if (apiKey.length < 10) { showToast('Invalid API key format.', 'error'); return; }
+        
         socket = new WebSocket(wsUrl);
         socket.onopen = () => {
             addLog({type: 'ws', direction: 'info', message: 'Connection opened'});
+            reconnectAttempts = 0; // Reset on successful connection
+            wsStats.connectTime = Date.now();
+            wsStats.reconnectionCount = reconnectAttempts;
+            
             const authMsg = { action: 'authenticate', api_key: apiKey };
             socket.send(JSON.stringify(authMsg));
-            addLog({type: 'ws', direction: 'send', message: JSON.stringify(authMsg)});
+            wsStats.messagesSent++;
+            addLog({type: 'ws', direction: 'send', message: JSON.stringify(authMsg), parsed: authMsg});
+            
+            updateWebSocketDiagnostics();
         };
-        socket.onclose = () => {
-            addLog({type: 'ws', direction: 'info', message: 'Connection closed'});
+        socket.onclose = (event) => {
+            addLog({type: 'ws', direction: 'info', message: `Connection closed (Code: ${event.code})`});
             wsStatus.textContent = 'Disconnected'; wsStatus.className = 'font-bold text-error'; connectBtn.textContent = 'Connect';
             currentDepthSymbol = null; currentQuoteSymbol = null;
+            wsDiagnostics.classList.add('hidden');
+            
+            // Auto-reconnect logic
+            if (reconnectAttempts < maxReconnectAttempts && event.code !== 1000) {
+                reconnectAttempts++;
+                addLog({type: 'info', message: `Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`});
+                setTimeout(() => connectWebSocket(), reconnectDelay * reconnectAttempts);
+            }
         };
-        socket.onerror = (err) => addLog({type: 'error', message: `WS Error: ${err.message || 'Unknown'}`});
+        socket.onerror = (err) => {
+            addLog({type: 'error', message: `WS Error: ${err.message || 'Connection failed'}`});
+            showToast('WebSocket connection failed', 'error');
+        };
         socket.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            addLog({type: 'ws', direction: 'recv', message: event.data, parsed: msg});
-            if ((msg.action === "authenticate" || msg.type === "auth") && msg.status === "success") {
-                wsStatus.textContent = 'Connected'; wsStatus.className = 'font-bold text-success'; connectBtn.textContent = 'Disconnect';
-                if (liveModeToggle.checked) Object.values(watchlist).forEach(symbol => subscribe(symbol, 1));
-            } else if (msg.type === 'market_data') {
-                handleMarketData(msg);
+            try {
+                const msg = JSON.parse(event.data);
+                wsStats.messagesReceived++;
+                
+                addLog({type: 'ws', direction: 'recv', message: event.data, parsed: msg});
+                
+                if ((msg.action === "authenticate" || msg.type === "auth") && msg.status === "success") {
+                    wsStatus.textContent = 'Connected'; wsStatus.className = 'font-bold text-success'; connectBtn.textContent = 'Disconnect';
+                    if (liveModeToggle.checked) Object.values(watchlist).forEach(symbol => subscribe(symbol, 1));
+                } else if (msg.type === 'market_data') {
+                    handleMarketData(msg);
+                }
+                
+                updateWebSocketDiagnostics();
+            } catch (error) {
+                addLog({type: 'error', message: `Failed to parse WebSocket message: ${error.message}`});
             }
         };
     };
@@ -140,14 +294,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
         const msg = { action: 'subscribe', symbol: symbolData.symbol, exchange: symbolData.exchange, mode: mode };
         socket.send(JSON.stringify(msg));
-        addLog({type: 'ws', direction: 'send', message: JSON.stringify(msg)});
+        wsStats.messagesSent++;
+        addLog({type: 'ws', direction: 'send', message: JSON.stringify(msg), parsed: msg});
+        updateWebSocketDiagnostics();
     };
 
     const unsubscribe = (symbolData, mode) => {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
         const msg = { action: 'unsubscribe', symbol: symbolData.symbol, exchange: symbolData.exchange, mode: mode };
         socket.send(JSON.stringify(msg));
-        addLog({type: 'ws', direction: 'send', message: JSON.stringify(msg)});
+        wsStats.messagesSent++;
+        addLog({type: 'ws', direction: 'send', message: JSON.stringify(msg), parsed: msg});
+        updateWebSocketDiagnostics();
     };
     
     const handleMarketData = (data) => {
@@ -187,13 +345,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateDepthPanelView = (data) => {
         const panel = document.getElementById('depth-panel-modal');
         const fields = panel.querySelectorAll('[data-field]');
-        const normalizedData = { ...data, close: data.close ?? data.prev_close, bid: data.bid ?? (data.bids && data.bids[0]?.price), ask: data.ask ?? (data.asks && data.asks[0]?.price) };
+        
+        // Normalize data and map field names to match HTML data-field attributes
+        const normalizedData = { 
+            ...data, 
+            close: data.close ?? data.prev_close, 
+            bid: data.bid ?? (data.bids && data.bids[0]?.price), 
+            ask: data.ask ?? (data.asks && data.asks[0]?.price),
+            // Map underscore field names to match HTML data-field attributes
+            totalbuyqty: data.total_buy_quantity ?? data.totalbuyqty,
+            totalsellqty: data.total_sell_quantity ?? data.totalsellqty
+        };
+        
         fields.forEach(field => {
-            const key = field.dataset.field; let value = normalizedData[key]; if (value === undefined || value === null) { field.textContent = '-'; return; }
-            if (key === 'ltt') { field.textContent = formatTimestamp(value); return; }
+            const key = field.dataset.field; 
+            let value = normalizedData[key]; 
+            if (value === undefined || value === null) { 
+                field.textContent = '-'; 
+                return; 
+            }
+            if (key === 'ltt') { 
+                field.textContent = formatTimestamp(value); 
+                return; 
+            }
             const toFixed = (key.includes('qty') || key === 'volume' || key === 'oi' || key === 'ltq') ? 0 : 2;
             field.textContent = formatNumber(value, toFixed);
         });
+        
         const bidsContainer = panel.querySelector('#depth-panel-bids');
         const asksContainer = panel.querySelector('#depth-panel-asks');
         const formatSide = (sideData, type) => {
@@ -209,11 +387,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateQuoteView = (data) => {
         const modal = document.getElementById('quote-data-modal');
         const fields = modal.querySelectorAll('[data-field]');
-        const normalizedData = { ...data, close: data.close ?? data.prev_close };
+        
+        // Normalize data and ensure field compatibility
+        const normalizedData = { 
+            ...data, 
+            close: data.close ?? data.prev_close,
+            // Map any additional field name variations if needed
+            last_quantity: data.last_quantity ?? data.ltq ?? data.last_traded_qty
+        };
+        
         fields.forEach(field => {
-            const key = field.dataset.field; let value = normalizedData[key]; if (value === undefined || value === null) { field.textContent = '-'; return; }
-            if (key === 'ltt') { field.textContent = formatTimestamp(value); return; }
-            const toFixed = (key.includes('qty') || key === 'volume' || key === 'oi' || key === 'last_quantity') ? 0 : 2;
+            const key = field.dataset.field; 
+            let value = normalizedData[key]; 
+            if (value === undefined || value === null) { 
+                field.textContent = '-'; 
+                return; 
+            }
+            if (key === 'ltt') { 
+                field.textContent = formatTimestamp(value); 
+                return; 
+            }
+            const toFixed = (key.includes('qty') || key.includes('quantity') || key === 'volume' || key === 'oi') ? 0 : 2;
             field.textContent = formatNumber(value, toFixed);
         });
     };
@@ -316,7 +510,72 @@ document.addEventListener('DOMContentLoaded', () => {
         resetFilterDropdowns(1);
         allLogs.forEach(log => log.element.classList.remove('hidden'));
     });
+    
+    // --- WebSocket Inspector Functions ---
+    const switchTab = (activeTab) => {
+        // Remove active class from all tabs
+        [logsTab, inspectorTab].forEach(tab => tab.classList.remove('tab-active'));
+        
+        // Hide all panels
+        [logsPanel, inspectorPanel].forEach(panel => panel.classList.add('hidden'));
+        
+        // Show active tab and panel
+        activeTab.classList.add('tab-active');
+        
+        if (activeTab === logsTab) {
+            logsPanel.classList.remove('hidden');
+        } else if (activeTab === inspectorTab) {
+            inspectorPanel.classList.remove('hidden');
+            renderInspectorMessages();
+        }
+    };
+    
+    const exportInspectorData = () => {
+        const dataStr = JSON.stringify(wsStats.messageHistory, null, 2);
+        const dataBlob = new Blob([dataStr], {type: 'application/json'});
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `websocket-messages-${new Date().toISOString().slice(0, 19)}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        showToast('Message history exported', 'success');
+    };
+    
+    // --- WebSocket Inspector Event Listeners ---
+    logsTab.addEventListener('click', () => switchTab(logsTab));
+    inspectorTab.addEventListener('click', () => switchTab(inspectorTab));
+    
+    clearInspectorBtn.addEventListener('click', () => {
+        wsStats.messageHistory = [];
+        renderInspectorMessages();
+        showToast('Inspector cleared', 'success');
+    });
+    exportInspectorBtn.addEventListener('click', exportInspectorData);
+    inspectorSearch.addEventListener('input', renderInspectorMessages);
 
+    // Load saved settings from localStorage
+    const loadSettings = () => {
+        const savedHost = localStorage.getItem('playground-host');
+        const savedWsServer = localStorage.getItem('playground-ws-server');
+        if (savedHost) hostServerInput.value = savedHost;
+        if (savedWsServer) wsServerInput.value = savedWsServer;
+    };
+    
+    // Save settings to localStorage
+    const saveSettings = () => {
+        localStorage.setItem('playground-host', hostServerInput.value);
+        localStorage.setItem('playground-ws-server', wsServerInput.value);
+    };
+    
+    // Add event listeners to save settings when changed
+    hostServerInput.addEventListener('change', saveSettings);
+    wsServerInput.addEventListener('change', saveSettings);
+    
     // Init
+    loadSettings();
     renderWatchlist();
+    
+    // Initialize with logs tab active
+    switchTab(logsTab);
 });
