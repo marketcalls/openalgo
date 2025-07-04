@@ -105,7 +105,7 @@ def validate_and_adjust_date_range(start_date, end_date, interval):
 
 @api.route('/<string:symbol>')
 @api.doc(params={
-    'symbol': 'Stock symbol with exchange (e.g., NSE:ZOMATO)',
+    'symbol': 'Stock symbol with exchange (e.g., NSE:RELIANCE)',
     'interval': 'Time interval (e.g., D, 5m, 1h)',
     'from': 'Start date (YYYY-MM-DD)',
     'to': 'End date (YYYY-MM-DD)',
@@ -119,9 +119,9 @@ class Ticker(Resource):
     def get(self, symbol):
         """Get aggregate bars for a stock over a given date range with specified interval"""
         try:
-            # Default to NSE:ZOMATO if no symbol is provided
+            # Default to NSE:RELIANCE if no symbol is provided
             if not symbol:
-                symbol = "NSE:ZOMATO"
+                symbol = "NSE:RELIANCE"
             
             # Split exchange and symbol
             parts = symbol.split(':')
@@ -129,7 +129,7 @@ class Ticker(Resource):
                 exchange, symbol = parts
             else:
                 exchange = "NSE"
-                symbol = "ZOMATO"
+                symbol = "RELIANCE"
             
             # Get parameters from query string
             ticker_data = {
