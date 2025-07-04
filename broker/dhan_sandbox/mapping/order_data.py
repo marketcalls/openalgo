@@ -50,7 +50,7 @@ def map_order_data(order_data):
                 elif order['exchangeSegment'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['productType'] == 'MARGIN':
                     order['productType'] = 'NRML'
             else:
-                logger.info(f"Symbol not found for token {{instrument_token}} and exchange {exchange}. Keeping original trading symbol.")
+                logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
