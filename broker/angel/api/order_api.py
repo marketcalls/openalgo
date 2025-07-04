@@ -41,7 +41,15 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
     
-    return json.loads(response.text)
+    # Handle empty response
+    if not response.text:
+        return {}
+    
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
+        return {}
 
 def get_order_book(auth):
     return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
