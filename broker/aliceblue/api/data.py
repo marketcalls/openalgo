@@ -169,11 +169,28 @@ class BrokerData:
                     "message": f"Error processing request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK")
+        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            exchange = 'NSE'  # Default to NSE for Indian stocks
-            logger.info(f"Processing string symbol: {symbol} on {exchange}")
+            
+            # Auto-detect exchange based on symbol pattern
+            if symbol.endswith('FUT'):
+                # Futures contracts - NFO for equity futures, BFO for BSE futures
+                exchange = 'NFO'  # Default to NFO for futures
+            elif symbol.endswith('CE') or symbol.endswith('PE'):
+                # Options contracts - NFO for equity options, BFO for BSE options
+                exchange = 'NFO'  # Default to NFO for options
+            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
+                # Currency derivatives
+                exchange = 'CDS'
+            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
+                # Commodity futures
+                exchange = 'MCX'
+            else:
+                # Default to NSE for equity stocks
+                exchange = 'NSE'
+                
+            logger.info(f"Processing string symbol: {symbol} on {exchange} (auto-detected)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, let's create mock data for testing
@@ -213,11 +230,14 @@ class BrokerData:
                         success = websocket.subscribe(instruments)
                         
                         if success:
-                            # Wait briefly for data to arrive
-                            time.sleep(0.5)
+                            # Wait longer for data to arrive, especially for first subscription
+                            logger.info(f"Waiting for WebSocket data for {exchange}:{symbol}")
+                            time.sleep(2.0)  # Increased wait time
                             
                             # Retrieve quote from WebSocket
+                            logger.info(f"Attempting to retrieve quote for {exchange}:{token}")
                             quote = websocket.get_quote(exchange, token)
+                            logger.info(f"Quote retrieval result: {quote is not None}")
                             
                             if quote:
                                 # Format the response according to OpenAlgo standard format
@@ -234,7 +254,7 @@ class BrokerData:
                                     'change': float(quote.get('change', 0)),
                                     'change_percent': float(quote.get('change_percent', 0)),
                                     'volume': int(quote.get('volume', 0)),
-                                    'oi': int(quote.get('oi', 0)),
+                                    'oi': int(quote.get('open_interest', 0)),
                                     'bid': float(quote.get('bid', 0)),
                                     'ask': float(quote.get('ask', 0)),
                                     'timestamp': datetime.now().isoformat()
@@ -246,8 +266,15 @@ class BrokerData:
                                 
                                 quote_data.append(quote_item)
                                 logger.info(f"Retrieved real-time quote for {symbol} on {exchange}")
+                                
+                                # Unsubscribe after getting the data to stop continuous streaming
+                                logger.info(f"Unsubscribing from {exchange}:{symbol} after retrieving quote")
+                                websocket.unsubscribe(instruments)
                             else:
                                 logger.warning(f"No quote data received for {symbol} on {exchange}")
+                                # Unsubscribe even if no data received to clean up subscription
+                                logger.info(f"Unsubscribing from {exchange}:{symbol} due to no quote data")
+                                websocket.unsubscribe(instruments)
                                 # Create fallback data with zeros
                                 quote_item = {
                                     'symbol': symbol,
@@ -267,6 +294,7 @@ class BrokerData:
                                 quote_data.append(quote_item)
                         else:
                             logger.error(f"Failed to subscribe to {symbol} on {exchange}")
+                            # No need to unsubscribe if subscription failed
                             # Create error data
                             quote_item = {
                                 'symbol': symbol,
@@ -289,39 +317,31 @@ class BrokerData:
                 else:
                     logger.error(f"Could not find token for {symbol} on {exchange}")
         
-        # Return OpenAlgo standard format
-        # If there's no data, return empty response with success status
+        # Return data directly (service layer will wrap it)
+        # If there's no data, return empty response
         if not quote_data:
-            return {
-                "status": "success",
-                "data": {}
-            }
+            return {}
         
         # For single symbol request (most common case), return in simplified format
         if len(quote_data) == 1:
             # Extract the first and only quote
             quote = quote_data[0]
             
-            # Return in the expected OpenAlgo standard format
+            # Return the data directly without wrapping
             return {
-                "status": "success",
-                "data": {
-                    "ltp": quote.get('ltp', 0),
-                    "open": quote.get('open', 0),
-                    "high": quote.get('high', 0),
-                    "low": quote.get('low', 0),
-                    "prev_close": quote.get('prev_close', 0) or quote.get('close', 0),
-                    "volume": quote.get('volume', 0),
-                    "bid": quote.get('bid', 0),
-                    "ask": quote.get('ask', 0)
-                }
+                "ltp": quote.get('ltp', 0),
+                "oi": quote.get('oi', 0),
+                "open": quote.get('open', 0),
+                "high": quote.get('high', 0),
+                "low": quote.get('low', 0),
+                "prev_close": quote.get('prev_close', 0) or quote.get('close', 0),
+                "volume": quote.get('volume', 0),
+                "bid": quote.get('bid', 0),
+                "ask": quote.get('ask', 0)
             }
         
         # For multiple symbols, return the full list
-        return {
-            "status": "success",
-            "data": quote_data
-        }
+        return quote_data
         
         # Support various input formats
         if not hasattr(symbol_list, '__iter__'):
@@ -689,11 +709,28 @@ class BrokerData:
                     "message": f"Error processing depth request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK")
+        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            exchange = 'NSE'  # Default to NSE for Indian stocks
-            logger.info(f"Processing string symbol depth: {symbol} on {exchange}")
+            
+            # Auto-detect exchange based on symbol pattern (same logic as quotes)
+            if symbol.endswith('FUT'):
+                # Futures contracts - NFO for equity futures, BFO for BSE futures
+                exchange = 'NFO'  # Default to NFO for futures
+            elif symbol.endswith('CE') or symbol.endswith('PE'):
+                # Options contracts - NFO for equity options, BFO for BSE options
+                exchange = 'NFO'  # Default to NFO for options
+            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
+                # Currency derivatives
+                exchange = 'CDS'
+            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
+                # Commodity futures
+                exchange = 'MCX'
+            else:
+                # Default to NSE for equity stocks
+                exchange = 'NSE'
+                
+            logger.info(f"Processing string symbol depth: {symbol} on {exchange} (auto-detected)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, prepare the instruments for WebSocket subscription
@@ -741,8 +778,9 @@ class BrokerData:
                     success = websocket.subscribe([instrument], is_depth=True)
                     
                     if success:
-                        # Wait briefly for data to arrive
-                        time.sleep(0.5)  # Give it a moment to get depth data
+                        # Wait longer for depth data to arrive
+                        logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
+                        time.sleep(2.0)  # Increased wait time for depth data
                         
                         # Retrieve depth from WebSocket
                         depth = websocket.get_market_depth(exchange, token)
@@ -757,6 +795,7 @@ class BrokerData:
                                 'total_buy_qty': depth.get('total_buy_quantity', 0),
                                 'total_sell_qty': depth.get('total_sell_quantity', 0),
                                 'ltp': depth.get('ltp', 0),
+                                'oi': depth.get('open_interest', 0),
                                 'depth': {
                                     'buy': [],
                                     'sell': []
@@ -783,8 +822,15 @@ class BrokerData:
                             
                             depth_data.append(item)
                             logger.info(f"Retrieved market depth for {symbol} on {exchange}")
+                            
+                            # Unsubscribe after getting the data to stop continuous streaming
+                            logger.info(f"Unsubscribing from depth for {exchange}:{symbol} after retrieving data")
+                            websocket.unsubscribe([instrument], is_depth=True)
                         else:
                             logger.warning(f"No market depth received for {symbol} on {exchange}")
+                            # Also unsubscribe even if no data received to clean up subscription
+                            logger.info(f"Unsubscribing from depth for {exchange}:{symbol} due to no data")
+                            websocket.unsubscribe([instrument], is_depth=True)
                     else:
                         logger.error(f"Failed to subscribe to market depth for {symbol} on {exchange}")
                 else:
@@ -792,44 +838,37 @@ class BrokerData:
             else:
                 logger.warning(f"Unsupported symbol format for market depth: {sym}")
         
+        # Return data directly (service layer will wrap it)
         # If there's no data, return empty response
         if not depth_data:
-            return {
-                "status": "success",
-                "data": {}
-            }
+            return {}
         
         # For single symbol request (most common case), return in simplified format
         if len(depth_data) == 1:
             # Extract the first and only depth item
             depth_item = depth_data[0]
             
-            # Return in the expected OpenAlgo standard format
+            # Return the data directly without wrapping
             return {
-                "status": "success",
-                "data": {
-                    "symbol": depth_item.get('symbol', ''),
-                    "exchange": depth_item.get('exchange', ''),
-                    "ltp": depth_item.get('ltp', 0),
-                    "total_buy_qty": depth_item.get('total_buy_qty', 0),
-                    "total_sell_qty": depth_item.get('total_sell_qty', 0),
-                    "depth": depth_item.get('depth', {'buy': [], 'sell': []})
-                }
+                "symbol": depth_item.get('symbol', ''),
+                "exchange": depth_item.get('exchange', ''),
+                "ltp": depth_item.get('ltp', 0),
+                "oi": depth_item.get('oi', 0),   
+                "total_buy_qty": depth_item.get('total_buy_qty', 0),
+                "total_sell_qty": depth_item.get('total_sell_qty', 0),
+                "depth": depth_item.get('depth', {'buy': [], 'sell': []})
             }
         
         # For multiple symbols, return the full list
-        return {
-            "status": "success",
-            "data": depth_data
-        }
+        return depth_data
     
-    def get_history(self, exchange: str, token: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
         """
         Get historical candle data for a symbol.
         
         Args:
+            symbol (str): Trading symbol (e.g., 'TCS', 'RELIANCE')
             exchange (str): Exchange code (NSE, BSE, NFO, etc.)
-            token (str): Instrument token
             timeframe (str): Timeframe such as '1m', '5m', etc.
             start_time (int): Start time in Unix timestamp (seconds)
             end_time (int): End time in Unix timestamp (seconds)
@@ -838,7 +877,15 @@ class BrokerData:
             pd.DataFrame: DataFrame with historical candle data
         """
         try:
-            logger.info(f"Getting historical data for {exchange}:{token}, timeframe: {timeframe}")
+            logger.info(f"Getting historical data for {symbol}:{exchange}, timeframe: {timeframe}")
+            
+            # Get token for the symbol
+            token = get_token(symbol, exchange)
+            if not token:
+                logger.error(f"Token not found for {symbol} on {exchange}")
+                return pd.DataFrame()
+            
+            logger.info(f"Found token {token} for {symbol}:{exchange}")
             
             # Convert timeframe to AliceBlue format
             aliceblue_timeframe = self.timeframe_map.get(timeframe)
@@ -846,35 +893,81 @@ class BrokerData:
                 logger.error(f"Invalid timeframe: {timeframe}")
                 return pd.DataFrame()
             
-            # Get user_id from environment variables and session_id from class instance
-            user_id = os.environ.get("BROKER_API_SECRET")
+            # Get credentials - user_id is BROKER_API_KEY, auth token is session_id
+            from utils.config import get_broker_api_key, get_broker_api_secret
+            
+            user_id = get_broker_api_key()  # This is the user_id for AliceBlue
             session_id = self.session_id
             
             if not user_id or not session_id:
                 logger.error(f"Missing credentials for historical data - user_id: {'Yes' if user_id else 'No'}, session_id: {'Yes' if session_id else 'No'}")
                 return pd.DataFrame()
             
-            # Prepare request headers
+            # Use the same authentication as other AliceBlue APIs (order_api.py pattern)
             headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {user_id} {session_id}"
+                'Authorization': f'Bearer {get_broker_api_secret()} {session_id}',
+                'Content-Type': 'application/json'
             }
+            
+            # Alternative: Try adding session token to payload as some historical APIs expect it
+            # payload['sessionId'] = session_id
             
             # For indices, append ::index to the exchange
             exchange_str = f"{exchange}::index" if exchange.endswith("IDX") else exchange
             
             # Convert timestamps to milliseconds as required by AliceBlue API
-            start_ms = str(start_time) + '000'  # Add 3 zeros to convert seconds to milliseconds
-            end_ms = str(end_time) + '000'
+            # Format: Unix timestamp in milliseconds (like 1660128489000)
+            import time
+            from datetime import datetime
             
-            # Prepare request payload
+            def convert_to_unix_ms(timestamp):
+                """Convert various timestamp formats to Unix milliseconds"""
+                if isinstance(timestamp, str):
+                    # Handle date strings like '2025-07-03'
+                    try:
+                        if 'T' in timestamp or ' ' in timestamp:
+                            # Handle datetime strings like '2025-07-03T10:30:00' or '2025-07-03 10:30:00'
+                            dt = datetime.fromisoformat(timestamp.replace('T', ' '))
+                        else:
+                            # Handle date-only strings like '2025-07-03'
+                            dt = datetime.strptime(timestamp, '%Y-%m-%d')
+                        # Convert to Unix timestamp in seconds, then to milliseconds
+                        return str(int(dt.timestamp() * 1000))
+                    except ValueError as e:
+                        logger.error(f"Error parsing timestamp string '{timestamp}': {e}")
+                        # Fallback to current time
+                        return str(int(time.time() * 1000))
+                elif isinstance(timestamp, (int, float)):
+                    if timestamp > 1000000000000:
+                        # Already in milliseconds
+                        return str(int(timestamp))
+                    elif timestamp > 1000000000:
+                        # In seconds, convert to milliseconds
+                        return str(int(timestamp * 1000))
+                    else:
+                        # Unknown format, assume milliseconds
+                        return str(int(timestamp))
+                else:
+                    # Fallback to current time
+                    return str(int(time.time() * 1000))
+            
+            start_ms = convert_to_unix_ms(start_time)
+            end_ms = convert_to_unix_ms(end_time)
+            
+            # Prepare request payload according to AliceBlue API docs
             payload = {
-                "token": token,
-                "exchange": exchange_str,
+                "token": str(token),  # Token should be the instrument token
+                "exchange": exchange,  # Exchange should be NSE, NFO, etc.
                 "from": start_ms,
                 "to": end_ms,
                 "resolution": aliceblue_timeframe
             }
+            
+            # Debug logging
+            logger.info(f"Making historical data request:")
+            logger.info(f"URL: {HISTORICAL_API_URL}")
+            logger.info(f"Headers: {headers}")
+            logger.info(f"Payload: {payload}")
             
             # Make request to historical API
             client = get_httpx_client()

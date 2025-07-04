@@ -41,9 +41,9 @@ class AliceBlueWebSocket:
         self.lock = threading.Lock()
         self.last_message_time = datetime.now()
         self.subscribed_tokens = set()
-        self.subscriptions = {}  # Dictionary to track subscribed instruments
-        self.last_quotes = {}
-        self.last_depth = {}
+        self.subscriptions = {}  # Dictionary to track subscribed instruments: exchange|token -> instrument object
+        self.last_quotes = {}   # Dictionary to store quote data: exchange:token -> quote data
+        self.last_depth = {}    # Dictionary to store depth data: exchange:token -> depth data
         self._connect_thread = None
         self._stop_event = threading.Event()
         
@@ -174,6 +174,10 @@ class AliceBlueWebSocket:
             data = json.loads(message)
             logger.debug(f"Parsed WebSocket message: {json.dumps(data, indent=2)}")
             
+            # Debug log for OI values if present
+            if 'oi' in data:
+                logger.info(f"Raw OI data from AliceBlue: oi='{data.get('oi')}' (type: {type(data.get('oi'))}) for token {data.get('tk', 'unknown')}")
+            
             # Authentication response
             if 's' in data and data['s'] == 'OK':
                 with self.lock:
@@ -235,6 +239,24 @@ class AliceBlueWebSocket:
             # Extract token and exchange
             token = data.get('tk', '')
             exchange = data.get('e', '')
+            
+            # Look up the original subscription to get the correct symbol
+            subscription_key = f"{exchange}|{token}"
+            original_instrument = None
+            with self.lock:
+                original_instrument = self.subscriptions.get(subscription_key)
+            
+            # Use subscription symbol if available, otherwise use broker symbol from data
+            if original_instrument and hasattr(original_instrument, 'symbol'):
+                symbol = original_instrument.symbol
+                logger.info(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+            else:
+                # Fallback to broker symbol from AliceBlue data
+                symbol = data.get('ts', f"TOKEN_{token}")
+                logger.warning(f"✗ Using broker symbol: {symbol} for {subscription_key} (subscription not found)")
+                logger.warning(f"Available subscriptions: {list(self.subscriptions.keys())}")
+            
+            # Use consistent key format for data storage: exchange:token
             key = f"{exchange}:{token}"
             
             # Message type can be 'tk' (acknowledgment) or 'tf' (feed)
@@ -255,10 +277,12 @@ class AliceBlueWebSocket:
                     'last_trade_time': data.get('ft', ''),
                     'last_trade_quantity': int(data.get('ltq', 0)),
                     'average_trade_price': float(data.get('ap', 0)),
-                    'open_interest': int(data.get('oi', 0)),
+                    'open_interest': int(float(data.get('oi', 0))) if data.get('oi') else 0,
+                    'prev_open_interest': int(float(data.get('poi', 0))) if data.get('poi') else 0,
                     'total_buy_quantity': int(data.get('tbq', 0)),
                     'total_sell_quantity': int(data.get('tsq', 0)),
-                    'symbol': data.get('ts', ''),  # Trading symbol
+                    'symbol': symbol,  # Use OpenAlgo symbol from subscription
+                    'broker_symbol': data.get('ts', ''),  # Keep broker symbol for reference
                     'timestamp': datetime.now().isoformat()
                 }
                 
@@ -290,6 +314,8 @@ class AliceBlueWebSocket:
                     if 'sq1' in data: quote['ask_qty'] = int(data.get('sq1', 0))
                     if 'tbq' in data: quote['total_buy_quantity'] = int(data.get('tbq', 0))
                     if 'tsq' in data: quote['total_sell_quantity'] = int(data.get('tsq', 0))
+                    if 'oi' in data: quote['open_interest'] = int(float(data.get('oi', 0))) if data.get('oi') else 0
+                    if 'poi' in data: quote['prev_open_interest'] = int(float(data.get('poi', 0))) if data.get('poi') else 0
                     
                     logger.debug(f"Updated tick data for {exchange}:{token} - LTP: {quote.get('ltp', 'N/A')}")
             else:
@@ -300,7 +326,7 @@ class AliceBlueWebSocket:
             with self.lock:
                 self.last_quotes[key] = quote
                 
-            logger.debug(f"Stored quote data for {key} with LTP {quote.get('ltp', 'N/A')}")
+            logger.info(f"✓ Stored quote data for {key} with LTP {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}, OI: {quote.get('open_interest', 'N/A')}")
             
             # Log the first time we get data for a token
             if message_type == 'tk':
@@ -320,6 +346,24 @@ class AliceBlueWebSocket:
             # Extract token and exchange
             token = data.get('tk', '')
             exchange = data.get('e', '')
+            
+            # Look up the original subscription to get the correct symbol
+            subscription_key = f"{exchange}|{token}"
+            original_instrument = None
+            with self.lock:
+                original_instrument = self.subscriptions.get(subscription_key)
+            
+            # Use subscription symbol if available, otherwise use broker symbol from data
+            if original_instrument and hasattr(original_instrument, 'symbol'):
+                symbol = original_instrument.symbol
+                logger.info(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+            else:
+                # Fallback to broker symbol from AliceBlue data
+                symbol = data.get('ts', f"TOKEN_{token}")
+                logger.warning(f"✗ Using broker symbol: {symbol} for {subscription_key} (subscription not found)")
+                logger.warning(f"Available subscriptions: {list(self.subscriptions.keys())}")
+            
+            # Use consistent key format for data storage: exchange:token
             key = f"{exchange}:{token}"
             
             # Message type can be 'dk' (acknowledgment) or 'df' (feed)
@@ -366,7 +410,10 @@ class AliceBlueWebSocket:
                     'total_buy_quantity': int(data.get('tbq', 0)),
                     'total_sell_quantity': int(data.get('tsq', 0)),
                     'ltp': float(data.get('lp', 0)),
-                    'symbol': data.get('ts', ''),  # Trading symbol
+                    'open_interest': int(float(data.get('oi', 0))) if data.get('oi') else 0,
+                    'prev_open_interest': int(float(data.get('poi', 0))) if data.get('poi') else 0,
+                    'symbol': symbol,  # Use OpenAlgo symbol from subscription
+                    'broker_symbol': data.get('ts', ''),  # Keep broker symbol for reference
                     'timestamp': datetime.now().isoformat()
                 }
                 
@@ -393,6 +440,8 @@ class AliceBlueWebSocket:
                     if 'ltq' in data: depth['last_trade_quantity'] = int(data.get('ltq', 0))
                     if 'tbq' in data: depth['total_buy_quantity'] = int(data.get('tbq', 0))
                     if 'tsq' in data: depth['total_sell_quantity'] = int(data.get('tsq', 0))
+                    if 'oi' in data: depth['open_interest'] = int(float(data.get('oi', 0))) if data.get('oi') else 0
+                    if 'poi' in data: depth['prev_open_interest'] = int(float(data.get('poi', 0))) if data.get('poi') else 0
                     
                     # Update bid/ask levels if provided in the update
                     for i in range(1, 6):
@@ -427,7 +476,7 @@ class AliceBlueWebSocket:
             with self.lock:
                 self.last_depth[key] = depth
                 
-            logger.debug(f"Stored market depth data for {key} with {len(depth.get('bids', []))} bid levels and {len(depth.get('asks', []))} ask levels")
+            logger.info(f"✓ Stored depth data for {key} with {len(depth.get('bids', []))} bid levels and {len(depth.get('asks', []))} ask levels, Symbol: {depth.get('symbol', 'N/A')}, OI: {depth.get('open_interest', 'N/A')}")
             
             # Log the first time we get data for a token
             if message_type == 'dk':
@@ -477,49 +526,6 @@ class AliceBlueWebSocket:
             
             threading.Thread(target=delayed_reconnect).start()
     
-    def subscribe(self, instruments, is_depth=False):
-        """
-        Subscribe to market data for specified instruments.
-        
-        Args:
-            instruments (list): List of instrument objects with exchange and token attributes
-            is_depth (bool): Whether to subscribe to market depth data
-        
-        Returns:
-            bool: True if subscription message was sent successfully, False otherwise
-        """
-        if not self.is_connected:
-            logger.warning("Cannot subscribe: WebSocket is not connected")
-            return False
-        
-        tokens = []
-        for instrument in instruments:
-            token_str = f"{instrument.exchange}|{instrument.token}"
-            tokens.append(token_str)
-            self.subscribed_tokens.add(token_str)
-            logger.info(f"Adding to subscription: {instrument.exchange}|{instrument.token}")
-        
-        if not tokens:
-            logger.warning("No valid instruments to subscribe")
-            return False
-        
-        subscription_key = '#'.join(tokens)
-        
-        # Create subscription message
-        sub_message = {
-            "k": subscription_key,
-            "t": "d" if is_depth else "t"  # 'd' for depth, 't' for touchline/tick
-        }
-        
-        logger.info(f"Sending subscription message: {json.dumps(sub_message)}")
-        
-        try:
-            self.ws.send(json.dumps(sub_message))
-            logger.info(f"Subscribed to {'market depth' if is_depth else 'tick data'} for {len(tokens)} instruments")
-            return True
-        except Exception as e:
-            logger.error(f"Error subscribing to instruments: {str(e)}")
-            return False
     
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments
@@ -540,10 +546,12 @@ class AliceBlueWebSocket:
                 logger.warning("No instruments to subscribe")
                 return False
                 
-            # Add instruments to subscriptions
+            # Add instruments to subscriptions mapping: exchange|token -> instrument
             for instrument in instruments:
-                key = f"{instrument.exchange}:{instrument.token}"
-                self.subscriptions[key] = instrument
+                subscription_key = f"{instrument.exchange}|{instrument.token}"
+                self.subscriptions[subscription_key] = instrument
+                logger.info(f"Storing subscription: {subscription_key} -> {getattr(instrument, 'symbol', 'Unknown')}")
+                logger.info(f"Instrument attributes: exchange={instrument.exchange}, token={instrument.token}, symbol={getattr(instrument, 'symbol', 'None')}")
             
             # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"t"}
             # For depth: {"k":"NFO|54957#MCX|239484","t":"d"}
@@ -586,12 +594,13 @@ class AliceBlueWebSocket:
         # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"u"}
         subscription_keys = []
         for instrument in instruments:
-            # Remove from subscriptions
-            key = f"{instrument.exchange}:{instrument.token}"
-            if key in self.subscriptions:
-                del self.subscriptions[key]
+            # Remove from subscriptions using the same key format as subscription
+            subscription_key = f"{instrument.exchange}|{instrument.token}"
+            if subscription_key in self.subscriptions:
+                del self.subscriptions[subscription_key]
+                logger.info(f"Removed subscription: {subscription_key}")
             
-            subscription_keys.append(f"{instrument.exchange}|{instrument.token}")
+            subscription_keys.append(subscription_key)
         
         if subscription_keys:
             # Create the unsubscription message with the correct format
@@ -604,7 +613,7 @@ class AliceBlueWebSocket:
             logger.info(f"Sending unsubscription message: {json.dumps(message)}")
             
             # Send the message
-            self._web_socket.send(json.dumps(message))
+            self.ws.send(json.dumps(message))
             
             logger.info(f"Unsubscribed from {len(instruments)} instruments")
             return True
@@ -612,46 +621,6 @@ class AliceBlueWebSocket:
             logger.warning("No valid unsubscription keys generated")
             return False
     
-    def unsubscribe(self, instruments, is_depth=False):
-        """
-        Unsubscribe from market data for specified instruments.
-
-        Args:
-            instruments (list): List of instrument objects with exchange and token attributes
-            is_depth (bool): Whether to unsubscribe from market depth data
-
-        Returns:
-            bool: True if unsubscription message was sent successfully, False otherwise
-        """
-        if not self.is_connected:
-            logger.warning("Cannot unsubscribe: WebSocket is not connected")
-            return False
-
-        tokens = []
-        for instrument in instruments:
-            token_str = f"{instrument.exchange}|{instrument.token}"
-            tokens.append(token_str)
-            self.subscribed_tokens.discard(token_str)
-
-        if not tokens:
-            logger.warning("No valid instruments to unsubscribe")
-            return False
-
-        unsubscription_key = '#'.join(tokens)
-
-        # Create unsubscription message
-        unsub_message = {
-            "k": unsubscription_key,
-            "t": "ud" if is_depth else "u"  # 'ud' for depth, 'u' for touchline/tick
-        }
-
-        try:
-            self.ws.send(json.dumps(unsub_message))
-            logger.info(f"Unsubscribed from {'market depth' if is_depth else 'tick data'} for {len(tokens)} instruments")
-            return True
-        except Exception as e:
-            logger.error(f"Error unsubscribing from instruments: {str(e)}")
-            return False
 
     def _resubscribe(self):
         """
@@ -724,9 +693,10 @@ class AliceBlueWebSocket:
         with self.lock:
             quote = self.last_quotes.get(key)
             if quote:
-                logger.debug(f"Retrieved quote for {key} - LTP: {quote.get('ltp', 'N/A')}")
+                logger.debug(f"Retrieved quote for {key} - LTP: {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}")
             else:
                 logger.debug(f"No quote data available for {key}")
+                logger.debug(f"Available quote keys: {list(self.last_quotes.keys())}")
             return quote
     
     def get_market_depth(self, exchange, token):
@@ -746,7 +716,8 @@ class AliceBlueWebSocket:
             if depth:
                 bid_levels = len(depth.get('bids', []))
                 ask_levels = len(depth.get('asks', []))
-                logger.debug(f"Retrieved market depth for {key} - Bid levels: {bid_levels}, Ask levels: {ask_levels}")
+                logger.debug(f"Retrieved market depth for {key} - Bid levels: {bid_levels}, Ask levels: {ask_levels}, Symbol: {depth.get('symbol', 'N/A')}")
             else:
                 logger.debug(f"No market depth data available for {key}")
+                logger.debug(f"Available depth keys: {list(self.last_depth.keys())}")
             return depth
