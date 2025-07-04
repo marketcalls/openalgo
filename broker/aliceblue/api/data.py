@@ -266,8 +266,15 @@ class BrokerData:
                                 
                                 quote_data.append(quote_item)
                                 logger.info(f"Retrieved real-time quote for {symbol} on {exchange}")
+                                
+                                # Unsubscribe after getting the data to stop continuous streaming
+                                logger.info(f"Unsubscribing from {exchange}:{symbol} after retrieving quote")
+                                websocket.unsubscribe(instruments)
                             else:
                                 logger.warning(f"No quote data received for {symbol} on {exchange}")
+                                # Unsubscribe even if no data received to clean up subscription
+                                logger.info(f"Unsubscribing from {exchange}:{symbol} due to no quote data")
+                                websocket.unsubscribe(instruments)
                                 # Create fallback data with zeros
                                 quote_item = {
                                     'symbol': symbol,
@@ -287,6 +294,7 @@ class BrokerData:
                                 quote_data.append(quote_item)
                         else:
                             logger.error(f"Failed to subscribe to {symbol} on {exchange}")
+                            # No need to unsubscribe if subscription failed
                             # Create error data
                             quote_item = {
                                 'symbol': symbol,
@@ -309,40 +317,31 @@ class BrokerData:
                 else:
                     logger.error(f"Could not find token for {symbol} on {exchange}")
         
-        # Return OpenAlgo standard format
-        # If there's no data, return empty response with success status
+        # Return data directly (service layer will wrap it)
+        # If there's no data, return empty response
         if not quote_data:
-            return {
-                "status": "success",
-                "data": {}
-            }
+            return {}
         
         # For single symbol request (most common case), return in simplified format
         if len(quote_data) == 1:
             # Extract the first and only quote
             quote = quote_data[0]
             
-            # Return in the expected OpenAlgo standard format
+            # Return the data directly without wrapping
             return {
-                "status": "success",
-                "data": {
-                    "ltp": quote.get('ltp', 0),
-                    "oi": quote.get('oi', 0),
-                    "open": quote.get('open', 0),
-                    "high": quote.get('high', 0),
-                    "low": quote.get('low', 0),
-                    "prev_close": quote.get('prev_close', 0) or quote.get('close', 0),
-                    "volume": quote.get('volume', 0),
-                    "bid": quote.get('bid', 0),
-                    "ask": quote.get('ask', 0)
-                }
+                "ltp": quote.get('ltp', 0),
+                "oi": quote.get('oi', 0),
+                "open": quote.get('open', 0),
+                "high": quote.get('high', 0),
+                "low": quote.get('low', 0),
+                "prev_close": quote.get('prev_close', 0) or quote.get('close', 0),
+                "volume": quote.get('volume', 0),
+                "bid": quote.get('bid', 0),
+                "ask": quote.get('ask', 0)
             }
         
         # For multiple symbols, return the full list
-        return {
-            "status": "success",
-            "data": quote_data
-        }
+        return quote_data
         
         # Support various input formats
         if not hasattr(symbol_list, '__iter__'):
@@ -823,8 +822,15 @@ class BrokerData:
                             
                             depth_data.append(item)
                             logger.info(f"Retrieved market depth for {symbol} on {exchange}")
+                            
+                            # Unsubscribe after getting the data to stop continuous streaming
+                            logger.info(f"Unsubscribing from depth for {exchange}:{symbol} after retrieving data")
+                            websocket.unsubscribe([instrument], is_depth=True)
                         else:
                             logger.warning(f"No market depth received for {symbol} on {exchange}")
+                            # Also unsubscribe even if no data received to clean up subscription
+                            logger.info(f"Unsubscribing from depth for {exchange}:{symbol} due to no data")
+                            websocket.unsubscribe([instrument], is_depth=True)
                     else:
                         logger.error(f"Failed to subscribe to market depth for {symbol} on {exchange}")
                 else:
@@ -832,37 +838,29 @@ class BrokerData:
             else:
                 logger.warning(f"Unsupported symbol format for market depth: {sym}")
         
+        # Return data directly (service layer will wrap it)
         # If there's no data, return empty response
         if not depth_data:
-            return {
-                "status": "success",
-                "data": {}
-            }
+            return {}
         
         # For single symbol request (most common case), return in simplified format
         if len(depth_data) == 1:
             # Extract the first and only depth item
             depth_item = depth_data[0]
             
-            # Return in the expected OpenAlgo standard format
+            # Return the data directly without wrapping
             return {
-                "status": "success",
-                "data": {
-                    "symbol": depth_item.get('symbol', ''),
-                    "exchange": depth_item.get('exchange', ''),
-                    "ltp": depth_item.get('ltp', 0),
-                    "oi": depth_item.get('oi', 0),   
-                    "total_buy_qty": depth_item.get('total_buy_qty', 0),
-                    "total_sell_qty": depth_item.get('total_sell_qty', 0),
-                    "depth": depth_item.get('depth', {'buy': [], 'sell': []})
-                }
+                "symbol": depth_item.get('symbol', ''),
+                "exchange": depth_item.get('exchange', ''),
+                "ltp": depth_item.get('ltp', 0),
+                "oi": depth_item.get('oi', 0),   
+                "total_buy_qty": depth_item.get('total_buy_qty', 0),
+                "total_sell_qty": depth_item.get('total_sell_qty', 0),
+                "depth": depth_item.get('depth', {'buy': [], 'sell': []})
             }
         
         # For multiple symbols, return the full list
-        return {
-            "status": "success",
-            "data": depth_data
-        }
+        return depth_data
     
     def get_history(self, exchange: str, token: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
         """
