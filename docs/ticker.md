@@ -36,9 +36,22 @@ API key must be provided either:
 - In the request header as `X-API-KEY`
 - As a query parameter `apikey`
 
+**Note**: The API key must be obtained from your OpenAlgo instance dashboard under the API Key section.
+
+### AmiBroker Integration
+For AmiBroker users, use this exact URL template format to fetch historical quotes:
+```
+http://127.0.0.1:5000/api/v1/ticker/{symbol}?apikey={api_key}&interval={interval_extra}&from={from_ymd}&to={to_ymd}&format=txt
+```
+
+Example:
+```
+http://127.0.0.1:5000/api/v1/ticker/NSE:ICICIBANK?apikey=your_api_key_here&interval=1m&from=2025-06-04&to=2025-07-04&format=txt
+```
+
 ## Example Request
 ```
-GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?interval=D&from=2023-01-09&to=2023-02-10&adjusted=true&sort=asc
+GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?apikey=your_api_key_here&interval=D&from=2023-01-09&to=2023-02-10&adjusted=true&sort=asc
 ```
 
 ## Response Format
@@ -68,7 +81,7 @@ GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?interval=D&from=2023-01-09&
 ## Example Usage
 For example, to get 5-minute bars for RELIANCE stock from NSE:
 ```
-GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?interval=5m&from=2023-01-09&to=2023-02-10
+GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?apikey=your_api_key_here&interval=5m&from=2023-01-09&to=2023-02-10
 ```
 
 This will return 5-minute OHLCV bars for RELIANCE between January 9, 2023, and February 10, 2023.
@@ -185,7 +198,7 @@ To prevent large queries that could hit broker rate limits, the API automaticall
 - **Intraday intervals (1m, 5m, 1h, etc.)**: Maximum 30 days from end date
 
 If a request exceeds these limits, the start date will be automatically adjusted. For example:
-- Original request: `from=2000-06-01&to=2025-07-04&interval=1m`
+- Original request: `http://127.0.0.1:5000/api/v1/ticker/NSE:ICICIBANK?apikey=your_api_key_here&interval=1m&from=2000-06-01&to=2025-07-04&format=txt`
 - Adjusted to: `from=2025-06-04&to=2025-07-04&interval=1m` (30 days for 1-minute data)
 
 ## Notes
