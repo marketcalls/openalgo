@@ -65,7 +65,8 @@ def convert_timestamp(timestamp, interval):
     'adjusted': 'Adjust for splits (true/false)',
     'sort': 'Sort order (asc/desc)',
     'apikey': 'API Key for authentication',
-    'format': 'Response format (json/txt). Default: json'
+    'format': 'Response format (json/txt). Default: json',
+    'direct': 'Use direct API call without chunking (true/false). Default: false'
 })
 class Ticker(Resource):
     @limiter.limit(API_RATE_LIMIT)
@@ -94,8 +95,9 @@ class Ticker(Resource):
                 'end_date': request.args.get('to')
             }
 
-            # Get format parameter
+            # Get format and direct parameters
             response_format = request.args.get('format', 'json').lower()
+            use_direct = request.args.get('direct', 'false').lower() == 'true'
 
             # Validate request data using HistorySchema since we're reusing that functionality
             from .data_schemas import HistorySchema
@@ -130,13 +132,27 @@ class Ticker(Resource):
             try:
                 # Initialize broker's data handler
                 data_handler = broker_module.BrokerData(AUTH_TOKEN)
-                df = data_handler.get_history(
-                    history_data['symbol'],
-                    history_data['exchange'],
-                    history_data['interval'],
-                    history_data['start_date'],
-                    history_data['end_date']
-                )
+                
+                # Choose method based on direct parameter
+                if use_direct and hasattr(data_handler, 'get_history_direct'):
+                    logger.info(f"Using direct API call (no chunking) for {history_data['symbol']}")
+                    df = data_handler.get_history_direct(
+                        history_data['symbol'],
+                        history_data['exchange'],
+                        history_data['interval'],
+                        history_data['start_date'],
+                        history_data['end_date']
+                    )
+                else:
+                    if use_direct:
+                        logger.warning(f"Direct method requested but not available for broker {broker}")
+                    df = data_handler.get_history(
+                        history_data['symbol'],
+                        history_data['exchange'],
+                        history_data['interval'],
+                        history_data['start_date'],
+                        history_data['end_date']
+                    )
                 
                 if not isinstance(df, pd.DataFrame):
                     raise ValueError("Invalid data format returned from broker")
