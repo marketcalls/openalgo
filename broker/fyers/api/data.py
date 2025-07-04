@@ -124,6 +124,109 @@ class BrokerData:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
 
+    def get_history_direct(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Get historical data for given symbol without chunking (single API call)
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
+            interval: Candle interval in common format:
+                     Seconds: 5s, 10s, 15s, 30s, 45s
+                     Minutes: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m
+                     Hours: 1h, 2h, 4h
+                     Daily: D
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+        Returns:
+            pd.DataFrame: Historical data with columns [timestamp (epoch), open, high, low, close, volume]
+        """
+        try:
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+            logger.debug(f"Direct call - Using broker symbol: {br_symbol}")
+            
+            # Check for unsupported timeframes first
+            if interval in ['W', 'M']:
+                raise Exception(f"Timeframe '{interval}' is not supported by Fyers. Supported timeframes are:\n"
+                              "Seconds: 5s, 10s, 15s, 30s, 45s\n"
+                              "Minutes: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m\n"
+                              "Hours: 1h, 2h, 4h\n"
+                              "Daily: D")
+            
+            # Validate and map interval
+            resolution = self.timeframe_map.get(interval)
+            if not resolution:
+                supported = {
+                    'Seconds': ['5s', '10s', '15s', '30s', '45s'],
+                    'Minutes': ['1m', '2m', '3m', '5m', '10m', '15m', '20m', '30m'],
+                    'Hours': ['1h', '2h', '4h'],
+                    'Daily': ['D']
+                }
+                error_msg = "Unsupported timeframe. Supported timeframes:\n"
+                for category, timeframes in supported.items():
+                    error_msg += f"{category}: {', '.join(timeframes)}\n"
+                raise Exception(error_msg)
+            
+            # Convert dates to datetime objects
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            current_dt = pd.Timestamp.now()
+            
+            # Adjust end date if it's in the future
+            if end_dt > current_dt:
+                logger.warning(f"Warning: End date {end_dt.date()} is in the future. Adjusting to current date {current_dt.date()}")
+                end_dt = current_dt
+            
+            # Validate date range
+            if start_dt > end_dt:
+                raise Exception(f"Start date {start_dt.date()} cannot be after end date {end_dt.date()}")
+            
+            # Format dates for API call
+            formatted_start = start_dt.strftime('%Y-%m-%d')
+            formatted_end = end_dt.strftime('%Y-%m-%d')
+            
+            logger.debug(f"Direct API call - Fetching {resolution} data for {exchange}:{br_symbol} from {formatted_start} to {formatted_end}")
+            
+            # URL encode the symbol to handle special characters
+            encoded_symbol = urllib.parse.quote(br_symbol)
+            
+            # Construct endpoint with query parameters (single call)
+            endpoint = (f"/data/history?"
+                      f"symbol={encoded_symbol}&"
+                      f"resolution={resolution}&"
+                      f"date_format=1&"  # Keep epoch format
+                       f"range_from={formatted_start}&"
+                       f"range_to={formatted_end}")
+            
+            logger.debug(f"Direct API call - Making request to endpoint: {endpoint}")
+            response = get_api_response(endpoint, self.auth_token)
+            
+            if response.get('s') != 'ok':
+                error_msg = response.get('message', 'Unknown error')
+                logger.error(f"Direct API call error: {error_msg}")
+                raise Exception(f"Error from Fyers API: {error_msg}")
+            
+            # Get candles from response
+            candles = response.get('candles', [])
+            if not candles:
+                logger.debug("Direct API call - No data available for the requested period")
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Convert list of lists to DataFrame with epoch timestamp
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            logger.debug(f"Direct API call - Got {len(candles)} candles for period {formatted_start} to {formatted_end}")
+            
+            # Sort by timestamp and remove duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp'], keep='first')
+            
+            logger.info(f"Direct API call - Successfully collected data: {len(df)} total candles")
+            return df
+            
+        except Exception as e:
+            error_msg = f"Error fetching historical data directly for {exchange}:{symbol}"
+            logger.exception(error_msg)
+            raise Exception(f"{error_msg}: {e}")
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
