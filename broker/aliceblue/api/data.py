@@ -169,11 +169,28 @@ class BrokerData:
                     "message": f"Error processing request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK")
+        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            exchange = 'NSE'  # Default to NSE for Indian stocks
-            logger.info(f"Processing string symbol: {symbol} on {exchange}")
+            
+            # Auto-detect exchange based on symbol pattern
+            if symbol.endswith('FUT'):
+                # Futures contracts - NFO for equity futures, BFO for BSE futures
+                exchange = 'NFO'  # Default to NFO for futures
+            elif symbol.endswith('CE') or symbol.endswith('PE'):
+                # Options contracts - NFO for equity options, BFO for BSE options
+                exchange = 'NFO'  # Default to NFO for options
+            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
+                # Currency derivatives
+                exchange = 'CDS'
+            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
+                # Commodity futures
+                exchange = 'MCX'
+            else:
+                # Default to NSE for equity stocks
+                exchange = 'NSE'
+                
+            logger.info(f"Processing string symbol: {symbol} on {exchange} (auto-detected)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, let's create mock data for testing
@@ -213,11 +230,14 @@ class BrokerData:
                         success = websocket.subscribe(instruments)
                         
                         if success:
-                            # Wait briefly for data to arrive
-                            time.sleep(0.5)
+                            # Wait longer for data to arrive, especially for first subscription
+                            logger.info(f"Waiting for WebSocket data for {exchange}:{symbol}")
+                            time.sleep(2.0)  # Increased wait time
                             
                             # Retrieve quote from WebSocket
+                            logger.info(f"Attempting to retrieve quote for {exchange}:{token}")
                             quote = websocket.get_quote(exchange, token)
+                            logger.info(f"Quote retrieval result: {quote is not None}")
                             
                             if quote:
                                 # Format the response according to OpenAlgo standard format
@@ -234,7 +254,7 @@ class BrokerData:
                                     'change': float(quote.get('change', 0)),
                                     'change_percent': float(quote.get('change_percent', 0)),
                                     'volume': int(quote.get('volume', 0)),
-                                    'oi': int(quote.get('oi', 0)),
+                                    'oi': int(quote.get('open_interest', 0)),
                                     'bid': float(quote.get('bid', 0)),
                                     'ask': float(quote.get('ask', 0)),
                                     'timestamp': datetime.now().isoformat()
@@ -307,6 +327,7 @@ class BrokerData:
                 "status": "success",
                 "data": {
                     "ltp": quote.get('ltp', 0),
+                    "oi": quote.get('oi', 0),
                     "open": quote.get('open', 0),
                     "high": quote.get('high', 0),
                     "low": quote.get('low', 0),
@@ -689,11 +710,28 @@ class BrokerData:
                     "message": f"Error processing depth request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK")
+        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            exchange = 'NSE'  # Default to NSE for Indian stocks
-            logger.info(f"Processing string symbol depth: {symbol} on {exchange}")
+            
+            # Auto-detect exchange based on symbol pattern (same logic as quotes)
+            if symbol.endswith('FUT'):
+                # Futures contracts - NFO for equity futures, BFO for BSE futures
+                exchange = 'NFO'  # Default to NFO for futures
+            elif symbol.endswith('CE') or symbol.endswith('PE'):
+                # Options contracts - NFO for equity options, BFO for BSE options
+                exchange = 'NFO'  # Default to NFO for options
+            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
+                # Currency derivatives
+                exchange = 'CDS'
+            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
+                # Commodity futures
+                exchange = 'MCX'
+            else:
+                # Default to NSE for equity stocks
+                exchange = 'NSE'
+                
+            logger.info(f"Processing string symbol depth: {symbol} on {exchange} (auto-detected)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, prepare the instruments for WebSocket subscription
@@ -741,8 +779,9 @@ class BrokerData:
                     success = websocket.subscribe([instrument], is_depth=True)
                     
                     if success:
-                        # Wait briefly for data to arrive
-                        time.sleep(0.5)  # Give it a moment to get depth data
+                        # Wait longer for depth data to arrive
+                        logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
+                        time.sleep(2.0)  # Increased wait time for depth data
                         
                         # Retrieve depth from WebSocket
                         depth = websocket.get_market_depth(exchange, token)
@@ -757,6 +796,7 @@ class BrokerData:
                                 'total_buy_qty': depth.get('total_buy_quantity', 0),
                                 'total_sell_qty': depth.get('total_sell_quantity', 0),
                                 'ltp': depth.get('ltp', 0),
+                                'oi': depth.get('open_interest', 0),
                                 'depth': {
                                     'buy': [],
                                     'sell': []
@@ -811,6 +851,7 @@ class BrokerData:
                     "symbol": depth_item.get('symbol', ''),
                     "exchange": depth_item.get('exchange', ''),
                     "ltp": depth_item.get('ltp', 0),
+                    "oi": depth_item.get('oi', 0),   
                     "total_buy_qty": depth_item.get('total_buy_qty', 0),
                     "total_sell_qty": depth_item.get('total_sell_qty', 0),
                     "depth": depth_item.get('depth', {'buy': [], 'sell': []})
