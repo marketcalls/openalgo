@@ -184,7 +184,7 @@ def change_password():
 
     return render_template('profile.html', username=session['user'])
 
-@auth_bp.route('/logout', methods=['POST'])
+@auth_bp.route('/logout', methods=['GET', 'POST'])
 def logout():
     if session.get('logged_in'):
         username = session['user']
