@@ -15,13 +15,13 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if order_data['data'] is None:
+    # Check if order_data is empty or doesn't have 'data' key
+    if not order_data or 'data' not in order_data or order_data['data'] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
+        order_data = []  # Return empty list as the functions expect a list
     else:
         order_data = order_data['data']
         logger.info(f"{order_data}")

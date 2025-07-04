@@ -32,12 +32,20 @@
             <h1 class="text-3xl font-bold">Order Book</h1>
             <p class="text-base-content/60">Track and manage your trading orders</p>
         </div>
-        <a href="{{ url_for('orders_bp.export_orderbook') }}" class="btn btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
-            </svg>
-            Export to CSV
-        </a>
+        <div class="flex gap-2">
+            <button onclick="openCancelAllModal()" class="btn btn-error">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                Cancel All Orders
+            </button>
+            <a href="{{ url_for('orders_bp.export_orderbook') }}" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                Export to CSV
+            </a>
+        </div>
     </div>
 
     <!-- Stats Grid -->
@@ -237,5 +245,109 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// Cancel all orders functions
+let isCanceling = false; // Flag to prevent multiple calls
+let reloadTimer = null; // Store the reload timer
+
+// Add a global flag to prevent any refresh attempts
+window.CANCEL_ALL_IN_PROGRESS = false;
+
+// Override the refreshCurrentPageContent to check our flag
+const _originalRefresh = window.refreshCurrentPageContent;
+window.refreshCurrentPageContent = function() {
+    if (window.CANCEL_ALL_IN_PROGRESS) {
+        console.log('Refresh blocked - cancel all in progress');
+        return;
+    }
+    if (_originalRefresh) {
+        _originalRefresh();
+    }
+};
+
+function cancelAllOrders() {
+    // Prevent multiple simultaneous calls
+    if (isCanceling) {
+        return;
+    }
+    
+    isCanceling = true;
+    window.CANCEL_ALL_IN_PROGRESS = true;
+    
+    // Disable the confirm button
+    const confirmBtn = document.getElementById('cancel-all-confirm-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Canceling...';
+    }
+    
+    // Close the modal
+    document.getElementById('cancel-all-modal').checked = false;
+    
+    // Show processing message
+    showToast('Canceling all orders... Please wait', 'info');
+    
+    // Call the cancel_all_orders endpoint
+    fetch('/cancel_all_orders', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
+        },
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Show toast notification
+        if (data.status === 'success') {
+            showToast(data.message, 'success');
+        } else if (data.status === 'info') {
+            showToast(data.message, 'info');
+        } else {
+            showToast(data.message, 'error');
+            isCanceling = false;
+            window.CANCEL_ALL_IN_PROGRESS = false;
+            // Re-enable socket events on error
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+        
+        // Set a single reload timer for 10 seconds
+        reloadTimer = setTimeout(() => {
+            // Create a form and submit it to force a clean GET request
+            const form = document.createElement('form');
+            form.method = 'GET';
+            form.action = '/orderbook';
+            document.body.appendChild(form);
+            form.submit();
+        }, 10000); // 10 seconds delay to ensure rate limit is respected
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showToast('An error occurred while canceling orders.', 'error');
+        isCanceling = false;
+        window.CANCEL_ALL_IN_PROGRESS = false;
+        // Reload on error
+        setTimeout(() => location.reload(), 2000);
+    });
+}
+
+function openCancelAllModal() {
+    document.getElementById('cancel-all-modal').checked = true;
+}
 </script>
+
+<!-- DaisyUI Modal for Cancel All confirmation -->
+<input type="checkbox" id="cancel-all-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg text-error">⚠️ Cancel All Orders</h3>
+        <p class="py-4">Are you sure you want to cancel all open orders? This action will cancel all your pending orders immediately.</p>
+        <div class="modal-action">
+            <label for="cancel-all-modal" class="btn">Cancel</label>
+            <button id="cancel-all-confirm-btn" onclick="cancelAllOrders()" class="btn btn-error">Yes, Cancel All</button>
+        </div>
+    </div>
+    <label class="modal-backdrop" for="cancel-all-modal"></label>
+</div>
 {% endblock %}
