@@ -277,7 +277,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
             
             # Get token for the symbol
+            self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, ab_exchange: {ab_exchange}")
             token = get_token(symbol, ab_exchange)
+            self.logger.info(f"Subscribe: Token lookup result: {token}")
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
@@ -292,7 +294,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.ws_client.send(json.dumps(sub_msg))
                 
                 # Track subscription with more details for resubscription
-                sub_key = f"{ab_exchange}|{token}"
+                sub_key = f"{ab_exchange}|{str(token)}"
                 with self.lock:
                     self.subscriptions[sub_key] = {
                         'symbol': symbol,
@@ -304,6 +306,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     }
                 
                 self.logger.info(f"Subscribed to {symbol} ({ab_exchange}|{token}) for mode {mode}")
+                self.logger.info(f"Stored subscription with key: {sub_key}")
+                self.logger.info(f"Stored symbol: {symbol}, exchange: {exchange}")
+                self.logger.info(f"Token type: {type(token)}, value: {repr(token)}")
                 return self._create_success_response(f"Subscribed to {symbol} on {exchange} for mode {mode}")
             else:
                 self.logger.error("WebSocket not connected")
@@ -565,7 +570,10 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             msg_type = parsed_data.get('message_type', '')
             
             # Create a unique key for this symbol
-            symbol_key = f"{broker_exchange}|{token}"
+            symbol_key = f"{broker_exchange}|{str(token)}"
+            self.logger.info(f"Processing data - broker_exchange: {broker_exchange}, token: {token}")
+            self.logger.info(f"Token type in data: {type(token)}, value: {repr(token)}")
+            self.logger.info(f"Current subscriptions keys: {list(self.subscriptions.keys())}")
             
             # Handle different message types
             if msg_type == 'tk':
@@ -610,26 +618,38 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Other message types
                 symbol = parsed_data.get('symbol', 'UNKNOWN')
             
-            # Find the original subscription to get the correct exchange
+            # Find the original subscription to get the correct exchange and symbol
             # This is important because the client subscribes with NSE_INDEX for NIFTY
             # but the data comes with NSE exchange
-            sub_key = f"{broker_exchange}|{token}"
+            # Also, for NFO/BFO symbols, AliceBlue returns broker symbols but we need OpenAlgo symbols
+            sub_key = symbol_key  # Use the same key as created above
+            self.logger.info(f"Looking for subscription with key: {sub_key}")
             original_exchange = exchange  # Default to mapped exchange
+            original_symbol = symbol  # Default to parsed symbol
             
             with self.lock:
+                self.logger.info(f"Subscription lookup - checking if '{sub_key}' in subscriptions")
+                self.logger.info(f"Available keys: {list(self.subscriptions.keys())}")
                 if sub_key in self.subscriptions:
-                    # Use the exchange from the original subscription
+                    # Use the exchange and symbol from the original subscription
                     original_exchange = self.subscriptions[sub_key]['exchange']
-                    self.logger.info(f"Using subscription exchange: {original_exchange} for {symbol}")
+                    original_symbol = self.subscriptions[sub_key]['symbol']
+                    self.logger.info(f"FOUND subscription: exchange={original_exchange}, symbol={original_symbol}")
+                    self.logger.info(f"Parsed data had: exchange={broker_exchange}, symbol={symbol}")
+                else:
+                    self.logger.warning(f"NO subscription found for key: {sub_key}")
+                    self.logger.warning(f"Available subscription keys: {list(self.subscriptions.keys())}")
             
             # Special handling for NIFTY index based on token (26000 is NIFTY token)
             if token == '26000' and broker_exchange == 'NSE':
-                symbol = 'NIFTY'
+                original_symbol = 'NIFTY'
                 # Update the parsed_data with correct symbol
-                parsed_data['symbol'] = symbol
+                parsed_data['symbol'] = original_symbol
                 
-            # Use the original subscription exchange for topic generation
+            # Use the original subscription exchange and symbol for topic generation
             exchange = original_exchange
+            symbol = original_symbol
+            self.logger.info(f"Final values for topic: exchange={exchange}, symbol={symbol}")
             
             # Get the actual subscription mode from our stored subscriptions
             sub_mode = 1  # Default to LTP
