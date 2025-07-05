@@ -40,3 +40,9 @@ class SearchSchema(Schema):
     apikey = fields.Str(required=True)      # API Key for authentication
     query = fields.Str(required=True)       # Search query/symbol name
     exchange = fields.Str(required=False)   # Optional exchange filter (e.g., NSE, BSE)
+
+class ExpirySchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    symbol = fields.Str(required=True)      # Underlying symbol (e.g., NIFTY, BANKNIFTY)
+    exchange = fields.Str(required=True)    # Exchange (e.g., NFO, BFO, MCX, CDS)
+    instrumenttype = fields.Str(required=True)  # futures or options
