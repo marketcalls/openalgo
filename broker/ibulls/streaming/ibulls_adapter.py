@@ -1,0 +1,516 @@
+import threading
+import json
+import logging
+import time
+import base64
+from typing import Dict, Any, Optional, List
+
+from broker.ibulls.streaming.ibulls_websocket import IbullsWebSocketClient
+from database.auth_db import get_auth_token, get_feed_token
+from database.token_db import get_token
+
+import sys
+import os
+
+# Add parent directory to path to allow imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+
+from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+from websocket_proxy.mapping import SymbolMapper
+from .ibulls_mapping import IbullsExchangeMapper, IbullsCapabilityRegistry
+
+
+class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
+    """Ibulls XTS specific implementation of the WebSocket adapter"""
+    
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger("ibulls_websocket")
+        self.ws_client = None
+        self.user_id = None
+        self.broker_name = "ibulls"
+        self.reconnect_delay = 5  # Initial delay in seconds
+        self.max_reconnect_delay = 60  # Maximum delay in seconds
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 10
+        self.running = False
+        self.lock = threading.Lock()
+    
+    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
+        """
+        Initialize connection with Ibulls XTS WebSocket API
+        
+        Args:
+            broker_name: Name of the broker (always 'ibulls' in this case)
+            user_id: Client ID/user ID
+            auth_data: If provided, use these credentials instead of fetching from DB
+        
+        Raises:
+            ValueError: If required authentication tokens are not found
+        """
+        self.user_id = user_id
+        self.broker_name = broker_name
+        
+        # Get tokens from database if not provided
+        if not auth_data:
+            # Fetch authentication tokens from database
+            auth_token = get_auth_token(user_id)
+            feed_token = get_feed_token(user_id)
+            
+            if not auth_token or not feed_token:
+                self.logger.error(f"No authentication tokens found for user {user_id}")
+                raise ValueError(f"No authentication tokens found for user {user_id}")
+                
+        else:
+            # Use provided tokens
+            auth_token = auth_data.get('auth_token')
+            feed_token = auth_data.get('feed_token')
+            
+            if not auth_token or not feed_token:
+                self.logger.error("Missing required authentication data")
+                raise ValueError("Missing required authentication data")
+        
+        # Extract client ID from the JWT token
+        # The token contains userID in the format: "1048131_856F2F2AF32542B762129"
+        # We need to extract the actual client ID from the JWT payload
+        actual_client_id = self._extract_client_id_from_token(feed_token, user_id)
+        
+        # Create Ibulls WebSocket client
+        self.ws_client = IbullsWebSocketClient(
+            token=feed_token,  # Use feed_token for XTS WebSocket connection
+            user_id=actual_client_id  # Use the actual client ID from token
+        )
+        
+        # Set callbacks
+        self.ws_client.on_open = self._on_open
+        self.ws_client.on_data = self._on_data
+        self.ws_client.on_error = self._on_error
+        self.ws_client.on_close = self._on_close
+        self.ws_client.on_message = self._on_message
+        
+        self.running = True
+    
+    def _extract_client_id_from_token(self, feed_token: str, fallback_user_id: str) -> str:
+        """
+        Extract the actual client ID from the JWT feed token
+        
+        Args:
+            feed_token: JWT token containing client information
+            fallback_user_id: Fallback user ID if extraction fails
+            
+        Returns:
+            str: Actual client ID from the token
+        """
+        try:
+            # JWT tokens have format: header.payload.signature
+            # We need to decode the payload (middle part)
+            parts = feed_token.split('.')
+            if len(parts) != 3:
+                self.logger.warning("Invalid JWT token format, using fallback user ID")
+                return fallback_user_id
+            
+            # Decode the payload (base64 encoded)
+            payload = parts[1]
+            # Add padding if needed
+            padding = 4 - (len(payload) % 4)
+            if padding != 4:
+                payload += '=' * padding
+                
+            decoded_payload = base64.b64decode(payload)
+            payload_json = json.loads(decoded_payload.decode('utf-8'))
+            
+            # Extract userID from the payload
+            # From the log, it looks like: "userID": "1048131_856F2F2AF32542B762129"
+            actual_user_id = payload_json.get('userID')
+            if actual_user_id:
+                self.logger.info(f"Extracted client ID from token: {actual_user_id}")
+                return actual_user_id
+            else:
+                self.logger.warning("userID not found in token payload, using fallback")
+                return fallback_user_id
+                
+        except Exception as e:
+            self.logger.error(f"Error extracting client ID from token: {e}")
+            self.logger.info(f"Using fallback user ID: {fallback_user_id}")
+            return fallback_user_id
+    
+    def connect(self) -> None:
+        """Establish connection to Ibulls XTS WebSocket"""
+        if not self.ws_client:
+            self.logger.error("WebSocket client not initialized. Call initialize() first.")
+            return
+            
+        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        
+    def _connect_with_retry(self) -> None:
+        """Connect to Ibulls XTS WebSocket with retry logic"""
+        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+            try:
+                self.logger.info(f"Connecting to Ibulls XTS WebSocket (attempt {self.reconnect_attempts + 1})")
+                self.ws_client.connect()
+                self.reconnect_attempts = 0  # Reset attempts on successful connection
+                break
+                
+            except Exception as e:
+                self.reconnect_attempts += 1
+                delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
+                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                time.sleep(delay)
+        
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.logger.error("Max reconnection attempts reached. Giving up.")
+    
+    def disconnect(self) -> None:
+        """Disconnect from Ibulls XTS WebSocket"""
+        self.running = False
+        if hasattr(self, 'ws_client') and self.ws_client:
+            self.ws_client.disconnect()
+            
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
+    
+    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
+        """
+        Subscribe to market data with Ibulls XTS specific implementation
+        
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
+            mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
+            depth_level: Market depth level (5, 20)
+            
+        Returns:
+            Dict: Response with status and error message if applicable
+        """
+        # Validate the mode
+        if mode not in [1, 2, 3]:
+            return self._create_error_response("INVALID_MODE", 
+                                              f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+                                              
+        # If depth mode, check if supported depth level
+        if mode == 3 and depth_level not in [5, 20]:
+            return self._create_error_response("INVALID_DEPTH", 
+                                              f"Invalid depth level {depth_level}. Must be 5 or 20")
+        
+        # Map symbol to token using symbol mapper
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return self._create_error_response("SYMBOL_NOT_FOUND", 
+                                              f"Symbol {symbol} not found for exchange {exchange}")
+            
+        token = token_info['token']
+        brexchange = token_info['brexchange']
+        
+        # Check if the requested depth level is supported for this exchange
+        is_fallback = False
+        actual_depth = depth_level
+        
+        if mode == 3:  # Depth mode
+            if not IbullsCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
+                # If requested depth is not supported, use the highest available
+                actual_depth = IbullsCapabilityRegistry.get_fallback_depth_level(
+                    exchange, depth_level
+                )
+                is_fallback = True
+                
+                self.logger.info(
+                    f"Depth level {depth_level} not supported for {exchange}, "
+                    f"using {actual_depth} instead"
+                )
+        
+        # Create instrument list for Ibulls XTS API
+        instruments = [{
+            "exchangeSegment": IbullsExchangeMapper.get_exchange_type(brexchange),
+            "exchangeInstrumentID": token
+        }]
+        
+        # Generate unique correlation ID that includes mode to prevent overwriting
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        if mode == 3:
+            correlation_id = f"{correlation_id}_{depth_level}"
+        
+        # Store subscription for reconnection
+        with self.lock:
+            self.subscriptions[correlation_id] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'brexchange': brexchange,
+                'token': token,
+                'mode': mode,
+                'depth_level': depth_level,
+                'actual_depth': actual_depth,
+                'instruments': instruments,
+                'is_fallback': is_fallback
+            }
+        
+        # Subscribe if connected
+        if self.connected and self.ws_client:
+            try:
+                self.ws_client.subscribe(correlation_id, mode, instruments)
+            except Exception as e:
+                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        
+        # Return success with capability info
+        return self._create_success_response(
+            'Subscription requested' if not is_fallback else f"Using depth level {actual_depth} instead of requested {depth_level}",
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode,
+            requested_depth=depth_level,
+            actual_depth=actual_depth,
+            is_fallback=is_fallback
+        )
+    
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
+        """
+        Unsubscribe from market data
+        
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange code
+            mode: Subscription mode
+            
+        Returns:
+            Dict: Response with status
+        """
+        # Map symbol to token
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return self._create_error_response("SYMBOL_NOT_FOUND", 
+                                              f"Symbol {symbol} not found for exchange {exchange}")
+            
+        token = token_info['token']
+        brexchange = token_info['brexchange']
+        
+        # Create instrument list for Ibulls XTS API
+        instruments = [{
+            "exchangeSegment": IbullsExchangeMapper.get_exchange_type(brexchange),
+            "exchangeInstrumentID": token
+        }]
+        
+        # Generate correlation ID
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        
+        # Remove from subscriptions
+        with self.lock:
+            if correlation_id in self.subscriptions:
+                del self.subscriptions[correlation_id]
+        
+        # Unsubscribe if connected
+        if self.connected and self.ws_client:
+            try:
+                self.ws_client.unsubscribe(correlation_id, mode, instruments)
+            except Exception as e:
+                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
+        
+        return self._create_success_response(
+            f"Unsubscribed from {symbol}.{exchange}",
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode
+        )
+    
+    def _on_open(self, wsapp) -> None:
+        """Callback when connection is established"""
+        self.logger.info("Connected to Ibulls XTS WebSocket")
+        self.connected = True
+        
+        # Resubscribe to existing subscriptions if reconnecting
+        self._resubscribe_all()
+    
+    def _resubscribe_all(self):
+        """Resubscribe to all stored subscriptions"""
+        with self.lock:
+            for correlation_id, sub in self.subscriptions.items():
+                try:
+                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
+                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                except Exception as e:
+                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+    
+    def _on_error(self, wsapp, error) -> None:
+        """Callback for WebSocket errors"""
+        self.logger.error(f"Ibulls XTS WebSocket error: {error}")
+    
+    def _on_close(self, wsapp) -> None:
+        """Callback when connection is closed"""
+        self.logger.info("Ibulls XTS WebSocket connection closed")
+        self.connected = False
+        
+        # Attempt to reconnect if we're still running
+        if self.running:
+            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+    
+    def _on_message(self, wsapp, message) -> None:
+        """Callback for text messages from the WebSocket"""
+        self.logger.debug(f"Received message: {message}")
+    
+    def _on_data(self, wsapp, message) -> None:
+        """Callback for market data from the WebSocket"""
+        try:
+            self.logger.info(f"RAW IBULLS DATA: Type: {type(message)}, Data: {message}")
+            
+            # Handle different message types
+            if isinstance(message, bytes):
+                # Binary data - parse according to XTS protocol
+                self._process_binary_data(message)
+                return
+            elif isinstance(message, dict):
+                # JSON data
+                self._process_json_data(message)
+                return
+            elif isinstance(message, str):
+                # String data - try to parse as JSON
+                try:
+                    data = json.loads(message)
+                    self._process_json_data(data)
+                    return
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Received non-JSON string message: {message}")
+                    return
+            
+            self.logger.warning(f"Received unknown message type: {type(message)}")
+            
+        except Exception as e:
+            self.logger.error(f"Error processing market data: {e}", exc_info=True)
+    
+    def _process_binary_data(self, data: bytes):
+        """Process binary market data from XTS"""
+        # This would need to be implemented based on XTS binary protocol specification
+        self.logger.debug(f"Processing binary data of length: {len(data)}")
+        # For now, log and return - actual implementation would parse the binary format
+    
+    def _process_json_data(self, data: dict):
+        """Process JSON market data"""
+        try:
+            # Extract basic information
+            exchange_segment = data.get('ExchangeSegment')
+            exchange_instrument_id = data.get('ExchangeInstrumentID')
+            
+            # Find the subscription that matches this instrument
+            subscription = None
+            with self.lock:
+                for sub in self.subscriptions.values():
+                    if (sub['token'] == str(exchange_instrument_id) and 
+                        IbullsExchangeMapper.get_exchange_type(sub['brexchange']) == exchange_segment):
+                        subscription = sub
+                        break
+            
+            if not subscription:
+                self.logger.warning(f"Received data for unsubscribed instrument: {exchange_instrument_id}")
+                return
+            
+            # Create topic for ZeroMQ
+            symbol = subscription['symbol']
+            exchange = subscription['exchange']
+            mode = subscription['mode']
+            
+            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+            topic = f"{exchange}_{symbol}_{mode_str}"
+            
+            # Normalize the data
+            market_data = self._normalize_market_data(data, mode)
+            
+            # Add metadata
+            market_data.update({
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'timestamp': int(time.time() * 1000)
+            })
+            
+            self.logger.info(f"Publishing market data: {market_data}")
+            
+            # Publish to ZeroMQ
+            self.publish_market_data(topic, market_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error processing JSON data: {e}", exc_info=True)
+    
+    def _normalize_market_data(self, message: Dict[str, Any], mode: int) -> Dict[str, Any]:
+        """
+        Normalize broker-specific data format to a common format
+        
+        Args:
+            message: The raw message from the broker
+            mode: Subscription mode
+            
+        Returns:
+            Dict: Normalized market data
+        """
+        if mode == 1:  # LTP mode
+            return {
+                'ltp': message.get('LastTradedPrice', 0),
+                'ltt': message.get('LastTradedTime', 0)
+            }
+        elif mode == 2:  # Quote mode
+            return {
+                'ltp': message.get('LastTradedPrice', 0),
+                'ltt': message.get('LastTradedTime', 0),
+                'volume': message.get('TotalTradedQuantity', 0),
+                'open': message.get('Open', 0),
+                'high': message.get('High', 0),
+                'low': message.get('Low', 0),
+                'close': message.get('Close', 0),
+                'last_quantity': message.get('LastTradedQuantity', 0),
+                'average_price': message.get('AveragePrice', 0),
+                'total_buy_quantity': message.get('TotalBuyQuantity', 0),
+                'total_sell_quantity': message.get('TotalSellQuantity', 0)
+            }
+        elif mode == 3:  # Depth mode
+            result = {
+                'ltp': message.get('LastTradedPrice', 0),
+                'ltt': message.get('LastTradedTime', 0),
+                'volume': message.get('TotalTradedQuantity', 0),
+                'open': message.get('Open', 0),
+                'high': message.get('High', 0),
+                'low': message.get('Low', 0),
+                'close': message.get('Close', 0),
+                'oi': message.get('OpenInterest', 0),
+                'upper_circuit': message.get('UpperCircuitLimit', 0),
+                'lower_circuit': message.get('LowerCircuitLimit', 0)
+            }
+            
+            # Add depth data if available
+            if 'Bids' in message and 'Asks' in message:
+                result['depth'] = {
+                    'buy': self._extract_depth_data(message.get('Bids', []), is_buy=True),
+                    'sell': self._extract_depth_data(message.get('Asks', []), is_buy=False)
+                }
+                
+            return result
+        else:
+            return {}
+    
+    def _extract_depth_data(self, depth_list: List[Dict], is_buy: bool) -> List[Dict[str, Any]]:
+        """
+        Extract depth data from XTS message format
+        
+        Args:
+            depth_list: List of depth levels
+            is_buy: Whether this is buy or sell side
+            
+        Returns:
+            List: List of depth levels with price, quantity, and orders
+        """
+        depth = []
+        
+        for level in depth_list:
+            if isinstance(level, dict):
+                depth.append({
+                    'price': level.get('Price', 0),
+                    'quantity': level.get('Quantity', 0),
+                    'orders': level.get('OrderCount', 0)
+                })
+        
+        # Ensure we have at least 5 levels
+        while len(depth) < 5:
+            depth.append({
+                'price': 0.0,
+                'quantity': 0,
+                'orders': 0
+            })
+        
+        return depth[:20]  # Limit to maximum 20 levels
