@@ -18,6 +18,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 from .ibulls_mapping import IbullsExchangeMapper, IbullsCapabilityRegistry
+from database.token_db import get_symbol
 
 
 class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -35,6 +36,9 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        
+        # Log the ZMQ port being used
+        self.logger.info(f"Ibulls adapter initialized with ZMQ port: {self.zmq_port}")
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -171,12 +175,57 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def disconnect(self) -> None:
         """Disconnect from Ibulls XTS WebSocket"""
+        self.logger.info("*** DISCONNECT CALLED - Starting IBulls disconnect process ***")
+        
+        # Set running to False to prevent reconnection attempts
         self.running = False
+        self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
+        self.logger.info("Set running=False and max reconnect attempts to prevent auto-reconnection")
+        
+        # Disconnect Socket.IO client
         if hasattr(self, 'ws_client') and self.ws_client:
-            self.ws_client.disconnect()
+            try:
+                self.logger.info("Disconnecting Socket.IO client...")
+                self.ws_client.disconnect()
+                self.logger.info("Socket.IO client disconnect call completed")
+            except Exception as e:
+                self.logger.error(f"Error during Socket.IO disconnect: {e}")
+        else:
+            self.logger.warning("No WebSocket client to disconnect")
+            
+        # Set connected flag to False
+        self.connected = False
+        self.logger.info("Set connected flag to False")
             
         # Clean up ZeroMQ resources
+        self.logger.info("Starting cleanup of ZeroMQ resources...")
         self.cleanup_zmq()
+        
+        self.logger.info("*** DISCONNECT PROCESS COMPLETED ***")
+        
+    def cleanup_zmq(self) -> None:
+        """Override cleanup_zmq to provide more detailed logging"""
+        try:
+            # Release the port from the bound ports set
+            if hasattr(self, 'zmq_port'):
+                with BaseBrokerWebSocketAdapter._port_lock:
+                    if self.zmq_port in BaseBrokerWebSocketAdapter._bound_ports:
+                        BaseBrokerWebSocketAdapter._bound_ports.remove(self.zmq_port)
+                        self.logger.info(f"Released port {self.zmq_port} from bound ports registry")
+            
+            # Close the socket
+            if hasattr(self, 'socket') and self.socket:
+                self.socket.close(linger=0)  # Don't linger on close
+                self.logger.info("ZeroMQ socket closed")
+                
+            # Terminate the context
+            if hasattr(self, 'context') and self.context:
+                self.context.term()
+                self.logger.info("ZeroMQ context terminated")
+                
+            self.logger.info("IBulls WebSocket cleanup completed successfully")
+        except Exception as e:
+            self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -210,6 +259,8 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info['token']
         brexchange = token_info['brexchange']
         
+        self.logger.info(f"Token mapping result: symbol={symbol}, exchange={exchange} -> token={token}, brexchange={brexchange}")
+        
         # Check if the requested depth level is supported for this exchange
         is_fallback = False
         actual_depth = depth_level
@@ -228,8 +279,11 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
         
         # Create instrument list for Ibulls XTS API
+        exchange_type = IbullsExchangeMapper.get_exchange_type(brexchange)
+        self.logger.info(f"Exchange mapping: brexchange={brexchange} -> exchange_type={exchange_type}")
+        
         instruments = [{
-            "exchangeSegment": IbullsExchangeMapper.get_exchange_type(brexchange),
+            "exchangeSegment": exchange_type,
             "exchangeInstrumentID": token
         }]
         
@@ -251,6 +305,9 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'instruments': instruments,
                 'is_fallback': is_fallback
             }
+            # Don't log the actual token value for security, but log its type and length
+            token_info = f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}" if token else "None"
+            self.logger.info(f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}")
         
         # Subscribe if connected
         if self.connected and self.ws_client:
@@ -271,9 +328,35 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             is_fallback=is_fallback
         )
     
+    def _get_token(self, symbol: str, exchange: str) -> Optional[str]:
+        """Get token for a symbol from the database
+        
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE', 'BSE')
+            
+        Returns:
+            str: Token for the symbol or None if not found
+        """
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if token_info:
+            return token_info['token']
+        return None
+        
+    def _get_exchange_segment(self, exchange: str) -> str:
+        """Get exchange segment code for XTS API
+        
+        Args:
+            exchange: Exchange code (e.g., 'NSE', 'BSE')
+            
+        Returns:
+            str: Exchange segment code for XTS API
+        """
+        return IbullsExchangeMapper.get_exchange_type(exchange)
+
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """
-        Unsubscribe from market data
+        Unsubscribe from market data and disconnect from XTS server
         
         Args:
             symbol: Trading symbol
@@ -283,9 +366,12 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Response with status
         """
+        self.logger.info(f"Unsubscribing from {symbol} on {exchange} with mode {mode}")
+        
         # Map symbol to token
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
+            self.logger.error(f"Symbol {symbol} not found for exchange {exchange}")
             return self._create_error_response("SYMBOL_NOT_FOUND", 
                                               f"Symbol {symbol} not found for exchange {exchange}")
             
@@ -305,15 +391,31 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+                self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
         
         # Unsubscribe if connected
         if self.connected and self.ws_client:
             try:
+                self.logger.info(f"Sending unsubscribe request for {symbol}.{exchange} to XTS server")
                 self.ws_client.unsubscribe(correlation_id, mode, instruments)
+                self.logger.info(f"Successfully sent unsubscribe request for {symbol}.{exchange}")
+                
+                # Always disconnect and perform cleanup after unsubscription
+                self.logger.info(f"Initiating disconnect and cleanup after unsubscription")
+                self.disconnect()
+                
+                return self._create_success_response(
+                    f"Unsubscribed from {symbol}.{exchange} and disconnected from XTS server",
+                    symbol=symbol,
+                    exchange=exchange,
+                    mode=mode
+                )
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
-        
+        else:
+            self.logger.warning(f"Not connected to XTS server, skipping unsubscribe request")
+            
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}",
             symbol=symbol,
@@ -360,18 +462,22 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for market data from the WebSocket"""
         try:
             self.logger.info(f"RAW IBULLS DATA: Type: {type(message)}, Data: {message}")
+            self.logger.info(f"Adapter state - Connected: {self.connected}, Subscriptions count: {len(self.subscriptions)}")
             
             # Handle different message types
             if isinstance(message, bytes):
                 # Binary data - parse according to XTS protocol
+                self.logger.info("Processing as binary data")
                 self._process_binary_data(message)
                 return
             elif isinstance(message, dict):
                 # JSON data
+                self.logger.info("Processing as JSON dict data")
                 self._process_json_data(message)
                 return
             elif isinstance(message, str):
                 # String data - try to parse as JSON
+                self.logger.info("Processing as string data")
                 try:
                     data = json.loads(message)
                     self._process_json_data(data)
@@ -398,25 +504,58 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             exchange_segment = data.get('ExchangeSegment')
             exchange_instrument_id = data.get('ExchangeInstrumentID')
             
-            # Find the subscription that matches this instrument
+            self.logger.debug(f"Processing market data: ExchangeSegment={exchange_segment}, ExchangeInstrumentID={exchange_instrument_id}")
+            
+            # Create reverse mapping from ExchangeSegment to exchange code
+            segment_to_exchange = {
+                1: 'NSE',
+                2: 'NFO',
+                11: 'BSE',
+                12: 'BFO',
+                51: 'MCX'
+            }
+            
+            # Get the exchange from segment
+            exchange = segment_to_exchange.get(exchange_segment)
+            if not exchange:
+                self.logger.warning(f"Unknown ExchangeSegment: {exchange_segment}")
+                return
+                
+            self.logger.info(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
+            
+            # Try to lookup symbol from the token
+            symbol = get_symbol(str(exchange_instrument_id), exchange)
+            if not symbol:
+                self.logger.warning(f"Could not find symbol for token {exchange_instrument_id} on exchange {exchange}")
+                return
+                
+            self.logger.info(f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}")
+            
+            # Now check if we have an active subscription for this symbol
+            correlation_id = None
             subscription = None
-            with self.lock:
-                for sub in self.subscriptions.values():
-                    if (sub['token'] == str(exchange_instrument_id) and 
-                        IbullsExchangeMapper.get_exchange_type(sub['brexchange']) == exchange_segment):
-                        subscription = sub
-                        break
+            mode = None
+            
+            # Check all possible modes for this symbol
+            for check_mode in [1, 2, 3]:  # LTP, Quote, Depth
+                check_correlation_id = f"{symbol}_{exchange}_{check_mode}"
+                if check_correlation_id in self.subscriptions:
+                    correlation_id = check_correlation_id
+                    subscription = self.subscriptions[check_correlation_id]
+                    mode = check_mode
+                    self.logger.info(f"Found active subscription: {correlation_id}")
+                    break
             
             if not subscription:
-                self.logger.warning(f"Received data for unsubscribed instrument: {exchange_instrument_id}")
+                self.logger.debug(f"No active subscription found for {symbol} on {exchange}")
                 return
             
             # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
-            mode = subscription['mode']
+            # symbol and exchange are already set from the reverse lookup
+            # mode is already set from the subscription check
             
             mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+            # Use standard topic format without broker prefix for WebSocket proxy routing
             topic = f"{exchange}_{symbol}_{mode_str}"
             
             # Normalize the data
@@ -431,9 +570,15 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             })
             
             self.logger.info(f"Publishing market data: {market_data}")
+            self.logger.info(f"Publishing to topic: {topic} on ZMQ port: {self.zmq_port}")
+            
+            # Log the socket state before publishing
+            self.logger.info(f"ZMQ Socket State - Port: {getattr(self, 'zmq_port', 'Unknown')}, Connected: {getattr(self, 'connected', False)}")
+            self.logger.info(f"Environment ZMQ_PORT: {os.environ.get('ZMQ_PORT', 'Not Set')}")
             
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
+            self.logger.info(f"Published data successfully to ZMQ - Topic: {topic}, Data: {market_data}")
             
         except Exception as e:
             self.logger.error(f"Error processing JSON data: {e}", exc_info=True)
@@ -452,7 +597,8 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 1:  # LTP mode
             return {
                 'ltp': message.get('LastTradedPrice', 0),
-                'ltt': message.get('LastTradedTime', 0)
+                'ltt': message.get('LastTradedTime', 0),
+                'ltq': message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0))  # Handle typo in XTS API
             }
         elif mode == 2:  # Quote mode
             return {
@@ -463,7 +609,7 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'high': message.get('High', 0),
                 'low': message.get('Low', 0),
                 'close': message.get('Close', 0),
-                'last_quantity': message.get('LastTradedQuantity', 0),
+                'last_quantity': message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0)),  # Handle typo in XTS API
                 'average_price': message.get('AveragePrice', 0),
                 'total_buy_quantity': message.get('TotalBuyQuantity', 0),
                 'total_sell_quantity': message.get('TotalSellQuantity', 0)

@@ -17,6 +17,7 @@ class IbullsWebSocketClient:
     ROOT_URI = "https://xts.ibullssecurities.com"
     SOCKET_PATH = "/apimarketdata/socket.io"
     API_BASE_URL = "https://xts.ibullssecurities.com/apimarketdata/instruments/subscription"
+    API_UNSUBSCRIBE_URL = "https://xts.ibullssecurities.com/apimarketdata/instruments/subscription"  # Same endpoint, different method
     
     # Available Actions
     SUBSCRIBE_ACTION = 1
@@ -95,6 +96,10 @@ class IbullsWebSocketClient:
         self.sio.on('1510-json-partial', self._on_message_1510_json_partial)
         self.sio.on('1512-json-full', self._on_message_1512_json_full)
         self.sio.on('1512-json-partial', self._on_message_1512_json_partial)
+        
+        # Register handler for 1105 events (binary market data)
+        self.sio.on('1105-json-partial', self._on_message_1105_json_partial)
+        self.sio.on('1105-json-full', self._on_message_1105_json_full)
         
         # Add catch-all handler for any unhandled events
         self.sio.on('*', self._on_catch_all)
@@ -192,9 +197,16 @@ class IbullsWebSocketClient:
         self.running = False
         self.connected = False
         
-        if self.sio:
-            self.sio.disconnect()
-            
+        try:
+            if self.sio and self.sio.connected:
+                self.sio.disconnect()
+                self.logger.info("Socket.IO client disconnected")
+        except Exception as e:
+            self.logger.warning(f"Error during Socket.IO disconnect: {e}")
+        
+        # Clear subscriptions
+        self.subscriptions.clear()
+        
         self.logger.info("Disconnected from Ibulls XTS Socket.IO")
     
     def subscribe(self, correlation_id: str, mode: int, instruments: List[Dict]):
@@ -217,9 +229,9 @@ class IbullsWebSocketClient:
         # 1510 = Open Interest
         # 1512 = LTP
         mode_to_xts_code = {
-            1: 1501,  # LTP mode -> 1501 (Touchline)
-            2: 1502,  # Quote mode -> 1502 (Market Depth)  
-            3: 1505   # Depth mode -> 1505 (Full Market Data)
+            1: 1512,  # LTP mode -> 1512 (LTP)
+            2: 1501,  # Quote mode -> 1501 (Full Market Data)  
+            3: 1502   # Depth mode -> 1502 (Market Depth)
         }
         
         xts_message_code = mode_to_xts_code.get(mode, 1501)
@@ -254,6 +266,18 @@ class IbullsWebSocketClient:
             if response.status_code == 200:
                 result = response.json()
                 self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
+                
+                # Process initial quote data from listQuotes if available
+                if result.get('type') == 'success' and 'result' in result:
+                    list_quotes = result['result'].get('listQuotes', [])
+                    for quote_str in list_quotes:
+                        try:
+                            quote_data = json.loads(quote_str)
+                            self.logger.info(f"[INITIAL QUOTE] Processing initial quote: {quote_data}")
+                            if self.on_data:
+                                self.on_data(self, quote_data)
+                        except json.JSONDecodeError as e:
+                            self.logger.error(f"Error parsing initial quote: {e}")
             else:
                 self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
                 
@@ -288,18 +312,16 @@ class IbullsWebSocketClient:
         if correlation_id in self.subscriptions:
             del self.subscriptions[correlation_id]
         
-        # Send unsubscription via HTTP POST
+        # Send unsubscription via HTTP PUT (different from subscription POST)
         try:
             headers = {
                 'Authorization': self.market_data_token,
                 'Content-Type': 'application/json'
             }
             
-            # Use unsubscription endpoint (same as subscription according to XTS API)
-            unsubscribe_url = self.API_BASE_URL  # Same endpoint for both subscribe and unsubscribe
-            
-            response = requests.post(
-                unsubscribe_url,
+            # Use PUT method for unsubscription as per XTS API
+            response = requests.put(
+                self.API_UNSUBSCRIBE_URL,
                 json=unsubscription_request,
                 headers=headers,
                 timeout=10
@@ -400,6 +422,92 @@ class IbullsWebSocketClient:
         self.logger.info(f"[1512-JSON-PARTIAL] Received Full data partial: {data}")
         if self.on_data:
             self.on_data(self, data)
+    
+    def _on_message_1105_json_full(self, data):
+        """Handle 1105 JSON full messages (Binary market data)"""
+        self.logger.info(f"[1105-JSON-FULL] Received binary market data: {data}")
+        self._process_1105_data(data)
+    
+    def _on_message_1105_json_partial(self, data):
+        """Handle 1105 JSON partial messages (Binary market data)"""
+        self.logger.debug(f"[1105-JSON-PARTIAL] Received binary partial: {data}")
+        self._process_1105_data(data)
+    
+    def _process_1105_data(self, data):
+        """Process 1105 binary market data format: t:exchangeSegment_instrumentID,field:value,field:value"""
+        try:
+            if not isinstance(data, str):
+                return
+                
+            # Parse format: t:12_1140025,110:2067.75,111:516.95
+            parts = data.split(',')
+            if not parts or not parts[0].startswith('t:'):
+                return
+                
+            # Extract instrument info from first part
+            instrument_part = parts[0][2:]  # Remove 't:'
+            if '_' not in instrument_part:
+                return
+                
+            exchange_segment, instrument_id = instrument_part.split('_', 1)
+            
+            # FILTER: Only process data for subscribed instruments
+            exchange_segment_int = int(exchange_segment)
+            instrument_id_int = int(instrument_id)
+            
+            # Check if we have any subscription for this instrument
+            is_subscribed = False
+            for sub in self.subscriptions.values():
+                # Get instruments from the subscription
+                for instrument in sub.get('instruments', []):
+                    if (instrument.get('exchangeSegment') == exchange_segment_int and 
+                        instrument.get('exchangeInstrumentID') == instrument_id_int):
+                        is_subscribed = True
+                        break
+                if is_subscribed:
+                    break
+            
+            if not is_subscribed:
+                # Skip processing for unsubscribed instruments
+                return
+            
+            # Parse field-value pairs only for subscribed instruments
+            market_data = {
+                'ExchangeSegment': exchange_segment_int,
+                'ExchangeInstrumentID': instrument_id_int
+            }
+            
+            # Map common field codes to standard names
+            field_mapping = {
+                '110': 'LastTradedPrice',  # LTP
+                '111': 'LastTradedQuantity',  # LTQ
+                '112': 'TotalTradedQuantity',  # Volume
+                '113': 'AverageTradedPrice',
+                '114': 'Open',
+                '115': 'High', 
+                '116': 'Low',
+                '117': 'Close',
+                '118': 'TotalBuyQuantity',
+                '119': 'TotalSellQuantity'
+            }
+            
+            for part in parts[1:]:
+                if ':' in part:
+                    field_code, value = part.split(':', 1)
+                    field_name = field_mapping.get(field_code, f'Field_{field_code}')
+                    try:
+                        market_data[field_name] = float(value)
+                    except ValueError:
+                        market_data[field_name] = value
+            
+            self.logger.info(f"[1105-PROCESSED] Subscribed instrument data: {market_data}")
+            
+            # Call the standard data handler
+            if self.on_data:
+                self.on_data(self, market_data)
+                
+        except Exception as e:
+            self.logger.error(f"Error processing 1105 data '{data}': {e}")
     
     def _on_catch_all(self, event, *args):
         """Catch-all handler for any unhandled Socket.IO events"""

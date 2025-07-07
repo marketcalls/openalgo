@@ -7,13 +7,11 @@ class IbullsExchangeMapper:
     EXCHANGE_TYPES = {
         'NSE': 1,  # NSE Cash Market
         'NFO': 2,  # NSE Futures & Options
-        'BSE': 3,  # BSE Cash Market
-        'BFO': 4,  # BSE F&O
-        'MCX': 5,  # MCX
-        'NCX': 7,  # NCDEX
-        'CDS': 13,  # Currency derivatives
+        'BSE': 11,  # BSE Cash Market
+        'BFO': 12,  # BSE F&O
+        'MCX': 51,  # MCX
         'NSE_INDEX': 1,  # NSE Index
-        'BSE_INDEX': 3  # BSE Index
+        'BSE_INDEX': 11  # BSE Index
     }
     
     @staticmethod
@@ -44,8 +42,7 @@ class IbullsCapabilityRegistry:
         'BSE': [5],       # BSE supports only 5 levels
         'BFO': [5],       # BFO supports only 5 levels
         'NFO': [5, 20],   # NFO supports 5 and 20 levels
-        'MCX': [5],       # MCX supports only 5 levels
-        'CDS': [5]        # CDS supports only 5 levels
+        'MCX': [5]
     }
     
     @classmethod
