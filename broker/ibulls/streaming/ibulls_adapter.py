@@ -61,24 +61,33 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"No authentication tokens found for user {user_id}")
                 raise ValueError(f"No authentication tokens found for user {user_id}")
                 
+            # For XTS, we need API key and secret, not just tokens
+            # These should be stored in environment variables or config
+            api_key = os.getenv('BROKER_API_KEY_MARKET')
+            api_secret = os.getenv('BROKER_API_SECRET_MARKET')
+            
+            if not api_key or not api_secret:
+                self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET environment variables")
+                raise ValueError("Missing Ibulls XTS API credentials in environment variables")
+                
         else:
             # Use provided tokens
             auth_token = auth_data.get('auth_token')
             feed_token = auth_data.get('feed_token')
+            api_key = auth_data.get('api_key', os.getenv('BROKER_API_KEY_MARKET'))
+            api_secret = auth_data.get('api_secret', os.getenv('BROKER_API_SECRET_MARKET'))
             
             if not auth_token or not feed_token:
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
         
-        # Extract client ID from the JWT token
-        # The token contains userID in the format: "1048131_856F2F2AF32542B762129"
-        # We need to extract the actual client ID from the JWT payload
-        actual_client_id = self._extract_client_id_from_token(feed_token, user_id)
+        self.logger.info(f"Using API Key: {api_key[:10]}... for Ibulls XTS connection")
         
-        # Create Ibulls WebSocket client
+        # Create Ibulls WebSocket client with API credentials
         self.ws_client = IbullsWebSocketClient(
-            token=feed_token,  # Use feed_token for XTS WebSocket connection
-            user_id=actual_client_id  # Use the actual client ID from token
+            api_key=api_key,
+            api_secret=api_secret,
+            user_id=user_id  # Pass the user_id, client will get actual userID from login
         )
         
         # Set callbacks

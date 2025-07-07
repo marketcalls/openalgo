@@ -3,6 +3,7 @@ import logging
 import time
 import threading
 import socketio
+import requests
 from typing import Dict, Any, Optional, List, Callable
 
 
@@ -13,8 +14,9 @@ class IbullsWebSocketClient:
     """
     
     # Socket.IO endpoints - Updated based on XTS API documentation
-    ROOT_URI = "https://developers.symphonyfintech.in"
+    ROOT_URI = "https://xts.ibullssecurities.com"
     SOCKET_PATH = "/apimarketdata/socket.io"
+    API_BASE_URL = "https://xts.ibullssecurities.com/apimarketdata/instruments/subscription"
     
     # Available Actions
     SUBSCRIBE_ACTION = 1
@@ -32,18 +34,25 @@ class IbullsWebSocketClient:
     BSE_FO = 4
     MCX_FO = 5
     
-    def __init__(self, token: str, user_id: str, base_url: str = None):
+    def __init__(self, api_key: str, api_secret: str, user_id: str, base_url: str = None):
         """
         Initialize the Ibulls XTS Socket.IO client
         
         Args:
-            token: Authentication token (feed token)
-            user_id: User ID
+            api_key: Market data API key
+            api_secret: Market data API secret
+            user_id: User ID (client ID)
             base_url: Base URL for the Socket.IO endpoint
         """
-        self.token = token
+        self.api_key = api_key
+        self.api_secret = api_secret
         self.user_id = user_id
         self.base_url = base_url or self.ROOT_URI
+        
+        # Authentication tokens
+        self.market_data_token = None
+        self.feed_token = None
+        self.actual_user_id = None
         
         # Connection state
         self.sio = None
@@ -90,14 +99,74 @@ class IbullsWebSocketClient:
         # Add catch-all handler for any unhandled events
         self.sio.on('*', self._on_catch_all)
     
-    def connect(self):
-        """Establish Socket.IO connection"""
+    def marketdata_login(self):
+        """
+        Login to XTS market data API to get authentication tokens
+        
+        Returns:
+            bool: True if login successful, False otherwise
+        """
         try:
-            # Build connection URL with authentication parameters
+            login_url = f"{self.base_url}/apibinarymarketdata/auth/login"
+            
+            login_payload = {
+                "appKey": self.api_key,
+                "secretKey": self.api_secret,
+                "source": "WebAPI"
+            }
+            
+            headers = {
+                'Content-Type': 'application/json'
+            }
+            
+            self.logger.info(f"[MARKET DATA LOGIN] Attempting login to: {login_url}")
+            
+            response = requests.post(
+                login_url,
+                json=login_payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"[MARKET DATA LOGIN] Response: {result}")
+                
+                if result.get("type") == "success":
+                    login_result = result.get("result", {})
+                    self.market_data_token = login_result.get("token")
+                    self.actual_user_id = login_result.get("userID")
+                    
+                    if self.market_data_token and self.actual_user_id:
+                        self.logger.info(f"[MARKET DATA LOGIN] Success! Token obtained, UserID: {self.actual_user_id}")
+                        return True
+                    else:
+                        self.logger.error(f"[MARKET DATA LOGIN] Missing token or userID in response")
+                        return False
+                else:
+                    self.logger.error(f"[MARKET DATA LOGIN] API returned error: {result}")
+                    return False
+            else:
+                self.logger.error(f"[MARKET DATA LOGIN] HTTP Error: {response.status_code}, Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"[MARKET DATA LOGIN] Exception: {e}")
+            return False
+    
+    def connect(self):
+        """Establish Socket.IO connection with proper authentication"""
+        try:
+            # First, login to market data API to get proper tokens
+            if not self.marketdata_login():
+                raise Exception("Market data login failed")
+            
+            # Build connection URL with proper market data token and user ID
             publish_format = 'JSON'
             broadcast_mode = 'FULL'  # or 'PARTIAL'
             
-            connection_url = f"{self.base_url}/?token={self.token}&userID={self.user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
+            # Use the market data token and actual user ID from login response
+            connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
             
             self.logger.info(f"Connecting to Ibulls XTS Socket.IO: {connection_url}")
             
@@ -130,7 +199,7 @@ class IbullsWebSocketClient:
     
     def subscribe(self, correlation_id: str, mode: int, instruments: List[Dict]):
         """
-        Subscribe to market data
+        Subscribe to market data using XTS HTTP API
         
         Args:
             correlation_id: Unique identifier for this subscription
@@ -140,28 +209,62 @@ class IbullsWebSocketClient:
         if not self.connected:
             raise RuntimeError("Socket.IO not connected")
         
+        # Map mode to XTS message code
+        # Based on XTS documentation:
+        # 1501 = LTP/Touchline
+        # 1502 = Market Depth
+        # 1505 = Full Market Data
+        # 1510 = Open Interest
+        # 1512 = LTP
+        mode_to_xts_code = {
+            1: 1501,  # LTP mode -> 1501 (Touchline)
+            2: 1502,  # Quote mode -> 1502 (Market Depth)  
+            3: 1505   # Depth mode -> 1505 (Full Market Data)
+        }
+        
+        xts_message_code = mode_to_xts_code.get(mode, 1501)
+        
+        # Prepare subscription request
         subscription_request = {
-            "correlationID": correlation_id,
-            "action": self.SUBSCRIBE_ACTION,
-            "params": {
-                "mode": mode,
-                "instrumentKeys": instruments
-            }
+            "instruments": instruments,
+            "xtsMessageCode": xts_message_code
         }
         
         # Store subscription for reconnection
         self.subscriptions[correlation_id] = {
             "mode": mode,
-            "instruments": instruments
+            "instruments": instruments,
+            "xts_message_code": xts_message_code
         }
         
-        # Send subscription via Socket.IO
-        self.sio.emit('message', subscription_request)
-        self.logger.info(f"Subscribed to {len(instruments)} instruments with mode {mode}")
+        # Send subscription via HTTP POST (like the official XTS SDK)
+        try:
+            headers = {
+                'Authorization': self.market_data_token,
+                'Content-Type': 'application/json'
+            }
+            
+            response = requests.post(
+                self.API_BASE_URL,
+                json=subscription_request,
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
+            else:
+                self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
+                
+        except Exception as e:
+            self.logger.error(f"[SUBSCRIPTION EXCEPTION] Error: {e}")
+        
+        self.logger.info(f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})")
     
     def unsubscribe(self, correlation_id: str, mode: int, instruments: List[Dict]):
         """
-        Unsubscribe from market data
+        Unsubscribe from market data using XTS HTTP API
         
         Args:
             correlation_id: Unique identifier for this subscription
@@ -171,21 +274,46 @@ class IbullsWebSocketClient:
         if not self.connected:
             return
         
+        # Get the XTS message code from stored subscription
+        subscription = self.subscriptions.get(correlation_id, {})
+        xts_message_code = subscription.get('xts_message_code', 1501)
+        
+        # Prepare unsubscription request
         unsubscription_request = {
-            "correlationID": correlation_id,
-            "action": self.UNSUBSCRIBE_ACTION,
-            "params": {
-                "mode": mode,
-                "instrumentKeys": instruments
-            }
+            "instruments": instruments,
+            "xtsMessageCode": xts_message_code
         }
         
         # Remove from subscriptions
         if correlation_id in self.subscriptions:
             del self.subscriptions[correlation_id]
         
-        # Send unsubscription via Socket.IO
-        self.sio.emit('message', unsubscription_request)
+        # Send unsubscription via HTTP POST
+        try:
+            headers = {
+                'Authorization': self.market_data_token,
+                'Content-Type': 'application/json'
+            }
+            
+            # Use unsubscription endpoint (same as subscription according to XTS API)
+            unsubscribe_url = self.API_BASE_URL  # Same endpoint for both subscribe and unsubscribe
+            
+            response = requests.post(
+                unsubscribe_url,
+                json=unsubscription_request,
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.logger.info(f"[UNSUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
+            else:
+                self.logger.error(f"[UNSUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
+                
+        except Exception as e:
+            self.logger.error(f"[UNSUBSCRIPTION EXCEPTION] Error: {e}")
+        
         self.logger.info(f"Unsubscribed from {len(instruments)} instruments")
     
     def _on_connect(self):
