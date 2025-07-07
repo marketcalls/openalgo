@@ -531,30 +531,30 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
             self.logger.info(f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}")
             
-            # Now check if we have an active subscription for this symbol
-            correlation_id = None
-            subscription = None
-            mode = None
-            
-            # Check all possible modes for this symbol
-            for check_mode in [1, 2, 3]:  # LTP, Quote, Depth
-                check_correlation_id = f"{symbol}_{exchange}_{check_mode}"
-                if check_correlation_id in self.subscriptions:
-                    correlation_id = check_correlation_id
-                    subscription = self.subscriptions[check_correlation_id]
-                    mode = check_mode
-                    self.logger.info(f"Found active subscription: {correlation_id}")
-                    break
-            
-            if not subscription:
-                self.logger.debug(f"No active subscription found for {symbol} on {exchange}")
+            # Determine mode based on MessageCode
+            message_code = data.get('MessageCode')
+            if message_code == 1512:  # LTP
+                mode = 1
+                mode_str = 'LTP'
+            elif message_code == 1501:  # Quote  
+                mode = 2
+                mode_str = 'QUOTE'
+            elif message_code == 1502:  # Depth
+                mode = 3
+                mode_str = 'DEPTH'
+            else:
+                self.logger.warning(f"Unknown MessageCode: {message_code}")
                 return
+                
+            self.logger.info(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
+            
+            # Check if we have an active subscription for this symbol and mode (optional check)
+            check_correlation_id = f"{symbol}_{exchange}_{mode}"
+            if check_correlation_id not in self.subscriptions:
+                self.logger.warning(f"No active subscription found for {check_correlation_id}, but publishing anyway")
+                # We'll publish the data anyway since we received it
             
             # Create topic for ZeroMQ
-            # symbol and exchange are already set from the reverse lookup
-            # mode is already set from the subscription check
-            
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
             # Use standard topic format without broker prefix for WebSocket proxy routing
             topic = f"{exchange}_{symbol}_{mode_str}"
             
@@ -594,35 +594,63 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
+        # For depth mode (MessageCode 1502), extract data from Touchline
+        if 'Touchline' in message:
+            touchline = message.get('Touchline', {})
+            ltp = touchline.get('LastTradedPrice', 0)
+            ltt = touchline.get('LastTradedTime', 0)
+            volume = touchline.get('TotalTradedQuantity', 0)
+            open_price = touchline.get('Open', 0)
+            high = touchline.get('High', 0)
+            low = touchline.get('Low', 0)
+            close = touchline.get('Close', 0)
+            ltq = touchline.get('LastTradedQunatity', touchline.get('LastTradedQuantity', 0))
+            avg_price = touchline.get('AverageTradedPrice', 0)
+            total_buy_qty = touchline.get('TotalBuyQuantity', 0)
+            total_sell_qty = touchline.get('TotalSellQuantity', 0)
+        else:
+            # Fallback to direct fields
+            ltp = message.get('LastTradedPrice', 0)
+            ltt = message.get('LastTradedTime', 0)
+            volume = message.get('TotalTradedQuantity', 0)
+            open_price = message.get('Open', 0)
+            high = message.get('High', 0)
+            low = message.get('Low', 0)
+            close = message.get('Close', 0)
+            ltq = message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0))
+            avg_price = message.get('AveragePrice', 0)
+            total_buy_qty = message.get('TotalBuyQuantity', 0)
+            total_sell_qty = message.get('TotalSellQuantity', 0)
+        
         if mode == 1:  # LTP mode
             return {
-                'ltp': message.get('LastTradedPrice', 0),
-                'ltt': message.get('LastTradedTime', 0),
-                'ltq': message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0))  # Handle typo in XTS API
+                'ltp': ltp,
+                'ltt': ltt,
+                'ltq': ltq
             }
         elif mode == 2:  # Quote mode
             return {
-                'ltp': message.get('LastTradedPrice', 0),
-                'ltt': message.get('LastTradedTime', 0),
-                'volume': message.get('TotalTradedQuantity', 0),
-                'open': message.get('Open', 0),
-                'high': message.get('High', 0),
-                'low': message.get('Low', 0),
-                'close': message.get('Close', 0),
-                'last_quantity': message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0)),  # Handle typo in XTS API
-                'average_price': message.get('AveragePrice', 0),
-                'total_buy_quantity': message.get('TotalBuyQuantity', 0),
-                'total_sell_quantity': message.get('TotalSellQuantity', 0)
+                'ltp': ltp,
+                'ltt': ltt,
+                'volume': volume,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
+                'last_quantity': ltq,
+                'average_price': avg_price,
+                'total_buy_quantity': total_buy_qty,
+                'total_sell_quantity': total_sell_qty
             }
         elif mode == 3:  # Depth mode
             result = {
-                'ltp': message.get('LastTradedPrice', 0),
-                'ltt': message.get('LastTradedTime', 0),
-                'volume': message.get('TotalTradedQuantity', 0),
-                'open': message.get('Open', 0),
-                'high': message.get('High', 0),
-                'low': message.get('Low', 0),
-                'close': message.get('Close', 0),
+                'ltp': ltp,
+                'ltt': ltt,
+                'volume': volume,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
                 'oi': message.get('OpenInterest', 0),
                 'upper_circuit': message.get('UpperCircuitLimit', 0),
                 'lower_circuit': message.get('LowerCircuitLimit', 0)
@@ -654,10 +682,11 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         for level in depth_list:
             if isinstance(level, dict):
+                # XTS uses 'Size' instead of 'Quantity' and 'TotalOrders' instead of 'OrderCount'
                 depth.append({
                     'price': level.get('Price', 0),
-                    'quantity': level.get('Quantity', 0),
-                    'orders': level.get('OrderCount', 0)
+                    'quantity': level.get('Size', 0),
+                    'orders': level.get('TotalOrders', 0)
                 })
         
         # Ensure we have at least 5 levels
