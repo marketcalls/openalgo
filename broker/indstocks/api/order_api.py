@@ -4,10 +4,10 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.dhan.mapping.transform_data import map_exchange_type, map_exchange
+from broker.indstocks.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.indstocks.mapping.transform_data import map_exchange_type, map_exchange, map_segment
 from utils.httpx_client import get_httpx_client
-from broker.dhan.api.baseurl import get_url
+from broker.indstocks.api.baseurl import get_url
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,7 +23,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     client = get_httpx_client()
     
     headers = {
-        'access-token': AUTH_TOKEN,
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
@@ -46,40 +46,35 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         
         # Check for API errors in the response
         if isinstance(response_data, dict):
-            # Some Dhan API errors come in this format
-            if response_data.get('status') == 'failed' or response_data.get('status') == 'error':
-                error_data = response_data.get('data', {})
-                if error_data:
-                    error_code = list(error_data.keys())[0] if error_data else 'unknown'
-                    error_message = error_data.get(error_code, 'Unknown error')
-                    logger.error(f"API Error: {error_code} - {error_message}")
-                    # Return the error response for further handling
-                    return response_data
-            
-            # Other Dhan API errors might come in this format
-            if response_data.get('errorType'):
-                logger.error(f"API Error: {response_data.get('errorCode')} - {response_data.get('errorMessage')}")
+            # IndStocks API errors come in this format
+            if response_data.get('status') == 'error':
+                error_message = response_data.get('message', 'Unknown error')
+                logger.error(f"API Error: {error_message}")
                 # Return the error response for further handling
                 return response_data
+            
+            # For successful responses, return the data array directly for list endpoints
+            if response_data.get('status') == 'success' and 'data' in response_data:
+                return response_data['data']
         
         return response_data
         
     except Exception as e:
         # Handle connection or parsing errors
         logger.exception(f"Error in API request to {url}: {e}")
-        return {'errorType': 'ConnectionError', 'errorMessage': str(e)}
+        return {'status': 'error', 'message': str(e)}
 
 def get_order_book(auth):
-    return get_api_response("/v2/orders",auth)
+    return get_api_response("/order-book",auth)
 
 def get_trade_book(auth):
-    return get_api_response("/v2/trades",auth)
+    return get_api_response("/tradebook",auth)
 
 def get_positions(auth):
-    return get_api_response("/v2/positions",auth)
+    return get_api_response("/positions",auth)
 
 def get_holdings(auth):
-    return get_api_response("/v2/holdings",auth)
+    return get_api_response("/holdings",auth)
 
 def get_open_position(tradingsymbol, exchange, product, auth):
 
@@ -89,15 +84,18 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     net_qty = '0'
     
     # Check if positions_data is an error response
-    if isinstance(positions_data, dict) and (positions_data.get('errorType') or positions_data.get('status') == 'failed' or positions_data.get('status') == 'error'):
-        logger.error(f"Error getting positions for {tradingsymbol}: {positions_data.get('errorMessage', 'API Error')}")
+    if isinstance(positions_data, dict) and positions_data.get('status') == 'error':
+        logger.error(f"Error getting positions for {tradingsymbol}: {positions_data.get('message', 'API Error')}")
         return net_qty
     
     # Only process if positions_data is valid and not an error
     if positions_data and isinstance(positions_data, list):
         for position in positions_data:
-            if position.get('tradingSymbol') == tradingsymbol and position.get('exchangeSegment') == map_exchange_type(exchange) and position.get('productType') == product:
-                net_qty = position.get('netQty', '0')
+            # Map IndStocks position fields to match our logic
+            if (position.get('trading_symbol') == tradingsymbol and 
+                position.get('exchange') == map_exchange_type(exchange) and 
+                position.get('product') == product):
+                net_qty = position.get('net_qty', '0')
                 break  # Assuming you need the first match
 
     return net_qty
@@ -107,20 +105,26 @@ def place_order_api(data,auth):
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
+    logger.info(f"Original order data: {data}")
+    logger.info(f"Security token: {token}")
     newdata = transform_data(data, token)  
+    logger.info(f"Transformed data: {newdata}")
     headers = {
-        'access-token': AUTH_TOKEN,
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
     payload = json.dumps(newdata)
 
     logger.debug(f"Placing order with payload: {payload}")
+    logger.info(f"IndStocks API URL: {get_url('/order')}")
+    logger.info(f"IndStocks API Headers: {headers}")
+    logger.info(f"IndStocks API Payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
     
-    url = get_url("/v2/orders")
+    url = get_url("/order")
     res = client.post(url, headers=headers, content=payload)
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
@@ -133,13 +137,14 @@ def place_order_api(data,auth):
     
     logger.debug(f"Place order response: {response_data}")
     
-    # Check if the API call was successful before accessing orderId
+    # Check if the API call was successful before accessing order ID
     orderid = None
     if res.status_code == 200 or res.status_code == 201:
-        if response_data and 'orderId' in response_data:
-            orderid = response_data['orderId']
+        if response_data and response_data.get('status') == 'success':
+            # IndStocks returns order ID in data field
+            orderid = response_data.get('data', {}).get('id')
         else:
-            logger.error(f"orderId not found in response: {response_data}")
+            logger.error(f"Order placement failed: {response_data}")
     else:
         logger.error(f"API call failed with status {res.status_code}: {response_data}")
     
@@ -220,6 +225,10 @@ def place_smartorder_api(data,auth):
         res, response, orderid = place_order_api(order_data,AUTH_TOKEN)
         
         return res , response, orderid
+    else:
+        # No action determined - should not happen with current logic
+        response = {"status": "success", "message": "No action needed"}
+        return res, response, None
     
 
 
@@ -238,18 +247,18 @@ def close_all_positions(current_api_key,auth):
         # Loop through each position to close
         for position in positions_response:
             # Skip if net quantity is zero
-            if int(position['netQty']) == 0:
+            if int(position['net_qty']) == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['netQty']) > 0 else 'BUY'
-            quantity = abs(int(position['netQty']))
+            action = 'SELL' if int(position['net_qty']) > 0 else 'BUY'
+            quantity = abs(int(position['net_qty']))
 
-            #print(f"Trading Symbol : {position['tradingsymbol']}")
+            #print(f"Trading Symbol : {position['trading_symbol']}")
             #print(f"Exchange : {position['exchange']}")
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['securityId'],map_exchange(position['exchangeSegment']))
+            symbol = get_symbol(position['security_id'],map_exchange(position['exchange']))
             logger.info(f"The Symbol is {symbol}")
 
             # Prepare the order payload
@@ -258,9 +267,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": map_exchange(position['exchangeSegment']),
+                "exchange": map_exchange(position['exchange']),
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['productType']),
+                "product": reverse_map_product_type(position['product']),
                 "quantity": str(quantity)
             }
 
@@ -282,20 +291,23 @@ def cancel_order(orderid,auth):
     
     # Set up the request headers
     headers = {
-        'access-token': AUTH_TOKEN,
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
     
-    
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
     
-    # Construct the URL for deleting the order
-    url = get_url(f"/v2/orders/{orderid}")
+    # Prepare the payload for IndStocks cancel order API
+    payload = {
+        "segment": "DERIVATIVE" if orderid.startswith("DRV-") else "EQUITY",
+        "order_id": orderid
+    }
     
-    # Make the DELETE request using httpx
-    res = client.delete(url, headers=headers)
+    # Make the POST request to cancel order using httpx
+    url = get_url("/order/cancel")
+    res = client.post(url, headers=headers, content=json.dumps(payload))
     
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
@@ -305,7 +317,7 @@ def cancel_order(orderid,auth):
 
     
     # Check if the request was successful
-    if data:
+    if res.status_code == 200 and data.get("status") == "success":
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
@@ -328,7 +340,7 @@ def modify_order(data,auth):
   
     # Set up the request headers
     headers = {
-        'access-token': AUTH_TOKEN,
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
@@ -340,10 +352,10 @@ def modify_order(data,auth):
     client = get_httpx_client()
     
     # Construct the URL for modifying the order
-    url = get_url(f"/v2/orders/{orderid}")
+    url = get_url("/order/modify")
     
-    # Make the PUT request using httpx
-    res = client.put(url, headers=headers, content=payload)
+    # Make the POST request using httpx
+    res = client.post(url, headers=headers, content=payload)
     
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
@@ -353,8 +365,8 @@ def modify_order(data,auth):
     logger.debug(f"Modify order response: {data}")
     #return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
 
-    if data["orderId"]:
-        return {"status": "success", "orderid": data["orderId"]}, 200
+    if res.status_code == 200 and data.get("status") == "success":
+        return {"status": "success", "orderid": orderid}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
     
@@ -369,14 +381,14 @@ def cancel_all_orders_api(data,auth):
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [order for order in order_book_response
-                        if order['orderStatus'] in ['PENDING']]
+                        if order['status'] in ['PENDING', 'O-PENDING', 'SL-PENDING']]
     logger.info(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['orderId']
+        orderid = order['id']
         cancel_response, status_code = cancel_order(orderid,AUTH_TOKEN)
         if status_code == 200:
             canceled_orders.append(orderid)

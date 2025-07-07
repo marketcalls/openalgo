@@ -1,6 +1,6 @@
-# Dhan API Base URL Configuration
+# IndStocks API Base URL Configuration
 
-# Base URL for Dhan API endpoints
+# Base URL for IndStocks API endpoints
 BASE_URL = "https://api.indstocks.com"
 
 # Function to build full URL with endpoint

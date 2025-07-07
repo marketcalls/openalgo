@@ -1,170 +1,162 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
+#Mapping IndStocks API Parameters https://api.indstocks.com/
 
-def transform_data(data,token):
+def transform_data(data, token):
     """
-    Transforms the OpenAlgo API request structure to Dhan v2 API structure.
+    Transforms the OpenAlgo API request structure to IndStocks API structure.
     
-    Parameters required by Dhan v2:
-    - dhanClientId (required): string
-    - correlationId: string
-    - transactionType (required): BUY/SELL
-    - exchangeSegment (required): Exchange segment enum
-    - productType (required): Product type enum
-    - orderType (required): Order type enum
+    Parameters required by IndStocks API:
+    - txn_type (required): BUY/SELL
+    - exchange (required): NSE/BSE
+    - segment (required): DERIVATIVE/EQUITY
+    - product (required): MARGIN/INTRADAY/CNC
+    - order_type (required): LIMIT/MARKET
     - validity (required): DAY/IOC
-    - securityId (required): string
-    - quantity (required): int
-    - disclosedQuantity: int
-    - price (required): float
-    - triggerPrice: float (required for SL orders)
-    - afterMarketOrder: boolean
-    - amoTime: string (OPEN/OPEN_30/OPEN_60)
-    - boProfitValue: float
-    - boStopLossValue: float
+    - security_id (required): string
+    - qty (required): integer
+    - is_amo: boolean (for after market orders)
+    - limit_price: float (required for LIMIT orders)
     """
-    # Basic mapping
+    # Basic mapping from OpenAlgo to IndStocks
+    segment = map_segment(data["exchange"])
     transformed = {
-        "dhanClientId": data["apikey"],
-        "transactionType": data["action"].upper(),
-        "exchangeSegment": map_exchange_type(data["exchange"]),
-        "productType": map_product_type(data["product"]),
-        "orderType": map_order_type(data["pricetype"]),
-        "validity": "DAY",  # Default to DAY, can be overridden if IOC is needed
-        "securityId": token,
-        "quantity": int(data["quantity"]),
-        "disclosedQuantity": int(data.get("disclosed_quantity", 0)),
-        "price": float(data.get("price", 0)),
-        "triggerPrice": float(data.get("trigger_price", 0)),
-        "afterMarketOrder": data.get("after_market_order", False)
+        "txn_type": data["action"].upper(),  # BUY/SELL
+        "exchange": data["exchange"].upper(),  # NSE/BSE
+        "segment": segment,  # DERIVATIVE/EQUITY
+        "product": map_product_type(data["product"]),  # MARGIN/INTRADAY/CNC
+        "order_type": map_order_type(data["pricetype"]),  # LIMIT/MARKET
+        "validity": "DAY",  # Default to DAY
+        "security_id": token,  # Security ID from token
+        "qty": int(data["quantity"]),  # Order quantity
+        "is_amo": data.get("is_amo", False)  # After market order flag
     }
     
-    # Add correlationId - Dhan API seems to require this field even if optional in docs
-    correlation_id = data.get("correlation_id")
-    if correlation_id is not None and correlation_id != "":
-        transformed["correlationId"] = correlation_id
-    else:
-        # Use a default correlation ID if not provided
-        import uuid
-        transformed["correlationId"] = str(uuid.uuid4())[:8]  # Short UUID for tracking
+    # Log the segment mapping for debugging
+    print(f"Exchange: {data['exchange']}, Mapped Segment: {segment}")
+    print(f"Order Type: {data.get('pricetype')} -> {transformed['order_type']}")
     
-    # Handle amoTime - required for after market orders, default for regular orders
-    if data.get("after_market_order", False):
-        amo_time = data.get("amo_time")
-        if amo_time and amo_time in ["OPEN", "OPEN_30", "OPEN_60"]:
-            transformed["amoTime"] = amo_time
-        else:
-            transformed["amoTime"] = "OPEN"  # Default for after market orders
-    else:
-        # Even for regular orders, Dhan API seems to require amoTime field
-        transformed["amoTime"] = "OPEN"
+    # Add limit_price for LIMIT orders
+    if data.get("pricetype") == "LIMIT" and data.get("price"):
+        transformed["limit_price"] = float(data["price"])
+    elif transformed["order_type"] == "limit":
+        # For LIMIT orders, price is required
+        transformed["limit_price"] = float(data.get("price", 0))
     
-    # Add bracket order fields only if they have valid values
-    bo_profit = data.get("bo_profit_value")
-    if bo_profit is not None and bo_profit != 0:
-        transformed["boProfitValue"] = float(bo_profit)
-    
-    bo_stop_loss = data.get("bo_stop_loss_value")
-    if bo_stop_loss is not None and bo_stop_loss != 0:
-        transformed["boStopLossValue"] = float(bo_stop_loss)
-
-    # Handle validity for IOC orders if specified
+    # Handle validity if specified
     if data.get("validity") == "IOC":
         transformed["validity"] = "IOC"
-
-    # For SL and SL-M orders, trigger price is required
-    if data["pricetype"] in ["SL", "SL-M"] and not transformed["triggerPrice"]:
-        raise ValueError("Trigger price is required for Stop Loss orders")
-
-
+    
+    # For equity orders, ensure we have all required fields
+    if transformed["segment"] == "EQUITY":
+        # Ensure limit_price is set for LIMIT orders
+        if transformed["order_type"] == "limit" and "limit_price" not in transformed:
+            transformed["limit_price"] = float(data.get("price", 0))
+    
     return transformed
 
 
 def transform_modify_order_data(data):
-    return {
-        "dhanClientId": data["apikey"],
-        "orderId": data["orderid"],
-        "orderType": map_order_type(data["pricetype"]),
-        "legName":"ENTRY_LEG",
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "disclosedQuantity": data.get("disclosed_quantity", "0"),
-        "triggerPrice": data.get("trigger_price", "0"),
-        "validity": "DAY"
-
+    """
+    Transforms OpenAlgo modify order data to IndStocks format.
+    """
+    transformed = {
+        "segment": map_segment_from_orderid(data.get("orderid", "")),  # Derive from order ID
+        "order_id": data["orderid"],
+        "qty": int(data["quantity"]),
+        "limit_price": float(data.get("price", 0))
     }
+    
+    return transformed
 
 
 def map_order_type(pricetype):
     """
-    Maps the new pricetype to the existing order type.
+    Maps OpenAlgo pricetype to IndStocks order_type.
     """
     order_type_mapping = {
         "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "STOP_LOSS",
-        "SL-M": "STOP_LOSS_MARKET"
+        "LIMIT": "limit",
+        "SL": "limit",  # Stop loss as limit order
+        "SL-M": "MARKET"  # Stop loss market as market order
     }
-    return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
+    return order_type_mapping.get(pricetype, "MARKET")
 
+
+def map_segment(exchange):
+    """
+    Maps OpenAlgo exchange to IndStocks segment.
+    """
+    segment_mapping = {
+        "NSE": "EQUITY",
+        "BSE": "EQUITY", 
+        "NFO": "DERIVATIVE",
+        "BFO": "DERIVATIVE",
+        "CDS": "DERIVATIVE",
+        "BCD": "DERIVATIVE",
+        "MCX": "DERIVATIVE"
+    }
+    result = segment_mapping.get(exchange, "EQUITY")
+    print(f"map_segment: {exchange} -> {result}")
+    return result
+
+
+def map_segment_from_orderid(orderid):
+    """
+    Maps order ID prefix to segment for modify/cancel operations.
+    """
+    if orderid.startswith("DRV-"):
+        return "DERIVATIVE"
+    else:
+        return "EQUITY"
 
 
 def map_exchange_type(exchange):
     """
-    Maps the Broker Exchange to the OpenAlgo Exchange.
+    Maps OpenAlgo exchange to IndStocks exchange format.
     """
     exchange_mapping = {
-        "NSE": "NSE_EQ",
-        "BSE": "BSE_EQ",
-        "CDS": "NSE_CURRENCY",
-        "NFO": "NSE_FNO",
-        "BFO": "BSE_FNO",
-        "BCD": "BSE_CURRENCY",
-        "MCX": "MCX_COMM"
-
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NFO": "NSE",
+        "BFO": "BSE",
+        "CDS": "NSE",
+        "BCD": "BSE",
+        "MCX": "MCX"
     }
-    return exchange_mapping.get(exchange)  # Default to MARKET if not found
+    return exchange_mapping.get(exchange, "NSE")
 
 
-
-def map_exchange(brexchange):
+def map_exchange(br_exchange):
     """
-    Maps the Broker Exchange to the OpenAlgo Exchange.
+    Maps IndStocks exchange back to OpenAlgo exchange.
     """
     exchange_mapping = {
-        "NSE_EQ": "NSE",
-        "BSE_EQ": "BSE",
-        "NSE_CURRENCY": "CDS",
-        "NSE_FNO": "NFO",
-        "BSE_FNO": "BFO",
-        "BSE_CURRENCY": "BCD",
-        "MCX_COMM": "MCX"
-
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "MCX": "MCX"
     }
-    return exchange_mapping.get(brexchange)  # Default to MARKET if not found
-
+    return exchange_mapping.get(br_exchange, "NSE")
 
 
 def map_product_type(product):
     """
-    Maps the new product type to the existing product type.
+    Maps OpenAlgo product type to IndStocks product type.
     """
     product_type_mapping = {
         "CNC": "CNC",
         "NRML": "MARGIN",
         "MIS": "INTRADAY",
     }
-    return product_type_mapping.get(product, "INTRADAY")  # Default to INTRADAY if not found
+    return product_type_mapping.get(product, "INTRADAY")
+
 
 def reverse_map_product_type(product):
     """
-    Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
+    Maps IndStocks product type back to OpenAlgo product type.
     """
-    # Exchange to OpenAlgo product type mapping for 'D'
     product_mapping = {
         "CNC": "CNC",
         "MARGIN": "NRML",
-        "MIS": "INTRADAY"
+        "INTRADAY": "MIS"
     }
-    
-    return product_mapping.get(product)  # Removed default; will return None if not found
+    return product_mapping.get(product, "MIS")
