@@ -141,6 +141,7 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
+
     def get_history(self, symbol: str, exchange: str, interval: str, 
                    start_date: str, end_date: str) -> pd.DataFrame:
         """

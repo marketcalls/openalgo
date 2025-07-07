@@ -27,6 +27,7 @@ from .openposition import api as openposition_ns
 from .ticker import api as ticker_ns
 from .symbol import api as symbol_ns
 from .search import api as search_ns
+from .expiry import api as expiry_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -51,3 +52,4 @@ api.add_namespace(openposition_ns, path='/openposition')
 api.add_namespace(ticker_ns, path='/ticker')
 api.add_namespace(symbol_ns, path='/symbol')
 api.add_namespace(search_ns, path='/search')
+api.add_namespace(expiry_ns, path='/expiry')

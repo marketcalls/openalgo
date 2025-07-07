@@ -11,7 +11,7 @@ GET http://127.0.0.1:5000/api/v1/ticker/{exchange}:{symbol}
 ## Parameters
 
 ### Path Parameters
-- `exchange:symbol` (required): Combined exchange and symbol (e.g., NSE:ZOMATO). Defaults to NSE:ZOMATO if not provided.
+- `exchange:symbol` (required): Combined exchange and symbol (e.g., NSE:RELIANCE). Defaults to NSE:RELIANCE if not provided.
 
 ### Query Parameters
 - `interval` (optional): The time interval for the data. Default: D
@@ -36,9 +36,22 @@ API key must be provided either:
 - In the request header as `X-API-KEY`
 - As a query parameter `apikey`
 
+**Note**: The API key must be obtained from your OpenAlgo instance dashboard under the API Key section.
+
+### AmiBroker Integration
+For AmiBroker users, use this exact URL template format to fetch historical quotes:
+```
+http://127.0.0.1:5000/api/v1/ticker/{symbol}?apikey={api_key}&interval={interval_extra}&from={from_ymd}&to={to_ymd}&format=txt
+```
+
+Example:
+```
+http://127.0.0.1:5000/api/v1/ticker/NSE:ICICIBANK?apikey=your_api_key_here&interval=1m&from=2025-06-04&to=2025-07-04&format=txt
+```
+
 ## Example Request
 ```
-GET http://127.0.0.1:5000/api/v1/ticker/NSE:ZOMATO?interval=D&from=2023-01-09&to=2023-02-10&adjusted=true&sort=asc
+GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?apikey=your_api_key_here&interval=D&from=2023-01-09&to=2023-02-10&adjusted=true&sort=asc
 ```
 
 ## Response Format
@@ -66,12 +79,12 @@ GET http://127.0.0.1:5000/api/v1/ticker/NSE:ZOMATO?interval=D&from=2023-01-09&to
 - 500: Internal Server Error - Unexpected error
 
 ## Example Usage
-For example, to get 5-minute bars for ZOMATO stock from NSE:
+For example, to get 5-minute bars for RELIANCE stock from NSE:
 ```
-GET http://127.0.0.1:5000/api/v1/ticker/NSE:ZOMATO?interval=5m&from=2023-01-09&to=2023-02-10
+GET http://127.0.0.1:5000/api/v1/ticker/NSE:RELIANCE?apikey=your_api_key_here&interval=5m&from=2023-01-09&to=2023-02-10
 ```
 
-This will return 5-minute OHLCV bars for ZOMATO between January 9, 2023, and February 10, 2023.
+This will return 5-minute OHLCV bars for RELIANCE between January 9, 2023, and February 10, 2023.
 
 ## Ticker API Documentation
 
@@ -87,7 +100,7 @@ GET /api/v1/ticker/{exchange}:{symbol}
 
 | Parameter | Type   | Required | Description                                      | Example     |
 |-----------|--------|----------|--------------------------------------------------|-------------|
-| symbol    | string | Yes      | Stock symbol with exchange (e.g., NSE:ZOMATO)    | NSE:ZOMATO  |
+| symbol    | string | Yes      | Stock symbol with exchange (e.g., NSE:RELIANCE)    | NSE:RELIANCE  |
 | interval  | string | No       | Time interval (D, 1m, 5m, 1h, etc.). Default: D  | 5m          |
 | from      | string | No       | Start date in YYYY-MM-DD format                  | 2024-12-01  |
 | to        | string | No       | End date in YYYY-MM-DD format                    | 2024-12-31  |
@@ -103,8 +116,8 @@ Format: `Ticker,Date_YMD,Open,High,Low,Close,Volume`
 
 Example:
 ```
-NSE:ZOMATO,2024-12-02,281.9,285.7,280.45,282.5,35170688
-NSE:ZOMATO,2024-12-03,279.7,282.35,279.0,279.85,30078648
+NSE:RELIANCE,2024-12-02,2815.9,2857.7,2804.45,2825.5,3517068
+NSE:RELIANCE,2024-12-03,2797.7,2823.35,2790.0,2798.5,3007864
 ```
 
 #### Intraday Data (interval=1m, 5m, etc.)
@@ -112,8 +125,18 @@ Format: `Ticker,Date_YMD,Time,Open,High,Low,Close,Volume`
 
 Example:
 ```
-NSE:ZOMATO,2024-12-02,09:15:00,281.5,281.95,280.45,281.05,529484
-NSE:ZOMATO,2024-12-02,09:16:00,281.0,281.4,280.65,280.95,391523
+NSE:ICICIBANK,2025-06-04,09:15:00,1437.4,1440.1,1433.0,1433.6,345598
+NSE:ICICIBANK,2025-06-04,09:16:00,1434.0,1436.3,1432.5,1434.2,83225
+NSE:ICICIBANK,2025-06-04,09:17:00,1434.4,1434.8,1432.9,1433.8,26743
+NSE:ICICIBANK,2025-06-04,09:18:00,1433.8,1434.8,1433.2,1433.4,22281
+NSE:ICICIBANK,2025-06-04,09:19:00,1433.3,1433.3,1430.3,1431.0,35529
+NSE:ICICIBANK,2025-06-04,09:20:00,1430.6,1431.9,1430.1,1431.0,31222
+NSE:ICICIBANK,2025-06-04,09:21:00,1431.0,1432.0,1430.9,1431.8,25495
+NSE:ICICIBANK,2025-06-04,09:22:00,1431.8,1432.3,1431.4,1432.3,9631
+NSE:ICICIBANK,2025-06-04,09:23:00,1432.3,1432.3,1431.4,1431.8,15877
+NSE:ICICIBANK,2025-06-04,09:24:00,1431.5,1431.7,1430.6,1431.2,12727
+NSE:ICICIBANK,2025-06-04,09:25:00,1431.2,1431.5,1431.0,1431.3,20720
+NSE:ICICIBANK,2025-06-04,09:26:00,1431.5,1432.2,1431.3,1432.2,10217
 ```
 
 ### JSON Format (format=json)
@@ -124,11 +147,11 @@ NSE:ZOMATO,2024-12-02,09:16:00,281.0,281.4,280.65,280.95,391523
     "data": [
         {
             "timestamp": 1701432600,
-            "open": 281.9,
-            "high": 285.7,
-            "low": 280.45,
-            "close": 282.5,
-            "volume": 35170688
+            "open": 2815.9,
+            "high": 2857.7,
+            "low": 2804.45,
+            "close": 2825.5,
+            "volume": 3517068
         },
         ...
     ]
@@ -167,12 +190,23 @@ Invalid openalgo apikey
 
 The API is rate-limited to 10 requests per second by default. This can be configured using the `API_RATE_LIMIT` environment variable.
 
+## Date Range Restrictions
+
+To prevent large queries that could hit broker rate limits, the API automatically restricts date ranges:
+
+- **Daily/Weekly/Monthly intervals (D, W, M)**: Maximum 10 years from end date
+- **Intraday intervals (1m, 5m, 1h, etc.)**: Maximum 30 days from end date
+
+If a request exceeds these limits, the start date will be automatically adjusted. For example:
+- Original request: `http://127.0.0.1:5000/api/v1/ticker/NSE:ICICIBANK?apikey=your_api_key_here&interval=1m&from=2000-06-01&to=2025-07-04&format=txt`
+- Adjusted to: `from=2025-06-04&to=2025-07-04&interval=1m` (30 days for 1-minute data)
+
 ## Notes
 
 1. All timestamps in the responses are in Indian Standard Time (IST)
 2. Volume is always returned as an integer
-3. If no symbol is provided, defaults to "NSE:ZOMATO"
+3. If no symbol is provided, defaults to "NSE:RELIANCE"
 4. If no exchange is specified in the symbol, defaults to "NSE"
 5. The API supports both formats:
-   - `NSE:ZOMATO` (preferred)
-   - `ZOMATO` (defaults to NSE)
+   - `NSE:RELIANCE` (preferred)
+   - `RELIANCE` (defaults to NSE)

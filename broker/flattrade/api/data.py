@@ -77,7 +77,6 @@ class BrokerData:
             dict: Simplified quote data with required fields
         """
         try:
-            quotes = []
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
@@ -96,11 +95,10 @@ class BrokerData:
             response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
                 
             if response.get('stat') != 'Ok':
-                logger.info(f"Error in quote: {response.get('emsg', 'Unknown error')}")
-                return []  # Return empty list instead of continue
+                raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data
-            quotes.append({
+            # Return simplified quote data as dict (not list)
+            return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)), 
                 'open': float(response.get('o', 0)),
@@ -109,9 +107,7 @@ class BrokerData:
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                 'volume': int(response.get('v', 0))
-            })
-        
-            return quotes
+            }
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -309,16 +305,16 @@ class BrokerData:
                     if df.empty or df['timestamp'].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quote = self.get_quotes(symbol, exchange)
+                            quotes = self.get_quotes(symbol, exchange)
                             
-                            if quote:
+                            if quotes:
                                 today_data = {
                                     'timestamp': today_ts,
-                                    'open': float(quote.get('open', 0)),
-                                    'high': float(quote.get('high', 0)),
-                                    'low': float(quote.get('low', 0)),
-                                    'close': float(quote.get('ltp', 0)),  # Use LTP as close
-                                    'volume': float(quote.get('volume', 0))
+                                    'open': float(quotes.get('open', 0)),
+                                    'high': float(quotes.get('high', 0)),
+                                    'low': float(quotes.get('low', 0)),
+                                    'close': float(quotes.get('ltp', 0)),  # Use LTP as close
+                                    'volume': float(quotes.get('volume', 0))
                                 }
                                 logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data

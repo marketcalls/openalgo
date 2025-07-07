@@ -261,7 +261,7 @@ class BrokerData:
             # If both dates are weekends, return empty DataFrame
             if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
                 logger.info("Both start and end dates are non-trading days")
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
 
             # If start and end dates are same, increase end date by one day
             if start_date == end_date:
@@ -299,7 +299,8 @@ class BrokerData:
                     "exchangeSegment": exchange_segment,
                     "instrument": instrument_type,
                     "fromDate": utc_start_date,
-                    "toDate": utc_end_date
+                    "toDate": utc_end_date,
+                    "oi": True
                 }
                 
                 # Add expiryCode only for EQUITY
@@ -318,6 +319,7 @@ class BrokerData:
                 lows = response.get('low', [])
                 closes = response.get('close', [])
                 volumes = response.get('volume', [])
+                openinterest = response.get('open_interest', [])
 
                 for i in range(len(timestamps)):
                     # Convert UTC timestamp to IST
@@ -328,7 +330,8 @@ class BrokerData:
                         'high': float(highs[i]) if highs[i] else 0,
                         'low': float(lows[i]) if lows[i] else 0,
                         'close': float(closes[i]) if closes[i] else 0,
-                        'volume': int(float(volumes[i])) if volumes[i] else 0
+                        'volume': int(float(volumes[i])) if volumes[i] else 0,
+                        'oi': int(float(openinterest[i])) if openinterest[i] else 0
                     })
             else:
                 # For intraday data
@@ -345,7 +348,8 @@ class BrokerData:
                         "instrument": instrument_type,
                         "interval": self.timeframe_map[interval],
                         "fromDate": from_time,
-                        "toDate": to_time
+                        "toDate": to_time,
+                        "oi": True
                     }
                     
                     logger.info(f"Making intraday history request to {endpoint}")
@@ -361,6 +365,7 @@ class BrokerData:
                         lows = response.get('low', [])
                         closes = response.get('close', [])
                         volumes = response.get('volume', [])
+                        openinterest = response.get('open_interest', [])
 
                         for i in range(len(timestamps)):
                             # Convert UTC timestamp to IST
@@ -371,7 +376,8 @@ class BrokerData:
                                 'high': float(highs[i]) if highs[i] else 0,
                                 'low': float(lows[i]) if lows[i] else 0,
                                 'close': float(closes[i]) if closes[i] else 0,
-                                'volume': int(float(volumes[i])) if volumes[i] else 0
+                                'volume': int(float(volumes[i])) if volumes[i] else 0,
+                                'oi': int(float(openinterest[i])) if openinterest[i] else 0
                             })
                     except Exception as e:
                         logger.error(f"Error fetching intraday data: {str(e)}")
@@ -394,7 +400,8 @@ class BrokerData:
                             "instrument": instrument_type,
                             "interval": self.timeframe_map[interval],
                             "fromDate": from_time,
-                            "toDate": to_time
+                            "toDate": to_time,
+                            "oi": True
                         }
                         
                         logger.info(f"Making intraday history request to {endpoint}")
@@ -410,7 +417,7 @@ class BrokerData:
                             lows = response.get('low', [])
                             closes = response.get('close', [])
                             volumes = response.get('volume', [])
-
+                            openinterest = response.get('open_interest', [])
                             for i in range(len(timestamps)):
                                 # Convert UTC timestamp to IST
                                 ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
@@ -420,7 +427,8 @@ class BrokerData:
                                     'high': float(highs[i]) if highs[i] else 0,
                                     'low': float(lows[i]) if lows[i] else 0,
                                     'close': float(closes[i]) if closes[i] else 0,
-                                    'volume': int(float(volumes[i])) if volumes[i] else 0
+                                    'volume': int(float(volumes[i])) if volumes[i] else 0,
+                                    'oi': int(float(openinterest[i])) if openinterest[i] else 0
                                 })
                         except Exception as e:
                             logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
@@ -441,7 +449,8 @@ class BrokerData:
                                 'high': float(quotes.get('high', 0)),
                                 'low': float(quotes.get('low', 0)),
                                 'close': float(quotes.get('ltp', 0)),  # Use LTP as current close
-                                'volume': int(quotes.get('volume', 0))
+                                'volume': int(quotes.get('volume', 0)),
+                                'oi': int(quotes.get('open_interest', 0))
                             }
                             all_candles.append(today_candle)
                     except Exception as e:
@@ -450,7 +459,7 @@ class BrokerData:
             # Create DataFrame from all candles
             df = pd.DataFrame(all_candles)
             if df.empty:
-                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume','oi'])
             else:
                 # Sort by timestamp and remove duplicates
                 df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
@@ -478,11 +487,12 @@ class BrokerData:
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
+                logger.info(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
                 
                 if not quote_data:
@@ -504,6 +514,7 @@ class BrokerData:
                     'high': float(quote_data.get('ohlc', {}).get('high', 0)),
                     'low': float(quote_data.get('ohlc', {}).get('low', 0)),
                     'volume': int(quote_data.get('volume', 0)),
+                    'oi': int(quote_data.get('oi', 0)),
                     'bid': 0,  # Will be updated from depth
                     'ask': 0,  # Will be updated from depth
                     'prev_close': float(quote_data.get('ohlc', {}).get('close', 0))
@@ -559,7 +570,7 @@ class BrokerData:
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:

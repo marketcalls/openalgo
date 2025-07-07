@@ -570,6 +570,11 @@ def process_aliceblue_indices_csv(path):
         'BSE': 'BSE_INDEX',
         'MCX': 'MCX_INDEX'
     })
+    token_df['exchange'] = df['exch'].map({
+        'NSE': 'NSE_INDEX',
+        'BSE': 'BSE_INDEX',
+        'MCX': 'MCX_INDEX'
+    })
     token_df['tick_size'] = 0.01
     token_df['symbol'] = token_df['symbol'].replace({
     'NIFTY 50': 'NIFTY',

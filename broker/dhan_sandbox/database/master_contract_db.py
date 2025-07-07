@@ -79,7 +79,7 @@ def copy_from_dataframe(df):
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error(f"Error during bulk insert: {e}")
+        logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -109,7 +109,7 @@ def download_csv_dhan_data(output_path):
                 file.write(response.content)
             downloaded_files.append(file_path)
         else:
-            logger.error(f"Failed to download {{key}} from {{url}}. Status code: {response.status_code}")
+            logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
     
 
 def reformat_symbol(row):
@@ -261,7 +261,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        logger.info(f"{e}")
+        logger.exception(f"Error during master contract download: {e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 
