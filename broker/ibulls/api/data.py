@@ -2,7 +2,7 @@ import json
 import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
-from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
+from broker.ibulls.database.master_contract_db import SymToken, db_session
 from flask import session  
 import pandas as pd
 from datetime import datetime, timedelta
@@ -287,69 +287,86 @@ class BrokerData:
                 current_start = current_end + timedelta(days=1)
             
             if not dfs:
+                # Check if we're trying to get today's data
                 if compression_value == 'D' and to_date.date() == datetime.now().date():
-                    # Get segment ID from exchange - use numeric values
-                    #segment_id = 1 if exchange == "NSE" else 2  # 1 for NSECM, 2 for BSECM
-                    # Exchange segment mapping
-                    exchange_segment_map = {
-                        "NSE": 1,
-                        "NFO": 2,
-                        "CDS": 3,
-                        "BSE": 11,
-                        "BFO": 12,
-                        "MCX": 51
-                    }
+                    try:
+                        # Exchange segment mapping
+                        exchange_segment_map = {
+                            "NSE": 1,
+                            "NFO": 2,
+                            "CDS": 3,
+                            "BSE": 11,
+                            "BFO": 12,
+                            "MCX": 51
+                        }
 
-                    # Determine segment ID based on exchange
-                    segment_id = exchange_segment_map.get(exchange)
-                    logger.info(f"Exchange: {exchange}, Segment ID: {segment_id}")
-                    if segment_id is None:
-                        raise ValueError(f"Unknown exchange: {exchange}")
-                    payload = {
-                        "instruments": [{
-                            "exchangeSegment": segment_id,
-                            "exchangeInstrumentID": token
-                        }],
-                        "xtsMessageCode": 1502,
-                        "publishFormat": "JSON"
-                    }
-                    
-                    response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
-                    
-                    if not response or response.get('type') != 'success':
-                        raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
-            
-                    # Parse quote data from response
-                    raw_quotes = response.get('result', {}).get('listQuotes', [])
-                    if not raw_quotes:
-                        raise Exception("No quote data found in listQuotes")
-            
-                    # Parse the JSON string in listQuotes
-                    quote = json.loads(raw_quotes[0])
-                    touchline = quote.get('Touchline', {})
-                    logger.info(f"Parsed Quote Data: {touchline}")
-                    
-                    if touchline:
-                        # For daily data, set timestamp to midnight IST
-                        today = datetime.now()
-                        # First set to midnight
-                        today = today.replace(hour=0, minute=0, second=0, microsecond=0)
-                        # Add 5:30 hours to compensate for IST conversion that happens later
-                        today = today + timedelta(hours=5, minutes=30)
-                        
-                        today_candle = {
-                            "timestamp": int(today.timestamp()),
-                            "open": touchline.get('Open'),
-                            "high": touchline.get('High'),
-                            "low": touchline.get('Low'),
-                            "close": touchline.get('LastTradedPrice'),  # Use LTP as current close
-                            "volume": touchline.get('TotalTradedQuantity', 0)
+                        # Determine segment ID based on exchange
+                        segment_id = exchange_segment_map.get(exchange)
+                        logger.info(f"Exchange: {exchange}, Segment ID: {segment_id}")
+                        if segment_id is None:
+                            raise ValueError(f"Unknown exchange: {exchange}")
+                            
+                        payload = {
+                            "instruments": [{
+                                "exchangeSegment": segment_id,
+                                "exchangeInstrumentID": token
+                            }],
+                            "xtsMessageCode": 1502,
+                            "publishFormat": "JSON"
                         }
                         
-                        return pd.DataFrame([today_candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    else:
-                        raise Exception("No Touchline data in quote")
-            final_df = pd.concat(dfs, ignore_index=True)
+                        response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+                        
+                        if not response or response.get('type') != 'success':
+                            logger.warning(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                            # Return empty dataframe with correct columns instead of raising exception
+                            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                        # Parse quote data from response
+                        raw_quotes = response.get('result', {}).get('listQuotes', [])
+                        if not raw_quotes:
+                            logger.warning("No quote data found in listQuotes")
+                            # Return empty dataframe with correct columns
+                            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                        # Parse the JSON string in listQuotes
+                        quote = json.loads(raw_quotes[0])
+                        touchline = quote.get('Touchline', {})
+                        logger.info(f"Parsed Quote Data: {touchline}")
+                        
+                        if touchline:
+                            # For daily data, set timestamp to midnight IST
+                            today = datetime.now()
+                            # First set to midnight
+                            today = today.replace(hour=0, minute=0, second=0, microsecond=0)
+                            # Add 5:30 hours to compensate for IST conversion that happens later
+                            today = today + timedelta(hours=5, minutes=30)
+                            
+                            today_candle = {
+                                "timestamp": int(today.timestamp()),
+                                "open": touchline.get('Open'),
+                                "high": touchline.get('High'),
+                                "low": touchline.get('Low'),
+                                "close": touchline.get('LastTradedPrice'),  # Use LTP as current close
+                                "volume": touchline.get('TotalTradedQuantity', 0)
+                            }
+                            
+                            return pd.DataFrame([today_candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    except Exception as e:
+                        logger.warning(f"Failed to get quote data: {str(e)}")
+                        # Return empty dataframe instead of raising exception
+                        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                else:
+                    # No historical data and not today - return empty dataframe with correct columns
+                    logger.warning(f"No historical data available for {symbol} on {exchange}")
+                    return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
+            # Only try to concat if we have dataframes
+            if dfs:
+                final_df = pd.concat(dfs, ignore_index=True)
+            else:
+                # Return empty dataframe with correct columns
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             # Sort by timestamp and remove duplicates
             final_df = final_df.sort_values('timestamp').drop_duplicates('timestamp').reset_index(drop=True)

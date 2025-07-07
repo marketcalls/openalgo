@@ -26,9 +26,9 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     
     url = f"{INTERACTIVE_URL}{endpoint}"
 
-    #logger.info(f"Request URL: {url}")
-    #logger.info(f"Headers: {headers}")
-    #logger.info(f'Payload: {json.dumps(payload, indent=2) if payload else "None"}')
+    logger.info(f"Request URL: {url}")
+    logger.info(f"Headers: {headers}")
+    logger.info(f'Payload: {json.dumps(payload, indent=2) if payload else "None"}')
     
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -39,8 +39,8 @@ def get_api_response(endpoint, auth, method="GET",  payload=''):
     
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    #logger.info(f"Response Status Code: {response.status_code}")
-    #logger.info(f"Response Content: {response.text}")
+    logger.info(f"Response Status Code: {response.status_code}")
+    logger.info(f"Response Content: {response.text}")
     return response.json()
 
 def get_order_book(auth):
@@ -110,6 +110,9 @@ def place_order_api(data,auth):
         response_data = {"error": "Invalid JSON response from server", "raw_response": response.text}
 
     orderid = response_data.get("result", {}).get("AppOrderID") if response_data.get("type") == "success" else None
+    
+    logger.info(f"Response Data: {response_data}")
+    logger.info(f"Order ID: {orderid}")
     
     return response, response_data, orderid
 

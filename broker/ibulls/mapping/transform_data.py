@@ -1,5 +1,5 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping fivepaisaxts Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
+#Mapping ibullssecurities Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
 
 from database.token_db import get_br_symbol,get_token
 from utils.logging import get_logger
