@@ -376,14 +376,30 @@ class IbullsWebSocketClient:
             self.on_data(self, data)
     
     def _on_message_1502_json_full(self, data):
-        """Handle 1502 JSON full messages (Index data)"""
-        self.logger.info(f"[1502-JSON-FULL] Received Index data: {data}")
+        """Handle 1502 JSON full messages (Market Depth)"""
+        self.logger.info(f"[1502-JSON-FULL] Received Market Depth data: {data}")
+        # Parse JSON string if needed
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+                self.logger.info(f"[1502-JSON-FULL] Parsed depth data: {data}")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"[1502-JSON-FULL] Failed to parse JSON: {e}")
+                return
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1502_json_partial(self, data):
-        """Handle 1502 JSON partial messages"""
-        self.logger.info(f"[1502-JSON-PARTIAL] Received Index partial: {data}")
+        """Handle 1502 JSON partial messages (Market Depth updates)"""
+        self.logger.info(f"[1502-JSON-PARTIAL] Received Market Depth partial: {data}")
+        # Parse JSON string if needed
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+                self.logger.info(f"[1502-JSON-PARTIAL] Parsed depth update: {data}")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"[1502-JSON-PARTIAL] Failed to parse JSON: {e}")
+                return
         if self.on_data:
             self.on_data(self, data)
     
@@ -511,7 +527,12 @@ class IbullsWebSocketClient:
     
     def _on_catch_all(self, event, *args):
         """Catch-all handler for any unhandled Socket.IO events"""
-        self.logger.info(f"[CATCH-ALL] Event: {event}, Args: {args}")
+        # Don't log connect/disconnect/joined events as they are handled separately
+        if event not in ['connect', 'disconnect', 'joined', 'message']:
+            self.logger.info(f"[CATCH-ALL] Unhandled event: {event}")
+            if args:
+                for i, arg in enumerate(args):
+                    self.logger.info(f"  Arg[{i}]: Type={type(arg)}, Value={str(arg)[:200]}...")
     
     def resubscribe_all(self):
         """Resubscribe to all stored subscriptions after reconnection"""

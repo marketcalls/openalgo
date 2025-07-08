@@ -74,12 +74,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
 
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
-        """Initialize CompositEdge data handler with authentication token"""
+        """Initialize Ibulls data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
         
-        # Map common timeframe format to CompositEdge intervals
+        # Map common timeframe format to Ibulls intervals
         self.timeframe_map = {
             "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
@@ -129,17 +129,17 @@ class BrokerData:
                 "exchangeInstrumentID": symbol_info.token  # token = instrument ID
             }
             
-            # Prepare payload for CompositEdge quotes API
+            # Prepare payload for Ibulls quotes API
             payload = {
                 "instruments": [token],
-                "xtsMessageCode": 1502,  # Market data request code for CompositEdge
+                "xtsMessageCode": 1502,  # Market data request code for Ibulls
                 "publishFormat": "JSON"
             }
             
             response = get_api_response("/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
             
             if not response or response.get('type') != 'success':
-                raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                raise Exception(f"Error from Ibulls API: {response.get('description', 'Unknown error')}")
             
             # Parse stringified JSON quote
             raw_quote_str = response.get('result', {}).get('listQuotes', [None])[0]
@@ -229,7 +229,7 @@ class BrokerData:
             while current_start <= to_date:
                 current_end = min(current_start + timedelta(days=6), to_date)
 
-                # CompositEdge expects MMM DD YYYY HHMMSS in IST
+                # Ibulls expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime('%b %d %Y %H%M%S')
                 to_str = current_end.strftime('%b %d %Y %H%M%S')
 
@@ -252,7 +252,7 @@ class BrokerData:
 
                 if not response or response.get('type') != 'success':
                     logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                    raise Exception(f"Error from Ibulls API: {response.get('description', 'Unknown error')}")
 
                 # Parse dataResponse (pipe-delimited string)
                 raw_data = response.get('result', {}).get('dataReponse', '')
@@ -318,7 +318,7 @@ class BrokerData:
                         response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
                         
                         if not response or response.get('type') != 'success':
-                            logger.warning(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                            logger.warning(f"Error from Ibulls API: {response.get('description', 'Unknown error')}")
                             # Return empty dataframe with correct columns instead of raising exception
                             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 

@@ -579,6 +579,7 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Check if this is an index token first
             token_str = str(exchange_instrument_id)
+            symbol = None  # Initialize symbol to None
             
             # If it's a known index token, try the index exchange first
             if self._is_index_token(token_str, exchange_segment):
@@ -681,8 +682,11 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
+        # For MessageCode 1502 (Depth mode), data is structured differently
+        message_code = message.get('MessageCode')
+        
         # For depth mode (MessageCode 1502), extract data from Touchline
-        if 'Touchline' in message:
+        if message_code == 1502 and 'Touchline' in message:
             touchline = message.get('Touchline', {})
             ltp = touchline.get('LastTradedPrice', 0)
             ltt = touchline.get('LastTradedTime', 0)
@@ -695,8 +699,11 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             avg_price = touchline.get('AverageTradedPrice', 0)
             total_buy_qty = touchline.get('TotalBuyQuantity', 0)
             total_sell_qty = touchline.get('TotalSellQuantity', 0)
+            
+            # Log touchline data for debugging
+            self.logger.info(f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}")
         else:
-            # Fallback to direct fields
+            # For other message codes (1512, 1501), data is at root level
             ltp = message.get('LastTradedPrice', 0)
             ltt = message.get('LastTradedTime', 0)
             volume = message.get('TotalTradedQuantity', 0)
@@ -705,7 +712,7 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             low = message.get('Low', 0)
             close = message.get('Close', 0)
             ltq = message.get('LastTradedQunatity', message.get('LastTradedQuantity', 0))
-            avg_price = message.get('AveragePrice', 0)
+            avg_price = message.get('AveragePrice', message.get('AverageTradedPrice', 0))
             total_buy_qty = message.get('TotalBuyQuantity', 0)
             total_sell_qty = message.get('TotalSellQuantity', 0)
         
@@ -745,10 +752,23 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Add depth data if available
             if 'Bids' in message and 'Asks' in message:
+                bids = message.get('Bids', [])
+                asks = message.get('Asks', [])
+                
+                self.logger.info(f"Processing depth data - Bids count: {len(bids)}, Asks count: {len(asks)}")
+                
                 result['depth'] = {
-                    'buy': self._extract_depth_data(message.get('Bids', []), is_buy=True),
-                    'sell': self._extract_depth_data(message.get('Asks', []), is_buy=False)
+                    'buy': self._extract_depth_data(bids, is_buy=True),
+                    'sell': self._extract_depth_data(asks, is_buy=False)
                 }
+                
+                # Log first bid and ask for debugging
+                if bids and len(bids) > 0:
+                    self.logger.info(f"First bid: Price={bids[0].get('Price')}, Size={bids[0].get('Size')}")
+                if asks and len(asks) > 0:
+                    self.logger.info(f"First ask: Price={asks[0].get('Price')}, Size={asks[0].get('Size')}")
+            else:
+                self.logger.warning(f"No depth data found in message. Keys present: {list(message.keys())}")
                 
             return result
         else:
