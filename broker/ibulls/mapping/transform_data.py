@@ -3,28 +3,82 @@
 
 from database.token_db import get_br_symbol,get_token
 from utils.logging import get_logger
+from broker.ibulls.api.data import BrokerData
+from flask import session
+from database.auth_db import get_auth_token, get_feed_token
 
 logger = get_logger(__name__)
 
 
-def transform_data(data,token):
+def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
+    For market orders, fetches quotes and adjusts price accordingly:
+    - BUY: Uses bid price + 0.1%
+    - SELL: Uses ask price + 0.1%
     """
-    symbol = get_br_symbol(data['symbol'],data['exchange'])
-    #token = get_token(data['symbol'], data['exchange'])
-    #logger.info(f"token: {token}")
+    symbol = get_br_symbol(data['symbol'], data['exchange'])
+    
+    # Check if market order and convert to limit order with adjusted price
+    order_type = map_order_type(data["pricetype"])
+    price = data.get("price", "0")
+    action = data['action'].upper()
+    
+    if data["pricetype"] == "MARKET":
+        try:
+            # Get username from Flask session
+            username = None
+            if session and hasattr(session, 'get'):
+                username = session.get('username')
+            
+            # Get feed token for market data using username (not broker name)
+            feed_token = get_feed_token(username if username else "kalaivani")
+            
+            logger.info(f"Using feed token for user: {username if username else 'kalaivani'}")
+            
+            if feed_token:
+                # Create BrokerData instance to use get_quotes - only need feed_token for market data
+                broker_data = BrokerData(feed_token, feed_token)
+                
+                # Fetch quotes for the symbol
+                quote_data = broker_data.get_quotes(data['symbol'], data['exchange'])
+                logger.info(f"Quote data for market order adjustment: {quote_data}")
+                
+                # Adjust price based on action (BUY or SELL)
+                if action == "BUY":
+                    bid_price = float(quote_data.get('bid', 0))
+                    if bid_price > 0:
+                        # Add 0.1% to bid price for BUY orders
+                        adjusted_price = bid_price * 1.001
+                        price = str(round(adjusted_price, 2))
+                        logger.info(f"Adjusted BUY price: bid {bid_price} + 0.1% = {price}")
+                        # Change order type to LIMIT
+                        order_type = "LIMIT"
+                elif action == "SELL":
+                    ask_price = float(quote_data.get('ask', 0))
+                    if ask_price > 0:
+                        # Subtract 0.1% from ask price for SELL orders
+                        adjusted_price = ask_price * 0.999
+                        price = str(round(adjusted_price, 2))
+                        logger.info(f"Adjusted SELL price: ask {ask_price} - 0.1% = {price}")
+                        # Change order type to LIMIT
+                        order_type = "LIMIT"
+            else:
+                logger.warning("No feed token available, cannot fetch quotes for market order price adjustment")
+        except Exception as e:
+            logger.error(f"Error adjusting market order price: {str(e)}. Proceeding with regular market order.")
+    
     # Basic mapping
     transformed = {
         "exchangeSegment": map_exchange(data['exchange']),
         "exchangeInstrumentID": token,
         "productType": map_product_type(data["product"]),
-        "orderType": map_order_type(data["pricetype"]),
-        "orderSide": data['action'].upper(),
+        "orderType": order_type,
+        "orderSide": action,
         "timeInForce": "DAY",
         "disclosedQuantity": data.get("disclosed_quantity", "0"),
         "orderQuantity": data["quantity"],
-        "limitPrice": data.get("price", "0"),
+        "limitPrice": price,
         "stopPrice": data.get("trigger_price", "0"),
         "orderUniqueIdentifier": "openalgo"
     }
