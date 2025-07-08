@@ -230,6 +230,14 @@ def broker_callback(broker,para=None):
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='ibulls':
+        code = 'ibulls'
+        logger.debug(f'Indiabulls broker - code: {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
     elif broker=='iifl':
         code = 'iifl'
         logger.debug(f'IIFL broker - The code is {code}')  
