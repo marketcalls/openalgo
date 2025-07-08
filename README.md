@@ -32,6 +32,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Flattrade**
 - **Fyers**
 - **ICICI Direct**
+- **IBulls**
 - **Jainam (Retail)**
 - **Jainam (Dealer)**
 - **Kotak** 
