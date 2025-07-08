@@ -5,6 +5,7 @@ import threading
 import socketio
 import requests
 from typing import Dict, Any, Optional, List, Callable
+from broker.ibulls.baseurl import MARKET_DATA_URL,INTERACTIVE_URL,BASE_URL
 
 
 class IbullsWebSocketClient:
@@ -14,10 +15,10 @@ class IbullsWebSocketClient:
     """
     
     # Socket.IO endpoints - Updated based on XTS API documentation
-    ROOT_URI = "https://xts.ibullssecurities.com"
+    #ROOT_URI = "https://xts.ibullssecurities.com"
     SOCKET_PATH = "/apimarketdata/socket.io"
-    API_BASE_URL = "https://xts.ibullssecurities.com/apimarketdata/instruments/subscription"
-    API_UNSUBSCRIBE_URL = "https://xts.ibullssecurities.com/apimarketdata/instruments/subscription"  # Same endpoint, different method
+    API_BASE_URL = f"{MARKET_DATA_URL}/instruments/subscription"
+    API_UNSUBSCRIBE_URL = f"{MARKET_DATA_URL}/instruments/subscription"  # Same endpoint, different method
     
     # Available Actions
     SUBSCRIBE_ACTION = 1
@@ -48,7 +49,7 @@ class IbullsWebSocketClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.user_id = user_id
-        self.base_url = base_url or self.ROOT_URI
+        self.base_url = base_url or self.BASE_URL
         
         # Authentication tokens
         self.market_data_token = None
