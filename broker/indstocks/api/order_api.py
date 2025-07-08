@@ -47,8 +47,12 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         # Check for API errors in the response
         if isinstance(response_data, dict):
             # IndStocks API errors come in this format
-            if response_data.get('status') == 'error':
-                error_message = response_data.get('message', 'Unknown error')
+            if response_data.get('status') in ['error', 'failure']:
+                # Handle both 'error' and 'failure' status
+                if response_data.get('status') == 'failure' and 'error' in response_data:
+                    error_message = response_data.get('error', {}).get('msg', 'Unknown error')
+                else:
+                    error_message = response_data.get('message', 'Unknown error')
                 logger.error(f"API Error: {error_message}")
                 # Return the error response for further handling
                 return response_data
@@ -143,6 +147,13 @@ def place_order_api(data,auth):
         if response_data and response_data.get('status') == 'success':
             # IndStocks returns order ID in data field
             orderid = response_data.get('data', {}).get('id')
+        elif response_data and response_data.get('status') in ['error', 'failure']:
+            # Handle API errors/failures
+            if response_data.get('status') == 'failure' and 'error' in response_data:
+                error_msg = response_data.get('error', {}).get('msg', 'Unknown error')
+            else:
+                error_msg = response_data.get('message', 'Unknown error')
+            logger.error(f"Order placement failed: {error_msg}")
         else:
             logger.error(f"Order placement failed: {response_data}")
     else:
@@ -321,8 +332,13 @@ def cancel_order(orderid,auth):
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
+        # Handle error response - check for both error message formats
+        if data.get("status") == "failure" and "error" in data:
+            error_msg = data.get("error", {}).get("msg", "Failed to cancel order")
+        else:
+            error_msg = data.get("message", "Failed to cancel order")
         # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+        return {"status": "error", "message": error_msg}, res.status
 
 
 def modify_order(data,auth):
@@ -368,7 +384,12 @@ def modify_order(data,auth):
     if res.status_code == 200 and data.get("status") == "success":
         return {"status": "success", "orderid": orderid}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+        # Handle error response - check for both error message formats
+        if data.get("status") == "failure" and "error" in data:
+            error_msg = data.get("error", {}).get("msg", "Failed to modify order")
+        else:
+            error_msg = data.get("message", "Failed to modify order")
+        return {"status": "error", "message": error_msg}, res.status
     
 
 def cancel_all_orders_api(data,auth):
