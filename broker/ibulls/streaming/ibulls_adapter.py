@@ -103,6 +103,40 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         self.running = True
     
+    def _is_index_token(self, token: str, exchange_segment: int) -> bool:
+        """
+        Check if a token represents an index based on well-known index tokens
+        
+        Args:
+            token: The instrument token
+            exchange_segment: The exchange segment code
+            
+        Returns:
+            bool: True if the token is likely an index
+        """
+        # Well-known NSE index tokens (segment 1)
+        nse_index_tokens = {
+            '26000': 'NIFTY',         # Nifty 50
+            '26001': 'BANKNIFTY',     # Bank Nifty
+            '26008': 'FINNIFTY',      # Fin Nifty
+            '26037': 'MIDCPNIFTY',    # Midcap Nifty
+            # Add more NSE index tokens as needed
+        }
+        
+        # Well-known BSE index tokens (segment 11)
+        bse_index_tokens = {
+            '1': 'SENSEX',            # BSE Sensex
+            '12': 'BANKEX',           # BSE Bankex
+            # Add more BSE index tokens as needed
+        }
+        
+        if exchange_segment == 1 and token in nse_index_tokens:
+            return True
+        elif exchange_segment == 11 and token in bse_index_tokens:
+            return True
+            
+        return False
+    
     def _extract_client_id_from_token(self, feed_token: str, fallback_user_id: str) -> str:
         """
         Extract the actual client ID from the JWT feed token
@@ -278,14 +312,31 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"using {actual_depth} instead"
                 )
         
+        # Log the input values for debugging
+        self.logger.info(f"Subscription input - symbol: {symbol}, exchange: {exchange}, brexchange: {brexchange}")
+        
         # Create instrument list for Ibulls XTS API
         exchange_type = IbullsExchangeMapper.get_exchange_type(brexchange)
-        self.logger.info(f"Exchange mapping: brexchange={brexchange} -> exchange_type={exchange_type}")
+        
+        # Log the full mapping for debugging
+        self.logger.info(f"Exchange mapping details:")
+        self.logger.info(f"  - Input exchange: {exchange}")
+        self.logger.info(f"  - Brexchange from DB: {brexchange}")
+        self.logger.info(f"  - Mapped exchange type: {exchange_type}")
+        self.logger.info(f"  - Symbol: {symbol}")
+        
+        # Ensure token is a string as expected by the API
+        token_str = str(token) if token is not None else ""
         
         instruments = [{
             "exchangeSegment": exchange_type,
-            "exchangeInstrumentID": token
+            "exchangeInstrumentID": token_str
         }]
+        
+        self.logger.info(f"Final subscription request for {symbol}.{exchange}:")
+        self.logger.info(f"  - Exchange Segment: {exchange_type} (type: {type(exchange_type)})")
+        self.logger.info(f"  - Instrument ID: {token_str}")
+        self.logger.info(f"  - Full request: {instruments}")
         
         # Generate unique correlation ID that includes mode to prevent overwriting
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -507,12 +558,15 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug(f"Processing market data: ExchangeSegment={exchange_segment}, ExchangeInstrumentID={exchange_instrument_id}")
             
             # Create reverse mapping from ExchangeSegment to exchange code
+            # Based on Ibulls API documentation:
+            # "NSECM": 1, "NSEFO": 2, "NSECD": 3, "BSECM": 11, "BSEFO": 12, "MCXFO": 51
             segment_to_exchange = {
-                1: 'NSE',
-                2: 'NFO',
-                11: 'BSE',
-                12: 'BFO',
-                51: 'MCX'
+                1: 'NSE',   # NSECM
+                2: 'NFO',   # NSEFO
+                3: 'CDS',   # NSECD
+                11: 'BSE',  # BSECM
+                12: 'BFO',  # BSEFO
+                51: 'MCX'   # MCXFO
             }
             
             # Get the exchange from segment
@@ -523,8 +577,41 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
             self.logger.info(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
             
-            # Try to lookup symbol from the token
-            symbol = get_symbol(str(exchange_instrument_id), exchange)
+            # Check if this is an index token first
+            token_str = str(exchange_instrument_id)
+            
+            # If it's a known index token, try the index exchange first
+            if self._is_index_token(token_str, exchange_segment):
+                if exchange_segment == 1:  # NSE segment
+                    symbol = get_symbol(token_str, 'NSE_INDEX')
+                    if symbol:
+                        exchange = 'NSE_INDEX'
+                        self.logger.info(f"Found index symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
+                elif exchange_segment == 11:  # BSE segment
+                    symbol = get_symbol(token_str, 'BSE_INDEX')
+                    if symbol:
+                        exchange = 'BSE_INDEX'
+                        self.logger.info(f"Found index symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
+            
+            # If not found as index or not an index token, try regular exchange
+            if not symbol:
+                symbol = get_symbol(token_str, exchange)
+            
+            # If still not found on base exchange, try index exchange as fallback
+            if not symbol:
+                if exchange == 'NSE' and not self._is_index_token(token_str, exchange_segment):
+                    # Try NSE_INDEX for NSE segment as fallback
+                    symbol = get_symbol(token_str, 'NSE_INDEX')
+                    if symbol:
+                        exchange = 'NSE_INDEX'
+                        self.logger.info(f"Found symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
+                elif exchange == 'BSE' and not self._is_index_token(token_str, exchange_segment):
+                    # Try BSE_INDEX for BSE segment as fallback
+                    symbol = get_symbol(token_str, 'BSE_INDEX')
+                    if symbol:
+                        exchange = 'BSE_INDEX'
+                        self.logger.info(f"Found symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
+            
             if not symbol:
                 self.logger.warning(f"Could not find symbol for token {exchange_instrument_id} on exchange {exchange}")
                 return
