@@ -244,10 +244,10 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
     """
-    Processes and modifies position data from IndStocks API format.
+    Processes and modifies position data from IndMoney API format.
     
     Parameters:
-    - position_data: A dict containing 'net_positions' and 'day_positions' arrays
+    - position_data: A flat list of position dictionaries (actual IndMoney API format)
     
     Returns:
     - A flat list of position dictionaries for compatibility
@@ -269,19 +269,17 @@ def map_position_data(position_data):
             logger.error(f"Received string response instead of position data: {position_data[:200]}...")
             return []
         
-        # Handle the new IndStocks nested format
+        # Handle the actual IndMoney flat array format
         all_positions = []
         
-        if isinstance(position_data, dict):
-            # Extract net_positions and day_positions
+        if isinstance(position_data, list):
+            # Direct flat list from actual API
+            all_positions = position_data
+        elif isinstance(position_data, dict):
+            # Fallback to handle documented nested format if it changes back
             net_positions = position_data.get('net_positions', [])
             day_positions = position_data.get('day_positions', [])
-            
-            # Combine both arrays
             all_positions = net_positions + day_positions
-        elif isinstance(position_data, list):
-            # If it's already a flat list, use it directly
-            all_positions = position_data
         else:
             logger.warning(f"Unexpected position data format: {type(position_data)}")
             return []
@@ -294,44 +292,42 @@ def map_position_data(position_data):
                 logger.warning(f"Skipping non-dictionary position: {type(position)}")
                 continue
 
-            # Extract the instrument_token and exchange for the current position
-            # Handle new IndStocks API format
+            # Extract fields from actual IndMoney API format
             instrument_token = position.get('security_id')
-            exchange_segment = position.get('exchange_segment', '')
+            segment = position.get('segment', '')
             
-            # Map exchange segment to standard format
-            if exchange_segment == 'NSE_FNO':
+            # Map segment to standard exchange format
+            if segment == 'F&O' or segment == 'FUTURES':
                 exchange = 'NFO'
-            elif exchange_segment == 'NSE_EQ':
-                exchange = 'NSE'
-            elif exchange_segment == 'BSE_EQ':
-                exchange = 'BSE'
-            elif exchange_segment == 'MCX_FO':
+            elif segment == 'EQUITY':
+                exchange = 'NSE'  # Default for equity
+            elif segment == 'COMMODITY':
                 exchange = 'MCX'
             else:
-                # Remove common suffixes and map
-                exchange = exchange_segment.replace('_FNO', '').replace('_EQ', '').replace('_FO', '')
-                if not exchange:
-                    exchange = exchange_segment
+                exchange = segment
 
-            # Map new format to expected format for consistency
+            # Map actual IndMoney format to expected format for consistency
             position['exchangeSegment'] = exchange
             position['securityId'] = instrument_token
-            position['tradingSymbol'] = position.get('trading_symbol', '')
-            position['netQty'] = position.get('net_quantity', 0)
-            position['avgCostPrice'] = position.get('average_price', 0.0)
-            position['lastTradedPrice'] = position.get('last_traded_price', 0.0)
-            position['marketValue'] = position.get('market_value', 0.0)
-            position['pnlAbsolute'] = position.get('pnl_absolute', 0.0)
-            position['multiplier'] = position.get('multiplier', 1)
-            position['positionType'] = position.get('position_type', 'open')
+            position['tradingSymbol'] = position.get('symbol', '')
+            position['netQty'] = position.get('net_qty', 0)
+            position['avgCostPrice'] = position.get('avg_price', 0.0)
+            position['lastTradedPrice'] = position.get('avg_price', 0.0)  # Using avg_price as placeholder
+            position['marketValue'] = position.get('net_qty', 0) * position.get('avg_price', 0.0)
+            position['pnlAbsolute'] = position.get('realized_profit', 0.0)
+            position['multiplier'] = 1  # Default multiplier
+            position['positionType'] = 'open' if position.get('net_qty', 0) != 0 else 'closed'
             
-            # Determine product type based on exchange and position characteristics
-            if exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+            # Determine product type based on actual API response
+            api_product = position.get('product', '')
+            if api_product == 'INTRADAY':
+                position['productType'] = 'MIS'
+            elif api_product == 'DELIVERY':
+                position['productType'] = 'CNC'
+            elif exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
                 position['productType'] = 'NRML'  # F&O positions are typically NRML
             else:
-                # For equity positions, determine based on position type or default to MIS
-                position['productType'] = 'MIS'  # Intraday positions
+                position['productType'] = 'MIS'  # Default to MIS
 
             # Use the get_symbol function to fetch the symbol from the database
             if instrument_token and exchange:
@@ -341,8 +337,8 @@ def map_position_data(position_data):
                 if symbol_from_db:
                     position['tradingSymbol'] = symbol_from_db
                 else:
-                    # Keep the existing trading_symbol from IndStocks API
-                    logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Using: {position.get('trading_symbol', '')}")
+                    # Keep the existing symbol from IndMoney API
+                    logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Using: {position.get('symbol', '')}")
 
             processed_positions.append(position)
 

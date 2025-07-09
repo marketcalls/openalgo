@@ -105,12 +105,12 @@ def get_positions(auth):
         result = get_api_response("/portfolio/positions", auth)
         # Ensure we never return None
         if result is None:
-            logger.warning("get_api_response returned None for positions, returning empty dict")
-            return {"net_positions": [], "day_positions": []}
+            logger.warning("get_api_response returned None for positions, returning empty list")
+            return []
         return result
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
-        return {"net_positions": [], "day_positions": []}
+        return []
 
 def get_holdings(auth):
     try:
@@ -137,16 +137,16 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         logger.error(f"Error getting positions for {tradingsymbol}: {positions_response.get('message', 'API Error')}")
         return net_qty
     
-    # Handle the new nested format from IndStocks
+    # Handle the actual flat array format from IndMoney API
     all_positions = []
-    if isinstance(positions_response, dict):
-        # Extract positions from both net_positions and day_positions arrays
+    if isinstance(positions_response, list):
+        # Direct flat list from actual API
+        all_positions = positions_response
+    elif isinstance(positions_response, dict) and 'net_positions' in positions_response:
+        # Fallback to documented format if it changes back
         net_positions = positions_response.get('net_positions', [])
         day_positions = positions_response.get('day_positions', [])
         all_positions = net_positions + day_positions
-    elif isinstance(positions_response, list):
-        # If it's already a flat list, use it directly
-        all_positions = positions_response
     
     # Only process if all_positions is valid and not empty
     if all_positions and isinstance(all_positions, list):
@@ -154,24 +154,24 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             if not isinstance(position, dict):
                 continue
                 
-            # Map the IndStocks fields to match our search logic
-            position_symbol = position.get('trading_symbol')
-            position_exchange = position.get('exchange_segment', '')
+            # Map the actual IndMoney API fields
+            position_symbol = position.get('symbol')  # Actual field name from API
+            position_segment = position.get('segment', '')
             
-            # Map exchange segment to standard format for comparison
-            if position_exchange == 'NSE_FNO':
+            # Map segment to exchange format for comparison
+            if position_segment == 'F&O' or position_segment == 'FUTURES':
                 mapped_exchange = 'NFO'
-            elif position_exchange == 'NSE_EQ':
-                mapped_exchange = 'NSE'
-            elif position_exchange == 'BSE_EQ':
-                mapped_exchange = 'BSE'
+            elif position_segment == 'EQUITY':
+                mapped_exchange = 'NSE'  # Default for equity
+            elif position_segment == 'COMMODITY':
+                mapped_exchange = 'MCX'
             else:
-                mapped_exchange = position_exchange.replace('_FNO', '').replace('_EQ', '').replace('_FO', '')
+                mapped_exchange = position_segment
             
             # Check if this position matches our search criteria
             if (position_symbol == tradingsymbol and 
                 mapped_exchange == map_exchange_type(exchange)):
-                net_qty = str(position.get('net_quantity', 0))
+                net_qty = str(position.get('net_qty', 0))
                 break  # Return the first match
 
     return net_qty
@@ -322,16 +322,16 @@ def close_all_positions(current_api_key,auth):
     positions_response = get_positions(AUTH_TOKEN)
     logger.debug(f"Positions response for closing all: {positions_response}")
     
-    # Handle the new nested format from IndStocks
+    # Handle the actual flat array format from IndMoney API
     all_positions = []
-    if isinstance(positions_response, dict):
-        # Extract positions from both net_positions and day_positions arrays
+    if isinstance(positions_response, list):
+        # Direct flat list from actual API
+        all_positions = positions_response
+    elif isinstance(positions_response, dict):
+        # Fallback to handle documented nested format if it changes back
         net_positions = positions_response.get('net_positions', [])
         day_positions = positions_response.get('day_positions', [])
         all_positions = net_positions + day_positions
-    elif isinstance(positions_response, list):
-        # If it's already a flat list, use it directly
-        all_positions = positions_response
     
     # Check if the positions data is null or empty
     if not all_positions:
@@ -343,8 +343,8 @@ def close_all_positions(current_api_key,auth):
             if not isinstance(position, dict):
                 continue
                 
-            # Skip if net quantity is zero
-            net_qty = position.get('net_quantity', 0)
+            # Skip if net quantity is zero - using actual API field name
+            net_qty = position.get('net_qty', 0)
             if int(net_qty) == 0:
                 continue
 
@@ -352,23 +352,28 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if int(net_qty) > 0 else 'BUY'
             quantity = abs(int(net_qty))
 
-            # Map exchange segment to standard format
-            exchange_segment = position.get('exchange_segment', '')
-            if exchange_segment == 'NSE_FNO':
+            # Map segment to standard exchange format - using actual API field name
+            segment = position.get('segment', '')
+            if segment == 'F&O' or segment == 'FUTURES':
                 exchange = 'NFO'
-            elif exchange_segment == 'NSE_EQ':
+            elif segment == 'EQUITY':
                 exchange = 'NSE'
-            elif exchange_segment == 'BSE_EQ':
-                exchange = 'BSE'
+            elif segment == 'COMMODITY':
+                exchange = 'MCX'
             else:
-                exchange = exchange_segment.replace('_FNO', '').replace('_EQ', '').replace('_FO', '')
+                exchange = segment
 
             #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['security_id'], exchange)
             logger.info(f"The Symbol is {symbol}")
 
-            # Determine product type
-            if exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+            # Determine product type based on actual API response
+            api_product = position.get('product', '')
+            if api_product == 'INTRADAY':
+                product = 'MIS'
+            elif api_product == 'DELIVERY':
+                product = 'CNC'
+            elif exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
                 product = 'NRML'
             else:
                 product = 'MIS'
