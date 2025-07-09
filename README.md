@@ -33,6 +33,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Fyers**
 - **ICICI Direct**
 - **IBulls**
+- **Indmoney**
 - **Jainam (Retail)**
 - **Jainam (Dealer)**
 - **Kotak** 
