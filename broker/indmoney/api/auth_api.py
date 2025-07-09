@@ -2,7 +2,7 @@ import httpx
 import json
 import os
 from utils.httpx_client import get_httpx_client
-from broker.indstocks.api.baseurl import get_url, BASE_URL
+from broker.indmoney.api.baseurl import get_url, BASE_URL
 
 
 

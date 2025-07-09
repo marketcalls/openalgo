@@ -3,7 +3,7 @@
 import json
 import logging
 from utils.httpx_client import get_httpx_client
-from broker.indstocks.api.baseurl import get_url
+from broker.indmoney.api.baseurl import get_url
 from utils.logging import get_logger
 
 logger = get_logger(__name__)

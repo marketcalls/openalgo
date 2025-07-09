@@ -4,10 +4,10 @@ import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
-from broker.indstocks.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
-from broker.indstocks.mapping.transform_data import map_exchange_type, map_exchange, map_segment
+from broker.indmoney.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.indmoney.mapping.transform_data import map_exchange_type, map_exchange, map_segment
 from utils.httpx_client import get_httpx_client
-from broker.indstocks.api.baseurl import get_url
+from broker.indmoney.api.baseurl import get_url
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -41,8 +41,23 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         # Add status attribute for compatibility with existing codebase
         response.status = response.status_code
         
+        # Check if response is successful
+        if response.status_code not in [200, 201]:
+            logger.error(f"HTTP Error {response.status_code} for {url}: {response.text}")
+            return {'status': 'error', 'message': f'HTTP {response.status_code}: {response.text}'}
+        
+        # Check if response has content
+        if not response.text.strip():
+            logger.error(f"Empty response from {url}")
+            return {'status': 'error', 'message': 'Empty response from API'}
+        
         # Parse the response JSON
-        response_data = json.loads(response.text)
+        try:
+            response_data = json.loads(response.text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response from {url}: {e}")
+            logger.error(f"Raw response: {response.text[:500]}...")  # Log first 500 chars
+            return {'status': 'error', 'message': f'Invalid JSON response: {str(e)}'}
         
         # Check for API errors in the response
         if isinstance(response_data, dict):
@@ -59,8 +74,10 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
             
             # For successful responses, return the data array directly for list endpoints
             if response_data.get('status') == 'success' and 'data' in response_data:
+                logger.info(f"Successfully fetched data from {endpoint}")
                 return response_data['data']
         
+        logger.info(f"Response data: {response_data}")
         return response_data
         
     except Exception as e:
@@ -69,38 +86,93 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         return {'status': 'error', 'message': str(e)}
 
 def get_order_book(auth):
-    return get_api_response("/order-book",auth)
+    try:
+        result = get_api_response("/order-book", auth)
+        # Ensure we never return None
+        if result is None:
+            logger.warning("get_api_response returned None, returning empty list")
+            return []
+        return result
+    except Exception as e:
+        logger.error(f"Exception in get_order_book: {e}")
+        return []
 
 def get_trade_book(auth):
     return get_api_response("/tradebook",auth)
 
 def get_positions(auth):
-    return get_api_response("/positions",auth)
+    try:
+        result = get_api_response("/portfolio/positions", auth)
+        # Ensure we never return None
+        if result is None:
+            logger.warning("get_api_response returned None for positions, returning empty dict")
+            return {"net_positions": [], "day_positions": []}
+        return result
+    except Exception as e:
+        logger.error(f"Exception in get_positions: {e}")
+        return {"net_positions": [], "day_positions": []}
 
 def get_holdings(auth):
-    return get_api_response("/holdings",auth)
+    try:
+        result = get_api_response("/portfolio/holdings", auth)
+        # Ensure we never return None
+        if result is None:
+            logger.warning("get_api_response returned None for holdings, returning empty list")
+            return []
+        return result
+    except Exception as e:
+        logger.error(f"Exception in get_holdings: {e}")
+        return []
 
 def get_open_position(tradingsymbol, exchange, product, auth):
 
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    positions_data = get_positions(auth)
+    positions_response = get_positions(auth)
     net_qty = '0'
+    # logger.info(f"Positions response: {positions_response}")
     
-    # Check if positions_data is an error response
-    if isinstance(positions_data, dict) and positions_data.get('status') == 'error':
-        logger.error(f"Error getting positions for {tradingsymbol}: {positions_data.get('message', 'API Error')}")
+    # Check if positions_response is an error response
+    if isinstance(positions_response, dict) and positions_response.get('status') == 'error':
+        logger.error(f"Error getting positions for {tradingsymbol}: {positions_response.get('message', 'API Error')}")
         return net_qty
     
-    # Only process if positions_data is valid and not an error
-    if positions_data and isinstance(positions_data, list):
-        for position in positions_data:
-            # Map IndStocks position fields to match our logic
-            if (position.get('trading_symbol') == tradingsymbol and 
-                position.get('exchange') == map_exchange_type(exchange) and 
-                position.get('product') == product):
-                net_qty = position.get('net_qty', '0')
-                break  # Assuming you need the first match
+    # Handle the new nested format from IndStocks
+    all_positions = []
+    if isinstance(positions_response, dict):
+        # Extract positions from both net_positions and day_positions arrays
+        net_positions = positions_response.get('net_positions', [])
+        day_positions = positions_response.get('day_positions', [])
+        all_positions = net_positions + day_positions
+    elif isinstance(positions_response, list):
+        # If it's already a flat list, use it directly
+        all_positions = positions_response
+    
+    # Only process if all_positions is valid and not empty
+    if all_positions and isinstance(all_positions, list):
+        for position in all_positions:
+            if not isinstance(position, dict):
+                continue
+                
+            # Map the IndStocks fields to match our search logic
+            position_symbol = position.get('trading_symbol')
+            position_exchange = position.get('exchange_segment', '')
+            
+            # Map exchange segment to standard format for comparison
+            if position_exchange == 'NSE_FNO':
+                mapped_exchange = 'NFO'
+            elif position_exchange == 'NSE_EQ':
+                mapped_exchange = 'NSE'
+            elif position_exchange == 'BSE_EQ':
+                mapped_exchange = 'BSE'
+            else:
+                mapped_exchange = position_exchange.replace('_FNO', '').replace('_EQ', '').replace('_FO', '')
+            
+            # Check if this position matches our search criteria
+            if (position_symbol == tradingsymbol and 
+                mapped_exchange == map_exchange_type(exchange)):
+                net_qty = str(position.get('net_quantity', 0))
+                break  # Return the first match
 
     return net_qty
 
@@ -250,27 +322,56 @@ def close_all_positions(current_api_key,auth):
     positions_response = get_positions(AUTH_TOKEN)
     logger.debug(f"Positions response for closing all: {positions_response}")
     
+    # Handle the new nested format from IndStocks
+    all_positions = []
+    if isinstance(positions_response, dict):
+        # Extract positions from both net_positions and day_positions arrays
+        net_positions = positions_response.get('net_positions', [])
+        day_positions = positions_response.get('day_positions', [])
+        all_positions = net_positions + day_positions
+    elif isinstance(positions_response, list):
+        # If it's already a flat list, use it directly
+        all_positions = positions_response
+    
     # Check if the positions data is null or empty
-    if positions_response is None or not positions_response:
+    if not all_positions:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response:
+    if all_positions:
         # Loop through each position to close
-        for position in positions_response:
+        for position in all_positions:
+            if not isinstance(position, dict):
+                continue
+                
             # Skip if net quantity is zero
-            if int(position['net_qty']) == 0:
+            net_qty = position.get('net_quantity', 0)
+            if int(net_qty) == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['net_qty']) > 0 else 'BUY'
-            quantity = abs(int(position['net_qty']))
+            action = 'SELL' if int(net_qty) > 0 else 'BUY'
+            quantity = abs(int(net_qty))
 
-            #print(f"Trading Symbol : {position['trading_symbol']}")
-            #print(f"Exchange : {position['exchange']}")
+            # Map exchange segment to standard format
+            exchange_segment = position.get('exchange_segment', '')
+            if exchange_segment == 'NSE_FNO':
+                exchange = 'NFO'
+            elif exchange_segment == 'NSE_EQ':
+                exchange = 'NSE'
+            elif exchange_segment == 'BSE_EQ':
+                exchange = 'BSE'
+            else:
+                exchange = exchange_segment.replace('_FNO', '').replace('_EQ', '').replace('_FO', '')
 
             #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['security_id'],map_exchange(position['exchange']))
+            symbol = get_symbol(position['security_id'], exchange)
             logger.info(f"The Symbol is {symbol}")
+
+            # Determine product type
+            if exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+                product = 'NRML'
+            else:
+                product = 'MIS'
 
             # Prepare the order payload
             place_order_payload = {
@@ -278,9 +379,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": map_exchange(position['exchange']),
+                "exchange": exchange,
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['product']),
+                "product": product,
                 "quantity": str(quantity)
             }
 

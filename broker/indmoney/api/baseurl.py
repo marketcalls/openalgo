@@ -1,4 +1,4 @@
-# IndStocks API Base URL Configuration
+# IndMoney API Base URL Configuration
 
 # Base URL for IndStocks API endpoints
 BASE_URL = "https://api.indstocks.com"

@@ -148,7 +148,7 @@ def download_csv_indstocks_data(output_path):
     # Since IndStocks might have multiple users, we need to get the first valid one
     try:
         from database.auth_db import Auth, db_session
-        auth_obj = Auth.query.filter_by(broker='indstocks', is_revoked=False).first()
+        auth_obj = Auth.query.filter_by(broker='indmoney', is_revoked=False).first()
         if auth_obj:
             from database.auth_db import decrypt_token
             auth_token = decrypt_token(auth_obj.auth)

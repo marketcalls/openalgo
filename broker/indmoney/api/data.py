@@ -6,7 +6,7 @@ from database.token_db import get_token
 import httpx
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from broker.indstocks.api.baseurl import get_url
+from broker.indmoney.api.baseurl import get_url
 
 logger = get_logger(__name__)
 
