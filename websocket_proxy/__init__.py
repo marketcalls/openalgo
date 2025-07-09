@@ -35,6 +35,9 @@ from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSo
 # Import the iifl_adapter
 from broker.iifl.streaming.iifl_adapter import IiflWebSocketAdapter
 
+# Import the jainam_adapter
+from broker.jainam.streaming.jainam_adapter import JainamWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -47,6 +50,7 @@ register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
+register_adapter("jainam", JainamWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -63,5 +67,6 @@ __all__ = [
     'IbullsWebSocketAdapter',
     'CompositedgeWebSocketAdapter',
     'FivepaisaXTSWebSocketAdapter',
-    'IiflWebSocketAdapter'
+    'IiflWebSocketAdapter',
+    'JainamWebSocketAdapter'
 ]
