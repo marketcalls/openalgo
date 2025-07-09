@@ -14,6 +14,9 @@ class CompositedgeWebSocketClient:
     Based on the XTS Python SDK architecture using Socket.IO
     """
     
+    # Base URL
+    BASE_URL = BASE_URL
+    
     # Socket.IO endpoints - Updated based on XTS API documentation
     #ROOT_URI = "https://xts.compositedge.com"
     SOCKET_PATH = "/apimarketdata/socket.io"

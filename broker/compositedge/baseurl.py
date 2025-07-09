@@ -4,5 +4,5 @@
 BASE_URL = "https://xts.compositedge.com"
 
 # Derived URLs for specific API endpoints
-MARKET_DATA_URL = f"{BASE_URL}/apibinarymarketdata"
+MARKET_DATA_URL = f"{BASE_URL}/apimarketdata"
 INTERACTIVE_URL = f"{BASE_URL}/interactive"
