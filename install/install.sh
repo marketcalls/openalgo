@@ -89,7 +89,7 @@ validate_broker() {
 # Function to check if broker is XTS based
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,iifl,jainam,jainampro,wisdom"
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainam,jainampro,wisdom"
     if [[ $xts_brokers == *"$broker"* ]]; then
         return 0
     else
