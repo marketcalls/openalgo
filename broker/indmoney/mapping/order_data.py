@@ -47,7 +47,7 @@ def map_order_data(order_data):
                     continue
                     
                 # Extract the instrument_token and exchange for the current order
-                # Handle new IndStocks API format
+                # Handle new IndMoney API format
                 instrument_token = order.get('security_id')
                 exchange = map_exchange(order.get('exchange', ''))
                 
@@ -72,11 +72,11 @@ def map_order_data(order_data):
                     if symbol_from_db:
                         order['tradingSymbol'] = symbol_from_db
                     else:
-                        # Use the 'name' field from IndStocks API as fallback
+                        # Use the 'name' field from Indmoney API as fallback
                         order['tradingSymbol'] = order.get('name', '')
                         logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Using name: {order.get('name', '')}")
                 else:
-                    # Use the 'name' field from IndStocks API
+                    # Use the 'name' field from Indmoney API
                     order['tradingSymbol'] = order.get('name', '')
                 
                 # Map product types
@@ -131,7 +131,7 @@ def calculate_order_statistics(order_data):
             elif order.get('transactionType') == 'SELL':
                 total_sell_orders += 1
             
-            # Count orders based on their status - handle new IndStocks status values
+            # Count orders based on their status - handle new Indmoney status values
             status = order.get('orderStatus', '').upper()
             if status in ['SUCCESS', 'TRADED']:
                 total_completed_orders += 1
@@ -452,11 +452,11 @@ def map_portfolio_data(portfolio_data):
                     logger.warning(f"Skipping non-dictionary holding: {type(holding)}")
                     continue
 
-                # Extract the instrument_token from the actual IndStocks format
+                # Extract the instrument_token from the actual Indmoney format
                 instrument_token = holding.get('security_id')
                 symbol = holding.get('symbol', '')
                 
-                # Map actual IndStocks format to expected format for consistency
+                # Map actual Indmoney format to expected format for consistency
                 holding['securityId'] = instrument_token
                 holding['tradingSymbol'] = symbol
                 holding['totalQty'] = holding.get('total_qty', 0)
@@ -468,7 +468,7 @@ def map_portfolio_data(portfolio_data):
                 holding['t1AvgPrice'] = holding.get('t1_avg_price', 0.0)
                 holding['isin'] = holding.get('isin', '')
 
-                # For IndStocks, we'll assume NSE as default exchange since it's not provided
+                # For Indmoney, we'll assume NSE as default exchange since it's not provided
                 # We can try to determine exchange from symbol or use database lookup
                 exchange = 'NSE'  # Default to NSE for equity holdings
                 holding['exchangeSegment'] = exchange
@@ -492,7 +492,7 @@ def map_portfolio_data(portfolio_data):
                     if symbol_from_db:
                         holding['tradingSymbol'] = symbol_from_db
                     else:
-                        # Keep the existing symbol from IndStocks API
+                        # Keep the existing symbol from Indmoney API
                         logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Using: {symbol}")
 
         return portfolio_data
@@ -522,11 +522,11 @@ def calculate_portfolio_statistics(holdings_data):
             if not isinstance(holding, dict):
                 continue
                 
-            # Calculate values from actual IndStocks format
+            # Calculate values from actual Indmoney format
             total_qty = holding.get('total_qty', holding.get('totalQty', 0))
             avg_price = holding.get('avg_price', holding.get('avgCostPrice', 0.0))
             
-            # For now, use avg_price as market price since IndStocks doesn't provide current market price
+            # For now, use avg_price as market price since Indmoney doesn't provide current market price
             # In a real implementation, this should fetch current market price
             market_price = avg_price  # Placeholder - should be replaced with live market data
             

@@ -55,7 +55,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         
     except Exception as req_error:
         logger.error(f"Request failed: {str(req_error)}")
-        raise Exception(f"Failed to make request to IndStocks API: {str(req_error)}")
+        raise Exception(f"Failed to make request to Indmoney API: {str(req_error)}")
     
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
@@ -66,7 +66,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     # Check if response is successful
     if res.status_code != 200:
         logger.error(f"HTTP Error {res.status_code}: {res.text}")
-        raise Exception(f"IndStocks API HTTP Error {res.status_code}: {res.text}")
+        raise Exception(f"Indmoney API HTTP Error {res.status_code}: {res.text}")
     
     # Try to parse JSON response
     try:
@@ -93,9 +93,9 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
         logger.error(f"Response text that failed to parse: {res.text}")
-        raise Exception(f"IndStocks API returned invalid JSON: {str(e)}")
+        raise Exception(f"Indmoney API returned invalid JSON: {str(e)}")
     
-    # Handle IndStocks API error responses
+    # Handle Indmoney API error responses
     response_status = response.get('status')
     
     # Check if this is a successful data response even without explicit status
@@ -113,7 +113,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         error_code = response.get('code', 'unknown')
         logger.error(f"API Error - Status: '{response_status}' (code: {error_code}): {error_message}")
         logger.error(f"Full error response: {json.dumps(response, indent=2)}")
-        raise Exception(f"IndStocks API Error ({error_code}): {error_message}")
+        raise Exception(f"Indmoney API Error ({error_code}): {error_message}")
     else:
         logger.info(f"API response successful with status: '{response_status}'")
     
@@ -121,9 +121,9 @@ def get_api_response(endpoint, auth, method="GET", params=None):
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize IndStocks data handler with authentication token"""
+        """Initialize Indmoney data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to IndStocks resolutions
+        # Map common timeframe format to Indmoney resolutions
         self.timeframe_map = {
             # Minutes
             '1m': '1',    # 1 minute
@@ -136,13 +136,13 @@ class BrokerData:
         }
 
     def _get_scrip_code(self, symbol, exchange):
-        """Convert symbol and exchange to IndStocks scrip code format"""
+        """Convert symbol and exchange to Indmoney scrip code format"""
         # Get security ID/token for the symbol
         security_id = get_token(symbol, exchange)
         if not security_id:
             raise Exception(f"Could not find security ID for {symbol} on {exchange}")
         
-        # Map exchange to IndStocks segment
+        # Map exchange to Indmoney segment
         exchange_segment_map = {
             'NSE': 'NSE',
             'BSE': 'BSE',
@@ -330,7 +330,7 @@ class BrokerData:
             }
             
             try:
-                # Get market depth from IndStocks API
+                # Get market depth from Indmoney API
                 depth_response = get_api_response("/market/quotes/mkt", self.auth_token, "GET", params)
                 depth_data = depth_response.get('data', {}).get(scrip_code, {})
                 
@@ -361,7 +361,7 @@ class BrokerData:
                 
                 # Process market depth - handle the extra nesting level
                 market_depth_container = depth_data.get('market_depth', {})
-                # IndStocks has an extra nesting level with the scrip code
+                # Indmoney has an extra nesting level with the scrip code
                 market_depth = market_depth_container.get(scrip_code, {})
                 depth_levels = market_depth.get('depth', [])
                 aggregate = market_depth.get('aggregate', {})
@@ -417,7 +417,7 @@ class BrokerData:
                     'bids': bids,
                     'asks': asks,
                     'ltp': ltp_price,
-                    'ltq': 0,  # Last traded quantity not available in IndStocks API
+                    'ltq': 0,  # Last traded quantity not available in Indmoney API
                     'volume': 0,  # Volume not available in market depth endpoint
                     'open': 0,  # OHLC data not available in market depth endpoint
                     'high': 0,
@@ -468,7 +468,7 @@ class BrokerData:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi]
         """
         try:
-            # Map OpenAlgo intervals to IndStocks intervals
+            # Map OpenAlgo intervals to Indmoney intervals
             interval_map = {
                 '1m': '1minute',
                 '2m': '2minute', 
@@ -489,11 +489,11 @@ class BrokerData:
                 supported = list(interval_map.keys())
                 raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
             
-            indstocks_interval = interval_map[interval]
+            indmoney_interval = interval_map[interval]
             scrip_code = self._get_scrip_code(symbol, exchange)
             
             logger.info(f"Getting history for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Interval: {interval} -> {indstocks_interval}")
+            logger.info(f"Interval: {interval} -> {indmoney_interval}")
             logger.info(f"Date range: {start_date} to {end_date}")
             logger.info(f"Using scrip code: {scrip_code}")
             
@@ -503,7 +503,7 @@ class BrokerData:
             
             logger.info(f"Timestamp range: {start_timestamp} to {end_timestamp}")
             
-            # Check if date range exceeds IndStocks limits
+            # Check if date range exceeds Indmoney limits
             max_ranges = {
                 '1second': 1, '5second': 1, '10second': 1, '15second': 1,  # 1 day
                 '1minute': 7, '2minute': 7, '3minute': 7, '4minute': 7, '5minute': 7,  # 7 days
@@ -512,7 +512,7 @@ class BrokerData:
                 '1day': 365, '1week': 365, '1month': 365  # 1 year
             }
             
-            max_days = max_ranges.get(indstocks_interval, 7)
+            max_days = max_ranges.get(indmoney_interval, 7)
             date_chunks = self._split_date_range(start_date, end_date, max_days)
             
             logger.info(f"Split into {len(date_chunks)} chunks: {date_chunks}")
@@ -530,23 +530,23 @@ class BrokerData:
                         'end_time': str(chunk_end_ts)
                     }
                     
-                    endpoint = f"/market/historical/{indstocks_interval}"
+                    endpoint = f"/market/historical/{indmoney_interval}"
                     logger.info(f"Fetching chunk {chunk_start} to {chunk_end}")
                     logger.info(f"Request params: {params}")
                     
                     response = get_api_response(endpoint, self.auth_token, "GET", params)
                     
-                    # Extract candles from response - handle actual IndStocks format
+                    # Extract candles from response - handle actual Indmoney format
                     candles_data = response.get('data', [])
                     logger.info(f"Received {len(candles_data)} candles for chunk")
                     
-                    # Transform IndStocks candle format to OpenAlgo format
+                    # Transform Indmoney candle format to OpenAlgo format
                     chunk_candles = []
                     for candle in candles_data:
                         try:
                             # Handle the actual format: {"ts": timestamp, "o": open, "h": high, "l": low, "c": close, "v": volume}
                             if isinstance(candle, dict) and 'ts' in candle:
-                                # IndStocks returns timestamp in seconds already
+                                # Indmoney returns timestamp in seconds already
                                 timestamp_seconds = int(candle.get('ts', 0))
                                 
                                 chunk_candles.append({
@@ -556,7 +556,7 @@ class BrokerData:
                                     'low': float(candle.get('l', 0)),
                                     'close': float(candle.get('c', 0)),
                                     'volume': int(candle.get('v', 0)),
-                                    'oi': 0  # Open interest not available in IndStocks historical data
+                                    'oi': 0  # Open interest not available in Indmoney historical data
                                 })
                             # Also handle documented format as fallback
                             elif isinstance(candle, list) and len(candle) >= 6:
@@ -570,7 +570,7 @@ class BrokerData:
                                     'low': float(candle[3]),
                                     'close': float(candle[4]),
                                     'volume': int(candle[5]) if candle[5] else 0,
-                                    'oi': 0  # Open interest not available in IndStocks historical data
+                                    'oi': 0  # Open interest not available in Indmoney historical data
                                 })
                         except Exception as candle_error:
                             logger.error(f"Error processing individual candle {candle}: {str(candle_error)}")
@@ -622,7 +622,7 @@ class BrokerData:
         return timestamp_ms
     
     def _split_date_range(self, start_date: str, end_date: str, max_days: int) -> list:
-        """Split date range into chunks based on IndStocks API limits"""
+        """Split date range into chunks based on Indmoney API limits"""
         from datetime import datetime, timedelta
         
         start = datetime.strptime(start_date, "%Y-%m-%d")

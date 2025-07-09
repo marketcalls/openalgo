@@ -19,15 +19,15 @@ DEFAULT_MARGIN_RESPONSE = {
 
 def get_margin_data(auth_token):
     """
-    Fetch margin data from IndStocks API using the provided auth token.
+    Fetch margin data from Indmoney API using the provided auth token.
     
     Args:
-        auth_token (str): The authorization token for IndStocks API
+        auth_token (str): The authorization token for Indmoney API
         
     Returns:
         dict: Formatted margin data or default values if request fails
     """
-    logger.info(f"Getting margin data from IndStocks API with token: {auth_token[:10]}...")
+    logger.info(f"Getting margin data from Indmoney API with token: {auth_token[:10]}...")
     
     try:
         # Get the shared httpx client with connection pooling
@@ -57,7 +57,7 @@ def get_margin_data(auth_token):
             # Check if it's a Cloudflare challenge
             if response.status_code == 403 and ('cloudflare' in response.text.lower() or 'just a moment' in response.text.lower()):
                 logger.warning("Cloudflare protection detected - API requires browser-based access")
-                logger.warning("Consider using a headless browser solution or contacting IndStocks for API whitelisting")
+                logger.warning("Consider using a headless browser solution or contacting Indmoney for API whitelisting")
                 
                 # Return a message indicating the limitation
                 return {
@@ -83,7 +83,7 @@ def get_margin_data(auth_token):
         try:
             # Try to parse the JSON response
             response_data = response.json()
-            logger.debug(f"Raw response from IndStocks API: {response_data}")
+            logger.debug(f"Raw response from Indmoney API: {response_data}")
             
             # Check if the response indicates success
             if response_data.get('status') != 'success':
@@ -141,7 +141,7 @@ def get_margin_data(auth_token):
                 "eq_mtf_balance": f"{float(detailed_balance.get('eq_mtf', 0.0)):.2f}"
             }
             
-            logger.info("Successfully processed margin data from IndStocks API")
+            logger.info("Successfully processed margin data from Indmoney API")
             return processed_data
             
         except (json.JSONDecodeError, ValueError, TypeError) as parse_err:

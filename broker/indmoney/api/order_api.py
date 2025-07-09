@@ -61,7 +61,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         
         # Check for API errors in the response
         if isinstance(response_data, dict):
-            # IndStocks API errors come in this format
+            # Indmoney API errors come in this format
             if response_data.get('status') in ['error', 'failure']:
                 # Handle both 'error' and 'failure' status
                 if response_data.get('status') == 'failure' and 'error' in response_data:
@@ -193,9 +193,9 @@ def place_order_api(data,auth):
     payload = json.dumps(newdata)
 
     logger.debug(f"Placing order with payload: {payload}")
-    logger.info(f"IndStocks API URL: {get_url('/order')}")
-    logger.info(f"IndStocks API Headers: {headers}")
-    logger.info(f"IndStocks API Payload: {payload}")
+    logger.info(f"Indmoney API URL: {get_url('/order')}")
+    logger.info(f"Indmoney API Headers: {headers}")
+    logger.info(f"Indmoney API Payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -217,7 +217,7 @@ def place_order_api(data,auth):
     orderid = None
     if res.status_code == 200 or res.status_code == 201:
         if response_data and response_data.get('status') == 'success':
-            # IndStocks returns order ID in data field
+            # Indmoney returns order ID in data field
             orderid = response_data.get('data', {}).get('id')
         elif response_data and response_data.get('status') in ['error', 'failure']:
             # Handle API errors/failures
@@ -416,7 +416,7 @@ def cancel_order(orderid,auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
     
-    # Prepare the payload for IndStocks cancel order API
+    # Prepare the payload for Indmoney cancel order API
     payload = {
         "segment": "DERIVATIVE" if orderid.startswith("DRV-") else "EQUITY",
         "order_id": orderid

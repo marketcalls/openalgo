@@ -141,11 +141,11 @@ def copy_from_dataframe(df):
         logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
 
-def download_csv_indstocks_data(output_path):
-    logger.info("Downloading Master Contract CSV Files from IndStocks")
+def download_csv_indmoney_data(output_path):
+    logger.info("Downloading Master Contract CSV Files from Indmoney")
     
-    # Get the access token for IndStocks broker from the database
-    # Since IndStocks might have multiple users, we need to get the first valid one
+    # Get the access token for Indmoney broker from the database
+    # Since Indmoney might have multiple users, we need to get the first valid one
     try:
         from database.auth_db import Auth, db_session
         auth_obj = Auth.query.filter_by(broker='indmoney', is_revoked=False).first()
@@ -159,10 +159,10 @@ def download_csv_indstocks_data(output_path):
         auth_token = None
     
     if not auth_token:
-        logger.error("No authentication token available for IndStocks broker")
+        logger.error("No authentication token available for Indmoney broker")
         return
     
-    # IndStocks API endpoints for different segments
+    # Indmoney API endpoints for different segments
     segments = ['equity', 'fno', 'index']
     
     headers = {
@@ -192,7 +192,7 @@ def download_csv_indstocks_data(output_path):
 
 def reformat_symbol(row, file_segment=None):
     """
-    Reformat symbols according to OpenAlgo standards based on IndStocks data structure
+    Reformat symbols according to OpenAlgo standards based on Indmoney data structure
     """
     instrument_name = row['INSTRUMENT_NAME']
     option_type = row.get('OPTION_TYPE', '')
@@ -255,7 +255,7 @@ def reformat_symbol(row, file_segment=None):
 
 def assign_values(row, file_segment=None):
     """
-    Assign exchange and instrument type values based on IndStocks data structure
+    Assign exchange and instrument type values based on Indmoney data structure
     """
     exch = row['EXCH']
     segment = row['SEGMENT']
@@ -302,12 +302,12 @@ def assign_values(row, file_segment=None):
     else:
         return 'Unknown', 'Unknown', 'Unknown'
 
-def process_indstocks_csv(path):
+def process_indmoney_csv(path):
     """
-    Processes the IndStocks CSV files to fit the existing database schema.
-    Based on the official IndStocks API documentation CSV structure.
+    Processes the Indmoney CSV files to fit the existing database schema.
+    Based on the official Indmoney API documentation CSV structure.
     """
-    logger.info("Processing IndStocks Instrument Master CSV Data")
+    logger.info("Processing Indmoney Instrument Master CSV Data")
     
     # List to hold all dataframes
     all_dfs = []
@@ -349,7 +349,7 @@ def process_indstocks_csv(path):
         else:
             df['EXPIRY_DATE'] = '-1'
         
-        # Map IndStocks columns to our database schema
+        # Map Indmoney columns to our database schema
         df['token'] = df['SECURITY_ID'].astype(str)
         df['name'] = df['SYMBOL_NAME'].fillna(df['TRADING_SYMBOL'])
         df['expiry'] = df['EXPIRY_DATE'].str.upper()
@@ -403,7 +403,7 @@ def process_indstocks_csv(path):
         logger.error("No data files were processed successfully")
         return pd.DataFrame()
 
-def delete_indstocks_temp_data(output_path):
+def delete_indmoney_temp_data(output_path):
     """
     Delete temporary CSV files after processing
     """
@@ -418,9 +418,9 @@ def delete_indstocks_temp_data(output_path):
 
 def master_contract_download():
     """
-    Main function to download and process IndStocks master contract data
+    Main function to download and process Indmoney master contract data
     """
-    logger.info("Downloading Master Contract from IndStocks")
+    logger.info("Downloading Master Contract from Indmoney")
     
     output_path = 'tmp'
     
@@ -429,16 +429,16 @@ def master_contract_download():
         os.makedirs(output_path)
         
     try:
-        download_csv_indstocks_data(output_path)
+        download_csv_indmoney_data(output_path)
         delete_symtoken_table()
-        token_df = process_indstocks_csv(output_path)
+        token_df = process_indmoney_csv(output_path)
         
         if not token_df.empty:
             copy_from_dataframe(token_df)
-            delete_indstocks_temp_data(output_path)
-            return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded IndStocks Instruments'})
+            delete_indmoney_temp_data(output_path)
+            return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded Indmoney Instruments'})
         else:
-            return socketio.emit('master_contract_download', {'status': 'error', 'message': 'No data downloaded from IndStocks'})
+            return socketio.emit('master_contract_download', {'status': 'error', 'message': 'No data downloaded from Indmoney'})
     
     except Exception as e:
         logger.exception(f"Error during master contract download: {e}")

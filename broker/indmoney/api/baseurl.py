@@ -1,6 +1,6 @@
 # IndMoney API Base URL Configuration
 
-# Base URL for IndStocks API endpoints
+# Base URL for Indmoney API endpoints
 BASE_URL = "https://api.indstocks.com"
 
 # Function to build full URL with endpoint
