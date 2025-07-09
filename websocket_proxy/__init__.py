@@ -32,6 +32,9 @@ from broker.compositedge.streaming.compositedge_adapter import CompositedgeWebSo
 # Import the fivepaisaxts_adapter
 from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter
 
+# Import the iifl_adapter
+from broker.iifl.streaming.iifl_adapter import IiflWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -43,6 +46,8 @@ register_adapter("shoonya", ShoonyaWebSocketAdapter)
 register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
+register_adapter("iifl", IiflWebSocketAdapter)
+
 # AliceBlue adapter will be registered dynamically when first used
 
 __all__ = [
@@ -57,5 +62,6 @@ __all__ = [
     'ShoonyaWebSocketAdapter',
     'IbullsWebSocketAdapter',
     'CompositedgeWebSocketAdapter',
-    'FivepaisaXTSWebSocketAdapter'
+    'FivepaisaXTSWebSocketAdapter',
+    'IiflWebSocketAdapter'
 ]
