@@ -65,11 +65,28 @@ def is_session_valid():
     logger.debug(f"Session valid. Current time: {now_ist}, Login time: {login_time}, Daily expiry: {daily_expiry}")
     return True
 
+def revoke_user_tokens():
+    """Revoke auth tokens for the current user when session expires"""
+    if 'user' in session:
+        username = session.get('user')
+        try:
+            from database.auth_db import upsert_auth
+            # Revoke the auth token in database
+            inserted_id = upsert_auth(username, "", "", revoke=True)
+            if inserted_id is not None:
+                logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
+            else:
+                logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+        except Exception as e:
+            logger.error(f"Error revoking tokens during auto-expiry for user {username}: {e}")
+
 def check_session_validity(f):
     """Decorator to check session validity before executing route"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
+            # Revoke tokens before clearing session
+            revoke_user_tokens()
             session.clear()
             logger.info("Invalid session detected - redirecting to login")
             return redirect(url_for('auth.login'))
@@ -83,6 +100,8 @@ def invalidate_session_if_invalid(f):
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
             logger.info("Invalid session detected - clearing session")
+            # Revoke tokens before clearing session
+            revoke_user_tokens()
             session.clear()
         return f(*args, **kwargs)
     return decorated_function

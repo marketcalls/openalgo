@@ -64,6 +64,9 @@
                 case 'groww':
                     loginUrl = '/groww/callback';
                     break;
+                case 'ibulls':
+                    loginUrl = '/ibulls/callback';
+                    break;
                 case 'iifl':
                     loginUrl = '/iifl/callback';
                     break;
@@ -167,6 +170,7 @@
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="groww" {{ 'disabled' if broker_name != 'groww' }}>Groww {{ '(Disabled)' if broker_name != 'groww' }}</option>
+                                <option value="ibulls" {{ 'disabled' if broker_name != 'ibulls' }}>Ibulls {{ '(Disabled)' if broker_name != 'ibulls' }}</option>
                                 <option value="iifl" {{ 'disabled' if broker_name != 'iifl' }}>IIFL {{ '(Disabled)' if broker_name != 'iifl' }}</option>
                                 <option value="jainam" {{ 'disabled' if broker_name != 'jainam' }}>Jainam (Retail) {{ '(Disabled)' if broker_name != 'jainam' }}</option>
                                 <option value="jainampro" {{ 'disabled' if broker_name != 'jainampro' }}>Jainam (Dealer) {{ '(Disabled)' if broker_name != 'jainampro' }}</option>

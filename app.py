@@ -2,7 +2,7 @@
 from utils.env_check import load_and_check_env_variables  # Import the environment check function
 load_and_check_env_variables()
 
-from flask import Flask, render_template
+from flask import Flask, render_template, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
@@ -161,6 +161,27 @@ def create_app():
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
+    @app.before_request
+    def check_session_expiry():
+        """Check session validity before each request"""
+        from flask import request
+        from utils.session import is_session_valid, revoke_user_tokens
+        
+        # Skip session check for static files, API endpoints, and public routes
+        if (request.path.startswith('/static/') or 
+            request.path.startswith('/api/') or 
+            request.path in ['/', '/auth/login', '/auth/reset-password', '/setup', '/download', '/faq'] or
+            request.path.startswith('/auth/broker/') or  # OAuth callbacks
+            request.path.startswith('/_reload-ws')):  # WebSocket reload endpoint
+            return
+        
+        # Check if user is logged in and session is expired
+        if session.get('logged_in') and not is_session_valid():
+            logger.info(f"Session expired for user: {session.get('user')} - revoking tokens")
+            revoke_user_tokens()
+            session.clear()
+            # Don't redirect here, let individual routes handle it
+    
     @app.errorhandler(404)
     def not_found_error(error):
         return render_template('404.html'), 404

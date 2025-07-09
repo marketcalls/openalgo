@@ -302,13 +302,19 @@ class BrokerData:
             # Upstox format: [timestamp, open, high, low, close, volume, oi]
             df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
-            # Convert timestamp to datetime and handle timezone properly
+            # Convert timestamp to datetime
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             
-            # Handle timezone - make all timestamps timezone-naive by converting to IST and then removing timezone
-            if not df.empty:
-                # First convert any timezone-aware timestamps to timezone-naive
-                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+            # Upstox returns IST timestamps, but we need to convert them to UTC 
+            # for consistency with other brokers (SDK will convert back to IST)
+            if not df.empty and interval in ['1m', '30m']:
+                # Check if timestamps are timezone-aware
+                if df['timestamp'].dt.tz is None:
+                    # Assume IST (what Upstox returns) and convert to UTC
+                    df['timestamp'] = df['timestamp'].dt.tz_localize('Asia/Kolkata').dt.tz_convert('UTC').dt.tz_localize(None)
+                else:
+                    # If already timezone-aware, convert to UTC
+                    df['timestamp'] = df['timestamp'].dt.tz_convert('UTC').dt.tz_localize(None)
                 
             # Handle daily data specifically - fix timestamp to show just the date (remove 18:30:00)
             if interval == 'D':

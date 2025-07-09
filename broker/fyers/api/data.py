@@ -124,6 +124,7 @@ class BrokerData:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
 
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
