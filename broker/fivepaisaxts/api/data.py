@@ -14,6 +14,9 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Configure logging
+logger = get_logger(__name__)
+
 def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
     if feed_token:
@@ -74,12 +77,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
 
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
-        """Initialize CompositEdge data handler with authentication token"""
+        """Initialize FivepaisaXTS data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
         
-        # Map common timeframe format to CompositEdge intervals
+        # Map common timeframe format to FivepaisaXTS intervals
         self.timeframe_map = {
             "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
@@ -87,78 +90,135 @@ class BrokerData:
         }
         
 
-    def get_quotes(self, symbol: str, exchange: str) -> dict:
+    def _get_instrument_token(self, symbol: str, exchange: str) -> tuple:
         """
-        Get real-time quotes for given symbol
+        Helper method to get instrument token and exchange segment
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Quote data with required fields
+            tuple: (token_info, exchange_segment)
+        """
+        # Exchange segment mapping
+        exchange_segment_map = {
+            "NSE": 1,
+            "NFO": 2,
+            "CDS": 3,
+            "BSE": 11,
+            "BFO": 12,
+            "MCX": 51
+        }
+        
+        # Convert symbol to broker format
+        br_symbol = get_br_symbol(symbol, exchange)
+        
+        brexchange = exchange_segment_map.get(exchange)
+        if brexchange is None:
+            raise Exception(f"Unknown exchange segment: {exchange}")
+            
+        # Get exchange_token from database
+        with db_session() as session:
+            symbol_info = session.query(SymToken).filter(
+                SymToken.exchange == exchange,
+                SymToken.brsymbol == br_symbol
+            ).first()
+            
+            if not symbol_info:
+                raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
+            
+            return symbol_info, brexchange
+
+    def _fetch_market_data(self, token: dict, message_code: int) -> dict:
+        """
+        Helper method to fetch market data from FivepaisaXTS API
+        Args:
+            token: Dictionary containing exchangeSegment and exchangeInstrumentID
+            message_code: XTS message code (e.g., 1502 for market data, 1510 for OI)
+        Returns:
+            dict: Parsed market data
         """
         try:
-            # Exchange segment mapping
-            exchange_segment_map = {
-                "NSE": 1,
-                "NFO": 2,
-                "CDS": 3,
-                "BSE": 11,
-                "BFO": 12,
-                "MCX": 51
-            }
-            
-            # Convert symbol to broker format
-            br_symbol = get_br_symbol(symbol, exchange)
-            
-            brexchange = exchange_segment_map.get(exchange)
-            if brexchange is None:
-                raise Exception(f"Unknown exchange segment: {brexchange}")
-            # Get exchange_token from database
-            with db_session() as session:
-                symbol_info = session.query(SymToken).filter(
-                    SymToken.exchange == exchange,
-                    SymToken.brsymbol == br_symbol
-                ).first()
-                
-                if not symbol_info:
-                    raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
-                
-                # Get the token for quotes
-                token = {
-                "exchangeSegment": brexchange,  
-                "exchangeInstrumentID": symbol_info.token  # token = instrument ID
-            }
-            
-            # Prepare payload for CompositEdge quotes API
             payload = {
                 "instruments": [token],
-                "xtsMessageCode": 1502,  # Market data request code for CompositEdge
+                "xtsMessageCode": message_code,
                 "publishFormat": "JSON"
             }
             
-            response = get_api_response("/instruments/quotes",self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+            response = get_api_response(
+                "/instruments/quotes",
+                self.auth_token,
+                method="POST",
+                payload=payload,
+                feed_token=self.feed_token
+            )
             
             if not response or response.get('type') != 'success':
-                raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                error_msg = response.get('description', 'Unknown error') if response else 'No response'
+                logger.warning(f"Error fetching market data (code {message_code}): {error_msg}")
+                return None
+                
+            raw_data = response.get('result', {}).get('listQuotes', [None])[0]
+            if not raw_data:
+                logger.warning(f"No data in response (code {message_code})")
+                return None
+                
+            return json.loads(raw_data) if isinstance(raw_data, str) else raw_data
             
-            # Parse stringified JSON quote
-            raw_quote_str = response.get('result', {}).get('listQuotes', [None])[0]
-            if not raw_quote_str:
-                raise Exception("No quote data found in listQuotes")
+        except Exception as e:
+            logger.error(f"Error in _fetch_market_data (code {message_code}): {str(e)}", exc_info=True)
+            return None
+
+    def get_quotes(self, symbol: str, exchange: str) -> dict:
+        """
+        Get real-time quotes for given symbol including Open Interest
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
+        Returns:
+            dict: Quote data with required fields including OI
+        """
+        try:
+            # Get instrument token and exchange segment
+            symbol_info, brexchange = self._get_instrument_token(symbol, exchange)
             
-            # Get quote data from response
-            quote = json.loads(raw_quote_str)
-            touchline = quote.get('Touchline', {})
-            return {
+            # Prepare token for API requests
+            token = {
+                "exchangeSegment": brexchange,
+                "exchangeInstrumentID": symbol_info.token
+            }
+            
+            # Fetch market data (xtsMessageCode 1502)
+            market_data = self._fetch_market_data(token, 1502)
+            if not market_data:
+                raise Exception("Failed to fetch market data")
+                
+            # Fetch Open Interest data (xtsMessageCode 1510) - non-blocking
+            oi_data = None
+            try:
+                oi_data = self._fetch_market_data(token, 1510)
+            except Exception as e:
+                logger.warning(f"Failed to fetch OI data: {str(e)}")
+            
+            # Process market data
+            touchline = market_data.get('Touchline', {})
+            quote_data = {
                 'ask': touchline.get('AskInfo', {}).get('Price', 0),
                 'bid': touchline.get('BidInfo', {}).get('Price', 0),
                 'high': touchline.get('High', 0),
                 'low': touchline.get('Low', 0),
                 'ltp': touchline.get('LastTradedPrice', 0),
-            'open': touchline.get('Open', 0),
-            'prev_close': touchline.get('Close', 0),
-            'volume': touchline.get('TotalTradedQuantity', 0)
-        }
+                'open': touchline.get('Open', 0),
+                'prev_close': touchline.get('Close', 0),
+                'volume': touchline.get('TotalTradedQuantity', 0),
+                'oi': 0  # Default value if OI data is not available
+            }
+            
+            # Add OI data if available
+            if oi_data and 'OpenInterest' in oi_data:
+                quote_data['oi'] = oi_data['OpenInterest']
+                logger.debug(f"Added OI data: {quote_data['oi']}")
+            
+            return quote_data
             
         except Exception as e:
             logger.error(f"Error fetching quotes: {str(e)}")
@@ -229,7 +289,7 @@ class BrokerData:
             while current_start <= to_date:
                 current_end = min(current_start + timedelta(days=6), to_date)
 
-                # CompositEdge expects MMM DD YYYY HHMMSS in IST
+                # FivepaisaXTS expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime('%b %d %Y %H%M%S')
                 to_str = current_end.strftime('%b %d %Y %H%M%S')
 
@@ -252,7 +312,7 @@ class BrokerData:
 
                 if not response or response.get('type') != 'success':
                     logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                    raise Exception(f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}")
 
                 # Parse dataResponse (pipe-delimited string)
                 raw_data = response.get('result', {}).get('dataReponse', '')
@@ -302,7 +362,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    logger.info(f"Exchange: {exchange}, Segment ID: {segment_id}")
+                    logger.info(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {
@@ -317,7 +377,7 @@ class BrokerData:
                     response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
                     
                     if not response or response.get('type') != 'success':
-                        raise Exception(f"Error from CompositEdge API: {response.get('description', 'Unknown error')}")
+                        raise Exception(f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}")
             
                     # Parse quote data from response
                     raw_quotes = response.get('result', {}).get('listQuotes', [])
@@ -497,59 +557,61 @@ class BrokerData:
 
             # Get market depth via REST API
             logger.info("Getting market depth via REST API...")
-            payload = {
-                'instruments': [{
-                    'exchangeSegment': brexchange,  
-                    'exchangeInstrumentID': symbol_info.token
-                }],
-                'xtsMessageCode': 1502,
-                'publishFormat': 'JSON'
+            
+            # Prepare token for API requests
+            token = {
+                'exchangeSegment': brexchange,
+                'exchangeInstrumentID': symbol_info.token
             }
-            logger.info(f"REST API payload: {json.dumps(payload, indent=2)}")
             
-            response = get_api_response("/instruments/quotes",
-                                     self.auth_token, 
-                                     method="POST", 
-                                     payload=payload, 
-                                     feed_token=feed_token)
+            # Fetch market data (xtsMessageCode 1502)
+            market_data = self._fetch_market_data(token, 1502)
+            if not market_data:
+                logger.error("Failed to fetch market data for depth")
+                raise Exception("Failed to fetch market data")
             
-            if response and response.get('type') == 'success':
-                raw_quote = response.get('result', {}).get('listQuotes', [None])[0]
-                if raw_quote:
-                    quote = json.loads(raw_quote) if isinstance(raw_quote, str) else raw_quote
-                    touchline = quote.get("Touchline", {})
+            # Fetch Open Interest data (xtsMessageCode 1510) - non-blocking
+            oi = 0
+            try:
+                oi_data = self._fetch_market_data(token, 1510)
+                if oi_data and 'OpenInterest' in oi_data:
+                    oi = oi_data['OpenInterest']
+                    logger.debug(f"Fetched OI for depth: {oi}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch OI for depth: {str(e)}")
+            
+            # Process market data
+            touchline = market_data.get("Touchline", {})
+            
+            # Extracting top 5 bids and asks
+            bids = [
+                {"price": b.get("Price", 0), "quantity": b.get("Size", 0)}
+                for b in market_data.get("Bids", [])[:5]
+            ]
+            asks = [
+                {"price": a.get("Price", 0), "quantity": a.get("Size", 0)}
+                for a in market_data.get("Asks", [])[:5]
+            ]
 
-                    # Extracting top 5 bids and asks
-                    bids = [
-                        {"price": b.get("Price", 0), "quantity": b.get("Size", 0)}
-                        for b in quote.get("Bids", [])[:5]
-                        ]
-                    asks = [
-                        {"price": a.get("Price", 0), "quantity": a.get("Size", 0)}
-                        for a in quote.get("Asks", [])[:5]
-                        ]
-
-                    # Return structured response
-                    return {
-                        'bids': bids,
-                        'asks': asks,
-                        'high': touchline.get('High', 0),
-                        'low': touchline.get('Low', 0),
-                        'ltp': touchline.get('LastTradedPrice', 0),
-                        'ltq': touchline.get('LastTradedQunatity', 0),
-                        'open': touchline.get('Open', 0),
-                        'prev_close': touchline.get('Close', 0),
-                        'volume': touchline.get('TotalTradedQuantity', 0),
-                        'oi': quote.get('OpenInterest', 0),  # optional: not always present
-                        'totalbuyqty': touchline.get('TotalBuyQuantity', 0),
-                        'totalsellqty': touchline.get('TotalSellQuantity', 0)
-                    }
-                else:
-                    logger.warning("No quote data in response")
-            else:
-                logger.error(f"Error in API response: {response}")
-                
-            # Return empty structure if no data
+            # Return structured response with OI
+            return {
+                'bids': bids,
+                'asks': asks,
+                'high': touchline.get('High', 0),
+                'low': touchline.get('Low', 0),
+                'ltp': touchline.get('LastTradedPrice', 0),
+                'ltq': touchline.get('LastTradedQunatity', 0),
+                'open': touchline.get('Open', 0),
+                'prev_close': touchline.get('Close', 0),
+                'volume': touchline.get('TotalTradedQuantity', 0),
+                'oi': oi,  # Include OI from separate API call
+                'totalbuyqty': touchline.get('TotalBuyQuantity', 0),
+                'totalsellqty': touchline.get('TotalSellQuantity', 0)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in get_market_depth: {str(e)}", exc_info=True)
+            # Return empty structure on error
             empty_depth = {
                 'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
