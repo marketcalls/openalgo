@@ -76,6 +76,7 @@ dependencies = [
   "pillow==11.0.0",
   "platformdirs==4.3.7",
   "prompt-toolkit==3.0.50",
+  "protobuf==6.31.1",
   "psutil==7.0.0",
   "pure-eval==0.2.3",
   "pycparser==2.22",
