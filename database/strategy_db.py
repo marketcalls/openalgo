@@ -59,7 +59,7 @@ class StrategySymbolMapping(Base):
 
 def init_db():
     """Initialize the database"""
-    print("Initializing Strategy DB")
+    logger.info("Initializing Strategy DB")
     Base.metadata.create_all(bind=engine)
 
 def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='LONG', start_time=None, end_time=None, squareoff_time=None, platform='tradingview'):
@@ -139,15 +139,15 @@ def toggle_strategy(strategy_id):
     try:
         strategy = get_strategy(strategy_id)
         if not strategy:
-            return False
+            return None
         
         strategy.is_active = not strategy.is_active
         db_session.commit()
-        return True
+        return strategy
     except Exception as e:
         logger.error(f"Error toggling strategy {strategy_id}: {str(e)}")
         db_session.rollback()
-        return False
+        return None
 
 def update_strategy_times(strategy_id, start_time=None, end_time=None, squareoff_time=None):
     """Update strategy trading times"""

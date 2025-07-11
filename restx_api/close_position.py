@@ -3,20 +3,19 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
 import traceback
 
 from restx_api.schemas import ClosePositionSchema
 from services.close_position_service import close_position, emit_analyzer_error
 from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('close_position', description='Close Position API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 close_position_schema = ClosePositionSchema()

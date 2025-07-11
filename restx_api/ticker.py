@@ -5,20 +5,18 @@ from database.auth_db import get_auth_token_broker
 from limiter import limiter
 import os
 import importlib
-import traceback
-import logging
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pytz
 
 from .data_schemas import TickerSchema
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('ticker', description='Stock Ticker Data API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 ticker_schema = TickerSchema()
@@ -29,7 +27,7 @@ def import_broker_module(broker_name):
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 class TextResponse(Response):
@@ -58,25 +56,72 @@ def convert_timestamp(timestamp, interval):
     # For intraday: return date and time separately
     return dt_ist.strftime('%Y-%m-%d'), dt_ist.strftime('%H:%M:%S')
 
+def validate_and_adjust_date_range(start_date, end_date, interval):
+    """
+    Validate and adjust date range based on interval to prevent large queries
+    
+    Rules:
+    - D, W, M intervals: maximum 10 years from end_date
+    - All other intervals: maximum 30 days from end_date
+    
+    Returns tuple: (adjusted_start_date, adjusted_end_date, was_adjusted)
+    """
+    try:
+        # Parse dates
+        if isinstance(start_date, str):
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        else:
+            start_dt = start_date
+            
+        if isinstance(end_date, str):
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            end_dt = end_date
+        
+        # Determine maximum allowed range based on interval
+        interval_upper = interval.upper()
+        if interval_upper in ['D', 'W', 'M']:
+            # Daily, Weekly, Monthly: 10 years maximum
+            max_days = 10 * 365  # 10 years
+        else:
+            # Intraday intervals: 30 days maximum
+            max_days = 30
+        
+        # Calculate the earliest allowed start date
+        earliest_start = end_dt - timedelta(days=max_days)
+        
+        # Check if adjustment is needed
+        if start_dt < earliest_start:
+            adjusted_start = earliest_start.strftime('%Y-%m-%d')
+            logger.warning(f"Date range adjusted: {start_date} -> {adjusted_start} (interval: {interval}, max days: {max_days})")
+            return adjusted_start, end_date, True
+        
+        return start_date, end_date, False
+        
+    except Exception as e:
+        logger.error(f"Error in date range validation: {e}")
+        # Return original dates if parsing fails
+        return start_date, end_date, False
+
 @api.route('/<string:symbol>')
 @api.doc(params={
-    'symbol': 'Stock symbol with exchange (e.g., NSE:ZOMATO)',
+    'symbol': 'Stock symbol with exchange (e.g., NSE:RELIANCE)',
     'interval': 'Time interval (e.g., D, 5m, 1h)',
     'from': 'Start date (YYYY-MM-DD)',
     'to': 'End date (YYYY-MM-DD)',
     'adjusted': 'Adjust for splits (true/false)',
     'sort': 'Sort order (asc/desc)',
     'apikey': 'API Key for authentication',
-    'format': 'Response format (json/txt). Default: json'
+    'format': 'Response format (json/txt). Default: json',
 })
 class Ticker(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def get(self, symbol):
         """Get aggregate bars for a stock over a given date range with specified interval"""
         try:
-            # Default to NSE:ZOMATO if no symbol is provided
+            # Default to NSE:RELIANCE if no symbol is provided
             if not symbol:
-                symbol = "NSE:ZOMATO"
+                symbol = "NSE:RELIANCE"
             
             # Split exchange and symbol
             parts = symbol.split(':')
@@ -84,7 +129,7 @@ class Ticker(Resource):
                 exchange, symbol = parts
             else:
                 exchange = "NSE"
-                symbol = "ZOMATO"
+                symbol = "RELIANCE"
             
             # Get parameters from query string
             ticker_data = {
@@ -103,6 +148,19 @@ class Ticker(Resource):
             from .data_schemas import HistorySchema
             history_schema = HistorySchema()
             history_data = history_schema.load(ticker_data)
+
+            # Apply date range restrictions to prevent large queries
+            if history_data.get('start_date') and history_data.get('end_date'):
+                adjusted_start, adjusted_end, was_adjusted = validate_and_adjust_date_range(
+                    history_data['start_date'], 
+                    history_data['end_date'], 
+                    history_data['interval']
+                )
+                history_data['start_date'] = adjusted_start
+                history_data['end_date'] = adjusted_end
+                
+                if was_adjusted:
+                    logger.info(f"Date range restricted for {history_data['symbol']} ({history_data['interval']}): {adjusted_start} to {adjusted_end}")
 
             api_key = history_data['apikey']
             AUTH_TOKEN, broker = get_auth_token_broker(api_key)
@@ -132,6 +190,8 @@ class Ticker(Resource):
             try:
                 # Initialize broker's data handler
                 data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                
+                # Use chunked API call
                 df = data_handler.get_history(
                     history_data['symbol'],
                     history_data['exchange'],
@@ -176,8 +236,7 @@ class Ticker(Resource):
                     }), 200)
 
             except Exception as e:
-                logger.error(f"Error in broker_module.get_history: {e}")
-                traceback.print_exc()
+                logger.exception(f"Error in broker_module.get_history: {e}")
                 if response_format == 'txt':
                     response = TextResponse(str(e))
                     response.content_type = 'text/plain'
@@ -199,8 +258,7 @@ class Ticker(Resource):
                 'message': err.messages
             }), 400)
         except Exception as e:
-            logger.error(f"Unexpected error in ticker endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in ticker endpoint: {e}")
             if response_format == 'txt':
                 response = TextResponse('An unexpected error occurred')
                 response.content_type = 'text/plain'

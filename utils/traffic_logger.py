@@ -1,9 +1,9 @@
 from flask import request, g, has_request_context
 from database.traffic_db import TrafficLog, logs_session
 import time
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TrafficLoggerMiddleware:
     def __init__(self, app):

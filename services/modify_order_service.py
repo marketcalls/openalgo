@@ -1,5 +1,4 @@
 import importlib
-import logging
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional
@@ -10,10 +9,10 @@ from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.api_analyzer import analyze_request
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """

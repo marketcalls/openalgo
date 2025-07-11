@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, render_template, request, session, Respons
 from database.latency_db import OrderLatency, latency_session
 from utils.session import check_session_validity
 from limiter import limiter
-import logging
+from utils.logging import get_logger
 from sqlalchemy import func
 from collections import defaultdict
 import numpy as np
@@ -11,7 +11,7 @@ import pytz
 import csv
 import io
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 latency_bp = Blueprint('latency_bp', __name__, url_prefix='/latency')
 

@@ -1,14 +1,13 @@
-import logging
 import traceback
 from typing import Tuple, Dict, Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from sqlalchemy.orm.exc import NoResultFound
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 def get_symbol_info_with_auth(
     symbol: str,

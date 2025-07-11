@@ -4,6 +4,10 @@ import os
 import httpx
 import json
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from the broker's API using the provided auth token."""
@@ -34,7 +38,7 @@ def get_margin_data(auth_token):
     
     margin_data = json.loads(response.text)
 
-    print(f"Margin Data {margin_data}")
+    logger.info(f"Margin Data: {margin_data}")
 
     if margin_data.get('data'):
         required_keys = [

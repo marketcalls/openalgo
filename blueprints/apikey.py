@@ -1,12 +1,12 @@
 from flask import Blueprint, jsonify, render_template, request, session, redirect, url_for
 import os
-import logging
+from utils.logging import get_logger
 import secrets
 from argon2 import PasswordHasher
 from database.auth_db import upsert_api_key, get_api_key, verify_api_key, get_api_key_for_tradingview
 from utils.session import check_session_validity
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 api_key_bp = Blueprint('api_key_bp', __name__, url_prefix='/')
 

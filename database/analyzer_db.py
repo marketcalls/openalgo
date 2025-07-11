@@ -9,6 +9,9 @@ from sqlalchemy.sql import func
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -50,11 +53,11 @@ class AnalyzerLog(Base):
 
 def init_db():
     """Initialize the analyzer table"""
-    print("Initializing Analyzer Table")
+    logger.info("Initializing Analyzer Table")
     Base.metadata.create_all(bind=engine)
 
 # Executor for asynchronous tasks
-executor = ThreadPoolExecutor(2)
+executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency
 
 def async_log_analyzer(request_data, response_data, api_type='placeorder'):
     """Asynchronously log analyzer request"""
@@ -76,7 +79,7 @@ def async_log_analyzer(request_data, response_data, api_type='placeorder'):
         db_session.add(analyzer_log)
         db_session.commit()
     except Exception as e:
-        print(f"Error saving analyzer log: {e}")
+        logger.error(f"Error saving analyzer log: {e}")
         db_session.rollback()
     finally:
         db_session.remove()

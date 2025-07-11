@@ -6,12 +6,12 @@ from utils.api_analyzer import get_analyzer_stats
 import json
 from datetime import datetime, timedelta
 import pytz
-import logging
+from utils.logging import get_logger
 import traceback
 import io
 import csv
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 analyzer_bp = Blueprint('analyzer_bp', __name__, url_prefix='/analyzer')
 

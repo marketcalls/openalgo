@@ -3,18 +3,17 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
 import traceback
 
 from .data_schemas import IntervalsSchema
 from services.intervals_service import get_intervals
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('intervals', description='Supported Intervals API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 intervals_schema = IntervalsSchema()
@@ -41,8 +40,7 @@ class Intervals(Resource):
                 'message': err.messages
             }), 400)
         except Exception as e:
-            logger.error(f"Unexpected error in intervals endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in intervals endpoint: {e}")
             return make_response(jsonify({
                 'status': 'error',
                 'message': 'An unexpected error occurred'

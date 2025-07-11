@@ -19,6 +19,10 @@ from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -48,16 +52,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -72,19 +76,19 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 def download_csv_kotak_data(output_path):
 
-    print("Downloading Master Contract CSV Files")
+    logger.info("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
     csv_urls = get_kotak_master_filepaths()
-    print(csv_urls)
+    logger.info(f"Master contract URLs: {csv_urls}")
     # Create a list to hold the paths of the downloaded files
     downloaded_files = []
 
@@ -101,14 +105,14 @@ def download_csv_kotak_data(output_path):
                 file.write(response.content)
             downloaded_files.append(file_path)
         else:
-            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+            logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
     
 
 def process_kotak_nse_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak NSE CSV Data")
+    logger.info("Processing kotak NSE CSV Data")
     file_path = f'{path}/NSE_CM.csv'
 
     df = pd.read_csv(file_path)
@@ -156,7 +160,7 @@ def process_kotak_bse_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak BSE CSV Data")
+    logger.info("Processing kotak BSE CSV Data")
     file_path = f'{path}/BSE_CM.csv'
 
     df = pd.read_csv(file_path)
@@ -217,7 +221,7 @@ def process_kotak_nfo_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak NFO CSV Data")
+    logger.info("Processing kotak NFO CSV Data")
     file_path = f'{path}/NSE_FO.csv'
 
     df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
@@ -261,7 +265,7 @@ def get_kotak_master_filepaths():
     'accept': '*/*',
     'Authorization': f'Bearer {access_token}'
     }
-    conn.request("GET", "/Files/1.0/masterscrip/v1/file-paths", payload, headers)
+    conn.request("GET", "/Files/1.0/masterscrip/v2/file-paths", payload, headers)
     res = conn.getresponse()
     
     data = res.read().decode("utf-8")
@@ -270,7 +274,7 @@ def get_kotak_master_filepaths():
     filepaths_list = data_dict['data']['filesPaths']
     file_dict = {}
     for url in filepaths_list:
-        file_name = url.split('/')[-1].upper().replace('.CSV', '')  
+        file_name = url.split('/')[-1].upper().replace('.CSV', '').replace('-V1', '')
         file_dict[file_name] = url
 
     return file_dict
@@ -280,7 +284,7 @@ def process_kotak_cds_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak CDS CSV Data")
+    logger.info("Processing kotak CDS CSV Data")
     file_path = f'{path}/CDE_FO.csv'
 
     df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
@@ -320,7 +324,7 @@ def process_kotak_mcx_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak MCX CSV Data")
+    logger.info("Processing kotak MCX CSV Data")
     file_path = f'{path}/MCX_FO.csv'
 
     df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
@@ -361,7 +365,7 @@ def process_kotak_bfo_csv(path):
     """
     Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing kotak MCX CSV Data")
+    logger.info("Processing kotak BFO CSV Data")
     file_path = f'{path}/BSE_FO.csv'
 
     df = pd.read_csv(file_path, dtype={'pOptionType': 'str'})
@@ -405,10 +409,10 @@ def delete_kotak_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info(f"Deleted {file_path}")
     
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
     output_path = 'tmp'
     try:
@@ -435,7 +439,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

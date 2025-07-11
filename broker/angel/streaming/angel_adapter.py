@@ -357,8 +357,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'mode': mode,
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
-            
-            # Log the market data we're sending
+            # Log the market data we're sendingAdd commentMore actions
             self.logger.info(f"Publishing market data: {market_data}")
             
             # Publish to ZeroMQ
@@ -408,6 +407,8 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return result
         elif mode == 3:  # Snap Quote mode (includes depth data)
             # For snap quote mode, extract the depth data if available
+            # Note: OI is intentionally excluded for depth mode as per requirement
+            # Note: OI is intentionally excluded for depth mode as per requirement
             result = {
                 'ltp': message.get('last_traded_price', 0) / 100,  # Divide by 100 for correct price
                 'ltt': message.get('exchange_timestamp', 0),

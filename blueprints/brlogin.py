@@ -3,11 +3,15 @@ from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+from utils.logging import get_logger
 import http.client
 import json
 import jwt
 import base64
 import hashlib
+
+# Initialize logger
+logger = get_logger(__name__)
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -23,10 +27,20 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
-    print(f'Broker is {broker}')
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
+    logger.info(f'Broker callback initiated for: {broker}')
+    logger.info(f'Session contents: {dict(session)}')
+    logger.info(f'Session has user key: {"user" in session}')
+    
+    # Special handling for Compositedge - it comes from external OAuth and might lose session
+    if broker == 'compositedge' and 'user' not in session:
+        # For Compositedge OAuth callback, we'll handle authentication differently
+        # The session will be established after successful auth token validation
+        logger.info("Compositedge callback without session - will establish session after auth")
+    else:
+        # Check if user is not in session first for other brokers
+        if 'user' not in session:
+            logger.warning(f'User not in session for {broker} callback, redirecting to login')
+            return redirect(url_for('auth.login'))
 
     if session.get('logged_in'):
         # Store broker in session and g
@@ -72,7 +86,7 @@ def broker_callback(broker,para=None):
             return render_template('aliceblue.html')
         
         elif request.method == 'POST':
-            print('Aliceblue Login Flow')
+            logger.info('Aliceblue Login Flow initiated')
             userid = request.form.get('userid')
             # Step 1: Get encryption key
             # Use the shared httpx client with connection pooling
@@ -93,7 +107,7 @@ def broker_callback(broker,para=None):
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data_dict = response.json()
-                print(data_dict)
+                logger.debug(f'Aliceblue response data: {data_dict}')
                 
                 # Check if we successfully got the encryption key
                 if data_dict.get('stat') == 'Ok' and data_dict.get('encKey'):
@@ -114,7 +128,7 @@ def broker_callback(broker,para=None):
                 
     elif broker=='fivepaisaxts':
         code = 'fivepaisaxts'
-        print(f'The code is {code}')  
+        logger.debug(f'FivePaisaXTS broker - code: {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -122,6 +136,12 @@ def broker_callback(broker,para=None):
 
 
     elif broker=='compositedge':
+        # For Compositedge, check if we need to handle a special case where session might be lost
+        if 'user' not in session:
+            # Check if this is coming from a valid OAuth callback
+            # Log the issue but try to continue if we have valid data
+            logger.warning("Session 'user' key missing in Compositedge callback, attempting to recover")
+            
         try:
             # Get the raw data from the request
             if request.method == 'POST':
@@ -195,7 +215,7 @@ def broker_callback(broker,para=None):
 
     elif broker=='fyers':
         code = request.args.get('auth_code')
-        print(f'The code is {code}')
+        logger.debug(f'Fyers broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
@@ -220,15 +240,23 @@ def broker_callback(broker,para=None):
         
     elif broker=='icici':
         full_url = request.full_path
-        print(f'Full URL: {full_url}') 
+        logger.debug(f'ICICI broker - Full URL: {full_url}') 
         code = request.args.get('apisession')
-        print(f'The code is {code}')
+        logger.debug(f'ICICI broker - The code is {code}')
         auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker=='ibulls':
+        code = 'ibulls'
+        logger.debug(f'Indiabulls broker - code: {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker=='iifl':
         code = 'iifl'
-        print(f'The code is {code}')  
+        logger.debug(f'IIFL broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -236,7 +264,7 @@ def broker_callback(broker,para=None):
     
     elif broker=='jainam':
         code = 'jainam'
-        print(f'The code is {code}')  
+        logger.debug(f'Jainam broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -244,7 +272,7 @@ def broker_callback(broker,para=None):
 
     elif broker=='jainampro':
         code = 'jainampro'
-        print(f'The code is {code}')  
+        logger.debug(f'JainamPro broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -252,26 +280,39 @@ def broker_callback(broker,para=None):
 
     elif broker=='dhan':
         code = 'dhan'
-        print(f'The code is {code}')
+        logger.debug(f'Dhan broker - The code is {code}')
         auth_token, error_message = auth_function(code)
+        
+        # Validate authentication by testing funds API before proceeding
+        if auth_token:
+            # Import the funds function to test authentication
+            from broker.dhan.api.funds import test_auth_token
+            is_valid, validation_error = test_auth_token(auth_token)
+            
+            if not is_valid:
+                logger.error(f"Dhan authentication validation failed: {validation_error}")
+                return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
+            
+            logger.info("Dhan authentication validation successful")
+        
         forward_url = 'broker.html'
 
     elif broker=='dhan_sandbox':
         code = 'dhan_sandbox'
-        print(f'The code is {code}')
+        logger.debug(f'Dhan Sandbox broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
         
 
     elif broker == 'groww':
         code = 'groww'
-        print(f'The code is {code}')
+        logger.debug(f'Groww broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker == 'wisdom':
         code = 'wisdom'
-        print(f'The code is {code}')
+        logger.debug(f'Wisdom broker - The code is {code}')
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
@@ -314,12 +355,12 @@ def broker_callback(broker,para=None):
     elif broker == 'flattrade':
         code = request.args.get('code')
         client = request.args.get('client')  # Flattrade returns client ID as well
-        print(f'The code is {code} for client {client}')
+        logger.debug(f'Flattrade broker - The code is {code} for client {client}')
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = 'broker.html'
 
     elif broker=='kotak':
-        print(f"The Broker is {broker}")
+        logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
         
@@ -336,7 +377,7 @@ def broker_callback(broker,para=None):
 
     elif broker == 'paytm':
          request_token = request.args.get('requestToken')
-         print(f'The request token is {request_token}')
+         logger.debug(f'Paytm broker - The request token is {request_token}')
          auth_token, error_message = auth_function(request_token)
 
     elif broker == 'pocketful':
@@ -349,16 +390,16 @@ def broker_callback(broker,para=None):
         # Check if there was an error in the OAuth process
         if error:
             error_msg = f"OAuth error: {error}. {error_description if error_description else ''}"
-            print(error_msg)
+            logger.error(error_msg)
             return handle_auth_failure(error_msg, forward_url='broker.html')
         
         # Check if authorization code was provided
         if not auth_code:
             error_msg = "Authorization code not provided"
-            print(error_msg)
+            logger.error(error_msg)
             return handle_auth_failure(error_msg, forward_url='broker.html')
             
-        print(f'Received authorization code: {auth_code}')
+        logger.debug(f'Pocketful broker - Received authorization code: {auth_code}')
         # Exchange auth code for access token and fetch client_id
         auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = 'broker.html'
@@ -366,14 +407,14 @@ def broker_callback(broker,para=None):
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
-        print(f'The code is {code}')
+        logger.debug(f'Generic broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
     
     if auth_token:
         # Store broker in session
         session['broker'] = broker
-        print(f'Connected broker: {broker}')
+        logger.info(f'Successfully connected broker: {broker}')
         if broker == 'zerodha':
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
@@ -381,6 +422,20 @@ def broker_callback(broker,para=None):
         
         # For compositedge and pocketful, we have the user_id from authenticate_broker
         if broker =='angel' or broker == 'compositedge' or broker == 'pocketful':
+            # For Compositedge, handle missing session user
+            if broker == 'compositedge' and 'user' not in session:
+                # Get the admin user from the database
+                from database.user_db import find_user_by_username
+                admin_user = find_user_by_username()
+                if admin_user:
+                    # Use the admin user's username
+                    username = admin_user.username
+                    session['user'] = username
+                    logger.info(f"Compositedge callback: Set session user to {username}")
+                else:
+                    logger.error("No admin user found in database for Compositedge callback")
+                    return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
+            
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
         else:

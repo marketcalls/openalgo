@@ -1,5 +1,4 @@
 import importlib
-import logging
 import traceback
 import copy
 import time
@@ -18,10 +17,10 @@ from utils.constants import (
     VALID_PRODUCT_TYPES,
     REQUIRED_SMART_ORDER_FIELDS
 )
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Smart order delay
 SMART_ORDER_DELAY = "0.5"  # Default value, can be overridden by environment variable

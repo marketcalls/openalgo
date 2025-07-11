@@ -1,14 +1,19 @@
-import http.client
+import httpx
 import json
 import os
 import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Flattrade
+    Common function to make API calls to Flattrade using httpx with connection pooling
     """
     AUTH_TOKEN = auth
     full_api_key = os.getenv('BROKER_API_KEY')
@@ -26,21 +31,23 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
     payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("piconnect.flattrade.in")
+    # Get the shared httpx client
+    client = get_httpx_client()
+    
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    url = f"https://piconnect.flattrade.in{endpoint}"
 
-    conn.request(method, endpoint, payload_str, headers)
-    res = conn.getresponse()
-    data = res.read()
+    response = client.request(method, url, content=payload_str, headers=headers)
+    data = response.text
     
     # Print raw response for debugging
-    print(f"Raw Response: {data.decode('utf-8')}")
+    logger.info(f"Raw Response: {data}")
     
     try:
-        return json.loads(data.decode("utf-8"))
+        return json.loads(data)
     except json.JSONDecodeError as e:
-        print(f"Error decoding JSON: {e}")
-        print(f"Response data: {data.decode('utf-8')}")
+        logger.error(f"Error decoding JSON: {e}")
+        logger.info(f"Response data: {data}")
         raise
 
 class BrokerData:
@@ -70,7 +77,6 @@ class BrokerData:
             dict: Simplified quote data with required fields
         """
         try:
-            quotes = []
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
@@ -89,11 +95,10 @@ class BrokerData:
             response = get_api_response("/PiConnectTP/GetQuotes", self.auth_token, payload=payload)
                 
             if response.get('stat') != 'Ok':
-                print(f"Error in quote: {response.get('emsg', 'Unknown error')}")
-                return []  # Return empty list instead of continue
+                raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data
-            quotes.append({
+            # Return simplified quote data as dict (not list)
+            return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)), 
                 'open': float(response.get('o', 0)),
@@ -102,9 +107,7 @@ class BrokerData:
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                 'volume': int(response.get('v', 0))
-            })
-        
-            return quotes
+            }
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -216,12 +219,12 @@ class BrokerData:
                     "from": str(start_ts),  # Use epoch timestamp
                     "to": str(end_ts)       # Use epoch timestamp
                 }
-                print("EOD Payload:", payload)  # Debug print
+                logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response("/PiConnectTP/EODChartData", self.auth_token, payload=payload)
-                    print("EOD Response:", response)  # Debug print
+                    logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
-                    print(f"Error in EOD request: {str(e)}")
+                    logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
             else:
                 # For intraday data, use TPSeries endpoint
@@ -233,9 +236,9 @@ class BrokerData:
                     "et": str(end_ts),    # End time in epoch
                     "intrv": self.timeframe_map[interval]  # Changed to intrv
                 }
-                print("Intraday Payload:", payload)  # Debug print
+                logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response("/PiConnectTP/TPSeries", self.auth_token, payload=payload)
-                print("Intraday Response:", response)  # Debug print
+                logger.debug(f"Intraday Response: {response}")  # Debug print
            
             # Check if response is a dict (error case) or list (success case)
             if isinstance(response, dict):
@@ -268,7 +271,7 @@ class BrokerData:
                         try:
                             timestamp = int(datetime.strptime(candle['time'], '%d-%m-%Y %H:%M:%S').timestamp())
                         except ValueError:
-                            print(f"Error parsing timestamp: {candle['time']}")
+                            logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
                         # Skip candles with all zero values
@@ -287,7 +290,7 @@ class BrokerData:
                             'volume': float(candle.get('intv', 0))  # Intraday also uses 'intv' for volume
                         })
                 except (KeyError, ValueError) as e:
-                    print(f"Error parsing candle data: {e}, Candle: {candle}")
+                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
             if df.empty:
@@ -302,29 +305,25 @@ class BrokerData:
                     if df.empty or df['timestamp'].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quotes = self.get_quotes([{
-                                "exchange": exchange,
-                                "token": token
-                            }])
+                            quotes = self.get_quotes(symbol, exchange)
                             
-                            if quotes and len(quotes) > 0:
-                                quote = quotes[0]
+                            if quotes:
                                 today_data = {
                                     'timestamp': today_ts,
-                                    'open': float(quote.get('open', 0)),
-                                    'high': float(quote.get('high', 0)),
-                                    'low': float(quote.get('low', 0)),
-                                    'close': float(quote.get('ltp', 0)),  # Use LTP as close
-                                    'volume': float(quote.get('volume', 0))
+                                    'open': float(quotes.get('open', 0)),
+                                    'high': float(quotes.get('high', 0)),
+                                    'low': float(quotes.get('low', 0)),
+                                    'close': float(quotes.get('ltp', 0)),  # Use LTP as close
+                                    'volume': float(quotes.get('volume', 0))
                                 }
-                                print(f"Today's quote data: {today_data}")
+                                logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
-                                print(f"Added today's data from quotes")
+                                logger.info("Added today's data from quotes", )
                         except Exception as e:
-                            print(f"Error fetching today's data from quotes: {e}")
+                            logger.info(f"Error fetching today's data from quotes: {e}")
                 else:
-                    print(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
+                    logger.info(f"Today ({today_ts}) is outside requested range ({start_ts} to {end_ts})")
             
             # Sort by timestamp
             df = df.sort_values('timestamp')

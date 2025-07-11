@@ -3,18 +3,17 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
 import traceback
 
 from .account_schema import HoldingsSchema
 from services.holdings_service import get_holdings
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('holdings', description='Holdings API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 holdings_schema = HoldingsSchema()
@@ -41,8 +40,7 @@ class Holdings(Resource):
                 'message': err.messages
             }), 400)
         except Exception as e:
-            logger.error(f"Unexpected error in holdings endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in holdings endpoint: {e}")
             return make_response(jsonify({
                 'status': 'error',
                 'message': 'An unexpected error occurred'

@@ -3,18 +3,16 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import traceback
-import logging
 
 from .data_schemas import SymbolSchema
 from services.symbol_service import get_symbol_info
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('symbol', description='Symbol information API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 symbol_schema = SymbolSchema()
@@ -49,8 +47,7 @@ class Symbol(Resource):
             }), 400)
             
         except Exception as e:
-            logger.error(f"Unexpected error in symbol endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in symbol endpoint: {e}")
             return make_response(jsonify({
                 'status': 'error',
                 'message': 'An unexpected error occurred'

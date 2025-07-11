@@ -2,6 +2,10 @@
 #Mapping Wisdom Capital Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
 
 from database.token_db import get_br_symbol,get_token
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def transform_data(data,token):
     """
@@ -9,7 +13,7 @@ def transform_data(data,token):
     """
     symbol = get_br_symbol(data['symbol'],data['exchange'])
     #token = get_token(data['symbol'], data['exchange'])
-    #print(f"token: {token}")
+    #logger.info(f"token: {token}")
     # Basic mapping
     transformed = {
         "exchangeSegment": map_exchange(data['exchange']),
@@ -24,7 +28,7 @@ def transform_data(data,token):
         "stopPrice": data.get("trigger_price", "0"),
         "orderUniqueIdentifier": "openalgo"
     }
-    print(f"transformed data: {transformed}")
+    logger.info(f"transformed data: {transformed}")
     return transformed
 
 

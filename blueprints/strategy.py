@@ -13,7 +13,7 @@ import json
 from datetime import datetime, time
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-import logging
+from utils.logging import get_logger
 import requests
 import os
 import uuid
@@ -24,7 +24,7 @@ from collections import deque
 from time import time
 import re
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 strategy_bp = Blueprint('strategy_bp', __name__, url_prefix='/strategy')
 
@@ -394,28 +394,42 @@ def toggle_strategy_route(strategy_id):
         
     try:
         strategy = toggle_strategy(strategy_id)
-        if strategy.is_active:
-            # Schedule squareoff if being activated
-            schedule_squareoff(strategy_id)
-            flash('Strategy activated successfully', 'success')
-        else:
-            # Remove squareoff job if being deactivated
-            try:
-                scheduler.remove_job(f'squareoff_{strategy_id}')
-            except Exception:
-                pass
-            flash('Strategy deactivated successfully', 'success')
+        if strategy:
+            if strategy.is_active:
+                # Schedule squareoff if being activated
+                schedule_squareoff(strategy_id)
+                flash('Strategy activated successfully', 'success')
+            else:
+                # Remove squareoff job if being deactivated
+                try:
+                    scheduler.remove_job(f'squareoff_{strategy_id}')
+                except Exception:
+                    pass
+                flash('Strategy deactivated successfully', 'success')
             
-        return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+            return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+        else:
+            flash('Error toggling strategy: Strategy not found', 'error')
+            return redirect(url_for('strategy_bp.index'))
     except Exception as e:
         flash(f'Error toggling strategy: {str(e)}', 'error')
         return redirect(url_for('strategy_bp.index'))
 
 @strategy_bp.route('/<int:strategy_id>/delete', methods=['POST'])
+@check_session_validity
 def delete_strategy_route(strategy_id):
     """Delete strategy"""
-    if not is_session_valid():
-        return redirect(url_for('auth.login'))
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'error': 'Session expired'}), 401
+        
+    strategy = get_strategy(strategy_id)
+    if not strategy:
+        return jsonify({'status': 'error', 'error': 'Strategy not found'}), 404
+    
+    # Check if strategy belongs to user
+    if strategy.user_id != user_id:
+        return jsonify({'status': 'error', 'error': 'Unauthorized'}), 403
     
     try:
         # Remove squareoff job if exists
@@ -425,13 +439,12 @@ def delete_strategy_route(strategy_id):
             pass
             
         if delete_strategy(strategy_id):
-            flash('Strategy deleted successfully', 'success')
+            return jsonify({'status': 'success'})
         else:
-            flash('Error deleting strategy', 'error')
+            return jsonify({'status': 'error', 'error': 'Failed to delete strategy'}), 500
     except Exception as e:
-        flash(f'Error deleting strategy: {str(e)}', 'error')
-    
-    return redirect(url_for('strategy_bp.index'))
+        logger.error(f'Error deleting strategy {strategy_id}: {str(e)}')
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 @strategy_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
 @check_session_validity

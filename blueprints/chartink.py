@@ -13,7 +13,7 @@ import json
 from datetime import datetime, time
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-import logging
+from utils.logging import get_logger
 import requests
 import os
 import uuid
@@ -23,7 +23,7 @@ import threading
 from collections import deque
 from time import time
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 chartink_bp = Blueprint('chartink_bp', __name__, url_prefix='/chartink')
 

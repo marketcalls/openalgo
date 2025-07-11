@@ -1,0 +1,41 @@
+/* Ensure full height layout */
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Custom scrollbar for webkit browsers */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1d232a; /* bg-base-200 */
+}
+::-webkit-scrollbar-thumb {
+  background: #3d4451; /* bg-base-300 */
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Ensure the depth panel always opens centered */
+#depth-panel-modal.modal-open {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Custom styles for the market panel to match the image */
+.market-panel-label {
+    @apply text-xs text-gray-400 uppercase;
+}
+.market-panel-value {
+    @apply font-semibold font-mono;
+}
+.bid-price {
+    @apply text-green-400;
+}
+.ask-price {
+    @apply text-red-400;
+}

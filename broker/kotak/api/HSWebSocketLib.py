@@ -3,6 +3,10 @@ import json
 import ssl
 
 import websocket
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 # from neo_api_client.logger import logger
 
@@ -263,7 +267,7 @@ class ByteData:
         self.startOfMsg = 0
 
     def lenth(self):
-        # print("lenght of the bytes", self.bytes, len(self.bytes))
+        # logger.info(f"lenght of the bytes {self.bytes} {len(self.bytes)}")
         pass
 
     def markStartOfMsg(self):
@@ -285,11 +289,11 @@ class ByteData:
         return self.bytes
 
     def appendByte(self, d):
-        # print("in append Bytes POS", self.pos)
-        # print("in append Bytes d", d)
+        # logger.info(f"in append Bytes POS {self.pos}")
+        # logger.info(f"in append Bytes d {d}")
         self.bytes[self.pos] = d
         self.pos += 1
-        # print("in append Bytes", self.bytes)
+        # logger.info(f"in append Bytes {self.bytes}")
 
     def appendByteAtPos(self, e, d):
         self.bytes[e] = d
@@ -408,7 +412,7 @@ class TopicData:
 
 class DepthTopicData(TopicData):
     def __init__(self):
-        # print("INSIDE DepthTopicData")
+        # logger.info("INSIDE DepthTopicData")
         super().__init__(TopicTypes["DEPTH"])
         self.updatedFieldsArray = [None] * 100
         self.multiplier = None
@@ -416,7 +420,7 @@ class DepthTopicData(TopicData):
         self.precisionValue = None
 
     def setMultiplierAndPrec(self):
-        # print("INTO setMultiplierAndPrec")
+        # logger.info("INTO setMultiplierAndPrec")
         if self.updatedFieldsArray[DEPTH_INDEX['PRECISION']]:
             self.precision = self.fieldDataArray[DEPTH_INDEX['PRECISION']]
             self.precisionValue = 10 ** self.precision
@@ -424,9 +428,9 @@ class DepthTopicData(TopicData):
             self.multiplier = self.fieldDataArray[DEPTH_INDEX['MULTIPLIER']]
 
     def prepareData(self):
-        # print("INSIDE prepareData")
+        # logger.info("INSIDE prepareData")
         self.prepareCommonData()
-        # print("\nDepth:", self.feedType, self.exchange, self.symbol)
+        # logger.info(f"\nDepth: {self.feedType} {self.exchange} {self.symbol}")
         json_res = {}
         for d in range(len(DEPTH_MAPPING)):
             c = DEPTH_MAPPING[d]
@@ -436,10 +440,10 @@ class DepthTopicData(TopicData):
                     e = round(e / (self.multiplier * self.precisionValue), self.precision)
                 elif c["type"] == FieldTypes.get("DATE"):
                     e = getFormatDate(e)
-                # print(d, ":", c["name"], ":", e)
+                # logger.info(f"{d} : {c['name']} : {e}")
                 json_res[c["name"]] = str(e)
         self.updatedFieldsArray = [None] * 100
-        # print("INSIDE Parse Data", json_res)
+        # logger.info(f"INSIDE Parse Data {json_res}")
         return json_res
 
 
@@ -500,7 +504,7 @@ def prepareConnectionRequest2(a, c):
 def is_scrip_ok(a):
     scrips_count = len(a.split("&"))
     if scrips_count > MAX_SCRIPS:
-        print("Maximum scrips allowed per request is " + str(MAX_SCRIPS))
+        logger.info(f"Maximum scrips allowed per request is {str(MAX_SCRIPS)}")
         return False
     return True
 
@@ -514,7 +518,7 @@ def getScripByteArray(c, a):
     for index in range(scripsCount):
         scripArray[index] = a + "|" + scripArray[index]
         dataLen += len(scripArray[index]) + 1
-    # print("Data len ", dataLen)
+    # logger.info(f"Data len {dataLen}")
     bytes = [0] * (dataLen + 2)
     pos = 0
     bytes[pos] = (scripsCount >> 8) & 255
@@ -529,17 +533,17 @@ def getScripByteArray(c, a):
         for strIndex in range(scripLen):
             bytes[pos] = ord(currScrip[strIndex])
             pos += 1
-    # print("Bytes ", bytes)
+    # logger.info(f"Bytes {bytes}")
     return bytes
 
 
 def prepareSubsUnSubsRequest(scrips, subscribe_type, scrip_prefix, channel_num):
-    # print("Prepare prepareSubsUnSubsRequest")
+    # logger.info("Prepare prepareSubsUnSubsRequest")
     if not is_scrip_ok(scrips):
         return
 
     dataArr = getScripByteArray(scrips, scrip_prefix)
-    # print("Length Arr", dataArr)
+    # logger.info(f"Length Arr {dataArr}")
     # buffer = [0] * (len(dataArr) + 11) #ByteData(len(dataArr) + 11)
     buffer = ByteData(len(dataArr) + 11)
     buffer.markStartOfMsg()
@@ -556,11 +560,11 @@ def prepareSubsUnSubsRequest(scrips, subscribe_type, scrip_prefix, channel_num):
 
 
 def prepareSnapshotRequest(a, c, d):
-    # print("INTO prepareSnapshotRequest", a, c, d)
+    # logger.info(f"INTO prepareSnapshotRequest {a} {c} {d}")
     if not is_scrip_ok(a):
         return
     dataArr = getScripByteArray(a, d)
-    # print("DATA ARRAY", dataArr)
+    # logger.info(f"DATA ARRAY {dataArr}")
     buffer = ByteData(len(dataArr) + 7)
     buffer.markStartOfMsg()
     buffer.appendByte(c)
@@ -585,7 +589,7 @@ def prepareChannelRequest(c, a):
         elif 32 < d <= 64:
             int2 |= 1 << d
         else:
-            print("Error: Channel values must be in this range  [ val > 0 && val < 65 ]")
+            logger.info("Error: Channel values must be in this range  [ val > 0 && val < 65 ]")
     buffer[5:9] = int2.to_bytes(4, byteorder='big')
     buffer[9:13] = int1.to_bytes(4, byteorder='big')
     return buffer
@@ -721,7 +725,7 @@ def buf2string(a):
 class ScripTopicData(TopicData):
     def __init__(self):
         super().__init__(TopicTypes["SCRIP"])
-        # print("After topic")
+        # logger.info("After topic")
         self.precision = None
         self.precisionValue = None
         self.multiplier = None
@@ -750,7 +754,7 @@ class ScripTopicData(TopicData):
             if volume is not None and vwap is not None:
                 self.fieldDataArray[SCRIP_INDEX["TURNOVER"]] = volume * vwap
                 self.updatedFieldsArray[SCRIP_INDEX["TURNOVER"]] = True
-        # print("\nScrip::" + self.feedType + "|" + self.exchange + "|" + self.symbol)
+        # logger.info(f"\nScrip::{self.feedType}|{self.exchange}|{self.symbol}")
         jsonRes = {}
         for index in range(len(SCRIP_MAPPING)):
             dataType = SCRIP_MAPPING[index]
@@ -760,7 +764,7 @@ class ScripTopicData(TopicData):
                     val = "{:.2f}".format(val / (self.multiplier * self.precisionValue))
                 elif dataType["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
-                # print(str(index) + ":" + dataType["name"] + ":" + str(val))
+                # logger.info(f'{str(index)}:{dataType["name"]}:{str(val)}')
                 jsonRes[dataType["name"]] = str(val)
         self.updatedFieldsArray = [None] * 100
         return jsonRes
@@ -768,7 +772,7 @@ class ScripTopicData(TopicData):
 
 class IndexTopicData(TopicData):
     def __init__(self):
-        # print("INSIDE IndexTopicData")
+        # logger.info("INSIDE IndexTopicData")
         super().__init__(TopicTypes["INDEX"])
         self.updatedFieldsArray = [None] * 100
         self.multiplier = None
@@ -794,7 +798,7 @@ class IndexTopicData(TopicData):
                 per_change = round(change / close * 100, self.precision)
                 self.fieldDataArray[INDEX_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[INDEX_INDEX["PERCHANGE"]] = True
-        # print("\nIndex::" + self.feedType + "|" + self.exchange + "|" + self.symbol)
+        # logger.info(f"\nIndex::{self.feedType}|{self.exchange}|{self.symbol}")
         json_res = {}
         for index in range(len(INDEX_MAPPING)):
             data_type = INDEX_MAPPING[index]
@@ -804,7 +808,7 @@ class IndexTopicData(TopicData):
                     val = round(val / (self.multiplier * self.precisionValue), self.precision)
                 elif data_type["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
-                # print(str(index) + ":" + data_type["name"] + ":" + str(val))
+                # logger.info(f'{str(index)}:{data_type["name"]}:{str(val)}')
                 json_res[data_type["name"]] = str(val)
         self.updatedFieldsArray = [None] * 100
         return json_res
@@ -816,13 +820,13 @@ class HSWrapper:
         self.ack_num = 0
 
     def getNewTopicData(self, c):
-        # print("INPUT ", c)
+        # logger.info(f"INPUT {c}")
         feed_type, *_ = c.split("|")
         topic = None
         if feed_type == TopicTypes.get("SCRIP"):
             topic = ScripTopicData()
         elif feed_type == TopicTypes.get("INDEX"):
-            # print("INTO FEED TYPE index")
+            # logger.info("INTO FEED TYPE index")
             topic = IndexTopicData()
         elif feed_type == TopicTypes.get("DEPTH"):
             topic = DepthTopicData()
@@ -843,14 +847,14 @@ class HSWrapper:
 
     def parseData(self, e):
         pos = 0
-        # print("INTO Parse Data", e)
+        # logger.info(f"INTO Parse Data {e}")
         packetsCount = buf2long(e[pos:2])
         pos += 2
         type = int.from_bytes(e[pos:pos + 1], 'big')
         pos += 1
-        # print("Type in HSWebsocket", type)
-        # print("parse data ", e)
-        # print("parse data len", len(e))
+        # logger.info(f"Type in HSWebsocket {type}")
+        # logger.info(f"parse data {e}")
+        # logger.info(f"parse data len {len(e)}")
         if type == BinRespTypes.get("CONNECTION_TYPE"):
             jsonRes = {}
             fCount = int.from_bytes(e[pos:pos + 1], 'big')
@@ -867,7 +871,7 @@ class HSWrapper:
                 valLen = int.from_bytes(e[pos:pos + 2], 'big')
                 pos += 2
                 ackCount = int.from_bytes(e[pos:pos + valLen], 'big')
-                # print("STATUS", status)
+                # logger.info(f"STATUS {status}")
                 if status == BinRespStat.get("OK"):
                     jsonRes['stat'] = STAT.get("OK")
                     jsonRes['type'] = RespTypeValues.get("CONN")
@@ -904,11 +908,11 @@ class HSWrapper:
             return send_json_arr_resp(jsonRes)
         else:
             if type == BinRespTypes.get("DATA_TYPE"):
-                # print("IN By Datatype ")
-                # print("IN By self.ack_num ", self.ack_num)
+                # logger.info("IN By Datatype ")
+                # logger.info(f"IN By self.ack_num {self.ack_num}")
                 msg_num = 0
                 if self.ack_num > 0:
-                    # print("ack_num", self.ack_num)
+                    # logger.info(f"ack_num {self.ack_num}")
                     self.counter += 1
                     msg_num = buf2long(e[pos: pos + 4])
                     pos += 4
@@ -917,40 +921,40 @@ class HSWrapper:
                         if ws:
                             ws.send(req, 0x2)
                             self.counter = 0
-                        # print("Acknowledgement sent for message num:", msg_num)
+                        # logger.info(f"Acknowledgement sent for message num: {msg_num}")
                 h = []
                 g = buf2long(e[pos: pos + 2])
-                # print("G in ", g)
+                # logger.info(f"G in {g}")
                 pos += 2
                 for n in range(g):
                     pos += 2
                     c = buf2long(e[pos: pos + 1])
-                    # print("ResponseType:", c)
+                    # logger.info(f"ResponseType: {c}")
                     pos += 1
                     if c == ResponseTypes.get("SNAP"):
                         f = buf2long(e[pos: pos + 4])
                         pos += 4
-                        # print("topic Id:", f)
+                        # logger.info(f"topic Id: {f}")
                         name_len = buf2long(e[pos: pos + 1])
                         pos += 1
                         topic_name = buf2string(e[pos: pos + name_len])
-                        # print("TOPIC Name ", topic_name)
+                        # logger.info(f"TOPIC Name {topic_name}")
                         pos += name_len
                         d = self.getNewTopicData(topic_name)
                         if d:
                             topic_list[f] = d
                             fcount = buf2long(e[pos: pos + 1])
                             pos += 1
-                            # print("fcount1:", fcount)
+                            # logger.info(f"fcount1: {fcount}")
                             for index in range(fcount):
                                 fvalue = buf2long(e[pos: pos + 4])
                                 d.setLongValues(index, fvalue)
                                 pos += 4
-                            # print("Able to set ")
+                            # logger.info("Able to set ")
                             d.setMultiplierAndPrec()
                             fcount = buf2long(e[pos: pos + 1])
                             pos += 1
-                            # print("fcount2:", fcount)
+                            # logger.info(f"fcount2: {fcount}")
                             for index in range(fcount):
                                 fid = buf2long(e[pos: pos + 1])
                                 pos += 1
@@ -959,37 +963,37 @@ class HSWrapper:
                                 str_val = buf2string(e[pos: pos + data_len])
                                 pos += data_len
                                 d.setStringValues(fid, str_val)
-                                # print(fid, ":", str_val)
+                                # logger.info(f"{fid} : {str_val}")
                             h.append(d.prepareData())
                         else:
-                            print("Invalid topic feed type !")
+                            logger.info("Invalid topic feed type !")
                     else:
                         if c == ResponseTypes.get("UPDATE"):
-                            print("updates ......")
+                            logger.info("updates ......")
                             f = buf2long(e[pos: pos + 4])
-                            # print("topic Id:", f)
+                            # logger.info(f"topic Id: {f}")
                             pos += 4
                             d = topic_list[f]
                             if not d:
-                                print("Topic Not Available in TopicList!")
+                                logger.info("Topic Not Available in TopicList!")
                             else:
-                                # print("INSIDE Else COndition ")
+                                # logger.info("INSIDE Else COndition ")
                                 fcount = buf2long(e[pos:pos + 1])
                                 pos += 1
-                                # print("fcount1:", fcount)
+                                # logger.info(f"fcount1: {fcount}")
                                 for index in range(fcount):
                                     fvalue = buf2long(e[pos:pos + 4])
                                     d.setLongValues(index, fvalue)
                                     # d[index] = fvalue
-                                    # print("index:", index, "val:", fvalue)
+                                    # logger.info(f"index: {index} val: {fvalue}")
                                     pos += 4
                             h.append(d.prepareData())
                         else:
-                            print("Invalid ResponseType: " + c)
+                            logger.info(f"Invalid ResponseType: {c}")
                 return h
             else:
                 if type == BinRespTypes.get("SUBSCRIBE_TYPE") or type == BinRespTypes.get("UNSUBSCRIBE_TYPE"):
-                    # print("INTO SUBScirbe Condition")
+                    # logger.info("INTO SUBScirbe Condition")
                     status = self.getStatus(e, pos)
                     json_res = {}
                     if status == BinRespStat.get("OK"):
@@ -1101,27 +1105,27 @@ class StartServer:
                                         on_error=self.on_error,
                                         on_close=self.on_close)
         except Exception:
-            print("WebSocket not supported!")
+            logger.info("WebSocket not supported!")
 
         if ws:
-            # print("WS is a array buffer ")
+            # logger.info("WS is a array buffer ")
             self.hsWrapper = HSWrapper()
-            # print("HS WRAPPER IS DONE ")
+            # logger.info("HS WRAPPER IS DONE ")
         else:
-            print("WebSocket not initialized!")
+            logger.info("WebSocket not initialized!")
 
         ws.run_forever()
 
     def on_open(self, ws):
-        # print("[OnOpen]: Function is running in HSWebscoket")
+        # logger.info("[OnOpen]: Function is running in HSWebscoket")
         self.onopen()
 
     def on_message(self, ws, inData):
-        # print("[OnMessage]: Function is running in HSWebsocket")
+        # logger.info("[OnMessage]: Function is running in HSWebsocket")
         outData = None
         if isinstance(inData, bytes):
             jsonData = self.hsWrapper.parseData(inData)
-            # print("JSON DATA in HSWEBSOCKE ON MESSAGE", jsonData)
+            # logger.info(f"JSON DATA in HSWEBSOCKE ON MESSAGE {jsonData}")
             if jsonData:
                 outData = json.dumps(jsonData) if isEncyptOut else jsonData
         else:
@@ -1130,13 +1134,13 @@ class StartServer:
             self.onmessage(outData)
 
     def on_close(self, ws, close_status_code, close_msg):
-        # print("[OnClose]: Function is running HSWebsocket", close_status_code)
+        # logger.info(f"[OnClose]: Function is running HSWebsocket {close_status_code}")
         self.onclose()
 
     def on_error(self, ws, error):
         self.onerror(error)
-        print('ERROR in HSWebscoket', error)
-        print("[OnError]: Function is running HSWebsocket")
+        logger.info(f"ERROR in HSWebscoket {error}")
+        logger.info("[OnError]: Function is running HSWebsocket")
 
 
 SCRIP_PREFIX = "sf"
@@ -1172,13 +1176,13 @@ class HSWebSocket:
     def hs_send(self, d):
         req_json = json.loads(d)
         req_type = req_json[Keys.get("TYPE")]
-        # print("Req Type", req_type)
+        # logger.info(f"Req Type {req_type}")
         req = {}
         if Keys.get("SCRIPS") in req_json:
             scrips = req_json[Keys.get("SCRIPS")]
-            # print("scrips ", scrips)
+            # logger.info(f"scrips {scrips}")
             channelnum = req_json[Keys.get("CHANNEL_NUM")]
-            # print("CHANNEL NUM ", channelnum)
+            # logger.info(f"CHANNEL NUM {channelnum}")
         else:
             scrips = None
             channelnum = 1
@@ -1189,23 +1193,23 @@ class HSWebSocket:
                 user = req_json[Keys.get("USER_ID")]
                 req = prepare_connection_request(user)
             elif Keys.get("SESSION_ID") in req_json:
-                # print("INSIDE SESSION_ID")
+                # logger.info("INSIDE SESSION_ID")
                 session_id = req_json[Keys.get("SESSION_ID")]
                 req = prepare_connection_request(session_id)
             elif Keys.get("AUTHORIZATION") in req_json:
-                # print("INSIDE AUTHORIZATION")
+                # logger.info("INSIDE AUTHORIZATION")
                 jwt = req_json[Keys.get("AUTHORIZATION")]
                 redis_key = req_json[Keys.get("SID")]
                 if jwt and redis_key:
                     req = prepareConnectionRequest2(jwt, redis_key)
                     # req = {"Authorization": jwt, "Sid": redis_key}
                 else:
-                    print("Authorization mode is enabled: Authorization or Sid not found !")
+                    logger.info("Authorization mode is enabled: Authorization or Sid not found !")
             else:
-                print("Invalid conn mode !")
+                logger.info("Invalid conn mode !")
         elif req_type == ReqTypeValues.get("SCRIP_SUBS"):
             req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
-            # print("*********** SUB SCRIPS req", req)
+            # logger.info(f"*********** SUB SCRIPS req {req}")
         elif req_type == ReqTypeValues.get("SCRIP_UNSUBS"):
             req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
         elif req_type == ReqTypeValues.get("INDEX_SUBS"):
@@ -1237,7 +1241,7 @@ class HSWebSocket:
         if ws and req:
             ws.send(req, 0x2)
         else:
-            print("Unable to send request !, Reason: Connection faulty or request not valid !")
+            logger.info("Unable to send request !, Reason: Connection faulty or request not valid !")
 
     def close(self):
         ws.close()
@@ -1267,19 +1271,19 @@ class HSWebSocket:
 #         self.hsiWs.run_forever()
 #
 #     def on_message(self, ws, message):
-#         print("Received message:", message)
+#         logger.info(f"Received message: {message}")
 #
 #     def on_error(self, ws, error):
-#         print("Error:", error)
+#         logger.info(f"Error: {error}")
 #
 #     def on_close(self, ws):
-#         print("Connection closed")
+#         logger.info("Connection closed")
 #         self.OPEN = 0
 #         self.readyState = 0
 #         self.hsiWs = None
 #
 #     def on_open(self, ws):
-#         print("Connection established")
+#         logger.info("Connection established")
 #         self.OPEN = 1
 #         self.readyState = 1
 #
@@ -1304,18 +1308,18 @@ class HSWebSocket:
 #                     }
 #                     self.reqData = req
 #                 else:
-#                     print("Invalid connection mode !")
+#                     logger.info("Invalid connection mode !")
 #         else:
 #             if reqJson['type'] == 'FORCE_CONNECTION':
 #                 self.reqData = self.reqData['type'] = 'fcn'
 #                 req = self.reqData
 #             else:
-#                 print("Invalid Request !")
+#                 logger.info("Invalid Request !")
 #         if self.hsiWs and req:
-#             print("REQ", req)
+#             logger.info(f"REQ {req}")
 #             self.hsiWs.send(json.dumps(req))
 #         else:
-#             print("Unable to send request! Reason: Connection faulty or request not valid!")
+#             logger.info("Unable to send request! Reason: Connection faulty or request not valid!")
 #
 #     def close(self):
 #         self.hsiWs.close()
@@ -1343,26 +1347,26 @@ class StartHSIServer:
                                            on_error=self.on_error,
                                            on_close=self.on_close)
         except Exception:
-            print("WebSocket not supported!")
+            logger.info("WebSocket not supported!")
         hsiws.run_forever()
 
     def on_message(self, ws, message):
-        # print("Received message:", message)
+        # logger.info(f"Received message: {message}")
         self.onmessage(message)
 
     def on_error(self, ws, error):
-        print("Error:", error)
+        logger.info(f"Error: {error}")
         self.onerror(error)
 
     def on_close(self, ws, close_status_code, close_msg):
-        print("Connection closed")
+        logger.info("Connection closed")
         self.OPEN = 0
         self.readyState = 0
         hsiWs = None
         self.onclose()
 
     def on_open(self, ws):
-        print("Connection established HSWebSocket")
+        logger.info("Connection established HSWebSocket")
         self.OPEN = 1
         self.readyState = 1
         self.onopen()
@@ -1411,18 +1415,18 @@ class HSIWebSocket:
                     }
                     self.reqData = req
                 else:
-                    print("Invalid connection mode !")
+                    logger.info("Invalid connection mode !")
         else:
             if reqJson['type'] == 'FORCE_CONNECTION':
                 self.reqData = self.reqData['type'] = 'fcn'
                 req = self.reqData
             else:
-                print("Invalid Request !")
+                logger.info("Invalid Request !")
         if hsiws and req:
             js_obj = json.dumps(req)
             hsiws.send(js_obj)
         else:
-            print("Unable to send request! Reason: Connection faulty or request not valid!")
+            logger.info("Unable to send request! Reason: Connection faulty or request not valid!")
 
     def close(self):
         self.OPEN = 0

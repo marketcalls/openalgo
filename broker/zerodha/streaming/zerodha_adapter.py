@@ -1,10 +1,13 @@
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 """
 Fixed Zerodha WebSocket adapter that properly handles NIFTY index data.
 The key fixes are in the _handle_ticks method for proper topic generation.
 """
 import asyncio
 import json
-import logging
 import os
 import threading
 import time
@@ -26,7 +29,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def __init__(self):
         """Initialize the Zerodha WebSocket adapter"""
         super().__init__()
-        self.logger = logging.getLogger("zerodha_websocket")
+        self.logger = get_logger("zerodha_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "zerodha"

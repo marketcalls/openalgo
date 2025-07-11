@@ -4,6 +4,9 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import os
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -25,14 +28,14 @@ class Settings(Base):
 
 def init_db():
     """Initialize the settings database"""
-    print("Initializing Settings DB")
+    logger.info("Initializing Settings DB")
     
     # Create tables if they don't exist
     Base.metadata.create_all(bind=engine)
     
     # Create default settings only if no settings exist
     if not Settings.query.first():
-        print("Creating default settings (Live Mode)")
+        logger.info("Creating default settings (Live Mode)")
         default_settings = Settings(analyze_mode=False)
         db_session.add(default_settings)
         db_session.commit()

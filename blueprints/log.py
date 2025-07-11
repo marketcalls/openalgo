@@ -6,13 +6,13 @@ from utils.session import check_session_validity
 from sqlalchemy import func
 import pytz
 from datetime import datetime
-import logging
+from utils.logging import get_logger
 import json
 import csv
 import io
 import traceback
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 log_bp = Blueprint('log_bp', __name__, url_prefix='/logs')
 

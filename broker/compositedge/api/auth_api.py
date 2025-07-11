@@ -4,6 +4,10 @@ import requests
 import hashlib
 from utils.httpx_client import get_httpx_client
 from broker.compositedge.baseurl import INTERACTIVE_URL, MARKET_DATA_URL
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def authenticate_broker(request_token):
     try:
@@ -33,7 +37,7 @@ def authenticate_broker(request_token):
             result = response.json()
             if result.get('type') == 'success':
                 token = result['result']['token']
-                print(f"Auth Token: {token}")
+                logger.info(f"Auth Token: {token}")
 
                 # Call get_feed_token() after successful authentication
                 feed_token, user_id, feed_error = get_feed_token()
@@ -84,7 +88,7 @@ def get_feed_token():
             if feed_result.get("type") == "success":
                 feed_token = feed_result["result"].get("token")
                 user_id = feed_result["result"].get("userID")
-                print(f"Feed Token: {feed_token}")
+                logger.info(f"Feed Token: {feed_token}")
             else:
                 return None, None, "Feed token request failed. Please check the response."
         else:

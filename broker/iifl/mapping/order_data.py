@@ -1,6 +1,10 @@
 import json
 from turtle import position
 from database.token_db import get_symbol, get_oa_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -23,10 +27,10 @@ def map_order_data(order_data):
     
     
         # Check if 'data' is None
-    #print(f"order_data: {order_data}")
+    #logger.info(f"order_data: {order_data}")
 
     if 'result' not in order_data or not order_data['result']:
-        print("No data available.")
+        logger.info("No data available.")
         return []  # Return an empty list if no orders are available
     
     order_data = order_data['result']
@@ -45,7 +49,7 @@ def map_order_data(order_data):
             if symbol_from_db:
                 order['TradingSymbol'] = symbol_from_db
 
-    #print(f"orders: {order_data}")
+    #logger.info(f"orders: {order_data}")
    
     return order_data
 
@@ -126,7 +130,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
         exchange = order.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
@@ -182,7 +186,7 @@ def map_trade_data(trade_data):
     
         # Check if 'data' is None
     if 'result' not in trade_data or not trade_data['result']:
-        print("No data available.")
+        logger.info("No data available.")
         return []  # Return an empty list if no orders are available
     
     trade_data = trade_data['result']
@@ -203,7 +207,7 @@ def map_trade_data(trade_data):
                 trade['TradingSymbol'] = symbol_from_db
 
 
-    print(f"trade_data: {trade_data}")
+    logger.info(f"trade_data: {trade_data}")
    
     return trade_data
 
@@ -259,21 +263,21 @@ def map_position_data(position_data):
      - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     # Check if 'data' is None
-    #print(f"order_data: {order_data}")
+    #logger.info(f"order_data: {order_data}")
     if 'result' not in position_data or not position_data['result']:
-        print("No data available.")
+        logger.info("No data available.")
         return []  # Return an empty list if no orders are available
     
     position_data = position_data['result']
  
-    #print(f"position_data: {position_data}")
+    #logger.info(f"position_data: {position_data}")
     
  
     return position_data
 
 
 def transform_positions_data(positions_data):
-    print(f"positions_data: {positions_data}")
+    logger.info(f"positions_data: {positions_data}")
     positions_data = positions_data.get("positionList", [])
     transformed_data = []
     # Define exchange mappings
@@ -286,13 +290,13 @@ def transform_positions_data(positions_data):
         "NSECD": "CDS"
     }
     if not isinstance(positions_data, list):
-        print(f"Error: positions_data is not a list. Received: {type(positions_data)} - {positions_data}")
+        logger.error(f"Error: positions_data is not a list. Received: {type(positions_data)} - {positions_data}")
         return transformed_data
 
     for position in positions_data:
 
         if not isinstance(position, dict):  # Ensure it's a dictionary
-            print(f"Skipping invalid position: {position}")
+            logger.info(f"Skipping invalid position: {position}")
             continue
         symboltoken = position.get('ExchangeInstrumentId')
         
@@ -325,7 +329,7 @@ def transform_positions_data(positions_data):
             "ltp": position.get('ltp', 0.0),  
             "pnl": position.get('pnl', 0.0),  
         }
-        #print(f"Transformed Position: {transformed_position}") 
+        #logger.info(f"Transformed Position: {transformed_position}") 
         transformed_data.append(transformed_position)
     return transformed_data
 
@@ -339,7 +343,7 @@ def transform_holdings_data(holdings_data):
     Returns:
     - A list of transformed holdings in a standardized format.
     """
-    print(f"holdings_data: {holdings_data}")
+    logger.info(f"holdings_data: {holdings_data}")
     transformed_data = []
     
     # Check if holdings_data has the expected structure
@@ -361,7 +365,7 @@ def transform_holdings_data(holdings_data):
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
-    print(f"portfolio_data: {portfolio_data}")
+    logger.info(f"portfolio_data: {portfolio_data}")
     """
     Processes and modifies portfolio data from FivePaisaXTS API.
     
@@ -373,7 +377,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if response is valid and contains result data
     if not portfolio_data or portfolio_data.get('type') != 'success' or 'result' not in portfolio_data:
-        print("No data available.")
+        logger.info("No data available.")
         return {'holdings': [], 'totalholding': None}
     
     # Extract the holdings data from the response
@@ -447,7 +451,7 @@ def calculate_portfolio_statistics(holdings_data):
     Returns:
     - A dictionary with portfolio statistics.
     """
-    print(f"holdings_data: {holdings_data}")
+    logger.info(f"holdings_data: {holdings_data}")
     
     # Check if totalholding exists and is not None
     if 'totalholding' not in holdings_data or holdings_data['totalholding'] is None:

@@ -9,7 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # Use a separate database for latency logs
-LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'
+LATENCY_DATABASE_URL = os.getenv('LATENCY_DATABASE_URL', 'sqlite:///db/latency.db')
 
 latency_engine = create_engine(
     LATENCY_DATABASE_URL,
@@ -154,8 +154,11 @@ class OrderLatency(LatencyBase):
 
 def init_latency_db():
     """Initialize the latency database"""
-    # Create db directory if it doesn't exist
-    os.makedirs('db', exist_ok=True)
+    # Extract directory from database URL and create if it doesn't exist
+    db_path = LATENCY_DATABASE_URL.replace('sqlite:///', '')
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     
-    print("Initializing Latency DB")
+    logger.info(f"Initializing Latency DB at: {LATENCY_DATABASE_URL}")
     LatencyBase.metadata.create_all(bind=latency_engine)

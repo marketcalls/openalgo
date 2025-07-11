@@ -5,9 +5,25 @@ from utils.session import get_session_expiry_time, set_session_login_time
 from database.auth_db import upsert_auth, get_feed_token as db_get_feed_token
 from database.master_contract_status_db import init_broker_status, update_status
 import importlib
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+def mask_api_credential(credential, show_chars=4):
+    """
+    Mask API credentials for display purposes, showing only the first few characters.
+    
+    Args:
+        credential (str): The credential to mask
+        show_chars (int): Number of characters to show from the beginning
+    
+    Returns:
+        str: Masked credential string
+    """
+    if not credential or len(credential) <= show_chars:
+        return '*' * 8  # Return generic mask for short/empty credentials
+    
+    return credential[:show_chars] + '*' * (len(credential) - show_chars)
 
 def async_master_contract_download(broker):
     """
@@ -97,7 +113,7 @@ def handle_auth_failure(error_message, forward_url='broker.html'):
     Handles common tasks after failed authentication.
     """
     logger.error(f"Authentication error: {error_message}")
-    return render_template(forward_url, error_message="Broker Authentication Failed")
+    return render_template(forward_url, error_message=error_message)
 
 def get_feed_token():
     """

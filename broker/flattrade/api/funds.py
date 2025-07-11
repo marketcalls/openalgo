@@ -1,22 +1,33 @@
 import os
-import http.client
+import httpx
 import json
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def calculate_pnl(entry):
     """Calculate realized and unrealized PnL for a given entry."""
-    unrealized_pnl = (float(entry.get("lp", 0)) - float(entry.get("netavgprc", 0))) * float(entry.get("netqty", 0))
-    realized_pnl = (float(entry.get("daysellavgprc", 0)) - float(entry.get("daybuyavgprc", 0))) * float(entry.get("daysellqty", 0))
+    # Use broker-provided values directly for more accurate calculation
+    unrealized_pnl = float(entry.get("urmtom", 0))
+    realized_pnl = float(entry.get("rpnl", 0))
+    
+    # Fallback calculation if broker values aren't available
+    if unrealized_pnl == 0 and float(entry.get("netqty", 0)) != 0:
+        price_factor = float(entry.get("prcftr", 1))
+        unrealized_pnl = (float(entry.get("lp", 0)) - float(entry.get("netavgprc", 0))) * float(entry.get("netqty", 0)) * price_factor
+    
     return realized_pnl, unrealized_pnl
 
-def fetch_data(endpoint, payload, headers, conn):
-    """Send a POST request and return the parsed JSON response."""
-    conn.request("POST", endpoint, payload, headers)
-    response = conn.getresponse()
-    return json.loads(response.read().decode("utf-8"))
+def fetch_data(endpoint, payload, headers, client):
+    """Send a POST request and return the parsed JSON response using httpx."""
+    url = f"https://piconnect.flattrade.in{endpoint}"
+    response = client.post(url, content=payload, headers=headers)
+    return response.json()
 
 def get_margin_data(auth_token):
     """Fetch and process margin and position data."""
-    url = "piconnect.flattrade.in"
     full_api_key = os.getenv('BROKER_API_KEY')
     userid = full_api_key.split(':::')[0]
     actid = userid
@@ -24,22 +35,22 @@ def get_margin_data(auth_token):
     # Prepare payload
     data = {"uid": userid, "actid": actid}
     payload = f"jData={json.dumps(data)}&jKey={auth_token}"
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
-    # Initialize HTTP connection
-    conn = http.client.HTTPSConnection(url)
+    # Get the shared httpx client
+    client = get_httpx_client()
 
     # Fetch margin data
-    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, conn)
+    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, client)
     
     # Check if the request was successful
     if margin_data.get('stat') != 'Ok':
         # Log the error or return an empty dictionary to indicate failure
-        print(f"Error fetching margin data: {margin_data.get('emsg')}")
+        logger.info(f"Error fetching margin data: {margin_data.get('emsg')}")
         return {}
 
     # Fetch position data
-    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, conn)
+    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, client)
     
     total_realised = 0
     total_unrealised = 0
@@ -68,5 +79,5 @@ def get_margin_data(auth_token):
         return processed_margin_data
     except KeyError as e:
         # Log the exception and return an empty dictionary if there's an unexpected error
-        print(f"Error processing margin data: {str(e)}")
+        logger.error(f"Error processing margin data: {e}")
         return {}

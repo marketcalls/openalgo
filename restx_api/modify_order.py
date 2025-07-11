@@ -3,20 +3,19 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
 import traceback
 
 from restx_api.schemas import ModifyOrderSchema
 from services.modify_order_service import modify_order, emit_analyzer_error
 from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace('modify_order', description='Modify Order API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 modify_order_schema = ModifyOrderSchema()
@@ -62,8 +61,7 @@ class ModifyOrder(Resource):
             return make_response(jsonify(error_response), 400)
             
         except Exception as e:
-            logger.error("An unexpected error occurred in ModifyOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in ModifyOrder endpoint.")
             error_message = 'An unexpected error occurred'
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

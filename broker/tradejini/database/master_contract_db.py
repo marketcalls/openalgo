@@ -5,6 +5,10 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from extensions import socketio  # Import SocketIO
 except ImportError:
@@ -41,7 +45,7 @@ class SymToken(Base):
 
 def init_db():
     """Initialize the database and create tables"""
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     
     # Create database directory if it doesn't exist
     db_path = os.path.dirname(DATABASE_URL.replace('sqlite:///', ''))
@@ -51,12 +55,12 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -71,11 +75,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Define Tradejini API endpoints
@@ -85,29 +89,29 @@ SCRIP_DATA_URL = f'{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store/{{group
 
 def get_scrip_groups():
     """Fetch available scrip groups from Tradejini API"""
-    print("Fetching scrip groups")
+    logger.info("Fetching scrip groups")
     try:
         # Add version=0 parameter to force fresh data
         params = {'version': '0'}
         response = client.get(SCRIP_GROUPS_URL, params=params)
         response.raise_for_status()
         data = response.json()
-        print(f"Received scrip groups data: {data}")
+        logger.info(f"Received scrip groups data: {data}")
         
         # Extract symbolStore array from response
         if isinstance(data, dict) and 's' in data and data['s'] == 'ok':
             if 'd' in data and 'symbolStore' in data['d']:
                 return data['d']['symbolStore']
         
-        print(f"Unexpected response format: {data}")
+        logger.info(f"Unexpected response format: {data}")
         return []
     except Exception as e:
-        print(f"Error fetching scrip groups: {e}")
+        logger.error(f"Error fetching scrip groups: {e}")
         return []
 
 def get_scrip_data(scrip_group):
     """Fetch scrip data for a specific group"""
-    print(f"Fetching scrip data for {scrip_group}")
+    logger.info(f"Fetching scrip data for {scrip_group}")
     try:
         # Add version=0 parameter to force fresh data
         params = {'version': '0'}
@@ -129,10 +133,10 @@ def get_scrip_data(scrip_group):
             if len(values) == len(headers):
                 data.append(dict(zip(headers, values)))
         
-        print(f"Processed {len(data)} records for {scrip_group}")
+        logger.info(f"Processed {len(data)} records for {scrip_group}")
         return data
     except Exception as e:
-        print(f"Error fetching scrip data for {scrip_group}: {e}")
+        logger.error(f"Error fetching scrip data for {scrip_group}: {e}")
         return []
 
 def format_symbol(row, id_format):
@@ -170,7 +174,7 @@ def format_symbol(row, id_format):
             return row.get('tradingSymbol', row.get('symbol', ''))
             
     except Exception as e:
-        print(f"Error formatting symbol with format {id_format}: {e}")
+        logger.error(f"Error formatting symbol with format {id_format}: {e}")
         return row.get('tradingSymbol', row.get('symbol', ''))
 
 def process_scrip_data(scrip_data, group_info):
@@ -248,7 +252,7 @@ def process_scrip_data(scrip_data, group_info):
                     }
                     records.append(record)
             except Exception as e:
-                print(f"Error processing index {item.get('dispName', '')}: {e}")
+                logger.info(f"Error processing index {item.get('dispName', '')}: {e}")
                 continue
     else:
         # Process regular records
@@ -316,7 +320,7 @@ def process_scrip_data(scrip_data, group_info):
                             }
                             records.append(record)
                         except Exception as e:
-                            print(f"Error processing future {item['id']}: {e}")
+                            logger.info(f"Error processing future {item['id']}: {e}")
                             
                 elif group_name in ['NSEOptions', 'BSEOptions', 'CurrencyOptions', 'CommodityOptions']:
                     # Format: instrument_symbol_exchange_expiry_strike_optType
@@ -348,7 +352,7 @@ def process_scrip_data(scrip_data, group_info):
                             }
                             records.append(record)
                         except Exception as e:
-                            print(f"Error processing option {item['id']}: {e}")
+                            logger.info(f"Error processing option {item['id']}: {e}")
                             
                 elif instr_type == 'IDX':
                     # Handle index symbols
@@ -444,14 +448,14 @@ def process_scrip_data(scrip_data, group_info):
                                 'tick_size': 0.05
                             }
             except Exception as e:
-                print(f"Error processing item {item}: {e}")
+                logger.error(f"Error processing item {item}: {e}")
                 continue
     
     return pd.DataFrame(records)
 
 def master_contract_download():
     """Download and process Tradejini scrip data"""
-    print("Starting Tradejini Master Contract Download")
+    logger.info("Starting Tradejini Master Contract Download")
     
     try:
         # Delete existing data
@@ -460,10 +464,10 @@ def master_contract_download():
         # Get scrip groups
         scrip_groups = get_scrip_groups()
         if not scrip_groups:
-            print("No scrip groups found. Exiting.")
+            logger.info("No scrip groups found. Exiting.")
             return False
             
-        print(f"Found {len(scrip_groups)} scrip groups")
+        logger.info(f"Found {len(scrip_groups)} scrip groups")
         
         # Process each scrip group
         for group in scrip_groups:
@@ -472,7 +476,7 @@ def master_contract_download():
                 if not group_name:
                     continue
                     
-                print(f"Processing group: {group_name} (format: {group.get('idFormat')})")
+                logger.info(f"Processing group: {group_name} (format: {group.get('idFormat')})")
                 scrip_data = get_scrip_data(group_name)
                 
                 if scrip_data:
@@ -486,14 +490,14 @@ def master_contract_download():
                     # Insert into database
                     if not df.empty:
                         copy_from_dataframe(df)
-                        print(f"Processed {len(df)} symbols for {group_name}")
+                        logger.info(f"Processed {len(df)} symbols for {group_name}")
                     else:
-                        print(f"No valid records found for {group_name}")
+                        logger.info(f"No valid records found for {group_name}")
                 else:
-                    print(f"No data received for {group_name}")
+                    logger.info(f"No data received for {group_name}")
                     
             except Exception as group_error:
-                print(f"Error processing group {group_name}: {group_error}")
+                logger.error(f"Error processing group {group_name}: {group_error}")
                 continue
         
         if socketio:
@@ -502,7 +506,7 @@ def master_contract_download():
     
     except Exception as e:
         error_msg = f"Error in master contract download: {e}"
-        print(error_msg)
+        logger.error(f"{error_msg}")
         if socketio:
             socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
         return False

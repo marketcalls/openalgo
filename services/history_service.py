@@ -1,13 +1,12 @@
 import importlib
-import logging
 import traceback
 import pandas as pd
 from typing import Tuple, Dict, Any, Optional, List, Union
 from database.auth_db import get_auth_token_broker
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
     """
@@ -49,6 +48,7 @@ def get_history_with_auth(
         interval: Time interval (e.g., 1m, 5m, 15m, 1h, 1d)
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
+        include_oi: Whether to include Open Interest data (if supported by broker)
         
     Returns:
         Tuple containing:
@@ -76,6 +76,7 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
+        # Call the broker's get_history method
         df = data_handler.get_history(
             symbol,
             exchange,
@@ -86,7 +87,11 @@ def get_history_with_auth(
         
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid data format returned from broker")
-
+            
+        # Ensure all responses include 'oi' field, set to 0 if not present
+        if 'oi' not in df.columns:
+            df['oi'] = 0
+            
         return True, {
             'status': 'success',
             'data': df.to_dict(orient='records')

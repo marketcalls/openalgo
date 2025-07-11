@@ -1,5 +1,4 @@
 import importlib
-import logging
 import traceback
 import copy
 from typing import Tuple, Dict, Any, Optional, List, Union
@@ -17,10 +16,10 @@ from utils.constants import (
     REQUIRED_ORDER_FIELDS
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """

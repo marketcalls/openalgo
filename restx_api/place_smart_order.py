@@ -3,21 +3,19 @@ from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
 import os
-import logging
-import traceback
 
 from restx_api.schemas import SmartOrderSchema
 from services.place_smart_order_service import place_smart_order, emit_analyzer_error
 from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
+from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 SMART_ORDER_DELAY = os.getenv("SMART_ORDER_DELAY", "0.5")
 api = Namespace('place_smart_order', description='Place Smart Order API')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
 # Initialize schema
 smart_order_schema = SmartOrderSchema()
@@ -54,8 +52,7 @@ class SmartOrder(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except Exception as e:
-            logger.error("An unexpected error occurred in SmartOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in SmartOrder endpoint.")
             error_message = 'An unexpected error occurred'
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

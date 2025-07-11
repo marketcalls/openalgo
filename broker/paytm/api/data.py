@@ -4,14 +4,12 @@ import urllib.parse
 import httpx
 from database.token_db import get_br_symbol, get_token
 from broker.paytm.database.master_contract_db import SymToken, db_session
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
@@ -24,12 +22,12 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     try:
         # Log the complete request details for Postman
-        logger.info("=== API Request Details ===")
-        logger.info(f"URL: {base_url}{endpoint}")
-        logger.info(f"Method: {method}")
-        logger.info(f"Headers: {json.dumps(headers, indent=2)}")
+        logger.debug("=== API Request Details ===")
+        logger.debug(f"URL: {base_url}{endpoint}")
+        logger.debug(f"Method: {method}")
+        logger.debug(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
-            logger.info(f"Payload: {payload}")
+            logger.debug(f"Payload: {payload}")
 
         client = get_httpx_client()
         # Use a longer timeout for Paytm API requests
@@ -40,15 +38,15 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
             response = client.post(f"{base_url}{endpoint}", headers=headers, content=payload, timeout=timeout)
 
         # Log the complete response
-        logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
+        logger.debug("=== API Response Details ===")
+        logger.debug(f"Status Code: {response.status_code}")
+        logger.debug(f"Response Headers: {dict(response.headers)}")
         response_data = response.json()
-        logger.info(f"Response Body: {json.dumps(response_data, indent=2)}")
+        logger.debug(f"Response Body: {json.dumps(response_data, indent=2)}")
 
         return response_data
     except Exception as e:
-        logger.error(f"API request failed: {str(e)}")
+        logger.exception(f"API request failed for endpoint {endpoint}: {e}")
         raise
 
 class BrokerData:
@@ -106,7 +104,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             token = get_token(symbol, exchange)
-            logger.info(f"Fetching quotes for {exchange}:{token}")
+            logger.debug(f"Fetching quotes for {exchange}:{token}")
 
             br_symbol = get_br_symbol(symbol, exchange)
             # Determine opt_type based on symbol format
@@ -136,13 +134,17 @@ class BrokerData:
             response = get_api_response(f"/data/v1/price/live?mode=QUOTE&pref={encoded_symbol}", self.auth_token)
             
             if not response or not response.get('data', []):
-                raise Exception(f"Error from Paytm API: {response.get('message', 'Unknown error')}")
+                error_msg = f"Error from Paytm API: {response.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
             
             # Return quote data
             quote = response.get('data', [])[0] if response.get('data') else {}
             if not quote:
-                raise Exception("No quote data found")
+                error_msg = f"No quote data found for {symbol}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
 
             return {
                 'ask': 0,  # Not available in new format
@@ -156,8 +158,8 @@ class BrokerData:
             }
             
         except Exception as e:
-            logger.error(f"Error fetching quotes: {str(e)}")
-            raise Exception(f"Error fetching quotes: {str(e)}")
+            logger.exception(f"Error fetching quotes for {symbol}: {e}")
+            raise
 
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
@@ -172,7 +174,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             token = get_token(symbol, exchange)
-            logger.info(f"Fetching quotes for {exchange}:{token}")
+            logger.debug(f"Fetching market depth for {exchange}:{token}")
 
             br_symbol = get_br_symbol(symbol, exchange)
             # Determine opt_type based on symbol format
@@ -202,13 +204,17 @@ class BrokerData:
             response = get_api_response(f"/data/v1/price/live?mode=FULL&pref={encoded_symbol}", self.auth_token)
             
             if not response or not response.get('data', []):
-                raise Exception(f"Error from Paytm API: {response.get('message', 'Unknown error')}")
+                error_msg = f"Error from Paytm API: {response.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
             
             # Return quote data
             quote = response.get('data', [])[0] if response.get('data') else {}
             if not quote:
-                raise Exception("No quote data found")
+                error_msg = f"No market depth data found for {symbol}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
             depth = quote.get('depth', {})
             
@@ -255,8 +261,8 @@ class BrokerData:
             }
             
         except Exception as e:
-            logger.error(f"Error fetching market depth: {str(e)}")
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            logger.exception(f"Error fetching market depth for {symbol}: {e}")
+            raise
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""

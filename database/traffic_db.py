@@ -9,7 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # Use a separate database for logs
-LOGS_DATABASE_URL = 'sqlite:///db/logs.db'
+LOGS_DATABASE_URL = os.getenv('LOGS_DATABASE_URL', 'sqlite:///db/logs.db')
 
 logs_engine = create_engine(
     LOGS_DATABASE_URL,
@@ -93,8 +93,11 @@ class TrafficLog(LogBase):
 
 def init_logs_db():
     """Initialize the logs database"""
-    # Create db directory if it doesn't exist
-    os.makedirs('db', exist_ok=True)
+    # Extract directory from database URL and create if it doesn't exist
+    db_path = LOGS_DATABASE_URL.replace('sqlite:///', '')
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     
-    print("Initializing Traffic Logs DB")
+    logger.info(f"Initializing Traffic Logs DB at: {LOGS_DATABASE_URL}")
     LogBase.metadata.create_all(bind=logs_engine)

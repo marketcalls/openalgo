@@ -10,6 +10,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence,
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -37,16 +41,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -61,11 +65,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -73,11 +77,11 @@ def download_and_unzip_upstox_data(url, input_path, output_path):
     """
     Downloads the compressed JSON from Upstox, unzips it, and saves it to the specified path.
     """
-    print("Downloading Upstox Master Contract")
+    logger.info("Downloading Upstox Master Contract")
     response = requests.get(url, timeout=10)  # timeout after 10 seconds
     with open(input_path, 'wb') as f:
         f.write(response.content)
-    print("Decompressing the JSON file")
+    logger.info("Decompressing the JSON file")
     with gzip.open(input_path, 'rb') as f_in:
         with open(output_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
@@ -107,7 +111,7 @@ def process_upstox_json(path):
     """
     Processes the Upstox JSON file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Upstox Data")
+    logger.info("Processing Upstox Data")
     df = pd.read_json(path)
 
     #return df
@@ -165,17 +169,17 @@ def delete_upstox_temp_data(input_path, output_path):
             # Delete the file
             os.remove(input_path)
             os.remove(output_path)
-            print(f"The temporary file {input_path} and  {output_path} has been deleted.")
+            logger.info(f"The temporary file {input_path} and {output_path} has been deleted.")
         else:
-            print(f"The temporary file {input_path} and  {output_path} does not exist.")
+            logger.info(f"The temporary file {input_path} and {output_path} does not exist.")
     except Exception as e:
-        print(f"An error occurred while deleting the file: {e}")
+        logger.error(f"An error occurred while deleting the file: {e}")
     
 
 
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     url = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz'
     input_path = 'tmp/temp_upstox.json.gz'
     output_path = 'tmp/upstox.json'
@@ -194,7 +198,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

@@ -5,6 +5,10 @@ import http.client
 import json
 from utils.httpx_client import get_httpx_client
 from broker.iifl.baseurl import INTERACTIVE_URL
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_margin_data(auth_token):
     """Fetch margin data from Compositedge's API using the provided auth token."""
@@ -25,7 +29,7 @@ def get_margin_data(auth_token):
     
     margin_data = response.json()
 
-    #print(f"Funds Details: {margin_data}")
+    #logger.info(f"Funds Details: {margin_data}")
 
     if (
         margin_data.get("result") and 
@@ -51,7 +55,7 @@ def get_margin_data(auth_token):
                 formatted_value = "0.00"
             
             filtered_data[key] = formatted_value
-            #print(f"Funds Dashboard: {key} = {filtered_data[key]}")
+            #logger.info(f"Funds Dashboard: {key} = {filtered_data[key]}")
 
         processed_margin_data = {
             "availablecash": filtered_data.get('netMarginAvailable'),
@@ -61,7 +65,7 @@ def get_margin_data(auth_token):
             "utiliseddebits": filtered_data.get('marginUtilized'),
         }
         
-        #print(f"Funds = {processed_margin_data}")
+        #logger.info(f"Funds = {processed_margin_data}")
         return processed_margin_data
     else:
         return {}
