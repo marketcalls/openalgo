@@ -337,7 +337,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if market_data:
                 self.logger.debug(f"Publishing data for {symbol} on topic: {topic}")
                 if mode == 3:  # Depth mode
-                    self.publish_market_data(topic, {"depth": market_data})
+                    # For depth mode, structure the data properly with LTP at top level
+                    depth_data = market_data.copy()
+                    depth_levels = {
+                        'buy': depth_data.pop('buy', []),
+                        'sell': depth_data.pop('sell', []),
+                        'timestamp': depth_data.get('timestamp', current_ts)
+                    }
+                    # Keep LTP and other data at top level, put depth levels in 'depth' key
+                    depth_data['depth'] = depth_levels
+                    self.publish_market_data(topic, depth_data)
                 else:
                     self.publish_market_data(topic, market_data)
                     
@@ -408,12 +417,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_depth_data(self, feed_data: Dict[str, Any], current_ts: int) -> Dict[str, Any]:
         """Extract depth data from feed"""
         if "fullFeed" not in feed_data:
-            return {'buy': [], 'sell': [], 'timestamp': current_ts}
-            
+            return {'buy': [], 'sell': [], 'timestamp': current_ts, 'ltp': 0}
+        
         full_feed = feed_data["fullFeed"]
         market_ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
         market_level = market_ff.get("marketLevel", {})
         bid_ask = market_level.get("bidAskQuote", [])
+        
+        # Extract LTP data from ltpc field
+        ltpc = market_ff.get("ltpc", {})
+        ltp = float(ltpc.get("ltp", 0))
         
         buy_levels = []
         sell_levels = []
@@ -441,5 +454,6 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return {
             'buy': buy_levels[:5],
             'sell': sell_levels[:5],
-            'timestamp': current_ts
+            'timestamp': current_ts,
+            'ltp': ltp  # Include LTP in the depth data
         }
