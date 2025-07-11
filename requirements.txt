@@ -69,6 +69,7 @@ pandas_ta==0.3.14b0
 parso==0.8.4
 pillow==11.0.0
 platformdirs==4.3.7
+protobuf==6.31.1
 prompt_toolkit==3.0.50
 psutil==7.0.0
 pure_eval==0.2.3
