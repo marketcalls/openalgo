@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Logs: {{ strategy_name }}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Logs for: {{ strategy_name }}</h1>
+        <div>
+            <button
+                onclick="window.location.reload();"
+                class="btn btn-sm btn-outline btn-info mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2a8.001 8.001 0 0015.357 2M9 15h-4.5M20 4h-5" />
+                </svg>
+                Refresh
+            </button>
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-sm btn-outline">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                Back to List
+            </a>
+            {# Alternative Back (if we had prev_url): <a href="{{ prev_url or url_for('python_strategy_bp.index') }}" class="btn btn-sm btn-outline">Back</a> #}
+        </div>
+    </div>
+
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title">Log Output</h2>
+            {% if log_content and ('Log file not found' not in log_content and 'Error reading log file' not in log_content and 'Log file is empty' not in log_content) %}
+                <pre class="text-xs bg-neutral text-neutral-content p-4 rounded-md overflow-x-auto max-h-screen">{{ log_content }}</pre>
+            {% elif log_content %} {# Handles "not found", "error reading", "empty" messages from read_strategy_log #}
+                <div class="alert alert-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    <span>{{ log_content }}</span>
+                </div>
+            {% else %}
+                 <div class="alert alert-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <span>No log content was loaded or the log file might be empty.</span>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
