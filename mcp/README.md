@@ -30,9 +30,9 @@ Add the following configuration to your MCP client, replacing the placeholder pa
 {
   "mcpServers": {
     "openalgo": {
-      "command": "D:\\openalgo-zerodha\\openalgo\\.venv\\Scripts\\python.exe",
+      "command": "D:\\openalgo-mcp\\openalgo\\.venv\\Scripts\\python.exe",
       "args": [
-        "D:\\openalgo-zerodha\\openalgo\\mcp\\mcpserver.py",
+        "D:\\openalgo-mcp\\openalgo\\mcp\\mcpserver.py",
         "YOUR_API_KEY_HERE",
         "http://127.0.0.1:5000"
       ]
