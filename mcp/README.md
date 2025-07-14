@@ -8,186 +8,96 @@ This is a Model Context Protocol (MCP) server that provides trading and market d
 
 Ensure your OpenAlgo server is running and properly configured:
 
-1. **Start OpenAlgo Server**: Your OpenAlgo server should be running on `http://127.0.0.1:5000`
-2. **Verify Connection**: Test the server is accessible by visiting the web interface
-3. **Broker Authentication**: Ensure your broker credentials are properly configured in OpenAlgo
+1. **Start OpenAlgo Server**: Your OpenAlgo server should be running (e.g., on `http://127.0.0.1:5000`)
+2. **Verify Connection**: Test that the server is accessible by visiting the web interface.
+3. **Broker Authentication**: Ensure your broker credentials are properly configured in OpenAlgo.
 
-### 2. API Key Configuration
-
-**IMPORTANT**: Update the API key in `mcpserver.py`:
-
-```python
-# Line 7 in mcpserver.py - Replace with your actual API key
-api_key = 'YOUR_OPENALGO_API_KEY_HERE'
-```
+### 2. API Key
 
 To get your OpenAlgo API key:
-1. Open your OpenAlgo web interface (usually `http://127.0.0.1:5000`)
-2. Navigate to Settings → API Keys
-3. Generate or copy your existing API key
-4. Replace the placeholder in line 7 of `mcpserver.py`
+1. Open your OpenAlgo web interface (e.g., `http://127.0.0.1:5000`)
+2. Navigate to **Settings → API Keys**.
+3. Generate or copy your existing API key.
 
 ## MCP Client Configuration
 
-Add this configuration to your MCP client based on your operating system:
-
-### macOS
-
-#### Claude Desktop
-Configuration file location: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "/Users/openalgo/openalgo-test/openalgo/.venv/bin/python3",
-      "args": [
-        "/Users/openalgo/openalgo-test/openalgo/mcp/mcpserver.py"
-      ]
-    }
-  }
-}
-```
-
-#### Windsurf
-Configuration file location: `~/.config/windsurf/mcp_config.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "/Users/openalgo/openalgo-test/openalgo/.venv/bin/python3",
-      "args": [
-        "/Users/openalgo/openalgo-test/openalgo/mcp/mcpserver.py"
-      ]
-    }
-  }
-}
-```
-
-#### Cursor
-Configuration file location: `~/Library/Application Support/Cursor/User/settings.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "/Users/openalgo/openalgo-test/openalgo/.venv/bin/python3",
-      "args": [
-        "/Users/openalgo/openalgo-test/openalgo/mcp/mcpserver.py"
-      ]
-    }
-  }
-}
-```
+Add the following configuration to your MCP client, replacing the placeholder paths with your actual file paths. The server now takes the API key and host URL as command-line arguments for better security and flexibility.
 
 ### Windows
 
-#### Claude Desktop
-Configuration file location: `%APPDATA%\Claude\claude_desktop_config.json`
-
+**Example Configuration:**
 ```json
 {
   "mcpServers": {
     "openalgo": {
-      "command": "C:\\path\\to\\your\\openalgo\\venv\\Scripts\\python.exe",
+      "command": "D:\\openalgo-zerodha\\openalgo\\.venv\\Scripts\\python.exe",
       "args": [
-        "C:\\path\\to\\your\\openalgo\\mcp\\mcpserver.py"
+        "D:\\openalgo-zerodha\\openalgo\\mcp\\mcpserver.py",
+        "YOUR_API_KEY_HERE",
+        "http://127.0.0.1:5000"
       ]
     }
   }
 }
 ```
 
-#### Windsurf
-Configuration file location: `%APPDATA%\Windsurf\mcp_config.json`
+**Configuration File Locations:**
+- **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Windsurf**: `%APPDATA%\Windsurf\mcp_config.json`
+- **Cursor**: `%APPDATA%\Cursor\User\settings.json`
 
+### macOS
+
+**Example Configuration:**
 ```json
 {
   "mcpServers": {
     "openalgo": {
-      "command": "C:\\path\\to\\your\\openalgo\\venv\\Scripts\\python.exe",
+      "command": "/Users/your_username/openalgo/.venv/bin/python3",
       "args": [
-        "C:\\path\\to\\your\\openalgo\\mcp\\mcpserver.py"
+        "/Users/your_username/openalgo/mcp/mcpserver.py",
+        "YOUR_API_KEY_HERE",
+        "http://127.0.0.1:5000"
       ]
     }
   }
 }
 ```
 
-#### Cursor
-Configuration file location: `%APPDATA%\Cursor\User\settings.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "C:\\path\\to\\your\\openalgo\\venv\\Scripts\\python.exe",
-      "args": [
-        "C:\\path\\to\\your\\openalgo\\mcp\\mcpserver.py"
-      ]
-    }
-  }
-}
-```
+**Configuration File Locations:**
+- **Claude Desktop**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windsurf**: `~/.config/windsurf/mcp_config.json`
+- **Cursor**: `~/Library/Application Support/Cursor/User/settings.json`
 
 ### Linux
 
-#### Claude Desktop
-Configuration file location: `~/.config/Claude/claude_desktop_config.json`
-
+**Example Configuration:**
 ```json
 {
   "mcpServers": {
     "openalgo": {
-      "command": "/home/username/openalgo-test/openalgo/.venv/bin/python3",
+      "command": "/home/your_username/openalgo/.venv/bin/python3",
       "args": [
-        "/home/username/openalgo-test/openalgo/mcp/mcpserver.py"
+        "/home/your_username/openalgo/mcp/mcpserver.py",
+        "YOUR_API_KEY_HERE",
+        "http://127.0.0.1:5000"
       ]
     }
   }
 }
 ```
 
-#### Windsurf
-Configuration file location: `~/.config/windsurf/mcp_config.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "/home/username/openalgo-test/openalgo/.venv/bin/python3",
-      "args": [
-        "/home/username/openalgo-test/openalgo/mcp/mcpserver.py"
-      ]
-    }
-  }
-}
-```
-
-#### Cursor
-Configuration file location: `~/.config/Cursor/User/settings.json`
-
-```json
-{
-  "mcpServers": {
-    "openalgo": {
-      "command": "/home/username/openalgo-test/openalgo/.venv/bin/python3",
-      "args": [
-        "/home/username/openalgo-test/openalgo/mcp/mcpserver.py"
-      ]
-    }
-  }
-}
-```
+**Configuration File Locations:**
+- **Claude Desktop**: `~/.config/Claude/claude_desktop_config.json`
+- **Windsurf**: `~/.config/windsurf/mcp_config.json`
+- **Cursor**: `~/.config/Cursor/User/settings.json`
 
 ### Path Configuration Notes
 
 **Important**: Replace the paths in the examples above with your actual installation paths:
 
-- **Windows**: Replace `C:\\path\\to\\your\\openalgo` with your actual OpenAlgo installation path
-- **Linux**: Replace `/home/username` with your actual home directory path
-- **macOS**: The example shows `/Users/openalgo` - adjust to your actual path
+- **Windows**: Replace `D:\\openalgo-zerodha\\openalgo` with your actual OpenAlgo installation path
+- **macOS/Linux**: Replace `/Users/your_username` or `/home/your_username` with your actual home directory path
 
 To find your Python virtual environment path:
 - **Windows**: Usually in `venv\Scripts\python.exe`
@@ -260,16 +170,14 @@ Once configured, you can ask your AI assistant to:
 
 ## Security Note
 
-⚠️ **Important**: This server uses a hardcoded API key. For production use, consider:
-- Using environment variables for the API key
-- Implementing proper authentication mechanisms
-- Restricting network access to the MCP server
+⚠️ **Important**: This server is designed for local use. For production environments, consider implementing additional security measures such as environment variables for sensitive data and restricting network access.
 
 ## Troubleshooting
 
 1. **Connection Issues**: Verify OpenAlgo server is running on `http://127.0.0.1:5000`
 2. **Authentication Errors**: Check your API key is correct and valid
 3. **Permission Errors**: Ensure the Python virtual environment has proper permissions
+4. **Order Failures**: Verify your broker connection and trading permissions
 4. **Order Failures**: Verify broker credentials in OpenAlgo are valid and active
 
 ## Support

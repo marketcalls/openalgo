@@ -2,10 +2,18 @@ from mcp.server.fastmcp import FastMCP
 from openalgo import api
 from typing import List, Dict, Any, Optional
 import json
+import sys
 
 
-api_key = 'you-openalgo-apikey'
-client = api(api_key=api_key, host='http://127.0.0.1:5000')
+# Get API key and host from command line arguments
+if len(sys.argv) < 3:
+    raise ValueError("API key and host must be provided as command line arguments")
+
+api_key = sys.argv[1]
+host = sys.argv[2]
+
+# Initialize OpenAlgo client with provided arguments
+client = api(api_key=api_key, host=host)
 
 # Create MCP server
 mcp = FastMCP("openalgo")
