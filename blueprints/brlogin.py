@@ -3,17 +3,18 @@ from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+from utils.broker_credentials import get_broker_credentials, is_xts_broker
 from utils.logging import get_logger
 import http.client
 import json
 import jwt
 import base64
 import hashlib
+import os
 
 # Initialize logger
 logger = get_logger(__name__)
 
-BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
 LOGIN_RATE_LIMIT_HOUR = get_login_rate_limit_hour()
 
@@ -47,6 +48,29 @@ def broker_callback(broker,para=None):
         session['broker'] = broker
         return redirect(url_for('dashboard_bp.dashboard'))
 
+    # Load credentials from database or environment
+    user_id = session.get('user')
+    broker_creds = None
+    
+    if user_id:
+        broker_creds = get_broker_credentials(user_id, broker)
+        logger.info(f"Using {broker_creds.get('source', 'unknown')} credentials for {broker}")
+    
+    if not broker_creds:
+        # Fall back to environment variables
+        logger.info(f"Using environment credentials fallback for broker {broker}")
+        broker_creds = {
+            'api_key': get_broker_api_key(),
+            'api_secret': get_broker_api_secret(),
+            'redirect_url': os.getenv('REDIRECT_URL'),
+            'source': 'environment'
+        }
+        
+        # Add market data credentials for XTS brokers
+        if is_xts_broker(broker):
+            broker_creds['market_api_key'] = os.getenv('BROKER_API_KEY_MARKET')
+            broker_creds['market_api_secret'] = os.getenv('BROKER_API_SECRET_MARKET')
+
     broker_auth_functions = app.broker_auth_functions
     auth_function = broker_auth_functions.get(f'{broker}_auth')
 
@@ -78,7 +102,13 @@ def broker_callback(broker,para=None):
             totp_code = request.form.get('totp')
             #to store user_id in the DB
             user_id = clientcode
-            auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
+            
+            # Pass credentials to auth function
+            auth_token, feed_token, error_message = auth_function(
+                clientcode, broker_pin, totp_code,
+                api_key=broker_creds.get('api_key'),
+                api_secret=broker_creds.get('api_secret')
+            )
             forward_url = 'angel.html'
     
     elif broker == 'aliceblue':
@@ -281,7 +311,14 @@ def broker_callback(broker,para=None):
     elif broker=='dhan':
         code = 'dhan'
         logger.debug(f'Dhan broker - The code is {code}')
-        auth_token, error_message = auth_function(code)
+        
+        # Pass credentials to auth function
+        auth_token, error_message = auth_function(
+            code,
+            api_key=broker_creds.get('api_key'),
+            api_secret=broker_creds.get('api_secret'),
+            redirect_url=broker_creds.get('redirect_url')
+        )
         
         # Validate authentication by testing funds API before proceeding
         if auth_token:
@@ -416,7 +453,8 @@ def broker_callback(broker,para=None):
         session['broker'] = broker
         logger.info(f'Successfully connected broker: {broker}')
         if broker == 'zerodha':
-            auth_token = f'{BROKER_API_KEY}:{auth_token}'
+            api_key = broker_creds.get('api_key')
+            auth_token = f'{api_key}:{auth_token}'
         if broker == 'dhan':
             auth_token = f'{auth_token}'
         
@@ -464,8 +502,9 @@ def broker_loginflow(broker):
             mobile_number = f'+91{mobile_number}'
         
         # First get the access token
-        api_secret = get_broker_api_secret()
-        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
+        api_key = broker_creds.get('api_key')
+        api_secret = broker_creds.get('api_secret')
+        auth_string = base64.b64encode(f"{api_key}:{api_secret}".encode()).decode('utf-8')
         # Define the connection
         conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
 

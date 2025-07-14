@@ -190,6 +190,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('broker_setup.setup_wizard') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('broker_setup.') }}">
+                            Broker Setup
+                        </a>
+                    </li>
+                    <li>
                         <a href="{{ url_for('log_bp.view_logs') }}" 
                            class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
                             Logs

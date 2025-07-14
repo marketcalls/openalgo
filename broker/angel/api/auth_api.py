@@ -3,11 +3,25 @@ import json
 import os
 from utils.httpx_client import get_httpx_client
 
-def authenticate_broker(clientcode, broker_pin, totp_code):
+def authenticate_broker(clientcode, broker_pin, totp_code, api_key=None, api_secret=None):
     """
-    Authenticate with the broker and return the auth token.
+    Authenticate with Angel One broker and return the auth token.
+    
+    Args:
+        clientcode: Client ID for Angel broker
+        broker_pin: Password/PIN
+        totp_code: TOTP code
+        api_key: API key (optional, falls back to env)
+        api_secret: API secret (optional, not used by Angel but kept for consistency)
+    
+    Returns:
+        tuple: (auth_token, feed_token, error_message)
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    # Use provided api_key or fall back to environment
+    api_key = api_key or os.getenv('BROKER_API_KEY')
+    
+    if not api_key:
+        return None, None, "Missing API key"
 
     try:
         # Get the shared httpx client

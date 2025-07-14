@@ -23,6 +23,7 @@ from blueprints.apikey import api_key_bp
 from blueprints.log import log_bp
 from blueprints.tv_json import tv_json_bp
 from blueprints.brlogin import brlogin_bp
+from blueprints.broker_setup import broker_setup_bp
 from blueprints.core import core_bp
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
@@ -44,6 +45,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.broker_config_db import init_db as ensure_broker_config_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -142,6 +144,7 @@ def create_app():
     app.register_blueprint(log_bp)
     app.register_blueprint(tv_json_bp)
     app.register_blueprint(brlogin_bp)
+    app.register_blueprint(broker_setup_bp)
     app.register_blueprint(core_bp)
     app.register_blueprint(analyzer_bp)
     app.register_blueprint(settings_bp)
@@ -219,6 +222,7 @@ def setup_environment(app):
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
         ensure_strategy_tables_exists()
+        ensure_broker_config_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':

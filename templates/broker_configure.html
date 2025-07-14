@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+
+{% block title %}Configure {{ template.display_name }} - OpenAlgo{% endblock %}
+
+{% block head %}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto max-w-4xl">
+    <!-- Header -->
+    <div class="mb-8">
+        <a href="{{ url_for('broker_setup.setup_wizard') }}" class="btn btn-ghost btn-sm mb-4">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Back to Broker Setup
+        </a>
+        
+        <h1 class="text-3xl font-bold mb-2">Configure {{ template.display_name }}</h1>
+        <p class="text-base-content/70">{{ template.description }}</p>
+    </div>
+
+    <!-- XTS Notice -->
+    {% if template.is_xts_broker %}
+    <div class="alert alert-info mb-6">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <div>
+            <h3 class="font-bold">XTS API Broker</h3>
+            <p class="text-sm">This broker uses XTS API and requires separate credentials for trading and market data. Please ensure you have both sets of API keys from your broker.</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Alerts -->
+    <div id="alerts"></div>
+
+    <!-- Configuration Form -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <form id="brokerConfigForm" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="broker_name" value="{{ broker_name }}">
+                
+                <!-- Basic Credentials -->
+                <div class="mb-6">
+                    <h3 class="card-title text-lg mb-4">Trading API Credentials</h3>
+                    
+                    {% for field in template.required_fields %}
+                    {% if field.name in ['api_key', 'api_secret'] %}
+                    <div class="form-control mb-4">
+                        <label class="label" for="{{ field.name }}">
+                            <span class="label-text">
+                                {{ field.label }}
+                                <span class="text-error">*</span>
+                            </span>
+                        </label>
+                        <input 
+                            type="{{ field.type }}" 
+                            id="{{ field.name }}" 
+                            name="{{ field.name }}" 
+                            class="input input-bordered w-full" 
+                            placeholder="{{ field.placeholder }}"
+                            value="{% if existing_config %}{{ existing_config.get(field.name, '') }}{% endif %}"
+                            required
+                        >
+                        {% if field.help_text %}
+                        <label class="label">
+                            <span class="label-text-alt">{{ field.help_text }}</span>
+                        </label>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+
+                <!-- Market Data Credentials (XTS only) -->
+                {% if template.is_xts_broker %}
+                <div class="mb-6">
+                    <h3 class="card-title text-lg mb-4">Market Data API Credentials</h3>
+                    
+                    {% for field in template.required_fields %}
+                    {% if field.name in ['market_api_key', 'market_api_secret'] %}
+                    <div class="form-control mb-4">
+                        <label class="label" for="{{ field.name }}">
+                            <span class="label-text">
+                                {{ field.label }}
+                                <span class="text-error">*</span>
+                            </span>
+                        </label>
+                        <input 
+                            type="{{ field.type }}" 
+                            id="{{ field.name }}" 
+                            name="{{ field.name }}" 
+                            class="input input-bordered w-full" 
+                            placeholder="{{ field.placeholder }}"
+                            value="{% if existing_config %}{{ existing_config.get(field.name, '') }}{% endif %}"
+                            required
+                        >
+                        {% if field.help_text %}
+                        <label class="label">
+                            <span class="label-text-alt">{{ field.help_text }}</span>
+                        </label>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Redirect URL -->
+                <div class="form-control mb-4">
+                    <label class="label" for="redirect_url">
+                        <span class="label-text">Redirect URL</span>
+                    </label>
+                    <input 
+                        type="url" 
+                        id="redirect_url" 
+                        name="redirect_url" 
+                        class="input input-bordered w-full" 
+                        placeholder="OAuth redirect URL"
+                        value="{{ existing_config.redirect_url if existing_config else redirect_url }}"
+                    >
+                    <label class="label">
+                        <span class="label-text-alt">Use this URL in your broker's developer portal for OAuth authentication. Default format: HOST_SERVER/broker/callback</span>
+                    </label>
+                </div>
+
+                <!-- Default Broker -->
+                <div class="form-control mb-6">
+                    <label class="label cursor-pointer justify-start gap-2">
+                        <input 
+                            type="checkbox" 
+                            id="is_default" 
+                            name="is_default" 
+                            class="checkbox" 
+                            {% if existing_config and existing_config.is_default %}checked{% endif %}
+                        >
+                        <span class="label-text">Set as default broker</span>
+                    </label>
+                    <label class="label">
+                        <span class="label-text-alt">The default broker will be used automatically for trading operations.</span>
+                    </label>
+                </div>
+
+                <!-- Actions -->
+                <div class="divider"></div>
+                <div class="card-actions justify-end gap-3">
+                    <button type="submit" id="saveBtn" class="btn btn-primary">
+                        <span class="btn-text">Save Configuration</span>
+                        <span class="loading loading-spinner loading-sm hidden"></span>
+                    </button>
+                    
+                    <a href="{{ url_for('broker_setup.setup_wizard') }}" class="btn btn-ghost">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Documentation Link -->
+    {% if template.documentation_url %}
+    <div class="alert alert-info mt-6">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <div>
+            <h4 class="font-bold">Need API Credentials?</h4>
+            <p class="text-sm mb-2">Visit your broker's developer portal to generate API keys.</p>
+            <a href="{{ template.documentation_url }}" target="_blank" class="link link-primary">
+                View Documentation →
+            </a>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Warning Modal -->
+    <dialog id="credential_warning_modal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg text-warning">⚠️ Important Warning</h3>
+            <div class="py-4">
+                <p class="mb-3">Changing broker credentials will:</p>
+                <ul class="list-disc list-inside space-y-2 text-sm">
+                    <li>Log you out of OpenAlgo immediately</li>
+                    <li>Clear all existing authentication tokens</li>
+                    <li>Require fresh login with your broker</li>
+                    <li>Trigger new master contract download</li>
+                </ul>
+                <div class="alert alert-warning mt-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                    <span>This is critical for proper algo trading functionality!</span>
+                </div>
+            </div>
+            <div class="modal-action">
+                <button type="button" class="btn btn-warning" id="confirmSaveBtn">I Understand, Continue</button>
+                <button type="button" class="btn btn-ghost" onclick="credential_warning_modal.close()">Cancel</button>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('brokerConfigForm');
+    const saveBtn = document.getElementById('saveBtn');
+    const alertsContainer = document.getElementById('alerts');
+    const modal = document.getElementById('credential_warning_modal');
+    const confirmSaveBtn = document.getElementById('confirmSaveBtn');
+    
+    // Check if we're editing existing configuration
+    const existingConfig = {{ 'true' if existing_config else 'false' }};
+
+    function showAlert(message, type = 'error') {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${type} mb-4`;
+        
+        let icon = '';
+        if (type === 'success') {
+            icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+        } else {
+            icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+        }
+        
+        alertDiv.innerHTML = `
+            ${icon}
+            <span>${message}</span>
+            <button onclick="this.parentElement.remove()" class="btn btn-ghost btn-sm btn-circle ml-auto">✕</button>
+        `;
+        alertsContainer.appendChild(alertDiv);
+        
+        // Auto-remove success alerts after 5 seconds
+        if (type === 'success') {
+            setTimeout(() => {
+                if (alertDiv.parentElement) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+    }
+
+    function setButtonLoading(button, loading) {
+        const text = button.querySelector('.btn-text');
+        const spinner = button.querySelector('.loading');
+        
+        if (loading) {
+            text.style.display = 'none';
+            spinner.classList.remove('hidden');
+            button.disabled = true;
+        } else {
+            text.style.display = 'inline';
+            spinner.classList.add('hidden');
+            button.disabled = false;
+        }
+    }
+
+    function getFormData() {
+        const formData = new FormData(form);
+        return Object.fromEntries(formData.entries());
+    }
+
+    // Save configuration
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        // Clear previous alerts
+        alertsContainer.innerHTML = '';
+        
+        // If editing existing configuration, show warning modal
+        if (existingConfig) {
+            modal.showModal();
+            return;
+        }
+        
+        // For new configurations, save directly
+        await saveConfiguration();
+    });
+    
+    // Confirm save after warning
+    confirmSaveBtn.addEventListener('click', async function() {
+        modal.close();
+        await saveConfiguration();
+    });
+    
+    async function saveConfiguration() {
+        const data = getFormData();
+        
+        // Validate required fields
+        if (!data.api_key || !data.api_secret) {
+            showAlert('Please fill in all required fields.');
+            return;
+        }
+
+        {% if template.is_xts_broker %}
+        if (!data.market_api_key || !data.market_api_secret) {
+            showAlert('Please fill in all market data credentials for XTS brokers.');
+            return;
+        }
+        {% endif %}
+        
+        setButtonLoading(saveBtn, true);
+
+        try {
+            const response = await fetch('{{ url_for("broker_setup.save_configuration") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': getCSRFToken()
+                },
+                body: new URLSearchParams(data)
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                if (result.logout_required) {
+                    showAlert('Configuration saved! Logging out for security...', 'success');
+                    
+                    // Logout after 2 seconds
+                    setTimeout(() => {
+                        window.location.href = result.logout_url || '/auth/logout';
+                    }, 2000);
+                } else {
+                    showAlert('Configuration saved successfully!', 'success');
+                    
+                    // Redirect after a short delay
+                    setTimeout(() => {
+                        window.location.href = '{{ url_for("broker_setup.setup_wizard") }}';
+                    }, 2000);
+                }
+            } else {
+                showAlert(`Failed to save configuration: ${result.message}`, 'error');
+                setButtonLoading(saveBtn, false);
+            }
+        } catch (error) {
+            showAlert('Failed to save configuration due to network error.', 'error');
+            setButtonLoading(saveBtn, false);
+        }
+    }
+
+    // Copy redirect URL to clipboard
+    const redirectUrlInput = document.getElementById('redirect_url');
+    redirectUrlInput.addEventListener('click', function() {
+        this.select();
+        document.execCommand('copy');
+        showAlert('Redirect URL copied to clipboard!', 'success');
+    });
+});
+</script>
+{% endblock %}
