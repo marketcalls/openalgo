@@ -16,15 +16,22 @@ This folder contains comprehensive documentation for the zero-config broker setu
 
 ## 🎯 Quick Start
 
-### For New Installations
-1. Read **[zero_config_broker_setup.md](./zero_config_broker_setup.md)** for system overview
-2. Follow **[implementation_phases.md](./implementation_phases.md)** for setup
-3. Review **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)** for final configuration
+### For New Installations (First-Time Users)
+1. **Initial Setup**: OpenAlgo automatically detects first-time installation
+2. **User Account**: Create admin account via `/setup` page
+3. **Broker Configuration**: Use web interface at `/broker/setup` to configure brokers
+4. **Start Trading**: Login and select your configured broker
+5. Read **[FIRST_TIME_INSTALLATION.md](./FIRST_TIME_INSTALLATION.md)** for detailed flow
 
-### For Existing Installations
+### For Existing Installations (Migration)
 1. Review **[migration_guide.md](./migration_guide.md)** for upgrade process
 2. Run migration scripts as documented
 3. Verify system status with **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)**
+
+### For Developers
+1. Read **[zero_config_broker_setup.md](./zero_config_broker_setup.md)** for system overview
+2. Follow **[implementation_phases.md](./implementation_phases.md)** for setup details
+3. Review **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)** for final configuration
 
 ## 🔐 Key Features Implemented
 
@@ -80,15 +87,19 @@ This folder contains comprehensive documentation for the zero-config broker setu
 
 ## 🚀 Production Status
 
-**✅ PRODUCTION READY** - All features implemented and tested
+**✅ PRODUCTION READY** - All features implemented and tested *(Updated: July 2025)*
 
 ### Critical Features Verified
 - ✅ Secure credential storage with encryption
-- ✅ Automatic logout on credential changes
+- ✅ Automatic logout on credential changes  
 - ✅ CSRF protection on all forms
 - ✅ Proper error handling and logging
 - ✅ Backward compatibility maintained
 - ✅ UI consistency across all pages
+- ✅ **NEW**: Complete first-time user installation flow
+- ✅ **NEW**: Multi-broker database credential support
+- ✅ **NEW**: Angel One broker integration working
+- ✅ **NEW**: Comprehensive troubleshooting documentation
 
 ## 🐛 Issues Resolved
 

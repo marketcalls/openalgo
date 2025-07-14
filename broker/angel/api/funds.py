@@ -1,9 +1,10 @@
 # api/funds.py
 
 import os
-import httpx
 import json
+from flask import session
 from utils.httpx_client import get_httpx_client
+from utils.broker_credentials import get_broker_credentials
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -11,7 +12,24 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data from the broker's API using the provided auth token."""
-    api_key = os.getenv('BROKER_API_KEY')
+    # Get credentials from database for current user
+    user_id = session.get('user')
+    broker_creds = None
+    
+    if user_id:
+        broker_creds = get_broker_credentials(user_id, 'angel')
+    
+    # Use database credentials or fall back to environment
+    if broker_creds and broker_creds.get('api_key'):
+        api_key = broker_creds.get('api_key')
+        logger.info(f"Using database API key for Angel funds API")
+    else:
+        api_key = os.getenv('BROKER_API_KEY')
+        logger.info(f"Using environment API key for Angel funds API")
+    
+    if not api_key:
+        logger.error("No API key available for Angel funds API")
+        return {}
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()

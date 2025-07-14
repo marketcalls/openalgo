@@ -103,12 +103,19 @@ def broker_callback(broker,para=None):
             #to store user_id in the DB
             user_id = clientcode
             
+            logger.info(f"Angel authentication started for client: {clientcode}")
+            logger.info(f"Angel broker credentials source: {broker_creds.get('source', 'unknown')}")
+            logger.info(f"Angel API key available: {bool(broker_creds.get('api_key'))}")
+            
             # Pass credentials to auth function
             auth_token, feed_token, error_message = auth_function(
                 clientcode, broker_pin, totp_code,
                 api_key=broker_creds.get('api_key'),
                 api_secret=broker_creds.get('api_secret')
             )
+            
+            logger.info(f"Angel auth result - token: {bool(auth_token)}, feed_token: {bool(feed_token)}, error: {error_message}")
+            
             forward_url = 'angel.html'
     
     elif broker == 'aliceblue':
@@ -474,12 +481,15 @@ def broker_callback(broker,para=None):
                     logger.error("No admin user found in database for Compositedge callback")
                     return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
             
+            logger.info(f"Calling handle_auth_success for {broker} with user_id: {user_id}")
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
         else:
+            logger.info(f"Calling handle_auth_success for {broker} (no user_id)")
             # Pass just the feed token to handle_auth_success (other brokers don't have user_id)
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
+        logger.error(f"Authentication failed for {broker}: {error_message}")
         return handle_auth_failure(error_message, forward_url=forward_url)
     
 

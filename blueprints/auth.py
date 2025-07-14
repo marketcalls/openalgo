@@ -60,11 +60,27 @@ def broker_login():
         if 'user' not in session:
             return redirect(url_for('auth.login'))
             
-        # Get broker configuration (already validated at startup)
-        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-        BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
-        REDIRECT_URL = os.getenv('REDIRECT_URL')
-        broker_name = re.search(r'/([^/]+)/callback$', REDIRECT_URL).group(1)
+        user_id = session.get('user')
+        
+        # Get user's configured brokers from database
+        from database.broker_config_db import get_user_brokers
+        user_brokers = get_user_brokers(user_id)
+        
+        # Create list of configured broker names
+        configured_broker_names = [broker['broker_name'] for broker in user_brokers]
+        
+        # Get environment config for fallback (for OAuth redirects)
+        BROKER_API_KEY = os.getenv('BROKER_API_KEY', '')
+        BROKER_API_SECRET = os.getenv('BROKER_API_SECRET', '')
+        REDIRECT_URL = os.getenv('REDIRECT_URL', '')
+        
+        # Determine legacy broker for backward compatibility with .env
+        legacy_broker_name = None
+        if REDIRECT_URL:
+            try:
+                legacy_broker_name = re.search(r'/([^/]+)/callback$', REDIRECT_URL).group(1)
+            except (AttributeError, IndexError):
+                pass
         
         # Import mask function for credential security
         from utils.auth_utils import mask_api_credential
@@ -75,7 +91,8 @@ def broker_login():
                              broker_api_secret=BROKER_API_SECRET,  # Keep original for OAuth redirects  
                              broker_api_secret_masked=mask_api_credential(BROKER_API_SECRET),
                              redirect_url=REDIRECT_URL,
-                             broker_name=broker_name)
+                             broker_name=legacy_broker_name,  # Legacy fallback
+                             configured_brokers=configured_broker_names)  # New: List of configured brokers
 
 @auth_bp.route('/reset-password', methods=['GET', 'POST'])
 @limiter.limit(RESET_RATE_LIMIT)  # More restrictive rate limit for password reset

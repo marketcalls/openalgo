@@ -1,10 +1,12 @@
 import json
 import os
 import httpx
+from flask import session
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
+from utils.broker_credentials import get_broker_credentials
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -12,7 +14,23 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    
+    # Get credentials from database for current user
+    user_id = session.get('user')
+    broker_creds = None
+    
+    if user_id:
+        broker_creds = get_broker_credentials(user_id, 'angel')
+    
+    # Use database credentials or fall back to environment
+    if broker_creds and broker_creds.get('api_key'):
+        api_key = broker_creds.get('api_key')
+    else:
+        api_key = os.getenv('BROKER_API_KEY')
+    
+    if not api_key:
+        logger.error("No API key available for Angel order API")
+        return None
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()

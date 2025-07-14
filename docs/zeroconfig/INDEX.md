@@ -4,22 +4,31 @@
 
 ### 🚀 **Start Here**
 1. **[README.md](./README.md)** - Quick overview and getting started guide
-2. **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)** - Current implementation status and final state
+2. **[FIRST_TIME_INSTALLATION.md](./FIRST_TIME_INSTALLATION.md)** - Complete first-time user installation flow
+3. **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)** - Current implementation status and final state
 
 ### 📖 **Design Documents**
-3. **[zero_config_broker_setup.md](./zero_config_broker_setup.md)** - Original design document with implementation status
-4. **[database_schema_design.md](./database_schema_design.md)** - Detailed database schema and encryption design
+4. **[zero_config_broker_setup.md](./zero_config_broker_setup.md)** - Original design document with implementation status
+5. **[database_schema_design.md](./database_schema_design.md)** - Detailed database schema and encryption design
 
 ### 🔧 **Implementation Guides**
-5. **[implementation_phases.md](./implementation_phases.md)** - Step-by-step implementation phases
-6. **[migration_guide.md](./migration_guide.md)** - Migration from .env to database configuration
-7. **[zero_config_modifications_required.md](./zero_config_modifications_required.md)** - Required code modifications
+6. **[implementation_phases.md](./implementation_phases.md)** - Step-by-step implementation phases
+7. **[migration_guide.md](./migration_guide.md)** - Migration from .env to database configuration
+8. **[zero_config_modifications_required.md](./zero_config_modifications_required.md)** - Required code modifications
+
+### 🚨 **Support & Troubleshooting**
+9. **[troubleshooting.md](./troubleshooting.md)** - Common issues and solutions
 
 ## 🎯 Quick Navigation
 
 ### For First-Time Users
 ```
-README.md → zero_config_broker_setup.md → IMPLEMENTATION_COMPLETE.md
+README.md → FIRST_TIME_INSTALLATION.md → troubleshooting.md (if needed)
+```
+
+### For Existing Users (Migration)
+```
+README.md → migration_guide.md → IMPLEMENTATION_COMPLETE.md
 ```
 
 ### For Developers
@@ -29,7 +38,12 @@ database_schema_design.md → implementation_phases.md → zero_config_modificat
 
 ### For System Administrators
 ```
-migration_guide.md → IMPLEMENTATION_COMPLETE.md
+migration_guide.md → IMPLEMENTATION_COMPLETE.md → troubleshooting.md
+```
+
+### For Support/Troubleshooting
+```
+troubleshooting.md → FIRST_TIME_INSTALLATION.md → IMPLEMENTATION_COMPLETE.md
 ```
 
 ## ✅ Implementation Status

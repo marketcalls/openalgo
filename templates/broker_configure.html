@@ -38,7 +38,7 @@
     <!-- Configuration Form -->
     <div class="card bg-base-100 shadow-lg">
         <div class="card-body">
-            <form id="brokerConfigForm" method="POST">
+            <form id="brokerConfigForm" onsubmit="return false;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="broker_name" value="{{ broker_name }}">
                 
@@ -146,7 +146,7 @@
                 <!-- Actions -->
                 <div class="divider"></div>
                 <div class="card-actions justify-end gap-3">
-                    <button type="submit" id="saveBtn" class="btn btn-primary">
+                    <button type="button" id="saveBtn" class="btn btn-primary">
                         <span class="btn-text">Save Configuration</span>
                         <span class="loading loading-spinner loading-sm hidden"></span>
                     </button>
@@ -207,14 +207,31 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM loaded, initializing broker configuration form');
+    
     const form = document.getElementById('brokerConfigForm');
     const saveBtn = document.getElementById('saveBtn');
     const alertsContainer = document.getElementById('alerts');
     const modal = document.getElementById('credential_warning_modal');
     const confirmSaveBtn = document.getElementById('confirmSaveBtn');
     
+    console.log('Elements found:', {
+        form: !!form,
+        saveBtn: !!saveBtn,
+        alertsContainer: !!alertsContainer,
+        modal: !!modal,
+        confirmSaveBtn: !!confirmSaveBtn
+    });
+    
     // Check if we're editing existing configuration
     const existingConfig = {{ 'true' if existing_config else 'false' }};
+    console.log('Existing config:', existingConfig);
+    
+    // Early return if essential elements not found
+    if (!form || !saveBtn) {
+        console.error('Critical elements not found!');
+        return;
+    }
 
     function showAlert(message, type = 'error') {
         const alertDiv = document.createElement('div');
@@ -264,22 +281,56 @@ document.addEventListener('DOMContentLoaded', function() {
         return Object.fromEntries(formData.entries());
     }
 
-    // Save configuration
-    form.addEventListener('submit', async function(e) {
-        e.preventDefault();
+    // Handle save button click
+    async function handleSave() {
+        console.log('Save button clicked');
         
         // Clear previous alerts
         alertsContainer.innerHTML = '';
         
         // If editing existing configuration, show warning modal
         if (existingConfig) {
+            console.log('Existing config detected, showing modal');
             modal.showModal();
             return;
         }
         
+        console.log('New config, saving directly');
         // For new configurations, save directly
         await saveConfiguration();
+    }
+
+    // Save configuration on button click
+    console.log('Attaching click event to save button');
+    saveBtn.addEventListener('click', function(e) {
+        console.log('Save button clicked!');
+        e.preventDefault();
+        handleSave();
     });
+    
+    // Also handle form submission (backup)
+    console.log('Attaching submit event to form');
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        console.log('Form submit intercepted');
+        await handleSave();
+    });
+    
+    console.log('Event listeners attached successfully');
+    
+    // Test if getCSRFToken function is available
+    if (typeof getCSRFToken === 'function') {
+        console.log('getCSRFToken function is available');
+        console.log('CSRF Token:', getCSRFToken());
+    } else {
+        console.error('getCSRFToken function is NOT available!');
+        // Create a fallback function
+        window.getCSRFToken = function() {
+            const token = document.querySelector('meta[name="csrf-token"]');
+            return token ? token.getAttribute('content') : '';
+        };
+        console.log('Created fallback getCSRFToken function');
+    }
     
     // Confirm save after warning
     confirmSaveBtn.addEventListener('click', async function() {
@@ -288,7 +339,9 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     async function saveConfiguration() {
+        console.log('saveConfiguration called');
         const data = getFormData();
+        console.log('Form data:', data);
         
         // Validate required fields
         if (!data.api_key || !data.api_secret) {
@@ -306,6 +359,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setButtonLoading(saveBtn, true);
 
         try {
+            console.log('Sending request to save configuration');
             const response = await fetch('{{ url_for("broker_setup.save_configuration") }}', {
                 method: 'POST',
                 headers: {
@@ -316,6 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             const result = await response.json();
+            console.log('Save result:', result);
 
             if (result.success) {
                 if (result.logout_required) {
@@ -338,6 +393,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 setButtonLoading(saveBtn, false);
             }
         } catch (error) {
+            console.error('Network error:', error);
             showAlert('Failed to save configuration due to network error.', 'error');
             setButtonLoading(saveBtn, false);
         }

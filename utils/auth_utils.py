@@ -78,13 +78,17 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     - Stores auth token in the database
     - Initiates asynchronous master contract download
     """
+    logger.info(f"handle_auth_success called for {broker} - user: {user_session_key}, user_id: {user_id}")
+    
     # Set session parameters
     session['logged_in'] = True
     session['AUTH_TOKEN'] = auth_token
     if feed_token:
         session['FEED_TOKEN'] = feed_token  # Store feed token in session if available
+        logger.info(f"Set FEED_TOKEN in session for {broker}")
     if user_id:
         session['USER_ID'] = user_id  # Store user ID in session if available
+        logger.info(f"Set USER_ID in session for {broker}: {user_id}")
     session['user_session_key'] = user_session_key
     session['broker'] = broker
     
@@ -96,6 +100,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
 
     # Store auth token in database
+    logger.info(f"Attempting to store auth token in database for {user_session_key}/{broker}")
     inserted_id = upsert_auth(user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id)
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
@@ -103,6 +108,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         init_broker_status(broker)
         thread = Thread(target=async_master_contract_download, args=(broker,))
         thread.start()
+        logger.info(f"Redirecting to dashboard for {broker} authentication success")
         return redirect(url_for('dashboard_bp.dashboard'))
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")
