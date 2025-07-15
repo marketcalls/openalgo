@@ -300,7 +300,11 @@ class BrokerData:
             
             # For daily data, append today's data from quotes if it's missing
             if interval == 'D':
-                today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+                # Create today's timestamp at 00:00:00 UTC then add 5:30 hours for IST (to match Angel's format)
+                # This ensures daily candles align with IST trading hours
+                utc_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                ist_today = utc_today + timedelta(hours=5, minutes=30)
+                today_ts = int(ist_today.timestamp())
                 
                 # Only get today's data if it's within the requested range
                 if today_ts >= start_ts and today_ts <= end_ts:
@@ -330,6 +334,10 @@ class BrokerData:
             
             # Sort by timestamp
             df = df.sort_values('timestamp')
+            
+            # Reorder columns to match Angel format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+            
             return df
             
         except Exception as e:
