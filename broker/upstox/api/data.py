@@ -123,35 +123,25 @@ class BrokerData:
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
             
-            # Upstox API returns data with instrument_key as the key
-            quote = quote_data.get(instrument_key)
-
+            # Find the quote data - Upstox uses exchange:symbol format for the key
+            quote = None
+            for key, value in quote_data.items():
+                if value.get('instrument_token') == instrument_key:
+                    quote = value
+                    break
+                    
             if not quote:
-                raise Exception(f"No quote data found for instrument key: {instrument_key} in response: {quote_data}")
+                raise Exception(f"No quote data found for instrument key: {instrument_key}")
             
-            # Extract depth data - handle index instruments differently
+            # Extract depth data
             depth = quote.get('depth', {})
-            
-            # Check if this is an index instrument (NSE_INDEX or BSE_INDEX)
-            is_index = 'INDEX' in instrument_key.split('|')[0]
-            
-            if is_index:
-                # For index instruments, don't try to get bid/ask data (no order book)
-                best_bid_price = 0
-                best_ask_price = 0
-            else:
-                # For tradable instruments, extract bid/ask if available
-                buy_orders = depth.get('buy', [])
-                sell_orders = depth.get('sell', [])
-                
-                # Safely get the first bid/ask or default to 0
-                best_bid_price = buy_orders[0].get('price', 0) if buy_orders else 0
-                best_ask_price = sell_orders[0].get('price', 0) if sell_orders else 0
+            best_bid = depth.get('buy', [{}])[0]
+            best_ask = depth.get('sell', [{}])[0]
             
             # Return standard quote data format
             return {
-                'ask': best_ask_price,
-                'bid': best_bid_price,
+                'ask': best_ask.get('price', 0),
+                'bid': best_bid.get('price', 0),
                 'high': quote.get('ohlc', {}).get('high', 0),
                 'low': quote.get('ohlc', {}).get('low', 0),
                 'ltp': quote.get('last_price', 0),
@@ -195,9 +185,6 @@ class BrokerData:
             start = datetime.strptime(start_date, '%Y-%m-%d')
             current_date = datetime.now()
             logger.debug(f"Date range: {start} to {end}")
-            
-            # Check if end date is today to fetch today's data as well
-            is_today_requested = end.date() == current_date.date()
             
             # Validate date ranges based on interval
             if interval == '1m':
@@ -302,73 +289,45 @@ class BrokerData:
             # Upstox format: [timestamp, open, high, low, close, volume, oi]
             df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
-            # Convert timestamp to datetime
+            # Convert timestamp to datetime and handle timezone properly
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             
-            # Upstox returns IST timestamps, but we need to convert them to UTC 
-            # for consistency with other brokers (SDK will convert back to IST)
-            if not df.empty and interval in ['1m', '30m']:
-                # Check if timestamps are timezone-aware
-                if df['timestamp'].dt.tz is None:
-                    # Assume IST (what Upstox returns) and convert to UTC
-                    df['timestamp'] = df['timestamp'].dt.tz_localize('Asia/Kolkata').dt.tz_convert('UTC').dt.tz_localize(None)
-                else:
-                    # If already timezone-aware, convert to UTC
-                    df['timestamp'] = df['timestamp'].dt.tz_convert('UTC').dt.tz_localize(None)
-                
-            # Handle daily data specifically - fix timestamp to show just the date (remove 18:30:00)
-            if interval == 'D':
-                # For daily timeframe, adjust timestamps to midnight
-                df['timestamp'] = df['timestamp'].dt.normalize()  # Set to midnight
+            # For daily data, add +5:30 hours to match Flattrade format
+            if interval == 'D' and not df.empty:
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
             
-            # Add today's data if requested and not already in the dataset
-            if is_today_requested and interval == 'D':
-                # Check if today's data is already in the dataset
-                today_date_str = pd.Timestamp.now().strftime('%Y-%m-%d')
-                today_date = pd.to_datetime(today_date_str)
-                
-                # Check if today's date already exists in the dataframe
-                today_exists = False
-                if not df.empty:
-                    # Compare dates after stripping time components
-                    df_dates = df['timestamp'].dt.normalize()
-                    today_exists = any(d.date() == today_date.date() for d in df_dates)
-                    
-                if not today_exists:
-                    # Try to get today's data from quote endpoint
-                    try:
-                        quote = self.get_quotes(symbol, exchange)
-                        if quote and quote.get('ltp', 0) > 0:
-                            # Create today's candle with string timestamp to ensure compatibility
-                            today_candle = pd.DataFrame({
-                                'timestamp': [today_date],  # Use datetime object directly
-                                'open': [quote.get('open', quote.get('ltp', 0))], 
-                                'high': [quote.get('high', quote.get('ltp', 0))],
-                                'low': [quote.get('low', quote.get('ltp', 0))],
-                                'close': [quote.get('ltp', 0)],
-                                'volume': [quote.get('volume', 0)],
-                                'oi': [0]  # Default value
-                            })
-                            
-                            # Append to dataframe
-                            df = pd.concat([df, today_candle], ignore_index=True)
-                            logger.debug("Added today's candle from quote data")
-                    except Exception as e:
-                        logger.warning(f"Could not add today's data: {e}")
-            
-            # Ensure all timestamps are consistent before converting to Unix epoch
+            # Convert to Unix epoch first
             if not df.empty:
-                # First make sure all timestamps are normalized for daily data
-                if interval == 'D':
-                    df['timestamp'] = df['timestamp'].dt.normalize()
-                    
-                # Make all timestamps timezone-naive if they aren't already
-                # This is safe to call even if already timezone-naive
-                if hasattr(df['timestamp'].dt, 'tz_localize') and df['timestamp'].dt.tz is not None:
-                    df['timestamp'] = df['timestamp'].dt.tz_localize(None)
-                
-                # Convert to Unix epoch
                 df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9
+            
+            # Add today's data from quotes for daily data if needed
+            if interval == 'D':
+                # Check if today's data is requested
+                today = datetime.now().date()
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                if end_date_obj >= today:
+                    # Check if today's data is missing from the DataFrame
+                    today_ts_with_offset = int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=5, minutes=30)).timestamp())
+                    
+                    if df.empty or today_ts_with_offset not in df['timestamp'].values:
+                        try:
+                            # Get today's data from quotes
+                            quotes = self.get_quotes(symbol, exchange)
+                            if quotes and quotes.get('ltp', 0) > 0:
+                                today_data = pd.DataFrame({
+                                    'timestamp': [today_ts_with_offset],
+                                    'open': [quotes.get('open', quotes.get('ltp', 0))],
+                                    'high': [quotes.get('high', quotes.get('ltp', 0))],
+                                    'low': [quotes.get('low', quotes.get('ltp', 0))],
+                                    'close': [quotes.get('ltp', 0)],
+                                    'volume': [quotes.get('volume', 0)],
+                                    'oi': [0]
+                                })
+                                df = pd.concat([df, today_data], ignore_index=True)
+                                logger.debug("Added today's data from quotes for daily interval")
+                        except Exception as e:
+                            logger.warning(f"Could not add today's data from quotes: {e}")
             
             # Drop oi column and reorder columns to match expected format
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
@@ -412,33 +371,43 @@ class BrokerData:
                 raise Exception(full_error_msg)
             
             # Get quote data for the symbol
-            data = response.get('data', {}).get(instrument_key, {})
-            if not data:
+            quote_data = response.get('data', {})
+            if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
+                
+            # Find the quote data - Upstox uses exchange:symbol format for the key
+            quote = None
+            for key, value in quote_data.items():
+                if value.get('instrument_token') == instrument_key:
+                    quote = value
+                    break
+                    
+            if not quote:
+                raise Exception(f"No quote data found for instrument key: {instrument_key}")
             
-            # Extract depth data
-            depth = data.get('depth', {})
-            buy_orders = depth.get('buy', [])
-            sell_orders = depth.get('sell', [])
-            
-            # Format buy and sell orders safely
-            bids = [{'price': b.get('price', 0), 'quantity': b.get('quantity', 0), 'orders': b.get('orders', 0)} for b in buy_orders[:5]]
-            asks = [{'price': s.get('price', 0), 'quantity': s.get('quantity', 0), 'orders': s.get('orders', 0)} for s in sell_orders[:5]]
+            # Get depth data
+            depth = quote.get('depth', {})
             
             # Return standard depth data format
             return {
-                'asks': asks,
-                'bids': bids,
-                'high': data.get('ohlc', {}).get('high', 0),
-                'low': data.get('ohlc', {}).get('low', 0),
-                'ltp': data.get('last_price', 0),
-                'ltq': data.get('last_quantity', 0),
-                'oi': data.get('oi', 0),
-                'open': data.get('ohlc', {}).get('open', 0),
-                'prev_close': data.get('ohlc', {}).get('close', 0),
-                'totalbuyqty': data.get('total_buy_quantity', 0),
-                'totalsellqty': data.get('total_sell_quantity', 0),
-                'volume': data.get('volume', 0)
+                'asks': [{
+                    'price': order.get('price', 0),
+                    'quantity': order.get('quantity', 0)
+                } for order in depth.get('sell', [])],
+                'bids': [{
+                    'price': order.get('price', 0),
+                    'quantity': order.get('quantity', 0)
+                } for order in depth.get('buy', [])],
+                'high': quote.get('ohlc', {}).get('high', 0),
+                'low': quote.get('ohlc', {}).get('low', 0),
+                'ltp': quote.get('last_price', 0),
+                'ltq': quote.get('last_quantity', 0),
+                'oi': quote.get('oi', 0),
+                'open': quote.get('ohlc', {}).get('open', 0),
+                'prev_close': quote.get('ohlc', {}).get('close', 0),
+                'totalbuyqty': quote.get('total_buy_quantity', 0),
+                'totalsellqty': quote.get('total_sell_quantity', 0),
+                'volume': quote.get('volume', 0)
             }
             
         except Exception as e:
