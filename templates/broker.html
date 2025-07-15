@@ -82,6 +82,9 @@
                 case 'tradejini':
                     loginUrl = '/tradejini/callback';
                     break;
+                case 'trustline':
+                    loginUrl = '/trustline/callback';
+                    break;
                 case 'upstox':
                     loginUrl = 'https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={{broker_api_key}}&redirect_uri={{ redirect_url }}';
                     break;
@@ -175,6 +178,7 @@
                                 <option value="pocketful" {{ 'disabled' if broker_name != 'pocketful' }}>Pocketful {{ '(Disabled)' if broker_name != 'pocketful' }}</option>
                                 <option value="shoonya" {{ 'disabled' if broker_name != 'shoonya' }}>Shoonya {{ '(Disabled)' if broker_name != 'shoonya' }}</option>
                                 <option value="tradejini" {{ 'disabled' if broker_name != 'tradejini' }}>Tradejini {{ '(Disabled)' if broker_name != 'tradejini' }}</option>
+                                <option value="trustline" {{ 'disabled' if broker_name != 'trustline' }}>Trustline {{ '(Disabled)' if broker_name != 'trustline' }}</option>
                                 <option value="upstox" {{ 'disabled' if broker_name != 'upstox' }}>Upstox {{ '(Disabled)' if broker_name != 'upstox' }}</option>
                                 <option value="wisdom" {{ 'disabled' if broker_name != 'wisdom' }}>Wisdom Capital{{ '(Disabled)' if broker_name != 'wisdom' }}</option>
                                 <option value="zebu" {{ 'disabled' if broker_name != 'zebu' }}>Zebu {{ '(Disabled)' if broker_name != 'zebu' }}</option>

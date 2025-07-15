@@ -40,6 +40,7 @@ For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
 - **Pocketful**
 - **Shoonya**
 - **Tradejini**
+- **Trustline**
 - **Upstox**
 - **Wisdom Capital**
 - **Zebu**

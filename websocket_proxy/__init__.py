@@ -38,6 +38,9 @@ from broker.iifl.streaming.iifl_adapter import IiflWebSocketAdapter
 # Import the jainam_adapter
 from broker.jainam.streaming.jainam_adapter import JainamWebSocketAdapter
 
+# Import the trustline_adapter
+from broker.trustline.streaming.trustline_adapter import TrustlineWebSocketAdapter
+
 # Import the wisdom_adapter
 from broker.wisdom.streaming.wisdom_adapter import WisdomWebSocketAdapter
 
@@ -57,6 +60,7 @@ register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("jainam", JainamWebSocketAdapter)
+register_adapter("trustline", TrustlineWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
 register_adapter("wisdom", UpstoxWebSocketAdapter)
 
@@ -77,6 +81,7 @@ __all__ = [
     'FivepaisaXTSWebSocketAdapter',
     'IiflWebSocketAdapter',
     'JainamWebSocketAdapter',
+    'TrustlineWebSocketAdapter',
     'WisdomWebSocketAdapter',
     'UpstoxWebSocketAdapter'
 ]
