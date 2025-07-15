@@ -5,7 +5,7 @@ import time
 import base64
 from typing import Dict, Any, Optional, List
 
-from broker.trustline.streaming.trustlinexts_websocket import TrustlineXTSWebSocketClient
+from broker.trustline.streaming.trustline_websocket import TrustlineWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
 
