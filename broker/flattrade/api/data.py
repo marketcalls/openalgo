@@ -106,7 +106,7 @@ class BrokerData:
                 'low': float(response.get('l', 0)),
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                'volume': int(response.get('v', 0))
+                'volume': int(float(response.get('v', 0)))
             }
             
         except Exception as e:
@@ -169,7 +169,7 @@ class BrokerData:
                 'ltq': int(response.get('ltq', 0)),  # Last Traded Quantity
                 'open': float(response.get('o', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                'volume': int(response.get('v', 0)),
+                'volume': int(float(response.get('v', 0))),
                 'oi': int(response.get('oi', 0))  # Open Interest
             }
             
@@ -189,7 +189,7 @@ class BrokerData:
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         Returns:
-            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
+            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi]
         """
         try:
             # Check if interval is supported
@@ -264,7 +264,8 @@ class BrokerData:
                             'high': float(candle.get('inth', 0)),   # EOD uses 'inth' for high
                             'low': float(candle.get('intl', 0)),    # EOD uses 'intl' for low
                             'close': float(candle.get('intc', 0)),  # EOD uses 'intc' for close
-                            'volume': float(candle.get('intv', 0))  # EOD uses 'intv' for volume
+                            'volume': int(float(candle.get('intv', 0))),  # EOD uses 'intv' for volume
+                            'oi': int(float(candle.get('oi', 0)))   # Open Interest
                         })
                     else:
                         # Intraday format: "02-06-2020 15:46:23"
@@ -287,14 +288,15 @@ class BrokerData:
                             'high': float(candle.get('inth', 0)),   # Intraday also uses 'inth' for high
                             'low': float(candle.get('intl', 0)),    # Intraday also uses 'intl' for low
                             'close': float(candle.get('intc', 0)),  # Intraday also uses 'intc' for close
-                            'volume': float(candle.get('intv', 0))  # Intraday also uses 'intv' for volume
+                            'volume': int(float(candle.get('intv', 0))),  # Intraday also uses 'intv' for volume
+                            'oi': int(float(candle.get('oi', 0)))   # Open Interest
                         })
                 except (KeyError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
             if df.empty:
-                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
             # For daily data, append today's data from quotes if it's missing
             if interval == 'D':
@@ -314,7 +316,8 @@ class BrokerData:
                                     'high': float(quotes.get('high', 0)),
                                     'low': float(quotes.get('low', 0)),
                                     'close': float(quotes.get('ltp', 0)),  # Use LTP as close
-                                    'volume': float(quotes.get('volume', 0))
+                                    'volume': int(float(quotes.get('volume', 0))),
+                                    'oi': 0  # OI not available in quotes data
                                 }
                                 logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data
