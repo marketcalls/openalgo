@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
-    """Common function to make API calls to Upstox using httpx with connection pooling"""
+    """Common function to make API calls to Upstox v3 using httpx with connection pooling"""
     AUTH_TOKEN = auth
     
     # Get the shared httpx client with connection pooling
@@ -21,12 +21,12 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
+        'Accept': 'application/json'
     }
     
-    url = f"https://api.upstox.com{endpoint}"
-    logger.debug(f"Making {method} request to Upstox API: {url}")
+    # Use v3 API base URL
+    url = f"https://api.upstox.com/v3{endpoint}"
+    logger.debug(f"Making {method} request to Upstox v3 API: {url}")
     
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -47,21 +47,27 @@ class BrokerData:
         """Initialize with auth token"""
         self.auth_token = auth_token
         
-        # Map standard intervals to Upstox intervals
-        # Only include intervals that Upstox actually supports:
-        # - 1-minute (intraday/1 month historical)
-        # - 30-minute (intraday/1 year historical)
-        # - Daily (1 year historical)
-        # - Weekly (10 years historical)
-        # - Monthly (10 years historical)
+        # Map standard intervals to Upstox v3 intervals
+        # V3 supports custom intervals with unit and interval parameters
         self.timeframe_map = {
-            # Minutes
-            '1m': '1minute',   # Last month only
-            '30m': '30minute', # Last year only
-            # Days/Weeks/Months
-            'D': 'day',       # Last year only
-            'W': 'week',       # Last 10 years
-            'M': 'month'       # Last 10 years
+            # Minutes - v3 supports 1-300 minutes
+            '1m': {'unit': 'minutes', 'interval': '1'},
+            '2m': {'unit': 'minutes', 'interval': '2'},
+            '3m': {'unit': 'minutes', 'interval': '3'},
+            '5m': {'unit': 'minutes', 'interval': '5'},
+            '10m': {'unit': 'minutes', 'interval': '10'},
+            '15m': {'unit': 'minutes', 'interval': '15'},
+            '30m': {'unit': 'minutes', 'interval': '30'},
+            '60m': {'unit': 'minutes', 'interval': '60'},
+            # Hours - v3 supports 1-5 hours
+            '1h': {'unit': 'hours', 'interval': '1'},
+            '2h': {'unit': 'hours', 'interval': '2'},
+            '3h': {'unit': 'hours', 'interval': '3'},
+            '4h': {'unit': 'hours', 'interval': '4'},
+            # Days/Weeks/Months - v3 supports interval 1 only
+            'D': {'unit': 'days', 'interval': '1'},
+            'W': {'unit': 'weeks', 'interval': '1'},
+            'M': {'unit': 'months', 'interval': '1'}
         }
 
     def _get_instrument_key(self, symbol: str, exchange: str) -> str:
@@ -102,8 +108,8 @@ class BrokerData:
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
             
-            # Use quotes endpoint
-            url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
+            # Use v3 OHLC endpoint
+            url = f"/market-quote/ohlc?instrument_key={encoded_symbol}&interval=1d"
             response = get_api_response(url, self.auth_token)
             
             if response.get('status') != 'success':
@@ -123,7 +129,7 @@ class BrokerData:
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
             
-            # Find the quote data - Upstox uses exchange:symbol format for the key
+            # Find the quote data - v3 OHLC uses the original instrument key format
             quote = None
             for key, value in quote_data.items():
                 if value.get('instrument_token') == instrument_key:
@@ -133,21 +139,58 @@ class BrokerData:
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
             
-            # Extract depth data
-            depth = quote.get('depth', {})
-            best_bid = depth.get('buy', [{}])[0]
-            best_ask = depth.get('sell', [{}])[0]
+            # Extract OHLC data from v3 response
+            live_ohlc = quote.get('live_ohlc', {})
+            prev_ohlc = quote.get('prev_ohlc', {})
             
-            # Return standard quote data format
+            # Handle None values
+            if live_ohlc is None:
+                live_ohlc = {}
+            if prev_ohlc is None:
+                prev_ohlc = {}
+            
+            # Try to get bid/ask and OI from v2 quotes endpoint as fallback
+            bid_price = 0
+            ask_price = 0
+            oi_value = 0
+            try:
+                # Use v2 quotes endpoint for bid/ask and OI data
+                v2_url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
+                client = get_httpx_client()
+                headers = {
+                    'Authorization': f'Bearer {self.auth_token}',
+                    'Accept': 'application/json'
+                }
+                full_url = f"https://api.upstox.com{v2_url}"
+                v2_response = client.get(full_url, headers=headers)
+                v2_data = v2_response.json()
+                
+                if v2_data.get('status') == 'success':
+                    v2_quote_data = v2_data.get('data', {})
+                    for key, value in v2_quote_data.items():
+                        if value.get('instrument_token') == instrument_key:
+                            depth = value.get('depth', {})
+                            if depth:
+                                best_bid = depth.get('buy', [{}])[0] if depth.get('buy') else {}
+                                best_ask = depth.get('sell', [{}])[0] if depth.get('sell') else {}
+                                bid_price = best_bid.get('price', 0)
+                                ask_price = best_ask.get('price', 0)
+                            oi_value = value.get('oi', 0)
+                            break
+            except Exception as e:
+                logger.debug(f"Could not get bid/ask/OI from v2 endpoint: {e}")
+            
+            # Return standard quote data format using live_ohlc for current data
             return {
-                'ask': best_ask.get('price', 0),
-                'bid': best_bid.get('price', 0),
-                'high': quote.get('ohlc', {}).get('high', 0),
-                'low': quote.get('ohlc', {}).get('low', 0),
-                'ltp': quote.get('last_price', 0),
-                'open': quote.get('ohlc', {}).get('open', 0),
-                'prev_close': quote.get('ohlc', {}).get('close', 0),
-                'volume': quote.get('volume', 0)
+                'ask': float(ask_price) if ask_price else 0,
+                'bid': float(bid_price) if bid_price else 0,
+                'high': float(live_ohlc.get('high', 0)) if live_ohlc.get('high') else 0,
+                'low': float(live_ohlc.get('low', 0)) if live_ohlc.get('low') else 0,
+                'ltp': float(quote.get('last_price', 0)) if quote.get('last_price') else 0,
+                'open': float(live_ohlc.get('open', 0)) if live_ohlc.get('open') else 0,
+                'prev_close': float(prev_ohlc.get('close', 0)) if prev_ohlc.get('close') else 0,
+                'volume': int(live_ohlc.get('volume', 0)) if live_ohlc.get('volume') else 0,
+                'oi': int(oi_value) if oi_value else 0
             }
             
         except Exception as e:
@@ -171,11 +214,11 @@ class BrokerData:
             instrument_key = self._get_instrument_key(symbol, exchange)
             logger.debug(f"Using instrument key: {instrument_key}")
             
-            # Map standard interval to Upstox interval
-            upstox_interval = self.timeframe_map.get(interval)
-            if not upstox_interval:
+            # Map standard interval to Upstox v3 format
+            upstox_config = self.timeframe_map.get(interval)
+            if not upstox_config:
                 raise Exception(f"Invalid interval: {interval}")
-            logger.debug(f"Using interval: {upstox_interval}")
+            logger.debug(f"Using v3 config: {upstox_config}")
                 
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
@@ -186,107 +229,98 @@ class BrokerData:
             current_date = datetime.now()
             logger.debug(f"Date range: {start} to {end}")
             
-            # Validate date ranges based on interval
-            if interval == '1m':
-                # 1-minute: last month only
-                max_start = end - timedelta(days=30)
-                if start < max_start:
-                    start = max_start
-                    logger.debug(f"Adjusted start date to {start} for 1m interval")
-            elif interval == '30m':
-                # 30-minute: last year only
-                max_start = end - timedelta(days=365)
-                if start < max_start:
-                    start = max_start
-                    logger.debug(f"Adjusted start date to {start} for 30m interval")
-            elif interval == 'D':
-                # Daily: last year only
-                max_start = end - timedelta(days=365)
-                if start < max_start:
-                    start = max_start
-                    logger.debug(f"Adjusted start date to {start} for D interval")
-            elif interval == 'W':
-                # Weekly: last 10 years
-                max_start = end - timedelta(days=3650)  # 10 years
-                if start < max_start:
-                    start = max_start
-                    logger.debug(f"Adjusted start date to {start} for W interval")
-            elif interval == 'M':
-                # Monthly: last 10 years
-                max_start = end - timedelta(days=3650)  # 10 years
-                if start < max_start:
-                    start = max_start
-                    logger.debug(f"Adjusted start date to {start} for M interval")
+            # Get unit and interval for v3 API
+            unit = upstox_config['unit']
+            interval_value = upstox_config['interval']
+            
+            # Format dates for v3 API
+            from_date = start.strftime('%Y-%m-%d')
+            to_date = end.strftime('%Y-%m-%d')
             
             all_candles = []
             
-            # Try intraday endpoint first if interval is 1m or 30m
-            if interval in ['1m', '30m']:
-                logger.debug("Trying intraday endpoint...")
-                intraday_url = f"/v2/historical-candle/intraday/{encoded_symbol}/{upstox_interval}"
+            # Try intraday endpoint first for current day data
+            if unit in ['minutes', 'hours'] and end.date() == current_date.date():
+                logger.debug("Trying v3 intraday endpoint...")
+                intraday_url = f"/historical-candle/intraday/{encoded_symbol}/{unit}/{interval_value}"
                 logger.debug(f"Intraday URL: {intraday_url}")
-                intraday_response = get_api_response(intraday_url, self.auth_token)
-                logger.debug(f"Intraday Response: {intraday_response}")
                 
-                if intraday_response.get('status') == 'success':
-                    intraday_candles = intraday_response.get('data', {}).get('candles', [])
-                    logger.debug(f"Got {len(intraday_candles)} candles from intraday endpoint")
-                    all_candles.extend(intraday_candles)
+                try:
+                    intraday_response = get_api_response(intraday_url, self.auth_token)
+                    logger.debug(f"Intraday Response: {intraday_response}")
+                    
+                    if intraday_response.get('status') == 'success':
+                        intraday_candles = intraday_response.get('data', {}).get('candles', [])
+                        logger.debug(f"Got {len(intraday_candles)} candles from intraday endpoint")
+                        all_candles.extend(intraday_candles)
+                except Exception as e:
+                    logger.debug(f"Intraday endpoint failed: {e}")
             
-            # If no intraday data or need more historical data, try historical endpoint
+            # Try historical endpoint for all other cases or if intraday failed
             if not all_candles or start.date() < current_date.date():
-                logger.debug("Trying historical endpoint...")
-                # Format dates for historical endpoint
-                from_date = start.strftime('%Y-%m-%d')
-                to_date = end.strftime('%Y-%m-%d')
+                logger.debug("Trying v3 historical endpoint...")
                 
-                # Historical endpoint URL format: /historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
-                historical_url = f"/v2/historical-candle/{encoded_symbol}/{upstox_interval}/{to_date}/{from_date}"
+                # Historical endpoint URL format: /historical-candle/{instrument_key}/{unit}/{interval}/{to_date}/{from_date}
+                historical_url = f"/historical-candle/{encoded_symbol}/{unit}/{interval_value}/{to_date}/{from_date}"
                 logger.debug(f"Historical URL: {historical_url}")
-                historical_response = get_api_response(historical_url, self.auth_token)
-                logger.debug(f"Historical Response: {historical_response}")
                 
-                if historical_response.get('status') == 'success':
-                    historical_candles = historical_response.get('data', {}).get('candles', [])
-                    logger.debug(f"Got {len(historical_candles)} candles from historical endpoint")
-                    all_candles.extend(historical_candles)
+                try:
+                    historical_response = get_api_response(historical_url, self.auth_token)
+                    logger.debug(f"Historical Response: {historical_response}")
+                    
+                    if historical_response.get('status') == 'success':
+                        historical_candles = historical_response.get('data', {}).get('candles', [])
+                        logger.debug(f"Got {len(historical_candles)} candles from historical endpoint")
+                        all_candles.extend(historical_candles)
+                except Exception as e:
+                    logger.debug(f"Historical endpoint failed: {e}")
             
             logger.debug(f"Total candles: {len(all_candles)}")
             
-            # Special case: If requesting only today's data (start and end dates are the same day and that day is today)
-            today = datetime.now().date()
-            if start.date() == end.date() == today and not all_candles:
-                logger.debug("Special case: Requesting only today's data")
-                try:
-                    # Get today's data from quote endpoint
-                    quote = self.get_quotes(symbol, exchange)
-                    if quote and quote.get('ltp', 0) > 0:
-                        # Create today's candle
-                        today_datetime = pd.Timestamp.today().normalize()
-                        
-                        # Create a single candle for today
-                        today_candle = [
-                            today_datetime.strftime('%Y-%m-%dT%H:%M:%S'), 
-                            quote.get('open', quote.get('ltp', 0)),
-                            quote.get('high', quote.get('ltp', 0)),
-                            quote.get('low', quote.get('ltp', 0)),
-                            quote.get('ltp', 0),
-                            quote.get('volume', 0),
-                            0  # OI default
-                        ]
-                        all_candles.append(today_candle)
-                        logger.debug("Added today's candle from quote data for single-day request")
-                except Exception as e:
-                    logger.warning(f"Could not add today's data for single-day request: {e}")
-            
+            # Special case: If no historical data but requesting today's data only
             if not all_candles:
-                if start.date() == end.date() == today:
-                    # If we still have no data for today, return a meaningful error
-                    raise Exception("No data available for today. Market may not be open yet or quote data is unavailable.")
-                return pd.DataFrame()  # Return empty DataFrame if no data for other date ranges
+                # Check if we're only requesting today's data
+                today = datetime.now().date()
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                if start_date_obj == end_date_obj == today and interval == 'D':
+                    logger.debug("No historical data but requesting only today's data - will try to get from quotes")
+                    try:
+                        # Get today's data from quotes
+                        quotes = self.get_quotes(symbol, exchange)
+                        logger.debug(f"Quotes response for today-only request: {quotes}")
+                        
+                        if quotes and quotes.get('ltp', 0) > 0:
+                            today_ts_with_offset = int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=5, minutes=30)).timestamp())
+                            
+                            today_data = pd.DataFrame({
+                                'timestamp': [today_ts_with_offset],
+                                'open': [quotes.get('open', quotes.get('ltp', 0))],
+                                'high': [quotes.get('high', quotes.get('ltp', 0))],
+                                'low': [quotes.get('low', quotes.get('ltp', 0))],
+                                'close': [quotes.get('ltp', 0)],
+                                'volume': [quotes.get('volume', 0)],
+                                'oi': [quotes.get('oi', 0)]
+                            })
+                            
+                            # Keep timestamp as is (already in Unix epoch format)
+                            # No need to convert since today_ts_with_offset is already Unix epoch
+                            
+                            # Reorder columns to match Angel format
+                            today_data = today_data[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+                            
+                            logger.debug(f"Created today's data from quotes: {today_data.to_dict()}")
+                            return today_data
+                        else:
+                            logger.debug("No valid quotes data for today-only request")
+                    except Exception as e:
+                        logger.warning(f"Could not get today's data from quotes for today-only request: {e}")
+                
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
                 
             # Convert candle data to DataFrame
-            # Upstox format: [timestamp, open, high, low, close, volume, oi]
+            # Upstox v3 format: [timestamp, open, high, low, close, volume, oi]
             df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             
             # Convert timestamp to datetime and handle timezone properly
@@ -305,15 +339,28 @@ class BrokerData:
                 # Check if today's data is requested
                 today = datetime.now().date()
                 end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                logger.debug(f"Today: {today}, End date: {end_date_obj}")
                 
                 if end_date_obj >= today:
                     # Check if today's data is missing from the DataFrame
                     today_ts_with_offset = int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=5, minutes=30)).timestamp())
+                    logger.debug(f"Today's timestamp with offset: {today_ts_with_offset}")
                     
-                    if df.empty or today_ts_with_offset not in df['timestamp'].values:
+                    if df.empty:
+                        logger.debug("DataFrame is empty, will add today's data")
+                        today_exists = False
+                    else:
+                        today_exists = today_ts_with_offset in df['timestamp'].values
+                        logger.debug(f"Today exists in DataFrame: {today_exists}")
+                        logger.debug(f"Existing timestamps: {df['timestamp'].values}")
+                    
+                    if not today_exists:
                         try:
+                            logger.debug("Attempting to get today's data from quotes")
                             # Get today's data from quotes
                             quotes = self.get_quotes(symbol, exchange)
+                            logger.debug(f"Quotes response: {quotes}")
+                            
                             if quotes and quotes.get('ltp', 0) > 0:
                                 today_data = pd.DataFrame({
                                     'timestamp': [today_ts_with_offset],
@@ -322,15 +369,17 @@ class BrokerData:
                                     'low': [quotes.get('low', quotes.get('ltp', 0))],
                                     'close': [quotes.get('ltp', 0)],
                                     'volume': [quotes.get('volume', 0)],
-                                    'oi': [0]
+                                    'oi': [quotes.get('oi', 0)]
                                 })
                                 df = pd.concat([df, today_data], ignore_index=True)
-                                logger.debug("Added today's data from quotes for daily interval")
+                                logger.debug(f"Added today's data from quotes for daily interval: {today_data.to_dict()}")
+                            else:
+                                logger.debug("No valid quotes data received")
                         except Exception as e:
                             logger.warning(f"Could not add today's data from quotes: {e}")
             
-            # Drop oi column and reorder columns to match expected format
-            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            # Keep OI column and reorder columns to match Angel format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
             
             # Remove duplicates and sort by timestamp
             df = df.drop_duplicates(subset=['timestamp']).sort_values('timestamp')
@@ -357,9 +406,17 @@ class BrokerData:
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
             
-            # Use quotes endpoint to get depth
+            # Use v2 quotes endpoint for depth data (v3 OHLC doesn't provide depth)
             url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
-            response = get_api_response(url, self.auth_token)
+            # For depth, we still need to use v2 endpoint directly
+            client = get_httpx_client()
+            headers = {
+                'Authorization': f'Bearer {self.auth_token}',
+                'Accept': 'application/json'
+            }
+            full_url = f"https://api.upstox.com{url}"
+            response = client.get(full_url, headers=headers)
+            response = response.json()
             
             if response.get('status') != 'success':
                 error_msg = response.get('message', 'Unknown error')
@@ -385,8 +442,40 @@ class BrokerData:
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
             
-            # Get depth data
+            # Get depth data from v2 response
             depth = quote.get('depth', {})
+            
+            # Also try to get enhanced OHLC data from v3 API
+            ohlc_data = {}
+            try:
+                # Use v3 OHLC endpoint for better OHLC data
+                v3_url = f"/market-quote/ohlc?instrument_key={encoded_symbol}&interval=1d"
+                v3_response = get_api_response(v3_url, self.auth_token)
+                
+                if v3_response.get('status') == 'success':
+                    v3_quote_data = v3_response.get('data', {})
+                    for key, value in v3_quote_data.items():
+                        if value.get('instrument_token') == instrument_key:
+                            live_ohlc = value.get('live_ohlc', {})
+                            prev_ohlc = value.get('prev_ohlc', {})
+                            
+                            # Handle None values
+                            if live_ohlc is None:
+                                live_ohlc = {}
+                            if prev_ohlc is None:
+                                prev_ohlc = {}
+                            
+                            ohlc_data = {
+                                'high': live_ohlc.get('high', 0),
+                                'low': live_ohlc.get('low', 0),
+                                'open': live_ohlc.get('open', 0),
+                                'prev_close': prev_ohlc.get('close', 0),
+                                'volume': live_ohlc.get('volume', 0),
+                                'ltp': value.get('last_price', 0)
+                            }
+                            break
+            except Exception as e:
+                logger.debug(f"Could not get v3 OHLC data: {e}")
             
             # Return standard depth data format
             return {
@@ -398,16 +487,16 @@ class BrokerData:
                     'price': order.get('price', 0),
                     'quantity': order.get('quantity', 0)
                 } for order in depth.get('buy', [])],
-                'high': quote.get('ohlc', {}).get('high', 0),
-                'low': quote.get('ohlc', {}).get('low', 0),
-                'ltp': quote.get('last_price', 0),
+                'high': ohlc_data.get('high', quote.get('ohlc', {}).get('high', 0)),
+                'low': ohlc_data.get('low', quote.get('ohlc', {}).get('low', 0)),
+                'ltp': ohlc_data.get('ltp', quote.get('last_price', 0)),
                 'ltq': quote.get('last_quantity', 0),
                 'oi': quote.get('oi', 0),
-                'open': quote.get('ohlc', {}).get('open', 0),
-                'prev_close': quote.get('ohlc', {}).get('close', 0),
+                'open': ohlc_data.get('open', quote.get('ohlc', {}).get('open', 0)),
+                'prev_close': ohlc_data.get('prev_close', quote.get('ohlc', {}).get('close', 0)),
                 'totalbuyqty': quote.get('total_buy_quantity', 0),
                 'totalsellqty': quote.get('total_sell_quantity', 0),
-                'volume': quote.get('volume', 0)
+                'volume': ohlc_data.get('volume', quote.get('volume', 0))
             }
             
         except Exception as e:
