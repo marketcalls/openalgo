@@ -68,7 +68,6 @@ nest-asyncio==1.6.0
 numba==0.61.2
 numpy==2.2.4
 openalgo==1.0.19
--e file:///Users/openalgo/openalgo-test/openalgo
 ordered-set==4.1.0
 packaging==24.1
 pandas==2.2.3
