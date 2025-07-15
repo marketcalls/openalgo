@@ -19,9 +19,9 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
+    FEED_TOKEN = feed_token
     if feed_token:
-        FEED_TOKEN = feed_token
-    logger.info(f"Feed Token: {FEED_TOKEN}")
+        logger.info(f"Feed Token: {FEED_TOKEN}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
