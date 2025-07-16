@@ -192,9 +192,9 @@ async function refreshAnalyzer() {
                         </td>
                         <td class="badge-cell">
                             <div class="badge-container">
-                                <button class="btn btn-sm btn-primary view-details" 
-                                        data-request='${JSON.stringify(request.request_data)}'
-                                        data-response='${JSON.stringify(request.response_data)}'>
+                                <button class="btn btn-sm btn-primary view-details"
+                                        data-request="${encodeURIComponent(JSON.stringify(request.request_data))}"
+                                        data-response="${encodeURIComponent(JSON.stringify(request.response_data))}">
                                     View
                                 </button>
                             </div>
