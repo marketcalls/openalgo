@@ -207,14 +207,13 @@ async function refreshAnalyzer() {
             document.querySelectorAll('.view-details').forEach(button => {
                 button.addEventListener('click', function() {
                     try {
-                        const requestData = JSON.parse(this.getAttribute('data-request'));
-                        const responseData = JSON.parse(this.getAttribute('data-response'));
-                        
+                        const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                        const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
                         // Remove apikey from request data if present
                         if (requestData.apikey) {
                             delete requestData.apikey;
                         }
-                        
+
                         document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                         document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                         document.getElementById('requestModal').showModal();
@@ -444,9 +443,10 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.view-details').forEach(button => {
             button.addEventListener('click', function() {
                 try {
-                    const requestData = JSON.parse(this.getAttribute('data-request'));
-                    const responseData = JSON.parse(this.getAttribute('data-response'));
-                    
+                    const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                    const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
+                    console.log(responseData);
+
                     // Remove apikey from request data if present
                     if (requestData.apikey) {
                         delete requestData.apikey;
