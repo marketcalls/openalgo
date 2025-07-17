@@ -11,6 +11,14 @@ import os
 from typing import Dict, Set, Any, Optional
 from dotenv import load_dotenv
 
+# RedPanda/Kafka imports
+try:
+    from kafka import KafkaProducer, KafkaConsumer
+    from kafka.errors import KafkaError
+    KAFKA_AVAILABLE = True
+except ImportError:
+    KAFKA_AVAILABLE = False
+
 from .port_check import is_port_in_use, find_available_port
 from database.auth_db import get_broker_name
 from sqlalchemy import text
@@ -26,6 +34,7 @@ class WebSocketProxy:
     WebSocket Proxy Server that handles client connections and authentication,
     manages subscriptions, and routes market data from broker adapters to clients.
     Supports dynamic broker selection based on user configuration.
+    Enhanced with Kafka/RedPanda integration for scalable message distribution.
     """
     
     def __init__(self, host: str = "localhost", port: int = 8765):
@@ -70,20 +79,107 @@ class WebSocketProxy:
         
         # Set up ZeroMQ subscriber to receive all messages
         self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
+        
+        # Kafka/RedPanda integration
+        #self.kafka_enabled = os.getenv('ENABLE_REDPANDA', 'false').lower() == 'true' and KAFKA_AVAILABLE
+        #self.kafka_consumer = None
+        #self.kafka_consumer_task = None
+        self.kafka_subscriptions = {}  # Maps client_id to set of kafka topics
+        
+        #if self.kafka_enabled:
+        #    logger.info("Kafka integration enabled for WebSocket proxy")
+        #    self._setup_kafka()
+        #else:
+        #    logger.info("Kafka integration disabled - using ZMQ only")
+    
+    def _setup_kafka(self):
+        """Setup Kafka consumer for market data distribution"""
+        try:
+            kafka_brokers = os.getenv('REDPANDA_BROKERS', 'localhost:9092')
+            consumer_group = os.getenv('REDPANDA_CONSUMER_GROUP_ID', 'websocket_proxy_group')
+            
+            # Parse and validate broker addresses
+            broker_list = []
+            for broker in kafka_brokers.split(','):
+                broker = broker.strip()
+                if ':' in broker:
+                    host, port = broker.rsplit(':', 1)
+                    try:
+                        port = int(port)  # Convert port to integer
+                        broker_list.append(f"{host}:{port}")
+                    except ValueError:
+                        logger.error(f"Invalid port in broker address: {broker}")
+                        broker_list.append(broker)  # Use as-is if port conversion fails
+                else:
+                    broker_list.append(broker)
+            
+            # Kafka consumer configuration
+            consumer_config = {
+                'bootstrap_servers': broker_list,  # Use the parsed broker list
+                'group_id': consumer_group,
+                'key_deserializer': lambda k: k.decode('utf-8') if k else None,
+                'value_deserializer': lambda v: json.loads(v.decode('utf-8')),
+                'auto_offset_reset': os.getenv('REDPANDA_AUTO_OFFSET_RESET', 'latest'),
+                'enable_auto_commit': os.getenv('REDPANDA_ENABLE_AUTO_COMMIT', 'true').lower() == 'true',
+                'auto_commit_interval_ms': int(os.getenv('REDPANDA_AUTO_COMMIT_INTERVAL_MS', '1000')),
+                'session_timeout_ms': int(os.getenv('REDPANDA_SESSION_TIMEOUT_MS', '30000')),
+                'heartbeat_interval_ms': int(os.getenv('REDPANDA_HEARTBEAT_INTERVAL_MS', '3000')),
+                'max_poll_records': int(os.getenv('REDPANDA_MAX_POLL_RECORDS', '500')),
+                'fetch_min_bytes': int(os.getenv('REDPANDA_FETCH_MIN_BYTES', '1')),
+                'fetch_max_wait_ms': int(os.getenv('REDPANDA_FETCH_MAX_WAIT_MS', '500')),
+            }
+            
+            # Security configuration if needed
+            security_protocol = os.getenv('REDPANDA_SECURITY_PROTOCOL', 'PLAINTEXT')
+            if security_protocol != 'PLAINTEXT':
+                consumer_config['security_protocol'] = security_protocol
+                if security_protocol in ['SASL_PLAINTEXT', 'SASL_SSL']:
+                    consumer_config['sasl_mechanism'] = os.getenv('REDPANDA_SASL_MECHANISM', 'PLAIN')
+                    consumer_config['sasl_plain_username'] = os.getenv('REDPANDA_SASL_USERNAME', '')
+                    consumer_config['sasl_plain_password'] = os.getenv('REDPANDA_SASL_PASSWORD', '')
+                if security_protocol in ['SSL', 'SASL_SSL']:
+                    ssl_cafile = os.getenv('REDPANDA_SSL_CAFILE')
+                    ssl_certfile = os.getenv('REDPANDA_SSL_CERTFILE')
+                    ssl_keyfile = os.getenv('REDPANDA_SSL_KEYFILE')
+                    if ssl_cafile:
+                        consumer_config['ssl_cafile'] = ssl_cafile
+                    if ssl_certfile:
+                        consumer_config['ssl_certfile'] = ssl_certfile
+                    if ssl_keyfile:
+                        consumer_config['ssl_keyfile'] = ssl_keyfile
+            
+            # Add connection timeout to prevent hanging
+            consumer_config['request_timeout_ms'] = int(os.getenv('REDPANDA_REQUEST_TIMEOUT_MS', '30000'))
+            consumer_config['connections_max_idle_ms'] = int(os.getenv('REDPANDA_CONNECTIONS_MAX_IDLE_MS', '540000'))
+            
+            logger.info(f"Attempting to connect to Kafka brokers: {broker_list}")
+            self.kafka_consumer = KafkaConsumer(**consumer_config)
+            logger.info(f"Kafka consumer initialized successfully with brokers: {broker_list}")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup Kafka consumer: {e}")
+            logger.info("Kafka integration will be disabled, falling back to ZMQ only")
+            self.kafka_enabled = False
+            self.kafka_consumer = None
     
     async def start(self):
-        """Start the WebSocket server and ZeroMQ listener"""
+        """Start the WebSocket server, ZeroMQ listener, and Kafka consumer"""
         self.running = True
         
         try:
             # Start ZeroMQ listener
-            logger.info("Initializing ZeroMQ listener task")
+            # logger.info("Initializing ZeroMQ listener task")
             
             # Get the current event loop
             loop = aio.get_running_loop()
             
             # Create the ZMQ listener task
-            zmq_task = loop.create_task(self.zmq_listener())
+            # zmq_task = loop.create_task(self.zmq_listener())
+            
+            # Start Kafka consumer if enabled
+            # if self.kafka_enabled and self.kafka_consumer:
+            #     logger.info("Starting Kafka consumer task")
+            #     self.kafka_consumer_task = loop.create_task(self.kafka_listener())
             
             # Start WebSocket server
             stop = aio.Future()  # Used to stop the server
@@ -133,7 +229,7 @@ class WebSocketProxy:
             raise
     
     async def stop(self):
-        """Stop the WebSocket server"""
+        """Stop the WebSocket server, ZMQ listener, and Kafka consumer"""
         self.running = False
         
         # Close all client connections
@@ -143,6 +239,102 @@ class WebSocketProxy:
         # Disconnect all broker adapters
         for user_id, adapter in self.broker_adapters.items():
             adapter.disconnect()
+        
+        # Stop Kafka consumer
+    #     if self.kafka_consumer_task:
+    #         self.kafka_consumer_task.cancel()
+    #         try:
+    #             await self.kafka_consumer_task
+    #         except asyncio.CancelledError:
+    #             pass
+        
+    #     if self.kafka_consumer:
+    #         self.kafka_consumer.close()
+    
+    # async def kafka_listener(self):
+    #     """Listen for messages from Kafka and forward to clients"""
+    #     logger.info("Starting Kafka listener")
+        
+    #     while self.running:
+    #         try:
+    #             # Poll for messages with timeout
+    #             message_pack = self.kafka_consumer.poll(timeout_ms=100)
+                
+    #             if not message_pack:
+    #                 continue
+                
+    #             for topic, key, messages in message_pack.items():
+    #                 #topic = topic_partition.topic
+                    
+    #                 for message in messages:
+    #                     try:
+    #                         symbol = key  # Symbol is the partition key
+    #                         market_data = message.value
+                            
+    #                         # Extract market data components
+    #                         exchange = market_data.get('exchange', '')
+    #                         mode = market_data.get('mode', 'LTP')
+                            
+    #                         # Create topic string similar to ZMQ format
+    #                         zmq_topic = f"{exchange}_{symbol}_{mode}"
+                            
+    #                         # Forward to subscribed clients
+    #                         await self._forward_kafka_message_to_clients("tick_data", symbol, exchange, mode, market_data)
+                            
+    #                     except Exception as e:
+    #                         logger.error(f"Error processing Kafka message: {e}")
+    #                         continue
+                
+    #         except Exception as e:
+    #             logger.error(f"Error in Kafka listener: {e}")
+    #             # Continue running despite errors
+    #             await aio.sleep(1)
+    
+    # async def _forward_kafka_message_to_clients(self, topic: str, symbol: str, exchange: str, mode: str, market_data: dict):
+    #     """Forward Kafka message to subscribed WebSocket clients"""
+    #     # Find clients subscribed to this data
+    #     subscriptions_snapshot = list(self.subscriptions.items())
+        
+    #     for client_id, subscriptions in subscriptions_snapshot:
+    #         user_id = self.user_mapping.get(client_id)
+    #         if not user_id:
+    #             continue
+            
+    #         # Check if client is subscribed to this topic
+    #         subscriptions_list = list(subscriptions)
+    #         for sub_json in subscriptions_list:
+    #             try:
+    #                 sub = json.loads(sub_json)
+                    
+    #                 # Check subscription match
+    #                 if (sub.get("topic") == "tick_data"):
+                        
+    #                     # Forward data to the client
+    #                     await self.send_message(client_id, {
+    #                         "type": "market_data",
+    #                         "symbol": symbol,
+    #                         "exchange": exchange,
+    #                         "mode": mode,
+    #                         "broker": self.user_broker_mapping.get(user_id, "unknown"),
+    #                         "data": market_data,
+    #                         "source": "kafka"
+    #                     })
+    #                     break  # Only send once per client
+                        
+    #             except json.JSONDecodeError as e:
+    #                 logger.error(f"Error parsing subscription: {sub_json}, Error: {e}")
+    #                 continue
+    
+    def _mode_matches(self, subscription_mode: int, message_mode: str) -> bool:
+        """Check if subscription mode matches message mode"""
+        mode_mapping = {
+            1: "LTP",
+            2: "QUOTE", 
+            3: "DEPTH"
+        }
+        
+        expected_mode = mode_mapping.get(subscription_mode, "LTP")
+        return expected_mode == message_mode
     
     async def handle_client(self, websocket):
         """
@@ -154,6 +346,7 @@ class WebSocketProxy:
         client_id = id(websocket)
         self.clients[client_id] = websocket
         self.subscriptions[client_id] = set()
+        self.kafka_subscriptions[client_id] = set()
         
         # Get path info from websocket if available
         path = getattr(websocket, 'path', '/unknown')
@@ -914,7 +1107,7 @@ async def main():
             logger.error(f"Error in start method: {e}")
             logger.info("Starting ZeroMQ listener without signal handlers")
             # Continue with ZeroMQ listener even if signal handlers fail
-            await proxy.zmq_listener()
+            # await proxy.zmq_listener()
         else:
             logger.error(f"Server error: {e}")
             raise

@@ -128,3 +128,8 @@ wsproto==1.2.0
 wtforms==3.1.2
 zipp==3.19.2
 zmq==0.0.0
+kafka-python==2.2.15
+asyncio-mqtt==0.16.2
+redpanda==0.6.0
+python-snappy==0.7.3
+psycopg2==2.9.10
