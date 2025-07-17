@@ -24,6 +24,14 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 from .flattrade_mapping import FlattradeExchangeMapper, FlattradeCapabilityRegistry
 
+# RedPanda/Kafka imports
+try:
+    from kafka import KafkaProducer
+    from kafka.errors import KafkaError
+    KAFKA_AVAILABLE = True
+except ImportError:
+    KAFKA_AVAILABLE = False
+
 class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Flattrade-specific implementation of the WebSocket adapter"""
     def __init__(self):
@@ -45,6 +53,15 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnect_delay = 2  # seconds, will use exponential backoff
         self._reconnect_lock = threading.Lock()  # Prevent concurrent reconnects
         self.connected = False
+        
+        # Kafka/RedPanda specific attributes        
+        self.kafka_enabled = self.redpanda_enabled and KAFKA_AVAILABLE
+        self.kafka_publish_lock = threading.Lock()
+        
+        if self.kafka_enabled:
+            self.logger.info("Kafka publishing enabled for Flattrade adapter")
+        else:
+            self.logger.info("Kafka publishing disabled - using ZMQ only")
 
     def initialize(self, broker_name: str, user_id: str = None, auth_data: Optional[Dict[str, str]] = None) -> None:
         self.broker_name = broker_name
@@ -340,6 +357,8 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _generate_topic(self, exchange: str, symbol: str, mode_str: str) -> str:
         # Publish as {exchange}_{symbol}_{mode_str} to match OpenAlgo proxy expectation
         return f"{exchange}_{symbol}_{mode_str}"
+        #return f"{exchange}_{symbol}"
+        
 
     def _safe_float(self, value):
         """Safely convert value to float, return 0.0 if conversion fails"""
@@ -386,15 +405,15 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'symbol': data.get('ts', ''),
             'exchange': data.get('e', ''),
             'token': data.get('tk', ''),
-            'last_price': last_price,
-            'ltp': last_price,  # Always include 'ltp' for client compatibility
+            #'last_price': last_price,
+            #'ltp': last_price,  # Always include 'ltp' for client compatibility
             'volume': self._safe_int(data.get('v', 0)),
             'open': self._safe_float(data.get('o', 0)),
             'high': self._safe_float(data.get('h', 0)),
             'low': self._safe_float(data.get('l', 0)),
             'close': self._safe_float(data.get('c', 0)),
-            'average_price': self._safe_float(data.get('ap', 0)),
-            'percent_change': self._safe_float(data.get('pc', 0)),
+            #'average_price': self._safe_float(data.get('ap', 0)),
+            #'percent_change': self._safe_float(data.get('pc', 0)),
             'mode': 'LTP' if t in ('tf', 'tk') and (mode == 1 or mode is None) else ('QUOTE' if t in ('tf', 'tk') and mode == 2 else 'DEPTH'),
             'timestamp': timestamp,
         }
@@ -402,10 +421,10 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Add additional fields for touchline/quote mode
         if t in ('tf', 'tk'):
             # Best bid/ask (level 1)
-            result['best_bid_price'] = self._safe_float(data.get('bp1', 0))
-            result['best_bid_qty'] = self._safe_int(data.get('bq1', 0))
-            result['best_ask_price'] = self._safe_float(data.get('sp1', 0))
-            result['best_ask_qty'] = self._safe_int(data.get('sq1', 0))
+            #result['best_bid_price'] = self._safe_float(data.get('bp1', 0))
+            #result['best_bid_qty'] = self._safe_int(data.get('bq1', 0))
+            #result['best_ask_price'] = self._safe_float(data.get('sp1', 0))
+            #result['best_ask_qty'] = self._safe_int(data.get('sq1', 0))
             
             # Open Interest (if available)
             if data.get('oi'):
@@ -559,7 +578,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if is_acknowledgment:
             # Store complete snapshot from acknowledgment
             self.quote_snapshots[token] = data.copy()
-            self.logger.info(f"[QUOTE_SNAPSHOT] Stored full snapshot for token {token}")
+            self.logger.debug(f"[QUOTE_SNAPSHOT] Stored full snapshot for token {token}")
             return data
         
         # Get existing snapshot or create empty one
@@ -627,7 +646,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.quote_snapshots[token] = snapshot
         
         if updated_fields:
-            self.logger.info(f"[QUOTE_SNAPSHOT] Updated fields for token {token}: {updated_fields}")
+            self.logger.debug(f"[QUOTE_SNAPSHOT] Updated fields for token {token}: {updated_fields}")
         else:
             self.logger.debug(f"[QUOTE_SNAPSHOT] No fields updated for token {token} (all zero values)")
         
@@ -681,7 +700,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if mode is None and matching_modes:
                 mode = matching_modes[0][0]
             
-            self.logger.info(f"[MODE_DETECTION] Token {token}, message type {t}, selected mode: {mode}")
+            self.logger.debug(f"[MODE_DETECTION] Token {token}, message type {t}, selected mode: {mode}")
             if t in ('tf', 'tk', 'df', 'dk'):
                 # For LTP mode, only process if 'lp' field is present to avoid 0.0 values
                 if mode in [1, None] and 'lp' not in data:
@@ -707,7 +726,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if token:
                         is_acknowledgment = (t == 'tk')
                         processed_data = self._update_quote_snapshot(token, data, is_acknowledgment)
-                        self.logger.info(f"[QUOTE_SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} quote snapshot for token {token}")
+                        self.logger.debug(f"[QUOTE_SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} quote snapshot for token {token}")
                 
                 normalized = self._normalize_market_data(processed_data, t, mode)
                 self.logger.debug(f"[ON_MESSAGE] Normalized data: {normalized}")
@@ -736,8 +755,23 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception:
             self.logger.exception(f"Error processing message: {message}")
 
-    def publish_market_data(self, topic, data):
-        self.logger.info(f"[ZMQ PUBLISH] Topic: {topic} | Data: {data}")
-        # Extra debug for ZMQ publish
-        self.logger.debug(f"[DEBUG] ZMQ publish call for topic: {topic}, data keys: {list(data.keys())}")
-        super().publish_market_data(topic, data)
+    def publish_market_data(self, topic: str, data: dict) -> None:
+        # --- 1) ZMQ Publish (existing) ---
+        if self.zmq_enabled:
+            self.logger.info(f"[ZMQ PUBLISH] Topic: {topic} | Data: {data}")
+            self.logger.debug(f"[DEBUG] ZMQ publish call for topic: {topic}, data keys: {list(data.keys())}")
+            super().publish_market_data(topic, data)
+
+        # --- 2) Kafka Publish (new) ---
+        if self.kafka_enabled and self.kafka_producer:
+            try:
+                with self.kafka_publish_lock:
+                    # The KafkaProducer was set up in BaseBrokerWebSocketAdapter._setup_redpanda()
+                    # We assume the topic already exists or auto‐creation is enabled.
+                    # You can also prefix or map your ZMQ topic to a Kafka topic namespace here.
+                    self.kafka_producer.send("tick_data", key=topic, value=data)
+                    # Optionally flush immediately (costly):
+                    # self.kafka_producer.flush()
+                self.logger.info(f"[KAFKA PUBLISH] Topic: {"tick_data"} | Key:{topic} | Data: {data}")
+            except KafkaError as e:
+                self.logger.error(f"[KAFKA ERROR] Failed to publish to Kafka topic {"tick_data"}:{topic}: {e}")
