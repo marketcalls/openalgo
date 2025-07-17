@@ -62,7 +62,7 @@ register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("jainam", JainamWebSocketAdapter)
 register_adapter("trustline", TrustlineWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
-register_adapter("wisdom", UpstoxWebSocketAdapter)
+register_adapter("upstox", UpstoxWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
