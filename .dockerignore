@@ -1,3 +1,7 @@
+# Ignore stateful content (these will be generated again)
+db/
+log/
+
 # Byte-compiled / cache files
 __pycache__/
 *.py[cod]
@@ -11,7 +15,7 @@ venv/
 .Python
 
 # Environment and secrets
-!.env
+.env
 !.sample.env
 secrets.*
 *.key
