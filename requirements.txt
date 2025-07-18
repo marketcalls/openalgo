@@ -133,3 +133,4 @@ asyncio-mqtt==0.16.2
 redpanda==0.6.0
 python-snappy==0.7.3
 psycopg2==2.9.10
+google==3.0.0

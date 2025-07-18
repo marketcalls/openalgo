@@ -406,7 +406,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'exchange': data.get('e', ''),
             'token': data.get('tk', ''),
             #'last_price': last_price,
-            #'ltp': last_price,  # Always include 'ltp' for client compatibility
+            'ltp': self._safe_float(data.get('lp', 0)),  # Always include 'ltp' for client compatibility
             'volume': self._safe_int(data.get('v', 0)),
             'open': self._safe_float(data.get('o', 0)),
             'high': self._safe_float(data.get('h', 0)),
