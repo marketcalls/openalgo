@@ -110,7 +110,7 @@ For detailed documentation on OpenAlgo, including setup guides, API references, 
 ### Minimum Hardware Requirements
 
 To run OpenAlgo we recommend:
-- 2GB RAM
+- 0.5GB RAM (with 2GB of Swap Memory)
 - 1GB disk space
 - 2vCPU
 
@@ -122,9 +122,9 @@ We welcome contributions to OpenAlgo! If you're interested in improving the appl
 
 OpenAlgo is released under the AGPL V3.0 License. See the `LICENSE` file for more details.
 
-## Star History
+## Repo Activity
 
-[![Star History Chart](https://api.star-history.com/svg?repos=marketcalls/openalgo&type=Date)](https://star-history.com/#marketcalls/openalgo&Date)
+![Alt](https://repobeats.axiom.co/api/embed/0b6b18194a3089cb47ab8ae588caabb14aa9972b.svg "Repobeats analytics image")
 
 ## Disclaimer
 
