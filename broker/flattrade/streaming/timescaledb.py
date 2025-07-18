@@ -314,6 +314,14 @@ class MarketDataProcessor:
 
         # Initialize aggregation buffers
         self.reset_aggregation_buffers()
+
+        # volume tracking
+        # Initialize volume tracking for all timeframes
+        self.last_period_volume = {
+            '1m': {},
+            '5m': {},
+            '15m': {}
+        }
         
         # Rest of your initialization...
 
@@ -332,6 +340,13 @@ class MarketDataProcessor:
                 '15m': self.floor_to_interval(now, 15)
             }
             self.aggregation_state = {
+                '1m': {},
+                '5m': {},
+                '15m': {}
+            }
+            
+            # Reset volume tracking
+            self.last_period_volume = {
                 '1m': {},
                 '5m': {},
                 '15m': {}
@@ -439,10 +454,10 @@ class MarketDataProcessor:
             record = {
                 'time': dt,  # Convert ms to seconds
                 'symbol': symbol,
-                'open': float(value['open']),
-                'high': float(value['high']),
-                'low': float(value['low']),
-                'close': float(value['close']),
+                'open': float(value['ltp']),
+                'high': float(value['ltp']),
+                'low': float(value['ltp']),
+                'close': float(value['ltp']),
                 'volume': int(value['volume'])
             }
 
@@ -492,20 +507,30 @@ class MarketDataProcessor:
                 aligned_time = self.floor_to_interval(record['time'], minutes)
 
                 if symbol not in self.tick_buffer[timeframe]:
-                    self.tick_buffer[timeframe][symbol] = {
+                    self.tick_buffer[timeframe][symbol] = {}
+
+                # Initialize this specific minute bucket
+                if aligned_time not in self.tick_buffer[timeframe][symbol]:
+                    self.tick_buffer[timeframe][symbol][aligned_time] = {
                         'opens': [],
                         'highs': [],
                         'lows': [],
                         'closes': [],
                         'volumes': [],
-                        'first_ts': aligned_time
+                        'first_tick': None  # Track the first tick separately
                     }
 
-                self.tick_buffer[timeframe][symbol]['opens'].append(record['open'])
-                self.tick_buffer[timeframe][symbol]['highs'].append(record['high'])
-                self.tick_buffer[timeframe][symbol]['lows'].append(record['low'])
-                self.tick_buffer[timeframe][symbol]['closes'].append(record['close'])
-                self.tick_buffer[timeframe][symbol]['volumes'].append(record['volume'])
+                bucket = self.tick_buffer[timeframe][symbol][aligned_time]
+
+                # For the first tick in this interval, store it separately
+                if bucket['first_tick'] is None:
+                    bucket['first_tick'] = record
+
+                bucket['opens'].append(record['open'])
+                bucket['highs'].append(record['high'])
+                bucket['lows'].append(record['low'])
+                bucket['closes'].append(record['close'])
+                bucket['volumes'].append(record['volume'])
 
     def check_aggregation(self, current_time):
         """Check if aggregation should occur for any timeframe"""
@@ -534,37 +559,51 @@ class MarketDataProcessor:
 
     def aggregate_data(self, timeframe, agg_time):
         self.logger.info("Inside aggregate data-------->")
-        """Perform aggregation for specific timeframe"""
         with self.aggregation_lock:
-            buffer = self.tick_buffer[timeframe]
-
-            if not buffer:
+            symbol_buckets = self.tick_buffer[timeframe]
+            if not symbol_buckets:
                 return False
 
             aggregated = []
-            table_name = f"ohlc_{timeframe}"           
-            
-            for symbol, data in buffer.items():
-                if not data['opens']:
-                    continue
+            table_name = f"ohlc_{timeframe}"
 
-                bucket_start = self.floor_to_interval(data['first_ts'], minutes=int(timeframe[:-1]))
-            
-                open = data['opens'][0]
-                high = max(data['highs'])
-                low = min(data['lows'])
-                close = data['closes'][-1]
-                volume = sum(data['volumes'])                
-                
-                aggregated.append((
-                    bucket_start,
-                    symbol,
-                    open,
-                    high,
-                    low,
-                    close,
-                    volume
-                ))
+            for symbol, buckets in symbol_buckets.items():
+                for bucket_start, data in list(buckets.items()):
+                    if bucket_start >= self.last_agg_time[timeframe] + timedelta(minutes=int(timeframe[:-1])):
+                        # Don't process future buckets
+                        continue
+
+                    if not data['opens']:
+                        continue
+                    
+                    try:
+                        # Get OHLC values
+                        if data['first_tick'] is not None:
+                            open_ = data['first_tick']['open']
+                        else:
+                            open_ = data['opens'][0]
+
+                        #open_ = data['opens'][0]
+                        high = max(data['highs'])
+                        low = min(data['lows'])
+                        close = data['closes'][-1]      
+
+                        # Calculate volume correctly for cumulative data
+                        current_last_volume = data['volumes'][-1]
+                        previous_last_volume = self.last_period_volume[timeframe].get(symbol, current_last_volume)
+                        volume = max(0, current_last_volume - previous_last_volume)
+
+                        # Store the current last volume for next period
+                        self.last_period_volume[timeframe][symbol] = current_last_volume
+   
+                        aggregated.append((bucket_start, symbol, open_, high, low, close, volume))
+
+                        # Remove this bucket to avoid re-aggregation
+                        del self.tick_buffer[timeframe][symbol][bucket_start]
+                    
+                    except Exception as e:
+                        self.logger.error(f"Error aggregating {symbol} for {timeframe}: {e}")
+                        continue
 
             if aggregated:
                 try:
@@ -581,13 +620,10 @@ class MarketDataProcessor:
                                 volume = EXCLUDED.volume
                             """, aggregated)
                         self.db_conn.commit()
-                        logger.info(f"Aggregated {len(aggregated)} symbols to {table_name}")
-                        
-                        # Reset buffers for aggregated symbols
-                        self.tick_buffer[timeframe] = {}
+                        self.logger.info(f"Aggregated {len(aggregated)} symbols to {table_name}")
                         return True
                 except Exception as e:
-                    logger.error(f"Error aggregating {timeframe} data: {e}")
+                    self.logger.error(f"Error aggregating {timeframe} data: {e}")
                     self.db_conn.rollback()
                     return False
             return False
