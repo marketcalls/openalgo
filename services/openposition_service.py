@@ -9,6 +9,7 @@ from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.logging import get_logger
+from utils.config import get_host_server
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -102,8 +103,9 @@ def get_open_position_with_auth(
         # Prepare positionbook request with just apikey
         positionbook_request = {'apikey': position_data.get('apikey')}
         
-        # Make request to positionbook API
-        positionbook_response = requests.post('http://127.0.0.1:5000/api/v1/positionbook', json=positionbook_request)
+        # Make request to positionbook API using HOST_SERVER from config
+        host_server = get_host_server()
+        positionbook_response = requests.post(f'{host_server}/api/v1/positionbook', json=positionbook_request)
         
         if positionbook_response.status_code != 200:
             error_response = {
