@@ -592,5 +592,61 @@ def validate_order_constants() -> str:
     }
     return json.dumps(constants, indent=2)
 
+
+# Tool to get analyzer status
+@mcp.tool()
+def analyzer_status() -> dict:
+    """
+    Get the current analyzer status including mode and total logs.
+    
+    Returns:
+        Dictionary containing analyzer status information:
+        - analyze_mode: Boolean indicating if analyzer is active
+        - mode: Current mode ('analyze' or 'live')
+        - total_logs: Number of logs in analyzer
+    
+    Example Response:
+        {
+            'data': {
+                'analyze_mode': True,
+                'mode': 'analyze',
+                'total_logs': 2
+            },
+            'status': 'success'
+        }
+    """
+    try:
+        response = client.analyzerstatus()
+        return response
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+# Tool to toggle analyzer mode
+@mcp.tool()
+def analyzer_toggle(mode: bool) -> dict:
+    """
+    Toggle the analyzer mode between analyze (simulated) and live trading.
+    
+    Args:
+        mode: True for analyze mode (simulated), False for live mode
+    
+    Returns:
+        Dictionary with updated analyzer status:
+        - analyze_mode: Boolean indicating current state
+        - message: Status message
+        - mode: Current mode string
+        - total_logs: Number of logs in analyzer
+    
+    Example:
+        analyzer_toggle(True) - Switch to analyze mode (simulated responses)
+        analyzer_toggle(False) - Switch to live trading mode
+    """
+    try:
+        response = client.analyzertoggle(mode=mode)
+        return response
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 if __name__ == "__main__":
     mcp.run(transport='stdio')
