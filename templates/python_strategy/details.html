@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Strategy Details: {{ strategy_name }}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Strategy: {{ strategy_name }}</h1>
+        <div>
+            {# <<< NEW VIEW LOG BUTTON START >>> #}
+            <a href="{{ url_for('python_strategy_bp.view_strategy_log', strategy_filename=strategy_filename) }}" class="btn btn-sm btn-outline btn-info mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                View Log
+            </a>
+            {# <<< NEW VIEW LOG BUTTON END >>> #}
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-sm btn-outline">
+                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                Back to List
+            </a>
+        </div>
+    </div>
+
+    {# Flash messages #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category if category != 'message' else 'info' }} shadow-lg mb-4">
+                    <div>
+                        {% if category == 'success' %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        {% elif category == 'error' %}
+                             <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        {% else %} {# info or other categories #}
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        {% endif %}
+                        <span>{{ message }}</span>
+                    </div>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {# Parameters Card #}
+        <div class="card bg-base-200 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Parameters</h2>
+                {% if parameters %}
+                <form method="POST" action="{{ url_for('python_strategy_bp.details', strategy_filename=strategy_filename) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    {% for key, value in parameters.items() %}
+                        {# Skip 'description_from_code' as it's not a directly editable param here, shown in description card #}
+                        {% if key == 'description_from_code' %}
+                        {# This key is used to populate strategy_description, not an editable field itself unless 'description' param exists #}
+                        {% elif key == 'description' and strategy_description == value %}
+                        {# If 'description' parameter IS the strategy_description (from config), it will be shown in the description card's edit box #}
+                        {# Avoid duplicating it in the main params list if we have a dedicated edit box below #}
+                        {% else %}
+                        <div class="form-control mb-3">
+                            <label class="label">
+                                <span class="label-text">{{ key.replace('_', ' ') | title }}</span>
+                            </label>
+                            {% if value is boolean %}
+                            <select name="{{ key }}" class="select select-bordered w-full">
+                                <option value="true" {% if value %}selected{% endif %}>True</option>
+                                <option value="false" {% if not value %}selected{% endif %}>False</option>
+                            </select>
+                            {% elif value is number and not value is boolean %}
+                            <input type="number" name="{{ key }}" value="{{ value }}" class="input input-bordered w-full" step="any"/>
+                            {% else %}
+                            <input type="text" name="{{ key }}" value="{{ value }}" class="input input-bordered w-full"/>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                    <div class="card-actions justify-end mt-6">
+                        <button type="submit" class="btn btn-primary">Save Parameters</button>
+                    </div>
+                </form>
+                {% else %}
+                <p>No parameters found or could not be loaded for this strategy.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {# Description and Stocks Column #}
+        <div class="flex flex-col gap-6">
+            {# Description Card (New) #}
+            <div class="card bg-base-200 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title mb-2">Strategy Description</h2>
+                    {% if strategy_description %}
+                        <pre class="whitespace-pre-wrap text-sm p-2 bg-base-100 rounded mb-3 max-h-60 overflow-y-auto">{{ strategy_description }}</pre>
+                        <p class="text-xs text-gray-500 italic">
+                            This description should ideally include details about the strategy's entry and exit conditions, as provided by the strategy developer in the script's docstring or a manual 'description' parameter.
+                        </p>
+                    {% else %}
+                        <p class="text-gray-600">No specific description provided or found in the strategy file's docstring.</p>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Consider adding a docstring to the main strategy class in <code>{{ strategy_filename }}</code> to explain its logic, including entry and exit conditions.
+                        </p>
+                    {% endif %}
+
+                    {# Editable 'description' parameter if it exists in the config #}
+                    {% if parameters.description is defined %}
+                    <form method="POST" action="{{ url_for('python_strategy_bp.details', strategy_filename=strategy_filename) }}" class="mt-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        {# Preserve all other parameters when saving just the description via this form #}
+                        {% for param_key, param_value in parameters.items() %}
+                            {% if param_key != 'description' and param_key != 'csrf_token' and param_key != 'description_from_code' %}
+                            <input type="hidden" name="{{ param_key }}" value="{{ param_value if param_value is not none else '' }}"/>
+                            {% endif %}
+                        {% endfor %}
+                        <div class="form-control mb-3">
+                             <label class="label"><span class="label-text">Edit Description Override</span></label>
+                             <textarea name="description" class="textarea textarea-bordered w-full" rows="3">{{ parameters.description }}</textarea>
+                        </div>
+                        <div class="card-actions justify-end">
+                            <button type="submit" class="btn btn-sm btn-outline">Save Description Override</button>
+                        </div>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# Stock Configuration Card (Existing - moved into the second column's flex container) #}
+            <div class="card bg-base-200 shadow-xl">
+                <div class="card-body">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="card-title">Stock Configuration</h2>
+                        <label for="add_stock_modal" class="btn btn-sm btn-primary btn-outline">Add Stock</label>
+                    </div>
+
+                    {% if stocks %}
+                    <div class="overflow-x-auto">
+                        <table class="table table-compact w-full">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Exchange</th>
+                                    <th>Max Fund</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for stock in stocks %}
+                                <tr>
+                                    <td>{{ stock.symbol }}</td>
+                                    <td>{{ stock.exchange }}</td>
+                                    <td>{{ stock.max_fund }}</td>
+                                    <td class="flex gap-1">
+                                        <label for="edit_stock_modal_{{ stock.id }}" class="btn btn-xs btn-outline btn-info">Edit</label>
+                                        <form method="POST" action="{{ url_for('python_strategy_bp.delete_stock', strategy_filename=strategy_filename, stock_id=stock.id) }}" onsubmit="return confirm('Are you sure you want to delete {{stock.symbol}}?');" class="inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                            <button type="submit" class="btn btn-xs btn-outline btn-error">Delete</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-gray-600">
+                        No specific stocks configured in <code class="text-sm bg-base-300 p-1 rounded">{{ stocks_csv_path_display }}</code>.
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">
+                        The strategy might use a global default stock list if this file is empty or not found, or it may not require pre-defined stocks.
+                        You can add stocks here to create/use this strategy-specific configuration.
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div> {# End of Description and Stocks Column #}
+    </div> {# End of Grid #}
+</div> {# End of Container #}
+
+{# Add Stock Modal #}
+<input type="checkbox" id="add_stock_modal" class="modal-toggle" />
+<div class="modal">
+    <div class="modal-box relative">
+        <label for="add_stock_modal" class="btn btn-sm btn-circle absolute right-2 top-2">✕</label>
+        <h3 class="text-lg font-bold mb-4">Add New Stock</h3>
+        <form method="POST" action="{{ url_for('python_strategy_bp.add_stock', strategy_filename=strategy_filename) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="form-control mb-2">
+                <label class="label"><span class="label-text">Symbol</span></label>
+                <input type="text" name="symbol" placeholder="e.g., RELIANCE" class="input input-bordered w-full" required />
+            </div>
+            <div class="form-control mb-2">
+                <label class="label"><span class="label-text">Exchange</span></label>
+                <input type="text" name="exchange" placeholder="e.g., NSE" class="input input-bordered w-full" required />
+            </div>
+            <div class="form-control mb-4">
+                <label class="label"><span class="label-text">Max Fund Allocation</span></label>
+                <input type="number" name="max_fund" placeholder="e.g., 50000" class="input input-bordered w-full" required min="0" />
+            </div>
+            <div class="modal-action">
+                <button type="submit" class="btn btn-primary">Add Stock</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Edit Stock Modals (one per stock) #}
+{% if stocks %}
+    {% for stock in stocks %}
+    <input type="checkbox" id="edit_stock_modal_{{ stock.id }}" class="modal-toggle" />
+    <div class="modal">
+        <div class="modal-box relative">
+            <label for="edit_stock_modal_{{ stock.id }}" class="btn btn-sm btn-circle absolute right-2 top-2">✕</label>
+            <h3 class="text-lg font-bold mb-4">Edit Stock: {{ stock.symbol }}</h3>
+            <form method="POST" action="{{ url_for('python_strategy_bp.edit_stock', strategy_filename=strategy_filename, stock_id=stock.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <div class="form-control mb-2">
+                    <label class="label"><span class="label-text">Symbol</span></label>
+                    <input type="text" name="symbol" value="{{ stock.symbol }}" class="input input-bordered w-full" required />
+                </div>
+                <div class="form-control mb-2">
+                    <label class="label"><span class="label-text">Exchange</span></label>
+                    <input type="text" name="exchange" value="{{ stock.exchange }}" class="input input-bordered w-full" required />
+                </div>
+                <div class="form-control mb-4">
+                    <label class="label"><span class="label-text">Max Fund Allocation</span></label>
+                    <input type="number" name="max_fund" value="{{ stock.max_fund }}" class="input input-bordered w-full" required min="0" />
+                </div>
+                <div class="modal-action">
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+{% endif %}
+{% endblock %}

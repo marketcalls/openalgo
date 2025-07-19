@@ -1,0 +1,7 @@
+symbol,exchange,max_fund,strategy_id
+MAZDOCK,NSE,1000,DefaultStrategy
+APOLLO,NSE,1000,DefaultStrategy
+GRSE,NSE,1000,DefaultStrategy
+HUDCO,NSE,1000,DefaultStrategy
+MOSCHIP,NSE,1000,DefaultStrategy
+GMDCLTD,NSE,1000,DefaultStrategy
