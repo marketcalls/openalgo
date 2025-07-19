@@ -416,19 +416,93 @@ def get_historical_data(
 # INSTRUMENT SEARCH AND INFO TOOLS
 
 @mcp.tool()
-def search_instruments(query: str, exchange: str = "NSE") -> str:
+def search_instruments(query: str, exchange: str = "NSE", instrument_type: str = None) -> str:
     """
     Search for instruments by name or symbol.
     
     Args:
         query: Search query
-        exchange: Exchange to search in
+        exchange: Exchange to search in (NSE, BSE, NSE_INDEX, BSE_INDEX, etc.)
+        instrument_type: Optional - 'INDEX' to search in index exchanges
     """
     try:
+        # Handle index searches
+        if instrument_type and instrument_type.upper() == "INDEX":
+            if exchange.upper() == "NSE":
+                exchange = "NSE_INDEX"
+            elif exchange.upper() == "BSE":
+                exchange = "BSE_INDEX"
+        
         response = client.search(query=query, exchange=exchange.upper())
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error searching instruments: {str(e)}"
+
+@mcp.tool()
+def get_symbol_info(symbol: str, exchange: str = "NSE", instrument_type: str = None) -> str:
+    """
+    Get detailed information about a symbol.
+    
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        instrument_type: Optional - 'INDEX' for index symbols
+    """
+    try:
+        # Handle index symbols
+        if instrument_type and instrument_type.upper() == "INDEX":
+            if exchange.upper() == "NSE":
+                exchange = "NSE_INDEX"
+            elif exchange.upper() == "BSE":
+                exchange = "BSE_INDEX"
+        
+        # Or check if symbol is a known index
+        nse_indices = ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"]
+        bse_indices = ["SENSEX", "BANKEX", "SENSEX50"]
+        
+        if symbol.upper() in nse_indices and exchange.upper() == "NSE":
+            exchange = "NSE_INDEX"
+        elif symbol.upper() in bse_indices and exchange.upper() == "BSE":
+            exchange = "BSE_INDEX"
+        
+        response = client.get_symbol_info(symbol=symbol, exchange=exchange.upper())
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting symbol info: {str(e)}"
+
+@mcp.tool()
+def get_index_symbols(exchange: str = "NSE") -> str:
+    """
+    Get common index symbols for NSE or BSE.
+    
+    Args:
+        exchange: NSE or BSE
+    
+    Returns:
+        List of common index symbols for the specified exchange
+    """
+    indices = {
+        "NSE": {
+            "exchange_code": "NSE_INDEX",
+            "symbols": ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"]
+        },
+        "BSE": {
+            "exchange_code": "BSE_INDEX", 
+            "symbols": ["SENSEX", "BANKEX", "SENSEX50"]
+        }
+    }
+    
+    exchange_upper = exchange.upper()
+    if exchange_upper in indices:
+        return json.dumps({
+            "exchange": exchange_upper,
+            "exchange_code": indices[exchange_upper]["exchange_code"],
+            "indices": indices[exchange_upper]["symbols"]
+        }, indent=2)
+    else:
+        return json.dumps({
+            "error": f"Unknown exchange: {exchange}. Use NSE or BSE."
+        }, indent=2)
 
 @mcp.tool()
 def get_symbol_info(symbol: str, exchange: str = "NSE") -> str:
