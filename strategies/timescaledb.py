@@ -535,11 +535,9 @@ class MarketDataProcessor:
             #self.logger.info(f"Missing dates for {symbol} {interval}: {missing_ranges}")
 
             for range_start, range_end in missing_ranges:
-                if (
-                    range_start.weekday() in [5, 6] and
-                    range_end.weekday() in [5, 6] and
-                    (range_end - range_start).days <= 2
-                ): # Skip weekends
+                condition_1 = range_start.weekday() in [5, 6] and range_end.weekday() in [5, 6] and (range_end - range_start).days <= 2
+                condition_2 = range_start.weekday() in [0, 1, 2, 3, 4] and range_end.weekday() in [0, 1, 2, 3, 4] and (range_end - range_start).days == 0
+                if (condition_1 or condition_2): # Skip weekends
                     continue
                 df = client.history(
                         symbol=symbol,
@@ -559,34 +557,7 @@ class MarketDataProcessor:
 
         except Exception as e:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
-
-        #     for date in all_dates:
-        #         if date.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
-        #             #self.logger.info(f"[{symbol}] Skipping weekend: {date}")
-        #             continue
-        #         if date.date() not in existing_dates:
-        #             self.logger.info(f"[{symbol}] Fetching from {date.strftime('%Y-%m-%d')} to {date.strftime('%Y-%m-%d')} ({interval})")
-        #             df = client.history(
-        #                 symbol=symbol,
-        #                 exchange='NSE',
-        #                 interval=interval,
-        #                 start_date=date.strftime('%Y-%m-%d'),
-        #                 end_date=date.strftime('%Y-%m-%d')
-        #             )
-        #             # Check if df is dictionary before accessing 'df'
-        #             if df.__class__ == dict:
-        #                 self.logger.warning(f"[{symbol}] ⚠️ No data on {date.date()}")
-        #                 continue
-        #             if not df.empty:
-        #                 self.insert_historical_data(df, symbol, interval)
-        #                 self.logger.info(f"[{symbol}] ✅ Inserted {date.date()}")
-        #             else:
-        #                 self.logger.warning(f"[{symbol}] ⚠️ No data on {date.date()}")
-        #         else:
-        #             self.logger.debug(f"[{symbol}] ⏩ Skipped {date.date()}, already in DB")
-        # except Exception as e:
-        #     self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
-
+    
     def process_messages(self):
         """Main processing loop"""
         
@@ -930,21 +901,6 @@ if __name__ == "__main__":
             symbol_list = pd.read_csv('symbol_list_backtest.csv')
             symbol_list = symbol_list['Symbol'].tolist()
 
-            # Fetch historical data for each symbol
-            # for symbol in symbol_list:
-            #     for interval in ["1m", "5m", "15m", "D"]:
-            #         df = client.history(
-            #             symbol=symbol,
-            #             exchange='NSE',
-            #             interval=interval,
-            #             start_date=start_date,
-            #             end_date=end_date
-            #         )                    
-                    
-            #         # Insert historical data into the database
-            #         processor.insert_historical_data(df, symbol, interval)
-
-            
             # Fetch historical data for each symbol
             intervals = ["1m", "5m", "15m", "D"]
 
