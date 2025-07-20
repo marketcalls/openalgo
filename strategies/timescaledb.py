@@ -8,7 +8,9 @@ import pytz
 import json
 import logging
 from threading import Lock
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import product, groupby
+from operator import itemgetter
 from datetime import datetime, timedelta
 import os
 import random
@@ -17,6 +19,13 @@ import traceback
 import argparse
 from openalgo import api
 import pandas as pd
+from backtest_engine import BacktestEngine
+import glob
+from concurrent.futures import ThreadPoolExecutor
+
+# Suppress User warnings in output
+from warnings import filterwarnings
+filterwarnings("ignore", category=UserWarning)
 
 from dotenv import load_dotenv
 
@@ -202,7 +211,12 @@ class TimescaleDBManager:
             """,
             """
             SELECT create_hypertable('ohlc_D', 'time', if_not_exists => TRUE)
-            """ 
+            """,
+            """CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (time, symbol)""",
+            """CREATE INDEX IF NOT EXISTS idx_ohlc_1m_symbol_time ON ohlc_1m (time, symbol)""",
+            """CREATE INDEX IF NOT EXISTS idx_ohlc_5m_symbol_time ON ohlc_5m (time, symbol)""",
+            """CREATE INDEX IF NOT EXISTS idx_ohlc_15m_symbol_time ON ohlc_15m (time, symbol)""",
+            """CREATE INDEX IF NOT EXISTS idx_ohlc_d_symbol_time ON ohlc_D (time, symbol)"""
         ]
         
         try:
@@ -478,6 +492,100 @@ class MarketDataProcessor:
                 '5m': {},
                 '15m': {}
             }
+
+    def group_missing_dates(self, missing_dates):
+        """
+        Groups missing dates into continuous ranges.
+        
+        Example:
+        [2025-05-01, 2025-05-02, 2025-05-03, 2025-05-05]
+        → [(2025-05-01, 2025-05-03), (2025-05-05, 2025-05-05)]
+        """
+        sorted_dates = sorted(missing_dates)
+        ranges = []
+        for _, g in groupby(enumerate(sorted_dates), lambda x: x[0] - x[1].toordinal()):
+            group = list(map(itemgetter(1), g))
+            ranges.append((group[0], group[-1]))
+        return ranges
+
+    def get_existing_dates(self, symbol, interval):
+        table_name = f"ohlc_d"
+        query = f"""
+            SELECT DISTINCT DATE(time AT TIME ZONE 'Asia/Kolkata') as trade_date
+            FROM {table_name}
+            WHERE symbol = %s
+            ORDER BY trade_date;
+        """
+        try:
+            with self.db_conn.cursor() as cursor:
+                cursor.execute(query, (symbol,))
+                rows = cursor.fetchall()
+                return set(row[0] for row in rows)
+        except Exception as e:
+            self.logger.error(f"Error fetching existing dates: {e}")
+            return set()
+        
+    
+    def fetch_missing_data(self, symbol, interval, client, start_date, end_date):
+        try:
+            existing_dates = self.get_existing_dates(symbol, interval)
+            all_dates = pd.date_range(start=start_date, end=end_date, freq='D').date
+            missing_dates = sorted(set(all_dates) - set(existing_dates))
+            missing_ranges = self.group_missing_dates(missing_dates)
+            #self.logger.info(f"Missing dates for {symbol} {interval}: {missing_ranges}")
+
+            for range_start, range_end in missing_ranges:
+                if (
+                    range_start.weekday() in [5, 6] and
+                    range_end.weekday() in [5, 6] and
+                    (range_end - range_start).days <= 2
+                ): # Skip weekends
+                    continue
+                df = client.history(
+                        symbol=symbol,
+                        exchange='NSE',
+                        interval=interval,
+                        start_date=range_start.strftime('%Y-%m-%d'),
+                        end_date=range_end.strftime('%Y-%m-%d')
+                    )
+                # Check if df is dictionary before accessing 'df'
+                if df.__class__ == dict:
+                    self.logger.warning(f"[{symbol}] ⚠️ No data on {range_start}")
+                    continue
+                if not df.empty:
+                    self.insert_historical_data(df, symbol, interval)                    
+                else:
+                    self.logger.warning(f"[{symbol}] ⚠️ No data on {range_start}")
+
+        except Exception as e:
+            self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
+
+        #     for date in all_dates:
+        #         if date.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+        #             #self.logger.info(f"[{symbol}] Skipping weekend: {date}")
+        #             continue
+        #         if date.date() not in existing_dates:
+        #             self.logger.info(f"[{symbol}] Fetching from {date.strftime('%Y-%m-%d')} to {date.strftime('%Y-%m-%d')} ({interval})")
+        #             df = client.history(
+        #                 symbol=symbol,
+        #                 exchange='NSE',
+        #                 interval=interval,
+        #                 start_date=date.strftime('%Y-%m-%d'),
+        #                 end_date=date.strftime('%Y-%m-%d')
+        #             )
+        #             # Check if df is dictionary before accessing 'df'
+        #             if df.__class__ == dict:
+        #                 self.logger.warning(f"[{symbol}] ⚠️ No data on {date.date()}")
+        #                 continue
+        #             if not df.empty:
+        #                 self.insert_historical_data(df, symbol, interval)
+        #                 self.logger.info(f"[{symbol}] ✅ Inserted {date.date()}")
+        #             else:
+        #                 self.logger.warning(f"[{symbol}] ⚠️ No data on {date.date()}")
+        #         else:
+        #             self.logger.debug(f"[{symbol}] ⏩ Skipped {date.date()}, already in DB")
+        # except Exception as e:
+        #     self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
 
     def process_messages(self):
         """Main processing loop"""
@@ -755,6 +863,7 @@ if __name__ == "__main__":
                        help='Start date for backtest (DD-MM-YYYY format)')
     parser.add_argument('--to_date', type=str,
                        help='End date for backtest (DD-MM-YYYY format)')
+    parser.add_argument('--interval', type=str, default='1m', help='Interval to use for backtest/live (e.g., 1m, 5m, 15m, D)')
     args = parser.parse_args()
 
     # Validate arguments
@@ -809,7 +918,7 @@ if __name__ == "__main__":
         elif args.mode == 'backtest':
             logger.info(f"Running in backtest mode from {args.from_date} to {args.to_date}")
             # Clean the database
-            processor.clean_database()
+            # processor.clean_database()
 
             # Load historical data for the specified date range
             # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
@@ -822,21 +931,103 @@ if __name__ == "__main__":
             symbol_list = symbol_list['Symbol'].tolist()
 
             # Fetch historical data for each symbol
-            for symbol in symbol_list:
-                for interval in ["1m", "5m", "15m", "D"]:
-                    df = client.history(
-                        symbol=symbol,
-                        exchange='NSE',
-                        interval=interval,
-                        start_date=start_date,
-                        end_date=end_date
-                    )
+            # for symbol in symbol_list:
+            #     for interval in ["1m", "5m", "15m", "D"]:
+            #         df = client.history(
+            #             symbol=symbol,
+            #             exchange='NSE',
+            #             interval=interval,
+            #             start_date=start_date,
+            #             end_date=end_date
+            #         )                    
                     
-                    #print(df.head())
-                    # Insert historical data into the database
-                    processor.insert_historical_data(df, symbol, interval)
+            #         # Insert historical data into the database
+            #         processor.insert_historical_data(df, symbol, interval)
 
-            # Process data in simulation mode
+            
+            # Fetch historical data for each symbol
+            intervals = ["1m", "5m", "15m", "D"]
+
+            # Create all combinations of (symbol, interval)
+            symbol_interval_pairs = list(product(symbol_list, intervals))
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(
+                        processor.fetch_missing_data,
+                        symbol,
+                        interval,
+                        client,
+                        start_date,
+                        end_date
+                    )
+                    for symbol, interval in symbol_interval_pairs
+                ]
+
+                for future in as_completed(futures):
+                    future.result()
+
+            # Process data in simulation mode     
+            def run_backtest_for_symbol(symbol, db_config, start_date, end_date, interval):
+                # Create new connection per thread
+                conn = psycopg2.connect(
+                    user=db_config['user'],
+                    password=db_config['password'],
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    dbname=db_config['dbname']
+                )
+
+                engine = BacktestEngine(
+                    conn=conn,
+                    symbol=symbol,
+                    interval=interval,
+                    start_date=start_date.strftime("%Y-%m-%d"),
+                    end_date=end_date.strftime("%Y-%m-%d")
+                )
+                trades_df = engine.run()
+                trades_df.to_csv(f"backtest_trades_{symbol}.csv", index=False)
+
+                summary = engine.get_summary_metrics()
+                pd.DataFrame([summary]).to_csv(f"summary_{symbol}.csv", index=False)
+
+                if hasattr(engine, 'export_trail_charts'):
+                    engine.export_trail_charts()
+
+                conn.close()
+                logger.info(f"✅ Backtest completed for {symbol} → Trades: {len(trades_df)} → Saved: backtest_trades_{symbol}.csv")
+
+
+            def aggregate_all_summaries(output_path="master_summary.csv"):
+                summary_files = glob.glob("summary_*.csv")
+
+                if not summary_files:
+                    logger.warning("No summary files found to aggregate.")
+                    return
+
+                all_dfs = [pd.read_csv(f) for f in summary_files]
+                master_df = pd.concat(all_dfs, ignore_index=True)
+                master_df.to_csv(output_path, index=False)
+
+                logger.info(f"✅ Aggregated {len(summary_files)} summaries into {output_path}")
+                print(master_df)
+
+            # Run backtests in parallel
+            interval = args.interval
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = []
+                db_config = {
+                    "user": processor.db_manager.user,
+                    "password": processor.db_manager.password,
+                    "host": processor.db_manager.host,
+                    "port": processor.db_manager.port,
+                    "dbname": processor.db_manager.dbname
+                }
+                for symbol in symbol_list:
+                    futures.append(executor.submit(run_backtest_for_symbol, symbol, db_config, from_date, to_date, interval))
+                for future in futures:
+                    future.result()
+                aggregate_all_summaries("master_summary.csv")                 
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")
