@@ -55,6 +55,7 @@ class BacktestEngine:
         cumulative_pnl = 0
 
         for day in self.daterange():
+            #self.logger.info(f"Processing day: {day}")
             df = self.fetch_lookback_data(day)
             if df.empty or len(df) < 20:
                 continue
@@ -80,7 +81,7 @@ class BacktestEngine:
 
                 # ENTRY: Long
                 if not in_position and crossover and curr_ist_time <= time(14, 30) and self.position == 0:
-                    self.logger.info(f"[{curr['time']}] LONG ENTRY triggered at {curr['close']}")
+                    self.logger.info(f"[{curr_ist_time_2}] LONG ENTRY triggered at {curr['close']}")
                     self.position = 1
                     entry_row = curr
                     capital_per_trade = self.capital * self.leverage * (self.capital_alloc_pct / 100)
@@ -90,11 +91,13 @@ class BacktestEngine:
                     last_trail_price = None
                     trail_history = []
                     in_position = True
+                    self.entry_price = entry_row['close']
+                    self.logger.info(f"Entry confirmed: position={self.position}, entry_price={entry_row['close']}, in_position={in_position}")
                     continue
 
                 # ENTRY: Short
                 if not in_position and crossunder and curr_ist_time <= time(14, 30) and self.position == 0:
-                    self.logger.info(f"[{curr['time']}] SHORT ENTRY triggered at {curr['close']}")
+                    self.logger.info(f"[{curr_ist_time_2}] SHORT ENTRY triggered at {curr['close']}")
                     self.position = -1
                     entry_row = curr
                     capital_per_trade = self.capital * self.leverage * (self.capital_alloc_pct / 100)
@@ -104,12 +107,14 @@ class BacktestEngine:
                     last_trail_price = None
                     trail_history = []
                     in_position = True
+                    self.entry_price = entry_row['close']
+                    #self.logger.info(f"Entry confirmed: position={self.position}, entry_price={entry_row['close']}, in_position={in_position}")
                     continue
 
-
+                #self.logger.info(f"[{curr_ist_time_2}] Position check: position={self.position}, in_position={in_position}, entry_row={entry_row is not None}")
                 # EXIT
                 # TRADE MONITORING WHILE IN POSITION
-                if self.position != 0 and entry_row is not None:
+                if self.position != 0 and entry_row is not None and in_position:
                     price = curr['close']
                     entry_price = entry_row['close']
                     exit_row = None
@@ -117,6 +122,7 @@ class BacktestEngine:
                     #self.logger.info(f"[{curr_ist_time}] TRADE MONITORING: Position: {self.position}, Entry Price: {entry_price}, Current Price: {price}")
 
                     is_long = self.position == 1
+                    is_short = self.position == -1
                     price_change = price - entry_price
                     pct_move = price_change / entry_price
 
@@ -126,20 +132,21 @@ class BacktestEngine:
                     trail_trigger_pct = self.trail_activation_pct if is_long else -self.trail_activation_pct
                     trail_increment = self.trail_increment_pct * entry_price
                     trail_gap = self.trail_stop_gap_pct * entry_price
-
-                    #self.logger.info(f"[{curr['time']}] Evaluating exit for {'SHORT' if self.position == -1 else 'LONG'} at price {price}")
+                    
+                    #self.logger.info(f"[{curr_ist_time}] Evaluating exit for {'SHORT' if self.position == -1 else 'LONG'} at price {price}")
+                    #self.logger.info(f"[{curr_ist_time_2}] Evaluating exit for {'SHORT' if self.position == -1 else 'LONG'} at price {price}")
 
                     # TP
                     if tp_hit:
                         exit_row = curr
                         exit_reason = "TP"
-                        self.logger.info(f"[{curr['time']}] TP HIT at {price}")
+                        self.logger.info(f"[{curr_ist_time_2}] TP HIT at {price}")
 
                     # SL
                     elif sl_hit:
                         exit_row = curr
                         exit_reason = "SL"
-                        self.logger.info(f"[{curr['time']}] SL HIT at {price}")
+                        self.logger.info(f"[{curr_ist_time_2}] SL HIT at {price}")
                         
 
                     # Trailing Stop
@@ -157,11 +164,11 @@ class BacktestEngine:
                             })
 
                         # Price hit trailing stop
-                        if (is_long and price <= trail_stop) or (not is_long and price >= trail_stop):
+                        if (is_long and price <= trail_stop) or (is_short and price >= trail_stop):
                             exit_row = curr
                             exit_reason = "TRAIL"
-                            self.logger.info(f"[{curr['time']}] TRAIL STOP HIT at {price} vs stop {trail_stop}")
-                        
+                            self.logger.info(f"[{curr_ist_time_2}] TRAIL STOP HIT at {price} vs stop {trail_stop}")
+                      
 
                     # Activate trailing
                     elif (pct_move >= self.trail_activation_pct if is_long else pct_move <= -self.trail_activation_pct):
@@ -173,21 +180,24 @@ class BacktestEngine:
                     elif (crossunder if is_long else crossover):
                         exit_row = curr
                         exit_reason = "CROSSOVER" if is_long else "CROSSUNDER"
-                        self.logger.info(f"[{curr['time']}] CROSSOVER HIT for SHORT at EMA fast {curr['ema_fast']} vs slow {curr['ema_slow']}")
+                        self.logger.info(f"[{curr_ist_time_2}] CROSSOVER HIT for SHORT at EMA fast {curr['ema_fast']} vs slow {curr['ema_slow']}")
 
                     # Force exit based on direction and time (in UTC)
-                    elif is_long and curr_ist_time  >= time(15, 10):  # 3:10 PM IST
-                        exit_row = curr
-                        exit_reason = "FORCE_EXIT_1510"
-                        self.logger.info(f"[{curr['time']}] FORCE EXIT triggered for {'LONG' if is_long else 'SHORT'}")
+                    if exit_row is None:
+                        #self.logger.info(f"[{curr_ist_time_2}] No exit condition met, checking force exit conditions")
+                        if is_long and curr_ist_time  >= time(15, 10):  # 3:10 PM IST
+                            exit_row = curr
+                            exit_reason = "FORCE_EXIT_1510"
+                            self.logger.info(f"[{curr_ist_time_2}] FORCE EXIT triggered for {'LONG' if is_long else 'SHORT'}")
 
-                    elif not is_long and curr_ist_time  >= time(14, 40):  # 2:40 PM IST
-                        exit_row = curr
-                        exit_reason = "FORCE_EXIT_1440"
-                        self.logger.info(f"[{curr['time']}] FORCE EXIT triggered for {'LONG' if is_long else 'SHORT'}")
+                        elif is_short and curr_ist_time  >= time(14, 40):  # 2:40 PM IST
+                            exit_row = curr
+                            exit_reason = "FORCE_EXIT_1440"
+                            self.logger.info(f"[{curr_ist_time_2}] FORCE EXIT triggered for {'LONG' if is_long else 'SHORT'}")
 
                     # Process exit
                     if exit_row is not None:
+                        self.logger.info(f"[{curr_ist_time_2}] EXITING TRADE: {exit_reason} at {price}")
                         trade_df = df[(df['time'] >= entry_row['time']) & (df['time'] <= curr['time'])]
                         trade_close = trade_df['close']
 
@@ -227,6 +237,7 @@ class BacktestEngine:
 
                         # Reset
                         self.position = 0
+                        self.entry_price = None  
                         entry_row = None
                         trailing_active = False
                         trail_stop = None
