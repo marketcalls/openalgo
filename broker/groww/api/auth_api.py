@@ -21,15 +21,6 @@ def generate_totp(api_secret):
     """
     totp_gen = pyotp.TOTP(api_secret)
     totp_code = totp_gen.now()
-    
-    # Debug output
-    logger.debug(f"TOTP Generation:")
-    logger.debug(f"  - API Secret length: {len(api_secret)} chars")
-    logger.debug(f"  - API Secret (masked): {api_secret[:4]}...{api_secret[-4:]}")
-    logger.debug(f"  - Generated TOTP: {totp_code}")
-    logger.debug(f"  - TOTP length: {len(totp_code)} digits")
-    logger.debug(f"  - TOTP is numeric: {totp_code.isdigit()}")
-    
     return totp_code
 
 
@@ -49,11 +40,6 @@ def get_access_token_via_totp(api_key, api_secret):
         # Generate TOTP
         totp = generate_totp(api_secret)
         
-        # Debug API Key info
-        logger.debug("API Key Info:")
-        logger.debug(f"  - API Key length: {len(api_key)} chars")
-        logger.debug(f"  - API Key (masked): {api_key[:8]}...{api_key[-4:]}")
-        
         # Get the shared httpx client
         client = get_httpx_client()
         
@@ -72,11 +58,6 @@ def get_access_token_via_totp(api_key, api_secret):
         # Exact endpoint from SDK config
         endpoint = 'https://api.groww.in/v1/token/api/access'
         
-        logger.debug("Official SDK Format:")
-        logger.debug(f"  - Endpoint: {endpoint}")
-        logger.debug(f"  - Headers: {headers}")
-        logger.debug(f"  - Payload: {payload}")
-        
         try:
             response = client.post(
                 endpoint,
@@ -85,32 +66,22 @@ def get_access_token_via_totp(api_key, api_secret):
                 timeout=30
             )
             
-            logger.debug(f"  - Response Status: {response.status_code}")
-            logger.debug(f"  - Response Headers: {dict(response.headers)}")
-            logger.debug(f"  - Response Body: {response.text}")
-            
             if response.status_code == 200:
                 response_data = response.json()
-                logger.info(f"Authentication successful! Response data: {response_data}")
                 
                 # Based on AccessToken.ts, expect 'token' field
                 if 'token' in response_data:
-                    logger.info("Access token retrieved successfully")
                     return response_data['token'], None
                 else:
-                    logger.error(f"Authentication succeeded but no token found in response: {response_data}")
                     return None, f"Authentication succeeded but no token found in response: {response_data}"
             else:
                 try:
                     error_data = response.json()
-                    logger.error(f"HTTP error {response.status_code}: {error_data}")
                     return None, f"HTTP error {response.status_code}: {error_data}"
                 except:
-                    logger.error(f"HTTP error {response.status_code}: {response.text}")
                     return None, f"HTTP error {response.status_code}: {response.text}"
                     
         except Exception as e:
-            logger.error(f"Request exception: {str(e)}")
             return None, f"Request failed: {str(e)}"
         
         return None, "Unable to authenticate with Groww API. Please verify your API credentials and ensure you have an active API subscription."
