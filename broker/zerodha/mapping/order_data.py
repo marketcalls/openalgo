@@ -198,7 +198,9 @@ def transform_positions_data(positions_data):
             "exchange": position.get('exchange', ''),
             "product": position.get('product', ''),
             "quantity": position.get('quantity', '0'),
+            "pnl": round(position.get('pnl', 0.0), 2),  # Rounded to two decimals
             "average_price": average_price_formatted,
+            "ltp": round(position.get('last_price', 0.0), 2)
         }
         transformed_data.append(transformed_position)
     return transformed_data
