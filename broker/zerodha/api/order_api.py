@@ -2,11 +2,14 @@ import http.client
 import json
 import os
 import urllib.parse
+from datetime import datetime, time
+import pytz
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from broker.zerodha.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from broker.zerodha.api.data import BrokerData
 
 logger = get_logger(__name__)
 
@@ -114,14 +117,14 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     return net_qty
 
-def place_order_api(data,auth):
+def place_order_api(data, auth):
     AUTH_TOKEN = auth
-    
+
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     #token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data)
-    
+
     # Prepare the payload
     payload = {
         'tradingsymbol': newdata['tradingsymbol'],
@@ -138,39 +141,67 @@ def place_order_api(data,auth):
     }
 
     logger.info(f"Payload for place_order_api: {payload}")
-    
+
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
-    
+
+    # Determine endpoint based on market hours
+    exchange = newdata.get('exchange') or ""
+    # Use Asia/Calcutta timezone
+    tz = pytz.timezone('Asia/Calcutta')
+    now = datetime.now(tz).time()
+
+    # Get market timings for the exchange
+    broker_data = BrokerData(auth)
+    timings = broker_data.get_market_timings(exchange)
+    try:
+        market_start = datetime.strptime(timings['start'], "%H:%M:%S").time()
+        market_end = datetime.strptime(timings['end'], "%H:%M:%S").time()
+    except Exception as e:
+        logger.warning(f"Could not parse market timings for exchange {exchange}: {e}")
+        # Fallback to regular endpoint if timings are not available
+        market_start = time(0, 0, 0)
+        market_end = time(23, 59, 59)
+
+    # If current time is within market hours, use regular; else use amo
+    if market_start <= now <= market_end:
+        logger.debug("------> Placing Regular Order ....")
+        endpoint = 'https://api.kite.trade/orders/regular'
+    else:
+        logger.debug("------> Placing AMO Order ....")
+        endpoint = 'https://api.kite.trade/orders/amo'
+
+    logger.info(f"Selected endpoint for order: {endpoint} (now={now}, market_start={market_start}, market_end={market_end})")
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
     headers = {
         'X-Kite-Version': '3',
         'Authorization': f'token {AUTH_TOKEN}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
-    
+
     # Make the request using the shared client
     response = client.post(
-        'https://api.kite.trade/orders/regular',
+        endpoint,
         headers=headers,
         content=payload_encoded
     )
-    
+
     # Parse the response
     response_data = response.json()
     logger.info(f"Response from place_order_api: {response_data}")
-    
+
     # Handle the response
     if response_data['status'] == 'success':
         orderid = response_data['data']['order_id']
     else:
         orderid = None
-        
+
     # Add status attribute to maintain backward compatibility with the caller
     response.status = response.status_code
-    
+
     # Return the response object, response data, and order ID
     return response, response_data, orderid
 
@@ -417,4 +448,3 @@ def cancel_all_orders_api(data,auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-
