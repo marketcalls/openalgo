@@ -21,6 +21,12 @@ RUN pip install --no-cache-dir uv && \
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.13-slim-bookworm AS production
 
+# 0 – set timezone to IST (Asia/Kolkata)
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+    ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # 1 – user & workdir
 RUN useradd --create-home appuser
 WORKDIR /app
@@ -29,16 +35,21 @@ WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 
-# 3 – entrypoint script
-COPY --chown=appuser:appuser start.sh /start.sh
-RUN chmod +x /start.sh
+# 3 – create required directories with proper ownership
+RUN mkdir -p /app/logs /app/db && \
+    chown -R appuser:appuser /app/logs /app/db
+
+# 4 – entrypoint script and fix line endings
+COPY --chown=appuser:appuser start.sh /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 # ---- RUNTIME ENVS --------------------------------------------------------- #
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Kolkata
 # --------------------------------------------------------------------------- #
 
 USER appuser
 EXPOSE 5000
-CMD ["/start.sh"]
+CMD ["/app/start.sh"]

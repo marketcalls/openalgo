@@ -8,10 +8,12 @@ services:
     container_name: openalgo-web
     ports:
       - "${FLASK_PORT:-5000}:5000"
+      - "${WEBSOCKET_PORT:-8765}:8765"
 
-    # persistent DB + mount the host .env read-only so dotenv can read it
+    # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
       - ./db:/app/db
+      - ./logs:/app/logs
       - ./.env:/app/.env:ro   # ← .env stays on your machine
 
     # (optional) extra env-vars that are NOT in .env

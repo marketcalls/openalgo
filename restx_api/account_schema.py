@@ -26,3 +26,10 @@ class OpenPositionSchema(Schema):
     symbol = fields.Str(required=True)
     exchange = fields.Str(required=True)
     product = fields.Str(required=True)
+
+class AnalyzerSchema(Schema):
+    apikey = fields.Str(required=True)
+
+class AnalyzerToggleSchema(Schema):
+    apikey = fields.Str(required=True)
+    mode = fields.Bool(required=True)

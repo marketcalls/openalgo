@@ -28,9 +28,19 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
     logger.info(f'Broker callback initiated for: {broker}')
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
+    logger.info(f'Session contents: {dict(session)}')
+    logger.info(f'Session has user key: {"user" in session}')
+    
+    # Special handling for Compositedge - it comes from external OAuth and might lose session
+    if broker == 'compositedge' and 'user' not in session:
+        # For Compositedge OAuth callback, we'll handle authentication differently
+        # The session will be established after successful auth token validation
+        logger.info("Compositedge callback without session - will establish session after auth")
+    else:
+        # Check if user is not in session first for other brokers
+        if 'user' not in session:
+            logger.warning(f'User not in session for {broker} callback, redirecting to login')
+            return redirect(url_for('auth.login'))
 
     if session.get('logged_in'):
         # Store broker in session and g
@@ -126,6 +136,12 @@ def broker_callback(broker,para=None):
 
 
     elif broker=='compositedge':
+        # For Compositedge, check if we need to handle a special case where session might be lost
+        if 'user' not in session:
+            # Check if this is coming from a valid OAuth callback
+            # Log the issue but try to continue if we have valid data
+            logger.warning("Session 'user' key missing in Compositedge callback, attempting to recover")
+            
         try:
             # Get the raw data from the request
             if request.method == 'POST':
@@ -221,7 +237,7 @@ def broker_callback(broker,para=None):
                 return render_template('tradejini.html', error=error_message)
         
         forward_url = 'broker.html'
-        
+       
     elif broker=='icici':
         full_url = request.full_path
         logger.debug(f'ICICI broker - Full URL: {full_url}') 
@@ -241,22 +257,6 @@ def broker_callback(broker,para=None):
     elif broker=='iifl':
         code = 'iifl'
         logger.debug(f'IIFL broker - The code is {code}')  
-               
-        # Fetch auth token, feed token and user ID
-        auth_token, feed_token, user_id, error_message = auth_function(code)
-        forward_url = 'broker.html'
-    
-    elif broker=='jainam':
-        code = 'jainam'
-        logger.debug(f'Jainam broker - The code is {code}')  
-               
-        # Fetch auth token, feed token and user ID
-        auth_token, feed_token, user_id, error_message = auth_function(code)
-        forward_url = 'broker.html'
-
-    elif broker=='jainampro':
-        code = 'jainampro'
-        logger.debug(f'JainamPro broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -413,6 +413,20 @@ def broker_callback(broker,para=None):
         
         # For compositedge and pocketful, we have the user_id from authenticate_broker
         if broker =='angel' or broker == 'compositedge' or broker == 'pocketful':
+            # For Compositedge, handle missing session user
+            if broker == 'compositedge' and 'user' not in session:
+                # Get the admin user from the database
+                from database.user_db import find_user_by_username
+                admin_user = find_user_by_username()
+                if admin_user:
+                    # Use the admin user's username
+                    username = admin_user.username
+                    session['user'] = username
+                    logger.info(f"Compositedge callback: Set session user to {username}")
+                else:
+                    logger.error("No admin user found in database for Compositedge callback")
+                    return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
+            
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
         else:
