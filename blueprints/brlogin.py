@@ -237,15 +237,7 @@ def broker_callback(broker,para=None):
                 return render_template('tradejini.html', error=error_message)
         
         forward_url = 'broker.html'
-    
-    elif broker=='trustline':
-        code = 'trustline'
-        logger.debug(f'Trustline broker - code: {code}')  
-               
-        # Fetch auth token, feed token and user ID
-        auth_token, feed_token, user_id, error_message = auth_function(code)
-        forward_url = 'broker.html'
-        
+       
     elif broker=='icici':
         full_url = request.full_path
         logger.debug(f'ICICI broker - Full URL: {full_url}') 
@@ -265,22 +257,6 @@ def broker_callback(broker,para=None):
     elif broker=='iifl':
         code = 'iifl'
         logger.debug(f'IIFL broker - The code is {code}')  
-               
-        # Fetch auth token, feed token and user ID
-        auth_token, feed_token, user_id, error_message = auth_function(code)
-        forward_url = 'broker.html'
-    
-    elif broker=='jainam':
-        code = 'jainam'
-        logger.debug(f'Jainam broker - The code is {code}')  
-               
-        # Fetch auth token, feed token and user ID
-        auth_token, feed_token, user_id, error_message = auth_function(code)
-        forward_url = 'broker.html'
-
-    elif broker=='jainampro':
-        code = 'jainampro'
-        logger.debug(f'JainamPro broker - The code is {code}')  
                
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
