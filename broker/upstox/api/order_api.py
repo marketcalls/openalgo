@@ -147,6 +147,10 @@ def place_order_api(data, auth):
         headers = {'Authorization': f'Bearer {auth}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
         response = client.post("https://api.upstox.com/v2/order/place", headers=headers, content=payload)
         response.raise_for_status()
+        
+        # Add status attribute to make response compatible with place_order_service.py
+        # as the rest of the codebase expects .status instead of .status_code
+        response.status = response.status_code
 
         response_data = response.json()
         logger.debug(f"Place order API response: {response_data}")
