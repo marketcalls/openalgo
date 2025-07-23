@@ -88,25 +88,21 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, api_key: s
         
         # Filter by instrument type based on exchange
         if instrumenttype == 'futures':
+            # All exchanges support FUT along with their specific types
             if exchange in ['NFO', 'BFO']:
-                # For NFO/BFO futures: FUTSTK (stock futures) or FUTIDX (index futures)
-                query = query.filter(SymToken.instrumenttype.in_(['FUTSTK', 'FUTIDX']))
+                query = query.filter(SymToken.instrumenttype.in_(['FUTSTK', 'FUTIDX', 'FUT']))
             elif exchange == 'MCX':
-                # For MCX futures: FUTCOM (commodity futures)
-                query = query.filter(SymToken.instrumenttype.in_(['FUTCOM', 'FUTENR']))
+                query = query.filter(SymToken.instrumenttype.in_(['FUTCOM', 'FUTENR', 'FUT']))
             elif exchange == 'CDS':
-                # For CDS futures: FUTCUR (currency futures)
-                query = query.filter(SymToken.instrumenttype.in_(['FUTCUR', 'FUTIRC']))
+                query = query.filter(SymToken.instrumenttype.in_(['FUTCUR', 'FUTIRC', 'FUT']))
         else:  # options
+            # All exchanges support CE/PE along with their specific types
             if exchange in ['NFO', 'BFO']:
-                # For NFO/BFO options: OPTSTK (stock options) or OPTIDX (index options)
-                query = query.filter(SymToken.instrumenttype.in_(['OPTSTK', 'OPTIDX']))
+                query = query.filter(SymToken.instrumenttype.in_(['OPTSTK', 'OPTIDX', 'CE', 'PE']))
             elif exchange == 'MCX':
-                # For MCX options: OPTFUT (options on futures)
-                query = query.filter(SymToken.instrumenttype.in_(['OPTFUT']))
+                query = query.filter(SymToken.instrumenttype.in_(['OPTFUT', 'CE', 'PE']))
             elif exchange == 'CDS':
-                # For CDS options: OPTCUR (currency options)
-                query = query.filter(SymToken.instrumenttype.in_(['OPTCUR', 'OPTIRC']))
+                query = query.filter(SymToken.instrumenttype.in_(['OPTCUR', 'OPTIRC', 'CE', 'PE']))
         
         # Execute query and get results
         results = query.all()
@@ -123,9 +119,14 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, api_key: s
         logger.info(f"Sample symbols found: {[r[0] for r in results[:5]]}")
         
         # Filter for exact symbol match and extract expiry dates
-        # Pattern: SYMBOL + DDMMMYY (like BANKNIFTY31JUL25) + optional strike/type (like 46500CE)
+        # Pattern: SYMBOL + DDMMMYY (like BANKNIFTY31JUL25) + optional suffix (like FUT/CE/PE)
         import re
-        pattern = f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}'
+        # For futures, we need to handle the FUT suffix
+        if instrumenttype == 'futures':
+            pattern = f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}(FUT)?'
+        else:
+            # For options: SYMBOL + DDMMMYY + strike + CE/PE
+            pattern = f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}'
         
         filtered_expiry_dates = set()
         for result in results:
@@ -139,13 +140,23 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, api_key: s
         if not filtered_expiry_dates:
             logger.info(f"No exact matches found. Trying alternative patterns.")
             # Try different patterns that might exist in the database
-            alternative_patterns = [
-                f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}',  # BANKNIFTY31JUL25
-                f'^{symbol}[0-9]{{2}}[A-Z]{{3}}',  # BANKNIFTY31JUL
-                f'^{symbol}[0-9]{{4}}[A-Z]{{3}}',  # BANKNIFTY2025JUL
-                f'^{symbol}[A-Z]{{3}}[0-9]{{2}}',  # BANKNIFTYJUL25
-                f'^{symbol}[A-Z]{{3}}[0-9]{{4}}',  # BANKNIFTYJUL2025
-            ]
+            if instrumenttype == 'futures':
+                alternative_patterns = [
+                    f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}FUT',  # RELIANCE31JUL25FUT
+                    f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}',  # RELIANCE31JUL25
+                    f'^{symbol}[0-9]{{2}}[A-Z]{{3}}FUT',  # RELIANCE31JULFUT
+                    f'^{symbol}[0-9]{{4}}[A-Z]{{3}}FUT',  # RELIANCE2025JULFUT
+                    f'^{symbol}[A-Z]{{3}}[0-9]{{2}}FUT',  # RELIANCEJUL25FUT
+                    f'^{symbol}[A-Z]{{3}}[0-9]{{4}}FUT',  # RELIANCEJUL2025FUT
+                ]
+            else:
+                alternative_patterns = [
+                    f'^{symbol}[0-9]{{2}}[A-Z]{{3}}[0-9]{{2}}',  # BANKNIFTY31JUL25
+                    f'^{symbol}[0-9]{{2}}[A-Z]{{3}}',  # BANKNIFTY31JUL
+                    f'^{symbol}[0-9]{{4}}[A-Z]{{3}}',  # BANKNIFTY2025JUL
+                    f'^{symbol}[A-Z]{{3}}[0-9]{{2}}',  # BANKNIFTYJUL25
+                    f'^{symbol}[A-Z]{{3}}[0-9]{{4}}',  # BANKNIFTYJUL2025
+                ]
             
             for alt_pattern in alternative_patterns:
                 temp_matches = set()
