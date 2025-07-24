@@ -248,7 +248,7 @@
                 this.checkInterval = setInterval(() => this.checkStatus(), 10000);
                 
                 // Listen for WebSocket events
-                if (typeof socket !== 'undefined') {
+                if (typeof socket !== 'undefined' && socket) {
                     socket.on('master_contract_download', (data) => {
                         this.checkStatus();
                     });

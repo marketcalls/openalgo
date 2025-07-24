@@ -13,7 +13,10 @@
       "Bash(rg:*)",
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(uv run:*)",
+      "Bash(curl:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": []
   }

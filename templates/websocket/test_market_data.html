@@ -1,0 +1,974 @@
+{% extends "base.html" %}
+
+{% block head %}
+<!-- No external scripts needed - using existing assets -->
+<style>
+    .data-value { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+    .positive { color: rgb(34, 197, 94); }
+    .negative { color: rgb(239, 68, 68); }
+    .unchanged { color: rgb(107, 114, 128); }
+    .flash { animation: flash 0.5s; }
+    @keyframes flash {
+        0% { background-color: rgb(251, 191, 36, 0.3); }
+        100% { background-color: transparent; }
+    }
+    .connection-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-connected { background-color: rgb(34, 197, 94); }
+    .status-disconnected { background-color: rgb(239, 68, 68); }
+    .status-connecting { background-color: rgb(251, 191, 36); animation: pulse 2s infinite; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h1 class="card-title text-3xl">WebSocket Market Data Test</h1>
+            <p class="text-base-content/70">Real-time testing for RELIANCE and TCS market data streams</p>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Connection Status</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-center">
+                    <span class="text-base-content/70 mr-2">WebSocket:</span>
+                    <span class="connection-indicator status-disconnected"></span>
+                    <span id="websocket-status" class="font-semibold text-error">Disconnected</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="text-base-content/70 mr-2">Subscriptions:</span>
+                    <span id="subscription-count" class="badge badge-primary">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Control Panel</h2>
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <button onclick="connectWebSocket()" class="btn btn-primary btn-sm">
+                    Connect WebSocket
+                </button>
+                <button onclick="subscribeAll()" class="btn btn-success btn-sm">
+                    Subscribe All
+                </button>
+                <button onclick="subscribeAllLTP()" class="btn btn-info btn-sm">
+                    Subscribe All LTP
+                </button>
+                <button onclick="subscribeAllQuote()" class="btn btn-accent btn-sm">
+                    Subscribe All Quote
+                </button>
+                <button onclick="subscribeAllDepth()" class="btn btn-secondary btn-sm">
+                    Subscribe All Depth
+                </button>
+                <button onclick="unsubscribeAll()" class="btn btn-warning btn-sm">
+                    Unsubscribe All
+                </button>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                <button onclick="testSequential()" class="btn btn-outline btn-sm">
+                    Test Sequential
+                </button>
+                <button onclick="showSubscriptions()" class="btn btn-outline btn-sm">
+                    Show Subscriptions
+                </button>
+                <button onclick="clearData()" class="btn btn-error btn-sm">
+                    Clear Data
+                </button>
+                <button onclick="testPerformance()" class="btn btn-outline btn-sm">
+                    Performance Test
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Market Data Display -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- RELIANCE -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="card-title text-xl">NSE:RELIANCE</h3>
+                    <div class="text-xs space-y-2">
+                        <div>
+                            <span class="text-base-content/70">Subscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="subscribe('RELIANCE', 'NSE', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
+                                <button onclick="subscribe('RELIANCE', 'NSE', 'Quote')" class="btn btn-success btn-xs">Quote</button>
+                                <button onclick="subscribe('RELIANCE', 'NSE', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-base-content/70">Unsubscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'LTP')" class="btn btn-error btn-xs">LTP</button>
+                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'Quote')" class="btn btn-error btn-xs">Quote</button>
+                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'Depth')" class="btn btn-error btn-xs">Depth</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LTP Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Price:</span>
+                                <div id="reliance-ltp" class="data-value text-2xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="text-xs text-base-content/50">Last Update:</span>
+                            <span id="reliance-ltp-time" class="data-value text-xs">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quote Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Open:</span>
+                                <div id="reliance-open" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">High:</span>
+                                <div id="reliance-high" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Low:</span>
+                                <div id="reliance-low" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Close:</span>
+                                <div id="reliance-close" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Volume:</span>
+                                <div id="reliance-volume" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Avg Price:</span>
+                                <div id="reliance-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Buy Qty:</span>
+                                <div id="reliance-total-buy-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Sell Qty:</span>
+                                <div id="reliance-total-sell-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
+                                <div id="reliance-upper-circuit" class="data-value text-success">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
+                                <div id="reliance-lower-circuit" class="data-value text-error">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Depth Section -->
+                <div class="card bg-base-200">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
+                                <div id="reliance-buy-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
+                                <div id="reliance-sell-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TCS -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="card-title text-xl">NSE:TCS</h3>
+                    <div class="text-xs space-y-2">
+                        <div>
+                            <span class="text-base-content/70">Subscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="subscribe('TCS', 'NSE', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
+                                <button onclick="subscribe('TCS', 'NSE', 'Quote')" class="btn btn-success btn-xs">Quote</button>
+                                <button onclick="subscribe('TCS', 'NSE', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-base-content/70">Unsubscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="unsubscribe('TCS', 'NSE', 'LTP')" class="btn btn-error btn-xs">LTP</button>
+                                <button onclick="unsubscribe('TCS', 'NSE', 'Quote')" class="btn btn-error btn-xs">Quote</button>
+                                <button onclick="unsubscribe('TCS', 'NSE', 'Depth')" class="btn btn-error btn-xs">Depth</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LTP Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Price:</span>
+                                <div id="tcs-ltp" class="data-value text-2xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="text-xs text-base-content/50">Last Update:</span>
+                            <span id="tcs-ltp-time" class="data-value text-xs">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quote Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Open:</span>
+                                <div id="tcs-open" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">High:</span>
+                                <div id="tcs-high" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Low:</span>
+                                <div id="tcs-low" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Close:</span>
+                                <div id="tcs-close" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Volume:</span>
+                                <div id="tcs-volume" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Avg Price:</span>
+                                <div id="tcs-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Buy Qty:</span>
+                                <div id="tcs-total-buy-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Sell Qty:</span>
+                                <div id="tcs-total-sell-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
+                                <div id="tcs-upper-circuit" class="data-value text-success">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
+                                <div id="tcs-lower-circuit" class="data-value text-error">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Depth Section -->
+                <div class="card bg-base-200">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
+                                <div id="tcs-buy-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
+                                <div id="tcs-sell-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="card-title text-xl">Event Log</h2>
+                <button onclick="clearLog()" class="btn btn-ghost btn-sm">
+                    Clear Log
+                </button>
+            </div>
+            <div id="event-log" class="mockup-code h-64 overflow-y-auto text-xs">
+                <pre class="text-base-content/70"><code>Waiting for events...</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Global variables
+    let socket = null;
+    let subscriptions = new Set();
+    let lastPrices = {};
+
+    // Initialize WebSocket connection to the proxy server
+    function connectWebSocket() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            logEvent('Already connected to WebSocket', 'info');
+            return;
+        }
+
+        logEvent('Attempting to connect to WebSocket server...', 'info');
+
+        try {
+            // Get API key from the API first
+            fetchWithCSRF('/api/websocket/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'error') {
+                        if (data.message.includes('No API key found')) {
+                            logEvent(`❌ ${data.message}`, 'error');
+                            logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                        } else {
+                            logEvent(`WebSocket Error: ${data.message}`, 'error');
+                        }
+                        return;
+                    }
+                    
+                    // Now connect to the WebSocket server
+                    const wsUrl = 'ws://localhost:8765';
+                    socket = new WebSocket(wsUrl);
+
+                    socket.onopen = () => {
+                        document.getElementById('websocket-status').textContent = 'Connected';
+                        document.getElementById('websocket-status').className = 'font-semibold text-success';
+                        document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
+                        logEvent('Connected to WebSocket server', 'success');
+                        
+                        // Get API key and authenticate
+                        fetchWithCSRF('/api/websocket/apikey')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.status === 'success' && data.api_key) {
+                                    const authMessage = {
+                                        action: 'authenticate',
+                                        api_key: data.api_key
+                                    };
+                                    socket.send(JSON.stringify(authMessage));
+                                    logEvent('Sent authentication request with API key', 'info');
+                                } else {
+                                    logEvent(`Failed to get API key: ${data.message}`, 'error');
+                                    logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                                }
+                            })
+                            .catch(error => {
+                                logEvent(`Error getting API key: ${error}`, 'error');
+                            });
+                    };
+
+                    socket.onclose = () => {
+                        document.getElementById('websocket-status').textContent = 'Disconnected';
+                        document.getElementById('websocket-status').className = 'font-semibold text-error';
+                        document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
+                        logEvent('Disconnected from WebSocket', 'error');
+                    };
+
+                    socket.onerror = (error) => {
+                        logEvent(`WebSocket error: ${error}`, 'error');
+                    };
+
+                    socket.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            handleWebSocketMessage(data);
+                        } catch (e) {
+                            logEvent(`Error parsing WebSocket message: ${e}`, 'error');
+                        }
+                    };
+                })
+                .catch(error => {
+                    logEvent(`Error checking WebSocket status: ${error}`, 'error');
+                });
+
+        } catch (error) {
+            logEvent(`Error initializing WebSocket: ${error.message}`, 'error');
+        }
+    }
+
+    // Handle WebSocket messages
+    function handleWebSocketMessage(data) {
+        const type = data.type || data.status;
+        
+        switch(type) {
+            case 'auth':
+                if (data.status === 'success') {
+                    logEvent('WebSocket authentication successful', 'success');
+                } else {
+                    logEvent(`Authentication failed: ${data.message}`, 'error');
+                }
+                break;
+                
+            case 'market_data':
+                updateMarketData(data);
+                logEvent(`Market update: ${data.symbol} (${data.exchange})`, 'data');
+                break;
+                
+            case 'subscribe':
+                if (data.status === 'success') {
+                    logEvent(`Subscription successful`, 'success');
+                    updateSubscriptionCount();
+                } else {
+                    logEvent(`Subscription error: ${data.message}`, 'error');
+                }
+                break;
+                
+            case 'unsubscribe':
+                if (data.status === 'success') {
+                    if (data.successful && data.successful.length > 0) {
+                        data.successful.forEach(sub => {
+                            logEvent(`✅ Successfully unsubscribed: ${sub.exchange}:${sub.symbol}`, 'success');
+                        });
+                    } else {
+                        logEvent(`✅ Unsubscription successful`, 'success');
+                    }
+                } else {
+                    if (data.failed && data.failed.length > 0) {
+                        data.failed.forEach(sub => {
+                            logEvent(`❌ Failed to unsubscribe: ${sub.exchange}:${sub.symbol} - ${sub.message}`, 'error');
+                        });
+                    } else {
+                        logEvent(`❌ Unsubscription failed: ${data.message || 'Unknown error'}`, 'error');
+                    }
+                }
+                updateSubscriptionCount();
+                break;
+                
+            case 'error':
+                logEvent(`WebSocket error: ${data.message}`, 'error');
+                break;
+                
+            default:
+                logEvent(`Unknown message type: ${type}`, 'info');
+        }
+    }
+
+    // Subscribe to a symbol
+    function subscribe(symbol, exchange, mode) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        const message = {
+            action: 'subscribe',
+            symbols: [{symbol: symbol, exchange: exchange}],
+            mode: mode
+        };
+        
+        socket.send(JSON.stringify(message));
+        
+        logEvent(`📤 Sent subscribe: ${JSON.stringify(message)}`, 'info');
+
+        subscriptions.add(`${exchange}:${symbol}:${mode}`);
+        updateSubscriptionCount();
+        logEvent(`✅ Subscribing to ${exchange}:${symbol} (${mode})`, 'success');
+    }
+
+    // Unsubscribe from a symbol
+    function unsubscribe(symbol, exchange, mode) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        // Convert string mode to numeric for consistency with server
+        const modeMap = {"LTP": 1, "Quote": 2, "Depth": 3};
+        const numericMode = modeMap[mode] || mode;
+
+        const message = {
+            action: 'unsubscribe',
+            symbols: [{
+                symbol: symbol, 
+                exchange: exchange,
+                mode: numericMode
+            }],
+            mode: mode  // Keep string mode for frontend compatibility
+        };
+        
+        socket.send(JSON.stringify(message));
+        
+        logEvent(`📤 Sent unsubscribe: ${JSON.stringify(message)}`, 'info');
+
+        subscriptions.delete(`${exchange}:${symbol}:${mode}`);
+        updateSubscriptionCount();
+        logEvent(`❌ Unsubscribing from ${exchange}:${symbol} (${mode})`, 'info');
+    }
+
+    // Subscribe to all data for both symbols
+    function subscribeAll() {
+        subscribe('RELIANCE', 'NSE', 'LTP');
+        subscribe('RELIANCE', 'NSE', 'Quote');
+        subscribe('RELIANCE', 'NSE', 'Depth');
+        
+        setTimeout(() => {
+            subscribe('TCS', 'NSE', 'LTP');
+            subscribe('TCS', 'NSE', 'Quote');
+            subscribe('TCS', 'NSE', 'Depth');
+        }, 500);
+    }
+
+    // Subscribe to LTP for both symbols
+    function subscribeAllLTP() {
+        subscribe('RELIANCE', 'NSE', 'LTP');
+        setTimeout(() => subscribe('TCS', 'NSE', 'LTP'), 200);
+    }
+
+    // Subscribe to Quote for both symbols
+    function subscribeAllQuote() {
+        subscribe('RELIANCE', 'NSE', 'Quote');
+        setTimeout(() => subscribe('TCS', 'NSE', 'Quote'), 200);
+    }
+
+    // Subscribe to Depth for both symbols
+    function subscribeAllDepth() {
+        subscribe('RELIANCE', 'NSE', 'Depth');
+        setTimeout(() => subscribe('TCS', 'NSE', 'Depth'), 200);
+    }
+
+    // Test sequential subscription/unsubscription
+    function testSequential() {
+        logEvent('🧪 Starting sequential test...', 'info');
+        
+        // Phase 1: Subscribe to LTP
+        setTimeout(() => {
+            logEvent('Phase 1: Subscribing to LTP', 'info');
+            subscribeAllLTP();
+        }, 1000);
+        
+        // Phase 2: Subscribe to Quote
+        setTimeout(() => {
+            logEvent('Phase 2: Subscribing to Quote', 'info');
+            subscribeAllQuote();
+        }, 3000);
+        
+        // Phase 3: Unsubscribe LTP, Subscribe Depth
+        setTimeout(() => {
+            logEvent('Phase 3: Switching LTP to Depth', 'info');
+            unsubscribe('RELIANCE', 'NSE', 'LTP');
+            unsubscribe('TCS', 'NSE', 'LTP');
+            setTimeout(() => subscribeAllDepth(), 500);
+        }, 5000);
+        
+        // Phase 4: Unsubscribe all
+        setTimeout(() => {
+            logEvent('Phase 4: Unsubscribing all', 'info');
+            unsubscribeAll();
+        }, 8000);
+        
+        setTimeout(() => {
+            logEvent('✅ Sequential test completed!', 'success');
+        }, 9000);
+    }
+
+    // Show current subscriptions
+    function showSubscriptions() {
+        logEvent('📊 Current subscriptions:', 'info');
+        if (subscriptions.size === 0) {
+            logEvent('  - No active subscriptions', 'info');
+        } else {
+            subscriptions.forEach(sub => {
+                logEvent(`  - ${sub}`, 'info');
+            });
+        }
+    }
+
+    // Performance test
+    function testPerformance() {
+        logEvent('⚡ Starting performance test...', 'info');
+        const startTime = Date.now();
+        let subscribeCount = 0;
+        let updateCount = 0;
+        
+        // Track updates
+        const originalCallback = updateMarketData;
+        updateMarketData = function(data) {
+            updateCount++;
+            originalCallback(data);
+        };
+        
+        // Rapid subscribe/unsubscribe
+        const symbols = ['RELIANCE', 'TCS'];
+        const modes = ['LTP', 'Quote', 'Depth'];
+        
+        symbols.forEach((symbol, i) => {
+            modes.forEach((mode, j) => {
+                setTimeout(() => {
+                    subscribe(symbol, 'NSE', mode);
+                    subscribeCount++;
+                }, (i * 3 + j) * 200);
+            });
+        });
+        
+        // Show results after 10 seconds
+        setTimeout(() => {
+            const duration = (Date.now() - startTime) / 1000;
+            logEvent(`📈 Performance Results:`, 'success');
+            logEvent(`  - Duration: ${duration}s`, 'info');
+            logEvent(`  - Subscriptions: ${subscribeCount}`, 'info');
+            logEvent(`  - Updates received: ${updateCount}`, 'info');
+            logEvent(`  - Updates/second: ${(updateCount/duration).toFixed(2)}`, 'info');
+            
+            // Restore original callback
+            updateMarketData = originalCallback;
+        }, 10000);
+    }
+
+    // Unsubscribe all
+    function unsubscribeAll() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        const message = {
+            action: 'unsubscribe_all'
+        };
+        
+        socket.send(JSON.stringify(message));
+
+        subscriptions.clear();
+        updateSubscriptionCount();
+        logEvent('Unsubscribed from all symbols', 'info');
+    }
+
+    // Update market data display
+    function updateMarketData(data) {
+        const symbol = data.symbol.toLowerCase();
+        const mode = data.mode;
+        const marketData = data.data || {};
+
+        // Handle LTP updates
+        if (mode === 1 && marketData.ltp !== undefined) {
+            const ltpElement = document.getElementById(`${symbol}-ltp`);
+            const timeElement = document.getElementById(`${symbol}-ltp-time`);
+            
+            if (ltpElement) {
+                const newPrice = marketData.ltp;
+                const oldPrice = lastPrices[`${symbol}-ltp`] || newPrice;
+                
+                ltpElement.textContent = formatPrice(newPrice);
+                ltpElement.classList.add('flash');
+                
+                // Color coding for price changes
+                if (newPrice > oldPrice) {
+                    ltpElement.classList.add('positive');
+                    ltpElement.classList.remove('negative', 'unchanged');
+                } else if (newPrice < oldPrice) {
+                    ltpElement.classList.add('negative');
+                    ltpElement.classList.remove('positive', 'unchanged');
+                } else {
+                    ltpElement.classList.add('unchanged');
+                    ltpElement.classList.remove('positive', 'negative');
+                }
+                
+                lastPrices[`${symbol}-ltp`] = newPrice;
+                
+                setTimeout(() => ltpElement.classList.remove('flash'), 500);
+            }
+            
+            if (timeElement) {
+                timeElement.textContent = formatTimestamp(marketData.timestamp);
+            }
+        }
+
+        // Handle Quote updates - supports both mode 1 and mode 2
+        if (mode === 1 || mode === 2) {
+            // Price fields
+            const priceFields = ['open', 'high', 'low', 'close'];
+            priceFields.forEach(field => {
+                const element = document.getElementById(`${symbol}-${field}`);
+                if (element && marketData[field] !== undefined && marketData[field] > 0) {
+                    element.textContent = formatPrice(marketData[field]);
+                    element.classList.add('flash');
+                    setTimeout(() => element.classList.remove('flash'), 500);
+                }
+            });
+
+            // Volume
+            const volumeElement = document.getElementById(`${symbol}-volume`);
+            if (volumeElement && marketData.volume !== undefined) {
+                volumeElement.textContent = formatVolume(marketData.volume);
+                volumeElement.classList.add('flash');
+                setTimeout(() => volumeElement.classList.remove('flash'), 500);
+            }
+
+            // Average price
+            const avgPriceElement = document.getElementById(`${symbol}-average-price`);
+            if (avgPriceElement && marketData.average_price !== undefined) {
+                avgPriceElement.textContent = formatPrice(marketData.average_price);
+                avgPriceElement.classList.add('flash');
+                setTimeout(() => avgPriceElement.classList.remove('flash'), 500);
+            }
+
+            // Buy/Sell quantities
+            const buyQtyElement = document.getElementById(`${symbol}-total-buy-quantity`);
+            if (buyQtyElement && marketData.total_buy_quantity !== undefined) {
+                buyQtyElement.textContent = formatVolume(marketData.total_buy_quantity);
+                buyQtyElement.classList.add('flash');
+                setTimeout(() => buyQtyElement.classList.remove('flash'), 500);
+            }
+
+            const sellQtyElement = document.getElementById(`${symbol}-total-sell-quantity`);
+            if (sellQtyElement && marketData.total_sell_quantity !== undefined) {
+                sellQtyElement.textContent = formatVolume(marketData.total_sell_quantity);
+                sellQtyElement.classList.add('flash');
+                setTimeout(() => sellQtyElement.classList.remove('flash'), 500);
+            }
+
+            // Circuit limits
+            const upperCircuitElement = document.getElementById(`${symbol}-upper-circuit`);
+            if (upperCircuitElement && marketData.upper_circuit !== undefined) {
+                upperCircuitElement.textContent = formatPrice(marketData.upper_circuit);
+                upperCircuitElement.classList.add('flash');
+                setTimeout(() => upperCircuitElement.classList.remove('flash'), 500);
+            }
+
+            const lowerCircuitElement = document.getElementById(`${symbol}-lower-circuit`);
+            if (lowerCircuitElement && marketData.lower_circuit !== undefined) {
+                lowerCircuitElement.textContent = formatPrice(marketData.lower_circuit);
+                lowerCircuitElement.classList.add('flash');
+                setTimeout(() => lowerCircuitElement.classList.remove('flash'), 500);
+            }
+
+            // Update LTP from quote data as well
+            if (marketData.ltp !== undefined) {
+                const ltpElement = document.getElementById(`${symbol}-ltp`);
+                if (ltpElement) {
+                    const newPrice = marketData.ltp;
+                    const oldPrice = lastPrices[`${symbol}-ltp`] || newPrice;
+                    
+                    ltpElement.textContent = formatPrice(newPrice);
+                    ltpElement.classList.add('flash');
+                    
+                    // Color coding for price changes
+                    if (newPrice > oldPrice) {
+                        ltpElement.classList.add('positive');
+                        ltpElement.classList.remove('negative', 'unchanged');
+                    } else if (newPrice < oldPrice) {
+                        ltpElement.classList.add('negative');
+                        ltpElement.classList.remove('positive', 'unchanged');
+                    } else {
+                        ltpElement.classList.add('unchanged');
+                        ltpElement.classList.remove('positive', 'negative');
+                    }
+                    
+                    lastPrices[`${symbol}-ltp`] = newPrice;
+                    setTimeout(() => ltpElement.classList.remove('flash'), 500);
+                }
+
+                // Update timestamp
+                const timeElement = document.getElementById(`${symbol}-ltp-time`);
+                if (timeElement) {
+                    timeElement.textContent = formatTimestamp(marketData.timestamp);
+                }
+            }
+        }
+
+        // Handle Depth updates
+        if (mode === 3 && marketData.depth) {
+            updateDepth(symbol, marketData.depth);
+        }
+    }
+
+    // Update depth display
+    function updateDepth(symbol, depth) {
+        const buyDepthElement = document.getElementById(`${symbol}-buy-depth`);
+        const sellDepthElement = document.getElementById(`${symbol}-sell-depth`);
+
+        if (buyDepthElement && depth.buy && depth.buy.length > 0) {
+            buyDepthElement.innerHTML = depth.buy.slice(0, 5).map((level, i) => `
+                <div class="flex justify-between">
+                    <span>${formatPrice(level.price)}</span>
+                    <span class="text-success">${level.quantity}</span>
+                    <span class="text-base-content/50">${level.orders || '-'}</span>
+                </div>
+            `).join('');
+        }
+
+        if (sellDepthElement && depth.sell && depth.sell.length > 0) {
+            sellDepthElement.innerHTML = depth.sell.slice(0, 5).map((level, i) => `
+                <div class="flex justify-between">
+                    <span>${formatPrice(level.price)}</span>
+                    <span class="text-error">${level.quantity}</span>
+                    <span class="text-base-content/50">${level.orders || '-'}</span>
+                </div>
+            `).join('');
+        }
+    }
+
+    // Format price
+    function formatPrice(price) {
+        return new Intl.NumberFormat('en-IN', {
+            style: 'currency',
+            currency: 'INR',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(price);
+    }
+
+    // Format volume
+    function formatVolume(volume) {
+        return new Intl.NumberFormat('en-IN').format(volume);
+    }
+
+    // Format timestamp in IST
+    function formatTimestamp(timestamp) {
+        if (!timestamp) return '-';
+        const date = new Date(timestamp);
+        // Format in IST (Indian Standard Time)
+        return date.toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour12: true,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+
+    // Update subscription count
+    function updateSubscriptionCount() {
+        document.getElementById('subscription-count').textContent = subscriptions.size;
+    }
+
+    // Log events
+    function logEvent(message, type = 'info') {
+        const logElement = document.getElementById('event-log');
+        const timestamp = new Date().toLocaleTimeString('en-IN');
+        
+        const colorClass = {
+            'info': 'text-info',
+            'success': 'text-success',
+            'error': 'text-error',
+            'data': 'text-base-content/70'
+        }[type] || 'text-base-content/70';
+
+        const logEntry = document.createElement('pre');
+        logEntry.className = `${colorClass} mb-1`;
+        logEntry.innerHTML = `<code>[${timestamp}] ${message}</code>`;
+        
+        logElement.appendChild(logEntry);
+        logElement.scrollTop = logElement.scrollHeight;
+
+        // Limit log entries
+        if (logElement.children.length > 100) {
+            logElement.removeChild(logElement.firstChild);
+        }
+    }
+
+    // Clear log
+    function clearLog() {
+        const logElement = document.getElementById('event-log');
+        logElement.innerHTML = '<pre class="text-base-content/70"><code>Log cleared</code></pre>';
+    }
+
+    // Clear all data
+    function clearData() {
+        ['reliance', 'tcs'].forEach(symbol => {
+            // LTP section
+            document.getElementById(`${symbol}-ltp`).textContent = '-';
+            document.getElementById(`${symbol}-ltp-time`).textContent = '-';
+            
+            // Quote section - OHLC
+            ['open', 'high', 'low', 'close'].forEach(field => {
+                document.getElementById(`${symbol}-${field}`).textContent = '-';
+            });
+            
+            // Quote section - additional fields
+            ['volume', 'average-price', 'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
+                const element = document.getElementById(`${symbol}-${field}`);
+                if (element) element.textContent = '-';
+            });
+            
+            // Circuit limits
+            ['upper-circuit', 'lower-circuit'].forEach(field => {
+                const element = document.getElementById(`${symbol}-${field}`);
+                if (element) element.textContent = '-';
+            });
+            
+            // Depth section
+            document.getElementById(`${symbol}-buy-depth`).innerHTML = '<div class="text-base-content/50">No data</div>';
+            document.getElementById(`${symbol}-sell-depth`).innerHTML = '<div class="text-base-content/50">No data</div>';
+        });
+        
+        lastPrices = {};
+        logEvent('Cleared all market data', 'info');
+    }
+
+    // Auto-connect on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        // Check WebSocket server status via REST API
+        fetchWithCSRF('/api/websocket/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'error') {
+                    if (data.message.includes('No API key found')) {
+                        logEvent(`❌ ${data.message}`, 'error');
+                        logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                    } else {
+                        logEvent(`WebSocket Error: ${data.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (data.connected) {
+                    document.getElementById('ws-status').textContent = 'Connected';
+                    document.getElementById('ws-status').className = 'font-semibold text-success';
+                    document.querySelector('#ws-status').previousElementSibling.className = 'connection-indicator status-connected';
+                    logEvent(`WebSocket connected via ${data.broker || 'unknown broker'}`, 'success');
+                } else {
+                    logEvent('WebSocket not connected - you may need to configure your broker first', 'info');
+                }
+            })
+            .catch(error => {
+                console.error('Error checking WebSocket status:', error);
+                logEvent('Failed to check WebSocket status - network error', 'error');
+            });
+    });
+</script>
+{% endblock %}
