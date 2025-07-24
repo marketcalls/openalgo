@@ -41,6 +41,9 @@ from broker.wisdom.streaming.wisdom_adapter import WisdomWebSocketAdapter
 # Import the upstox_adapter
 from broker.upstox.streaming.upstox_adapter import UpstoxWebSocketAdapter
 
+# Import the kotak_adapter
+from broker.kotak.streaming.kotak_adapter import KotakWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -55,6 +58,7 @@ register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
 register_adapter("upstox", UpstoxWebSocketAdapter)
+register_adapter("kotak", KotakWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -75,5 +79,6 @@ __all__ = [
     'JainamWebSocketAdapter',
     'TrustlineWebSocketAdapter',
     'WisdomWebSocketAdapter',
-    'UpstoxWebSocketAdapter'
+    'UpstoxWebSocketAdapter',
+    'KotakWebSocketAdapter'
 ]
