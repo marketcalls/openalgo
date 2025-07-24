@@ -1,4 +1,3 @@
-import http.client
 import json
 import os
 import pandas as pd
@@ -6,16 +5,20 @@ from datetime import datetime, timedelta
 from database.token_db import get_token, get_br_symbol, get_symbol
 import traceback
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Firstock
+    Common function to make API calls to Firstock using shared httpx client with connection pooling
     """
     try:
         api_key = os.getenv('BROKER_API_KEY')
+        if not api_key:
+            raise Exception("BROKER_API_KEY not found in environment variables")
+            
         api_key = api_key[:-4]  # Firstock specific requirement
 
         if payload is None:
@@ -30,37 +33,46 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         logger.info(f"Endpoint: {endpoint}")
         logger.info(f"Payload: {json.dumps(data, indent=2)}")
 
-        conn = http.client.HTTPSConnection("connect.thefirstock.com")
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
 
-        # Convert payload to JSON string and encode
-        payload_str = json.dumps(data)
-        payload_bytes = payload_str.encode('utf-8')
-
         # Use the full endpoint path as provided
-        conn.request(method, f"/api/V4{endpoint}", payload_bytes, headers)
-        res = conn.getresponse()
-        data = res.read()
+        url = f"https://connect.thefirstock.com/api/V4{endpoint}"
+        
+        # Make request using shared httpx client
+        response = client.request(method, url, json=data, headers=headers, timeout=30)
+        
+        # Add status attribute for compatibility
+        response.status = response.status_code
         
         # Debug print
-        response_text = data.decode("utf-8")
+        response_text = response.text
         logger.info(f"Raw Response: {response_text}")
         
         if not response_text:
             return {"status": "error", "message": "Empty response from server"}
             
-        response = json.loads(response_text)
-        logger.info(f"Response: {json.dumps(response, indent=2)}")
+        response_data = response.json()
+        logger.info(f"Response: {json.dumps(response_data, indent=2)}")
         
-        return response
+        return response_data
 
     except Exception as e:
-        logger.error(f"API Error: {e}")
-        logger.info(f"Traceback: {traceback.format_exc()}")
-        raise
+        if "timeout" in str(e).lower():
+            logger.error("Request timeout while calling Firstock API")
+            raise Exception("Request timeout - please try again")
+        elif "connection" in str(e).lower():
+            logger.error("Connection error while calling Firstock API")
+            raise Exception("Connection error - please check your internet connection")
+        else:
+            logger.error(f"API Error: {e}")
+            logger.info(f"Traceback: {traceback.format_exc()}")
+            raise
 
 class BrokerData:
     def __init__(self, auth_token):
