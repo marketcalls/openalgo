@@ -22,6 +22,14 @@ import pandas as pd
 from backtest_engine import BacktestEngine
 import glob
 from concurrent.futures import ThreadPoolExecutor
+import time
+from tabulate import tabulate
+from colorama import Fore, Back, Style, init
+from textwrap import wrap
+from collections import defaultdict
+
+# Initialize colorama
+init(autoreset=True)
 
 # Suppress User warnings in output
 from warnings import filterwarnings
@@ -313,18 +321,18 @@ class MarketDataProcessor:
         self.db_conn = self.db_manager.initialize_database()
         self.logger = logging.getLogger(f"MarketDataProcessor")
         
-        self.consumer = KafkaConsumer(
-            'tick_data',
-            bootstrap_servers='localhost:9092',
-            group_id='tick-processor',
-            auto_offset_reset='earliest'
-            #key_deserializer=lambda k: k.decode('utf-8') if k else None,
-            #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
-        )
+        # self.consumer = KafkaConsumer(
+        #     'tick_data',
+        #     bootstrap_servers='localhost:9092',
+        #     group_id='tick-processor',
+        #     auto_offset_reset='earliest'
+        #     #key_deserializer=lambda k: k.decode('utf-8') if k else None,
+        #     #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
+        # )
 
-        self.logger.info("Starting consumer with configuration:")
-        self.logger.info(f"Group ID: {self.consumer.config['group_id']}")
-        self.logger.info(f"Brokers: {self.consumer.config['bootstrap_servers']}")
+        # self.logger.info("Starting consumer with configuration:")
+        # self.logger.info(f"Group ID: {self.consumer.config['group_id']}")
+        # self.logger.info(f"Brokers: {self.consumer.config['bootstrap_servers']}")
 
         self.aggregation_lock = Lock()
 
@@ -508,6 +516,13 @@ class MarketDataProcessor:
             ranges.append((group[0], group[-1]))
         return ranges
 
+    def chunk_dates(self, start_date, end_date, chunk_size_days):
+        current = start_date
+        while current <= end_date:
+            next_chunk = min(current + timedelta(days=chunk_size_days - 1), end_date)
+            yield current, next_chunk
+            current = next_chunk + timedelta(days=1)
+
     def get_existing_dates(self, symbol, interval):
         table_name = f"ohlc_d"
         query = f"""
@@ -532,7 +547,7 @@ class MarketDataProcessor:
             all_dates = pd.date_range(start=start_date, end=end_date, freq='D').date
             missing_dates = sorted(set(all_dates) - set(existing_dates))
             missing_ranges = self.group_missing_dates(missing_dates)
-            #self.logger.info(f"Missing dates for {symbol} {interval}: {missing_ranges}")
+            self.logger.info(f"Missing dates for {symbol} {interval}: {missing_ranges}")
 
             for range_start, range_end in missing_ranges:
                 condition_1 = range_start.weekday() in [5, 6] and range_end.weekday() in [5, 6] and (range_end - range_start).days <= 2
@@ -547,17 +562,63 @@ class MarketDataProcessor:
                         end_date=range_end.strftime('%Y-%m-%d')
                     )
                 # Check if df is dictionary before accessing 'df'
-                if df.__class__ == dict:
-                    self.logger.warning(f"[{symbol}] ⚠️ No data on {range_start}")
+                if df.__class__ == dict:                    
+                    self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {range_start}")
+                    self.logger.info(f"API Response: {df}")
                     continue
                 if not df.empty:
                     self.insert_historical_data(df, symbol, interval)                    
                 else:
-                    self.logger.warning(f"[{symbol}] ⚠️ No data on {range_start}")
+                    self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {range_start}")
 
         except Exception as e:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
     
+
+    def fetch_historical_data(self, symbol, interval, client, start_date, end_date):
+        try:
+            df = client.history(
+                    symbol=symbol,
+                    exchange='NSE',
+                    interval=interval,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+            # Check if df is dictionary before accessing 'df'
+            if df.__class__ == dict:                    
+                self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {start_date}")
+                self.logger.info(f"API Response: {df}")
+            if not df.empty:
+                self.insert_historical_data(df, symbol, interval)                    
+            else:
+                self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {start_date}")
+
+        except Exception as e:
+            self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
+
+    def process_symbol_interval(self, symbol, interval, client, start_date, end_date):
+        """Process a single symbol-interval pair"""
+        try:
+            if interval == "5m" or interval == "1m":
+                # Chunk the dates into smaller ranges to avoid timeout
+                s_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+                e_d = datetime.strptime(end_date, "%Y-%m-%d").date()
+                #self.logger.info(f"Fetching data for {symbol} with interval {interval} from {s_d} to {e_d}")
+                
+                for chunk_start, chunk_end in self.chunk_dates(start_date=s_d, end_date=e_d, chunk_size_days=10):
+                    self.fetch_historical_data(
+                        symbol, 
+                        interval, 
+                        client, 
+                        chunk_start.strftime("%Y-%m-%d"),
+                        chunk_end.strftime("%Y-%m-%d")
+                    )
+            else:    
+                self.fetch_historical_data(symbol, interval, client, start_date, end_date)
+        except Exception as e:
+            self.logger.error(f"Error processing {symbol} {interval}: {str(e)}")
+
+
     def process_messages(self):
         """Main processing loop"""
         
@@ -814,7 +875,7 @@ class MarketDataProcessor:
         """Clean shutdown"""
         logger.info("Shutting down processors")
         self.executor.shutdown(wait=True)
-        self.consumer.close()
+        #self.consumer.close()
         self.db_conn.close()
         logger.info("Clean shutdown complete")
 
@@ -824,6 +885,8 @@ if __name__ == "__main__":
         api_key="8009e08498f085ff1a3e7da718c5f4b585eaf9c2b7ce0c72740ab2b5d283d36c",  # Replace with your API key
         host="http://127.0.0.1:5000"
     )
+    # Start the timer
+    start_time = time.time()
 
     # Argument parsing
     parser = argparse.ArgumentParser(description='Market Data Processor')
@@ -834,7 +897,8 @@ if __name__ == "__main__":
                        help='Start date for backtest (DD-MM-YYYY format)')
     parser.add_argument('--to_date', type=str,
                        help='End date for backtest (DD-MM-YYYY format)')
-    parser.add_argument('--interval', type=str, default='1m', help='Interval to use for backtest/live (e.g., 1m, 5m, 15m, D)')
+    parser.add_argument('--backtest_folder', type=str,
+                       help='Folder to store backtest data')
     args = parser.parse_args()
 
     # Validate arguments
@@ -871,7 +935,7 @@ if __name__ == "__main__":
 
             # Fetch historical data for each symbol
             for symbol in symbol_list:
-                for interval in ["1m", "5m", "15m", "D"]:
+                for interval in ["D", "15m", "5m", "1m"]:
                     df = client.history(
                         symbol=symbol,
                         exchange='NSE',
@@ -894,37 +958,70 @@ if __name__ == "__main__":
             # Load historical data for the specified date range
             # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
             # Dynamic date range: 7 days back to today
-            end_date = to_date.strftime("%Y-%m-%d")
-            start_date = from_date.strftime("%Y-%m-%d")
+            end_date = to_date.strftime("%Y-%m-%d")     
+            start_date = (from_date - timedelta(days=20)).strftime("%Y-%m-%d") 
 
+            # Cleaning the backtest results folder
+            base_output_dir = args.backtest_folder
+            output_dir = os.path.join(base_output_dir)
+            os.makedirs(output_dir, exist_ok=True)
+            for filename in os.listdir(output_dir):
+                if filename.endswith(".csv"):
+                    os.remove(os.path.join(output_dir, filename))
+            
             # Import symbol list from CSV file
             symbol_list = pd.read_csv('symbol_list_backtest.csv')
             symbol_list = symbol_list['Symbol'].tolist()
 
             # Fetch historical data for each symbol
-            intervals = ["1m", "5m", "15m", "D"]
+            intervals = ["D", "15m", "5m", "1m"]
 
             # Create all combinations of (symbol, interval)
             symbol_interval_pairs = list(product(symbol_list, intervals))
 
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = [
-                    executor.submit(
-                        processor.fetch_missing_data,
-                        symbol,
-                        interval,
-                        client,
-                        start_date,
-                        end_date
-                    )
-                    for symbol, interval in symbol_interval_pairs
-                ]
+            # UNCOMMENT THIS BLOCK FOR FETCHING HISTORICAL DATA FOR ALL INTERVALS
+            # with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
+            #     futures = []
+            #     for symbol, interval in symbol_interval_pairs:
+            #         time.sleep(1)
+            #         futures.append(
+            #             executor.submit(
+            #                 processor.process_symbol_interval,
+            #                 symbol,
+            #                 interval,
+            #                 client,
+            #                 start_date,
+            #                 end_date
+            #             )
+            #         )
+                
+            #     # Wait for all tasks to complete (optional)
+            #     try:
+            #         for future in futures:                        
+            #             future.result()  # This will re-raise any exceptions from the thread
+            #     except KeyboardInterrupt:
+            #         print("Interrupted by user. Cancelling all futures.")
+            #         for future in futures:
+            #             future.cancel()
+            #         executor.shutdown(wait=False, cancel_futures=True)
 
-                for future in as_completed(futures):
-                    future.result()
-
+            
+            # Without threading
+            # for symbol, interval in symbol_interval_pairs:
+            #     if interval == "5m" or interval == "1m":
+            #         # Chunk the dates into smaller ranges to avoid timeout
+            #         s_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+            #         e_d = datetime.strptime(end_date, "%Y-%m-%d").date()
+            #         logger.info(f"Fetching data for {symbol} with interval {interval} from {s_d} to {e_d}")
+                    
+            #         for chunk_start, chunk_end in processor.chunk_dates(start_date=s_d, end_date=e_d, chunk_size_days=10):
+            #             processor.fetch_historical_data(symbol, interval, client, chunk_start.strftime("%Y-%m-%d") , chunk_end.strftime("%Y-%m-%d"))
+            #     else:    
+            #         processor.fetch_historical_data(symbol, interval, client, start_date, end_date)           
+            
+            
             # Process data in simulation mode     
-            def run_backtest_for_symbol(symbol, db_config, start_date, end_date, interval):
+            def run_backtest_for_symbol(symbol, db_config, start_date, end_date, base_output_dir):
                 # Create new connection per thread
                 conn = psycopg2.connect(
                     user=db_config['user'],
@@ -936,40 +1033,436 @@ if __name__ == "__main__":
 
                 engine = BacktestEngine(
                     conn=conn,
-                    symbol=symbol,
-                    interval=interval,
+                    symbol=symbol,                    
                     start_date=start_date.strftime("%Y-%m-%d"),
                     end_date=end_date.strftime("%Y-%m-%d")
                 )
                 trades_df = engine.run()
-                trades_df.to_csv(f"backtest_trades_{symbol}.csv", index=False)
+                
+                output_dir = os.path.join(base_output_dir)
+                os.makedirs(output_dir, exist_ok=True)
 
-                summary = engine.get_summary_metrics()
-                pd.DataFrame([summary]).to_csv(f"summary_{symbol}.csv", index=False)
+                trades_file = os.path.join(output_dir, f"backtest_trades_{symbol}.csv")
+                summary_file = os.path.join(output_dir, f"summary_{symbol}.csv")
 
-                if hasattr(engine, 'export_trail_charts'):
-                    engine.export_trail_charts()
+                trades_df.to_csv(trades_file, index=False)
+
+                #if hasattr(engine, 'export_trail_charts'):
+                #    engine.export_trail_charts()
 
                 conn.close()
                 logger.info(f"✅ Backtest completed for {symbol} → Trades: {len(trades_df)} → Saved: backtest_trades_{symbol}.csv")
 
 
-            def aggregate_all_summaries(output_path="master_summary.csv"):
-                summary_files = glob.glob("summary_*.csv")
+            def aggregate_all_summaries(base_output_dir="backtest_results", output_filename="master_summary.csv"):
+                """
+                Aggregate all summary files from the organized folder structure
+                """
+                # Find all summary files recursively
+                summary_pattern = os.path.join(base_output_dir, "**", "backtest_trades_*.csv")
+                summary_files = glob.glob(summary_pattern, recursive=True)
 
                 if not summary_files:
-                    logger.warning("No summary files found to aggregate.")
+                    logger.warning(f"No summary files found in {base_output_dir}")
                     return
 
-                all_dfs = [pd.read_csv(f) for f in summary_files]
-                master_df = pd.concat(all_dfs, ignore_index=True)
-                master_df.to_csv(output_path, index=False)
+                logger.info(f"Found {len(summary_files)} summary files to aggregate")
+                
+                all_dfs = []
+                skipped_files = []
+                
+                for file_path in summary_files:
+                    try:
+                        # Check if file is empty first
+                        if os.path.getsize(file_path) == 0:
+                            logger.warning(f"Skipping empty file: {file_path}")
+                            skipped_files.append(file_path)
+                            continue
+                        
+                        # Try to read the CSV file
+                        df = pd.read_csv(file_path)
+                        
+                        # Check if DataFrame is empty or has no columns
+                        if df.empty:
+                            logger.warning(f"Skipping empty DataFrame from file: {file_path}")
+                            skipped_files.append(file_path)
+                            continue
+                            
+                        if len(df.columns) == 0:
+                            logger.warning(f"Skipping file with no columns: {file_path}")
+                            skipped_files.append(file_path)
+                            continue
+                        
+                        # Add metadata columns to track source
+                        df['source_file'] = os.path.basename(file_path)
+                        df['folder_path'] = os.path.dirname(file_path)
+                        all_dfs.append(df)
+                        
+                    except pd.errors.EmptyDataError:
+                        #logger.warning(f"Skipping empty CSV file: {file_path}")
+                        skipped_files.append(file_path)
+                        continue
+                    except pd.errors.ParserError as e:
+                        logger.error(f"Parser error reading {file_path}: {e}")
+                        skipped_files.append(file_path)
+                        continue
+                    except FileNotFoundError:
+                        logger.error(f"File not found: {file_path}")
+                        skipped_files.append(file_path)
+                        continue
+                    except PermissionError:
+                        logger.error(f"Permission denied reading file: {file_path}")
+                        skipped_files.append(file_path)
+                        continue
+                    except Exception as e:
+                        logger.error(f"Unexpected error reading {file_path}: {e}")
+                        skipped_files.append(file_path)
+                        continue
+                
+                # Log summary of processing
+                processed_files = len(summary_files) - len(skipped_files)
+                logger.info(f"📊 Processing summary: {processed_files} files processed, {len(skipped_files)} files skipped")
+                
+                if all_dfs:
+                    try:
+                        master_df = pd.concat(all_dfs, ignore_index=True)
+                        master_df.sort_values(by='entry_time', inplace=True)
 
-                logger.info(f"✅ Aggregated {len(summary_files)} summaries into {output_path}")
-                print(master_df)
+                        # Process the trades with constraints
+                        master_df = process_trades_with_constraints(master_df)
+                      
+                        # STRATEGY SUMMARY
+                        strat_summary = master_df.groupby('strategy').agg(
+                            tot_trades=('gross_pnl', 'count'),
+                            proftrades=('net_pnl', lambda x: (x > 0).sum()),
+                            losstrades=('net_pnl', lambda x: (x < 0).sum()),
+                            win_rate=('net_pnl', lambda x: (x > 0).mean() * 100),
+                            gross_pnl=('gross_pnl', 'sum'),
+                            brokerage=('brokerage', 'sum'),
+                            tax_amount=('tax', 'sum'),
+                            net_pnl__=('net_pnl', 'sum'),
+                            avg_pnl__=('net_pnl', 'mean'),         
+                            max_dd__=('net_pnl', lambda x: (x.cumsum() - x.cumsum().cummax()).min()),
+                            avg_dd_=('net_pnl', lambda x: 
+                                (lambda dd: dd[dd > 0].mean() if (dd > 0).any() else 0)(
+                                    x.cumsum() - x.cumsum().cummax()
+                                )
+                            )
+                        ).reset_index()
+                        strat_summary = strat_summary.round(2)
 
-            # Run backtests in parallel
-            interval = args.interval
+                        # MONTH-STRATEGY SUMMARY
+                        master_df['entry_time'] = pd.to_datetime(master_df['entry_time'])
+                        master_df['month'] = master_df['entry_time'].dt.to_period('M').astype(str)
+
+                        month_strat_summary = master_df.groupby(['month', 'strategy']).agg(
+                            tottrades=('gross_pnl', 'count'),
+                            p_trades=('net_pnl', lambda x: (x > 0).sum()),
+                            l_trades=('net_pnl', lambda x: (x < 0).sum()),
+                            win_rate=('net_pnl', lambda x: (x > 0).mean() * 100),
+                            gross_pnl=('gross_pnl', 'sum'),
+                            brokerage=('brokerage', 'sum'),
+                            tax_amt=('tax', 'sum'),
+                            net_pnl_=('net_pnl', 'sum'),
+                            avg_pnl_=('net_pnl', 'mean'),         
+                            max_dd__=('net_pnl', lambda x: (x.cumsum() - x.cumsum().cummax()).min()),
+                            avg_dd__=('net_pnl', lambda x: 
+                                (lambda dd: dd[dd > 0].mean() if (dd > 0).any() else 0)(
+                                    x.cumsum() - x.cumsum().cummax()
+                                )
+                            )
+                        ).reset_index()
+                        month_strat_summary = month_strat_summary.round(2)
+
+                        # Save master trades in the base output directory                        
+                        master_output_path = os.path.join(base_output_dir, "backtest_trades_master.csv")
+                        master_df.to_csv(master_output_path, index=False)
+                        
+                        # Save strategy summary in the base output directory     
+                        master_output_path = os.path.join(base_output_dir, "master_summary_by_strategy.csv")
+                        strat_summary.to_csv(master_output_path, index=False)
+
+                        # Save month-strategy summary in the base output directory
+                        master_output_path = os.path.join(base_output_dir, "master_summary_by_strategy_month.csv")
+                        month_strat_summary.to_csv(master_output_path, index=False)
+
+                        # Remove the backtest_trades_* except backtest_trades_master.csv
+                        for file in os.listdir(base_output_dir):
+                            if file.startswith("backtest_trades_") and file != "backtest_trades_master.csv":
+                                file_path = os.path.join(base_output_dir, file)
+                                os.remove(file_path)
+                        
+                        print(f"📈 Total symbols processed: {len(master_df)}")
+                        print(f"📋 Valid files: {len(all_dfs)}, Skipped files: {len(skipped_files)}")
+                        
+                        if not strat_summary.empty:                            
+                            print_aggregate_totals_1(strat_summary, 'PERFORMANCE STRATEGY_WISE')
+
+                        if not month_strat_summary.empty:                            
+                            print_aggregate_totals_2(month_strat_summary, "PERFORMANCE MONTH_STRATEGY_WISE")
+                        
+                    except Exception as e:
+                        logger.error(f"Error creating master summary: {e}")
+                        logger.error(f"Number of DataFrames to concatenate: {len(all_dfs)}")
+                        return
+                        
+                else:
+                    logger.warning("❌ No valid summary data found to aggregate")
+                    print(f"\n⚠️  No valid summary files found. All {len(skipped_files)} files were skipped.")
+                    
+                    # Optionally, create an empty master file with headers if you know the expected structure
+                    try:
+                        # Create empty master file with basic structure
+                        empty_df = pd.DataFrame(columns=['symbol', 'total_trades', 'profitable_trades', 'loss_trades', 
+                                                    'win_rate', 'gross_pnl', 'max_drawdown', 'source_file', 'folder_path'])
+                        master_output_path = os.path.join(base_output_dir, output_filename)
+                        empty_df.to_csv(master_output_path, index=False)
+                        logger.info(f"📄 Created empty master summary file: {master_output_path}")
+                    except Exception as e:
+                        logger.error(f"Error creating empty master summary: {e}")   
+          
+                        
+            def print_aggregate_totals_1(summary_df, title='PERFORMANCE SUMMARY'):
+                """
+                Print Excel-like table with perfect alignment between headers and data rows
+                """
+                if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
+                    print(f"{Fore.RED}❌ No valid summary data")
+                    return
+
+                try:
+                    # Create display copy
+                    display_df = summary_df.copy()
+                    
+                    # Format numeric columns
+                    def format_currency(x):
+                        if pd.isna(x): return "N/A"
+                        x = float(x)
+                        if abs(x) >= 1000000: return f"₹{x/1000000:.1f}M"
+                        if abs(x) >= 1000: return f"₹{x/1000:.1f}K"
+                        return f"₹{x:.0f}"
+
+                    currency_cols = ['gross_pnl', 'tax_amount', 'brokerage', 'net_pnl__', 'avg_pnl__', 'max_dd__', 'avg_dd_']
+                    for col in currency_cols:
+                        display_df[col] = display_df[col].apply(format_currency)
+
+                    # Get terminal width
+                    try:
+                        terminal_width = os.get_terminal_size().columns
+                    except:
+                        terminal_width = 80
+
+                    # Calculate column widths (content + header)
+                    col_widths = {}
+                    for col in display_df.columns:
+                        content_width = max(display_df[col].astype(str).apply(len).max(), len(col))
+                        col_widths[col] = min(content_width + 2, 20)  # Max 20 chars per column
+
+                    # Adjust to fit terminal
+                    while sum(col_widths.values()) + len(col_widths) + 1 > terminal_width:
+                        max_col = max(col_widths, key=col_widths.get)
+                        if col_widths[max_col] > 8:  # Never go below 8 chars
+                            col_widths[max_col] -= 1
+                        else:
+                            break  # Can't shrink further
+
+                    # Build horizontal border
+                    border = '+' + '+'.join(['-' * (col_widths[col]) for col in display_df.columns]) + '+'
+
+                    # Print header
+                    print(f"\n{Style.BRIGHT}{Fore.BLUE}📊 {title}")
+                    print(border)
+                    
+                    # Print column headers
+                    header_cells = []
+                    for col in display_df.columns:
+                        header = f" {col.upper().replace('_', ' ')}"
+                        header = header.ljust(col_widths[col]-1)
+                        header_cells.append(f"{Style.BRIGHT}{header}{Style.RESET_ALL}")
+                    print('|' + '|'.join(header_cells) + '|')
+                    print(border)
+
+                    # Print data rows
+                    for _, row in display_df.iterrows():
+                        cells = []
+                        for col in display_df.columns:
+                            cell_content = str(row[col])[:col_widths[col]-2]
+                            if len(str(row[col])) > col_widths[col]-2:
+                                cell_content = cell_content[:-1] + '…'
+                            cells.append(f" {cell_content.ljust(col_widths[col]-1)}")
+                        print('|' + '|'.join(cells) + '|')
+
+                    # Print footer
+                    print(border)
+
+                    # Print summary
+                    if 'net_pnl__' in summary_df.columns:
+                        total_net = summary_df['net_pnl__'].sum()
+                        status = (f"{Fore.GREEN}↑PROFIT" if total_net > 0 else 
+                                f"{Fore.RED}↓LOSS" if total_net < 0 else 
+                                f"{Fore.YELLOW}➔BREAKEVEN")
+                        print(f"| {status}{Style.RESET_ALL}  Net: {format_currency(total_net)}  "
+                            f"Trades: {summary_df['tot_trades'].sum():,}  "
+                            f"Win%: {summary_df['proftrades'].sum()/summary_df['tot_trades'].sum()*100:.1f}%".ljust(len(border)-1) + "|")
+                        print(border + Style.RESET_ALL)
+
+                except Exception as e:
+                    print(f"{Fore.RED}❌ Error displaying table: {e}")
+
+            def print_aggregate_totals_2(summary_df, title='PERFORMANCE SUMMARY'):
+                """
+                Print Excel-like table with perfect alignment between headers and data rows
+                """
+                if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
+                    print(f"{Fore.RED}❌ No valid summary data")
+                    return
+
+                try:
+                    # Create display copy
+                    display_df = summary_df.copy()
+                    
+                    # Format numeric columns
+                    def format_currency(x):
+                        if pd.isna(x): return "N/A"
+                        x = float(x)
+                        if abs(x) >= 1000000: return f"₹{x/1000000:.1f}M"
+                        if abs(x) >= 1000: return f"₹{x/1000:.1f}K"
+                        return f"₹{x:.0f}"
+
+                    currency_cols = ['gross_pnl', 'tax_amt', 'brokerage', 'net_pnl_', 'avg_pnl_', 'max_dd__', 'avg_dd__']
+                    for col in currency_cols:
+                        display_df[col] = display_df[col].apply(format_currency)
+
+                    # Get terminal width
+                    try:
+                        terminal_width = os.get_terminal_size().columns
+                    except:
+                        terminal_width = 80
+
+                    # Calculate column widths (content + header)
+                    col_widths = {}
+                    for col in display_df.columns:
+                        content_width = max(display_df[col].astype(str).apply(len).max(), len(col))
+                        col_widths[col] = min(content_width + 2, 20)  # Max 20 chars per column
+
+                    # Adjust to fit terminal
+                    while sum(col_widths.values()) + len(col_widths) + 1 > terminal_width:
+                        max_col = max(col_widths, key=col_widths.get)
+                        if col_widths[max_col] > 8:  # Never go below 8 chars
+                            col_widths[max_col] -= 1
+                        else:
+                            break  # Can't shrink further
+
+                    # Build horizontal border
+                    border = '+' + '+'.join(['-' * (col_widths[col]) for col in display_df.columns]) + '+'
+
+                    # Print header
+                    print(f"\n{Style.BRIGHT}{Fore.BLUE}📊 {title}")
+                    print(border)
+                    
+                    # Print column headers
+                    header_cells = []
+                    for col in display_df.columns:
+                        header = f" {col.upper().replace('_', ' ')}"
+                        header = header.ljust(col_widths[col]-1)
+                        header_cells.append(f"{Style.BRIGHT}{header}{Style.RESET_ALL}")
+                    print('|' + '|'.join(header_cells) + '|')
+                    print(border)
+
+                    # Print data rows
+                    for _, row in display_df.iterrows():
+                        cells = []
+                        for col in display_df.columns:
+                            cell_content = str(row[col])[:col_widths[col]-2]
+                            if len(str(row[col])) > col_widths[col]-2:
+                                cell_content = cell_content[:-1] + '…'
+                            cells.append(f" {cell_content.ljust(col_widths[col]-1)}")
+                        print('|' + '|'.join(cells) + '|')
+
+                    # Print footer
+                    print(border)
+
+                    # Print summary
+                    if 'net_pnl_' in summary_df.columns:
+                        total_net = summary_df['net_pnl_'].sum()
+                        status = (f"{Fore.GREEN}↑PROFIT" if total_net > 0 else 
+                                f"{Fore.RED}↓LOSS" if total_net < 0 else 
+                                f"{Fore.YELLOW}➔BREAKEVEN")
+                        print(f"| {status}{Style.RESET_ALL}  Net: {format_currency(total_net)}  "
+                            f"Trades: {summary_df['tottrades'].sum():,}  "
+                            f"Win%: {summary_df['p_trades'].sum()/summary_df['tottrades'].sum()*100:.1f}%".ljust(len(border)-1) + "|")
+                        print(border + Style.RESET_ALL)
+
+                except Exception as e:
+                    print(f"{Fore.RED}❌ Error displaying table: {e}")
+
+            def process_trades_with_constraints(trades_df):
+                # Convert string times to datetime objects
+                trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time'])
+                trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
+                
+                # Sort trades by entry time
+                trades_df = trades_df.sort_values('entry_time')
+                
+                # Initialize tracking variables
+                active_positions = []
+                strategy_counts = defaultdict(int)
+                daily_strategy_tracker = defaultdict(set)  # {date: {strategies_used}}
+                filtered_trades = []
+                
+                for _, trade in trades_df.iterrows():
+                    trade_date = trade['entry_time'].date()
+                    strategy = str(trade['strategy'])
+                    symbol = trade['symbol']
+                    
+                    # Check if we've already used this strategy today
+                    if strategy in daily_strategy_tracker.get(trade_date, set()):
+                        continue
+                    
+                    # Check if we have capacity for new positions (max 3)
+                    if len(active_positions) >= 3:
+                        # Find the earliest exit time among active positions
+                        earliest_exit = min(pos['exit_time'] for pos in active_positions)
+                        if trade['entry_time'] < earliest_exit:
+                            # Can't take this trade as all 3 positions would still be open
+                            continue
+                    
+                    # For same-time entries, we need to check alphabetical priority
+                    # Get all trades at the same entry time for the same strategy
+                    same_time_trades = trades_df[
+                        (trades_df['entry_time'] == trade['entry_time']) & 
+                        (trades_df['strategy'] == trade['strategy'])]
+                    
+                    if len(same_time_trades) > 1:
+                        # Sort by symbol alphabetically and take the first one
+                        same_time_trades = same_time_trades.sort_values('symbol')
+                        if symbol != same_time_trades.iloc[0]['symbol']:
+                            continue
+                    
+                    # If we get here, the trade passes all constraints
+                    filtered_trades.append(trade)
+                    
+                    # Update tracking
+                    daily_strategy_tracker[trade_date].add(strategy)
+                    
+                    # Add to active positions
+                    active_positions.append({
+                        'symbol': symbol,
+                        'strategy': strategy,
+                        'entry_time': trade['entry_time'],
+                        'exit_time': trade['exit_time']
+                    })
+                    
+                    # Remove any positions that have exited
+                    active_positions = [pos for pos in active_positions 
+                                    if pos['exit_time'] > trade['entry_time']]
+                
+                # Create new DataFrame with filtered trades
+                filtered_df = pd.DataFrame(filtered_trades)
+                
+                return filtered_df
+                    
+            # Run backtests in parallel     
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = []
                 db_config = {
@@ -980,11 +1473,24 @@ if __name__ == "__main__":
                     "dbname": processor.db_manager.dbname
                 }
                 for symbol in symbol_list:
-                    futures.append(executor.submit(run_backtest_for_symbol, symbol, db_config, from_date, to_date, interval))
-                for future in futures:
-                    future.result()
-                aggregate_all_summaries("master_summary.csv")                 
-
+                    futures.append(executor.submit(run_backtest_for_symbol, symbol, db_config, from_date, to_date, base_output_dir))
+                try:
+                    for future in futures:
+                        future.result()
+                except KeyboardInterrupt:
+                    print("Interrupted by user. Cancelling all futures.")
+                    for future in futures:
+                        future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                
+            # Aggregate summaries from the organized folder structure                
+            aggregate_all_summaries(base_output_dir, "master_summary.csv")               
+            
+            # End the timer
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            logger.info(f"Elapsed time: {elapsed_time} seconds")
+            
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         processor.shutdown()
