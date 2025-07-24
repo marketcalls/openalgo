@@ -297,6 +297,323 @@ class BacktestEngine:
         df.drop('date', axis=1, inplace=True)
         df_5min.drop('date', axis=1, inplace=True)
         return df, df_5min
+    
+    def calculate_all_indicators_once(self, df_all_dict):
+        """
+        Calculate all indicators once for the entire dataset
+        Returns: Dictionary with pre-calculated dataframes
+        """
+        self.logger.info(f"Calculating indicators once for entire dataset for {self.symbol}")
+        
+        # Extract dataframes
+        df_15m = df_all_dict['15m'].copy()
+        df_5m = df_all_dict['5m'].copy()
+        df_1m = df_all_dict['1m'].copy()
+        df_daily = df_all_dict['d'].copy()
+        
+        # === DAILY INDICATORS (ATR & Volume) ===
+        atr_period = 5
+        volume_period = 5
+        df_daily['prev_close'] = df_daily['close'].shift(1)
+        df_daily['tr1'] = df_daily['high'] - df_daily['low']
+        df_daily['tr2'] = abs(df_daily['high'] - df_daily['prev_close'])
+        df_daily['tr3'] = abs(df_daily['low'] - df_daily['prev_close'])
+        df_daily['tr'] = df_daily[['tr1', 'tr2', 'tr3']].max(axis=1)
+        df_daily['atr_10'] = df_daily['tr'].ewm(span=atr_period, adjust=False).mean()
+        df_daily['volume_10'] = df_daily['volume'].rolling(window=volume_period).mean()
+        df_daily.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)
+        
+        # Add date columns for merging
+        df_15m['date'] = pd.to_datetime(df_15m['time'].dt.date)
+        df_5m['date'] = pd.to_datetime(df_5m['time'].dt.date)
+        df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
+        
+        # Merge ATR from daily data
+        df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10']], on='date', how='left')
+        df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10']], on='date', how='left')
+        
+        # === 5MIN INDICATORS (EMAs) ===
+        df_5m['ema_50'] = df_5m['close'].ewm(span=50, adjust=False).mean()
+        df_5m['ema_100'] = df_5m['close'].ewm(span=100, adjust=False).mean()
+        df_5m['ema_200'] = df_5m['close'].ewm(span=200, adjust=False).mean()
+        
+        # === RANGE CALCULATIONS - 15m ===
+        df_15m['range'] = df_15m['high'] - df_15m['low']
+        df_15m['date_only'] = df_15m['time'].dt.date
+        df_15m['avg_range_all'] = df_15m.groupby('date_only')['range'].expanding().mean().reset_index(level=0, drop=True)
+        avg_ex_first_30min_15m = df_15m.groupby('date_only').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
+        df_15m['avg_range_ex_first_30min'] = avg_ex_first_30min_15m.reindex(df_15m.index).ffill()
+        df_15m['is_range_bullish'] = (
+            (df_15m['range'] > 0.7 * df_15m['avg_range_ex_first_30min']) & 
+            (df_15m['close'] > df_15m['open']) & 
+            (df_15m['close'] > (((df_15m['high'] - df_15m['open']) * 0.5) + df_15m['open']))
+        )
+        df_15m['is_range_bearish'] = (
+            (df_15m['range'] > 0.7 * df_15m['avg_range_ex_first_30min']) & 
+            (df_15m['close'] < df_15m['open']) & 
+            (df_15m['close'] < (((df_15m['open'] - df_15m['low']) * 0.5) + df_15m['low']))
+        )
+        df_15m.drop('date_only', axis=1, inplace=True)
+        
+        # === RANGE CALCULATIONS - 5m ===
+        df_5m['range'] = df_5m['high'] - df_5m['low']
+        df_5m['date_only'] = df_5m['time'].dt.date
+        df_5m['avg_range_all'] = df_5m.groupby('date_only')['range'].expanding().mean().reset_index(level=0, drop=True)
+        avg_ex_first_30min_5m = df_5m.groupby('date_only').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
+        df_5m['avg_range_ex_first_30min'] = avg_ex_first_30min_5m.reindex(df_5m.index).ffill()
+        df_5m['is_range_bullish'] = (
+            (df_5m['range'] > 0.7 * df_5m['avg_range_ex_first_30min']) & 
+            (df_5m['close'] > df_5m['open']) & 
+            (df_5m['close'] > (((df_5m['high'] - df_5m['open']) * 0.5) + df_5m['open']))
+        )
+        df_5m['is_range_bearish'] = (
+            (df_5m['range'] > 0.7 * df_5m['avg_range_ex_first_30min']) & 
+            (df_5m['close'] < df_5m['open']) & 
+            (df_5m['close'] < (((df_5m['open'] - df_5m['low']) * 0.5) + df_5m['low']))
+        )
+        df_5m.drop('date_only', axis=1, inplace=True)
+        
+        # === ZERO LAG MACD (15m only) ===
+        fast_period, slow_period, signal_period = 12, 26, 9
+        df_15m['fast_zlema'] = self.zero_lag_ema(df_15m['close'], fast_period)
+        df_15m['slow_zlema'] = self.zero_lag_ema(df_15m['close'], slow_period)
+        df_15m['zl_macd'] = df_15m['fast_zlema'] - df_15m['slow_zlema']
+        df_15m['zl_signal'] = df_15m['zl_macd'].ewm(span=signal_period, adjust=False).mean()
+        df_15m['zl_hist'] = df_15m['zl_macd'] - df_15m['zl_signal']
+        
+        # Generate MACD Signals
+        df_15m['zl_macd_signal'] = 0
+        df_15m.loc[(df_15m['zl_macd'] > df_15m['zl_signal']) & 
+                (df_15m['zl_macd'].shift(1) <= df_15m['zl_signal'].shift(1)), 'zl_macd_signal'] = 1
+        df_15m.loc[(df_15m['zl_macd'] < df_15m['zl_signal']) & 
+                (df_15m['zl_macd'].shift(1) >= df_15m['zl_signal'].shift(1)), 'zl_macd_signal'] = -1
+        df_15m.drop(['fast_zlema', 'slow_zlema', 'zl_macd', 'zl_signal', 'zl_hist'], axis=1, inplace=True)
+        
+        # === SINGLE PRINT CALCULATIONS - 15m ===
+        df_15m['is_first_bullish_confirmed'] = False
+        df_15m['is_first_bearish_confirmed'] = False
+        df_15m['candle_count'] = df_15m.groupby(df_15m['date']).cumcount() + 1
+        df_15m['cum_high_prev'] = df_15m.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
+        df_15m['cum_low_prev'] = df_15m.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
+        df_15m['sp_confirmed_bullish'] = (
+            (df_15m['close'] > df_15m['cum_high_prev']) & 
+            (df_15m['close'] > df_15m['open']) & 
+            (df_15m['candle_count'] >= 2)
+        )
+        df_15m['sp_confirmed_bearish'] = (
+            (df_15m['close'] < df_15m['cum_low_prev']) & 
+            (df_15m['close'] < df_15m['open']) & 
+            (df_15m['candle_count'] >= 2)
+        )
+        
+        # Mark first confirmations
+        bullish_conf_15m = df_15m[df_15m['sp_confirmed_bullish']]
+        bearish_conf_15m = df_15m[df_15m['sp_confirmed_bearish']]
+        first_bullish_idx_15m = bullish_conf_15m.groupby('date').head(1).index
+        first_bearish_idx_15m = bearish_conf_15m.groupby('date').head(1).index
+        df_15m.loc[first_bullish_idx_15m, 'is_first_bullish_confirmed'] = True
+        df_15m.loc[first_bearish_idx_15m, 'is_first_bearish_confirmed'] = True
+        
+        # SP levels for 15m
+        sp_levels_bullish_15m = df_15m[df_15m['is_first_bullish_confirmed']][['date', 'close', 'cum_high_prev']]
+        sp_levels_bearish_15m = df_15m[df_15m['is_first_bearish_confirmed']][['date', 'close', 'cum_low_prev']]
+        sp_levels_bullish_15m['sp_high_bullish'] = sp_levels_bullish_15m['close']
+        sp_levels_bullish_15m['sp_low_bullish'] = sp_levels_bullish_15m['cum_high_prev']
+        sp_levels_bearish_15m['sp_high_bearish'] = sp_levels_bearish_15m['cum_low_prev']
+        sp_levels_bearish_15m['sp_low_bearish'] = sp_levels_bearish_15m['close']
+        sp_levels_bullish_15m.drop(['close', 'cum_high_prev'], axis=1, inplace=True)
+        sp_levels_bearish_15m.drop(['close', 'cum_low_prev'], axis=1, inplace=True)
+        
+        # Merge back for 15m
+        df_15m = df_15m.merge(sp_levels_bullish_15m, on='date', how='left')
+        df_15m = df_15m.merge(sp_levels_bearish_15m, on='date', how='left')
+        
+        # Forward fill SP levels for 15m
+        df_15m['sp_high_bullish'] = df_15m.groupby('date')['sp_high_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_15m['sp_low_bullish'] = df_15m.groupby('date')['sp_low_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_15m['sp_high_bearish'] = df_15m.groupby('date')['sp_high_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_15m['sp_low_bearish'] = df_15m.groupby('date')['sp_low_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        
+        # Set pre-confirmation values to NaN for 15m
+        df_15m.loc[~df_15m['sp_confirmed_bullish'].cummax(), ['sp_high_bullish', 'sp_low_bullish']] = None
+        df_15m.loc[~df_15m['sp_confirmed_bearish'].cummax(), ['sp_high_bearish', 'sp_low_bearish']] = None
+        
+        # Calculate SP range percentages for 15m
+        df_15m['sp_bullish_range_pct'] = (df_15m['sp_high_bullish'] - df_15m['sp_low_bullish']) / df_15m['sp_low_bullish'] * 100
+        df_15m['sp_bearish_range_pct'] = (df_15m['sp_high_bearish'] - df_15m['sp_low_bearish']) / df_15m['sp_low_bearish'] * 100
+        df_15m['cum_sp_bullish'] = df_15m.groupby('date')['sp_confirmed_bullish'].cumsum()
+        df_15m['cum_sp_bearish'] = df_15m.groupby('date')['sp_confirmed_bearish'].cumsum()
+        
+        # === SINGLE PRINT CALCULATIONS - 5m ===
+        df_5m['is_first_bullish_confirmed'] = False
+        df_5m['is_first_bearish_confirmed'] = False
+        df_5m['candle_count'] = df_5m.groupby(df_5m['date']).cumcount() + 1
+        df_5m['cum_high_prev'] = df_5m.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
+        df_5m['cum_low_prev'] = df_5m.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
+        df_5m['sp_confirmed_bullish'] = (
+            (df_5m['close'] > df_5m['cum_high_prev']) & 
+            (df_5m['close'] > df_5m['open']) & 
+            (df_5m['candle_count'] >= 2)
+        )
+        df_5m['sp_confirmed_bearish'] = (
+            (df_5m['close'] < df_5m['cum_low_prev']) & 
+            (df_5m['close'] < df_5m['open']) & 
+            (df_5m['candle_count'] >= 2)
+        )
+        
+        # Mark first confirmations for 5m
+        bullish_conf_5m = df_5m[df_5m['sp_confirmed_bullish']]
+        bearish_conf_5m = df_5m[df_5m['sp_confirmed_bearish']]
+        first_bullish_idx_5m = bullish_conf_5m.groupby('date').head(1).index
+        first_bearish_idx_5m = bearish_conf_5m.groupby('date').head(1).index
+        df_5m.loc[first_bullish_idx_5m, 'is_first_bullish_confirmed'] = True
+        df_5m.loc[first_bearish_idx_5m, 'is_first_bearish_confirmed'] = True
+        
+        # SP levels for 5m
+        sp_levels_bullish_5m = df_5m[df_5m['is_first_bullish_confirmed']][['date', 'close', 'cum_high_prev']]
+        sp_levels_bearish_5m = df_5m[df_5m['is_first_bearish_confirmed']][['date', 'close', 'cum_low_prev']]
+        sp_levels_bullish_5m['sp_high_bullish'] = sp_levels_bullish_5m['close']
+        sp_levels_bullish_5m['sp_low_bullish'] = sp_levels_bullish_5m['cum_high_prev']
+        sp_levels_bearish_5m['sp_high_bearish'] = sp_levels_bearish_5m['cum_low_prev']
+        sp_levels_bearish_5m['sp_low_bearish'] = sp_levels_bearish_5m['close']
+        sp_levels_bullish_5m.drop(['close', 'cum_high_prev'], axis=1, inplace=True)
+        sp_levels_bearish_5m.drop(['close', 'cum_low_prev'], axis=1, inplace=True)
+        
+        # Merge back for 5m
+        df_5m = df_5m.merge(sp_levels_bullish_5m, on='date', how='left')
+        df_5m = df_5m.merge(sp_levels_bearish_5m, on='date', how='left')
+        
+        # Forward fill SP levels for 5m
+        df_5m['sp_high_bullish'] = df_5m.groupby('date')['sp_high_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_5m['sp_low_bullish'] = df_5m.groupby('date')['sp_low_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_5m['sp_high_bearish'] = df_5m.groupby('date')['sp_high_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        df_5m['sp_low_bearish'] = df_5m.groupby('date')['sp_low_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x)
+        
+        # Set pre-confirmation values to NaN for 5m
+        df_5m.loc[~df_5m['sp_confirmed_bullish'].cummax(), ['sp_high_bullish', 'sp_low_bullish']] = None
+        df_5m.loc[~df_5m['sp_confirmed_bearish'].cummax(), ['sp_high_bearish', 'sp_low_bearish']] = None
+        
+        # Calculate SP range percentages for 5m
+        df_5m['sp_bullish_range_pct'] = (df_5m['sp_high_bullish'] - df_5m['sp_low_bullish']) / df_5m['sp_low_bullish'] * 100
+        df_5m['sp_bearish_range_pct'] = (df_5m['sp_high_bearish'] - df_5m['sp_low_bearish']) / df_5m['sp_low_bearish'] * 100
+        df_5m['cum_sp_bullish'] = df_5m.groupby('date')['sp_confirmed_bullish'].cumsum()
+        df_5m['cum_sp_bearish'] = df_5m.groupby('date')['sp_confirmed_bearish'].cumsum()
+        
+        # === VOLUME & RANGE CALCULATIONS - 15m ===
+        df_15m['cum_intraday_volume'] = df_15m.groupby('date')['volume'].cumsum()
+        df_15m['curtop'] = df_15m.groupby('date')['high'].cummax()
+        df_15m['curbot'] = df_15m.groupby('date')['low'].cummin()
+        df_15m['today_range'] = df_15m['curtop'] - df_15m['curbot']
+        df_15m['today_range_pct'] = df_15m['today_range'] / df_15m['atr_10']
+        df_15m['volume_range_pct'] = (df_15m['cum_intraday_volume'] / df_15m['volume_10']) / df_15m['today_range_pct']
+        
+        # === VOLUME & RANGE CALCULATIONS - 5m ===
+        df_5m['cum_intraday_volume'] = df_5m.groupby('date')['volume'].cumsum()
+        df_5m['curtop'] = df_5m.groupby('date')['high'].cummax()
+        df_5m['curbot'] = df_5m.groupby('date')['low'].cummin()
+        df_5m['today_range'] = df_5m['curtop'] - df_5m['curbot']
+        df_5m['today_range_pct'] = df_5m['today_range'] / df_5m['atr_10']
+        df_5m['volume_range_pct'] = (df_5m['cum_intraday_volume'] / df_5m['volume_10']) / df_5m['today_range_pct']
+        
+        # === STRATEGY DEFINITIONS ===
+        # Strategy 8 & 12 (15m)
+        df_15m['s_8'] = (
+            (df_15m['time'].dt.time >= time(4, 0)) & 
+            (df_15m['time'].dt.time < time(8, 15)) & 
+            (df_15m['cum_sp_bullish'] >= 1) & 
+            (df_15m['sp_bullish_range_pct'] > 1) & 
+            (df_15m['zl_macd_signal'] == -1) & 
+            (df_15m['volume_range_pct'] > 1)
+        )
+        df_15m['strategy_8'] = False
+        first_true_idx_8 = df_15m[df_15m['s_8']].groupby('date').head(1).index
+        df_15m.loc[first_true_idx_8, 'strategy_8'] = True
+        
+        df_15m['s_12'] = (
+            (df_15m['time'].dt.time >= time(4, 0)) & 
+            (df_15m['time'].dt.time < time(8, 15)) & 
+            (df_15m['cum_sp_bearish'] >= 1) & 
+            (df_15m['sp_bearish_range_pct'] > 0.8) & 
+            (df_15m['zl_macd_signal'] == 1) & 
+            (df_15m['volume_range_pct'] < 0.2)
+        )
+        df_15m['strategy_12'] = False
+        first_true_idx_12 = df_15m[df_15m['s_12']].groupby('date').head(1).index
+        df_15m.loc[first_true_idx_12, 'strategy_12'] = True
+        
+        # Strategy 10 & 11 (5m)
+        df_5m['s_10'] = (
+            (df_5m['time'].dt.time >= time(3, 50)) & 
+            (df_5m['time'].dt.time < time(8, 15)) & 
+            (df_5m['cum_sp_bearish'] >= 1) & 
+            (df_5m['sp_bearish_range_pct'] > 0.6) & 
+            (df_5m['close'] < df_5m['ema_50']) & 
+            (df_5m['close'] < df_5m['ema_100']) & 
+            (df_5m['close'] < df_5m['ema_200']) & 
+            (df_5m['is_range_bearish']) & 
+            (df_5m['volume_range_pct'] > 0.2) & 
+            (df_5m['volume_range_pct'] < 0.3)
+        )
+        df_5m['strategy_10'] = False
+        first_true_idx_10 = df_5m[df_5m['s_10']].groupby('date').head(1).index
+        df_5m.loc[first_true_idx_10, 'strategy_10'] = True
+        
+        df_5m['s_11'] = (
+            (df_5m['time'].dt.time >= time(3, 50)) & 
+            (df_5m['time'].dt.time < time(8, 15)) & 
+            (df_5m['cum_sp_bullish'] >= 1) & 
+            (df_5m['sp_bullish_range_pct'] > 0.8) & 
+            (df_5m['close'] > df_5m['ema_50']) & 
+            (df_5m['close'] > df_5m['ema_100']) & 
+            (df_5m['close'] > df_5m['ema_200']) & 
+            (df_5m['is_range_bullish']) & 
+            (df_5m['volume_range_pct'] > 0.2) & 
+            (df_5m['volume_range_pct'] < 0.3)
+        )
+        df_5m['strategy_11'] = False
+        first_true_idx_11 = df_5m[df_5m['s_11']].groupby('date').head(1).index
+        df_5m.loc[first_true_idx_11, 'strategy_11'] = True
+        
+        # Clean up date columns
+        df_15m.drop('date', axis=1, inplace=True)
+        df_5m.drop('date', axis=1, inplace=True)
+        
+        self.logger.info(f"✅ All indicators calculated once for {self.symbol}")
+        
+        return {
+            '15m': df_15m,
+            '5m': df_5m,
+            '1m': df_1m,
+            'd': df_daily
+        }
+    
+    def get_day_data_optimized(self, df_with_indicators, day, lookback_days):
+        """
+        Fast slicing of pre-calculated data for a specific day
+        """
+        start_date = day - timedelta(days=lookback_days)
+        end_date = day + timedelta(days=1)  # Include full day
+        
+        # Use boolean indexing (faster than .loc for large datasets)
+        mask = (df_with_indicators['time'].dt.date >= start_date) & (df_with_indicators['time'].dt.date <= day)
+        return df_with_indicators[mask].copy()
+
+    def get_today_data_only(self, df_with_indicators, day):
+        """Get only today's data (for trading logic)"""
+        start_dt = datetime.combine(day, time.min).replace(tzinfo=pytz.UTC)
+        end_dt = datetime.combine(day, time.max).replace(tzinfo=pytz.UTC)
+        
+        mask = (df_with_indicators['time'] >= start_dt) & (df_with_indicators['time'] <= end_dt)
+        return df_with_indicators[mask].copy()
+
+    
+    def pre_index_data_by_date(self, df_dict):
+        """Pre-index all dataframes by date for O(1) lookups"""
+        indexed_data = {}
+        for interval, df in df_dict.items():
+            df['date'] = df['time'].dt.date
+            indexed_data[interval] = df.groupby('date')
+        return indexed_data
 
     def run(self):
         self.logger.info(f"Running backtest from {self.start_date} to {self.end_date}")
@@ -304,42 +621,32 @@ class BacktestEngine:
         self.trailing_chart_data = []
         in_position = False
 
-        df_all = self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '15m')
-        df_5min_all = self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '5m')
-        df_min_all = self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '1m')
-        df_daily_all = self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd')
+        # === STEP 1: Fetch all data once ===
+        df_all_dict  = {
+        '15m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '15m'),
+        '5m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '5m'),
+        '1m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '1m'),
+        'd': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd')
+        }
 
-        #self.logger.info(f"df_all shape: {df_all.shape}")
-        #self.logger.info(f"df_5min_all shape: {df_5min_all.shape}")
-        #self.logger.info(f"df_min_all shape: {df_min_all.shape}")
-        #self.logger.info(f"df_daily_all shape: {df_daily_all.shape}")
+        # === STEP 2: Calculate all indicators once ===
+        data_with_indicators = self.calculate_all_indicators_once(df_all_dict)
 
+        # === STEP 3: Process each day with pre-calculated data ===
         for day in self.daterange():
-            # Filter data
-            df = df_all[(df_all['time'].dt.date >= (day - timedelta(days = 5))) & (df_all['time'].dt.date <= day)].copy()
-            df_5min = df_5min_all[(df_5min_all['time'].dt.date >= (day - timedelta(days = 7))) & (df_5min_all['time'].dt.date <= day)].copy()
-            df_min = df_min_all[(df_min_all['time'].dt.date >= (day - timedelta(days = 2))) & (df_min_all['time'].dt.date <= day)].copy()
-            df_daily = df_daily_all[(df_daily_all['time'].dt.date >= (day - timedelta(days = 20))) & (df_daily_all['time'].dt.date <= day)].copy()
-            
-            #self.logger.info(f"df shape: {df.shape}")
-            #self.logger.info(f"df_5min shape: {df_5min.shape}")
-            #self.logger.info(f"df_min shape: {df_min.shape}")
-            #self.logger.info(f"df_daily shape: {df_daily.shape}")
-            #df = self.fetch_lookback_data(day, '15m', 5)
-            #df_daily = self.fetch_lookback_data(day, 'd', 20)
-            #df_min = self.fetch_lookback_data(day, '1m', 2)
-            #df_5min = self.fetch_lookback_data(day, '5m', 7)
+            # Fast slicing of pre-calculated data (no more daily filtering/copying)
+            df = self.get_day_data_optimized(data_with_indicators['15m'], day, 5)
+            df_5min = self.get_day_data_optimized(data_with_indicators['5m'], day, 7)
+            df_min = self.get_day_data_optimized(data_with_indicators['1m'], day, 2)
+            df_daily = self.get_day_data_optimized(data_with_indicators['d'], day, 20)
 
             if df.empty or df_5min.empty or df_daily.empty or df_min.empty:
                 continue
-
-            df, df_5min = self.trading_indicator_calculations(df, df_daily, df_5min)
-
-            start_dt = datetime.combine(day, time.min).replace(tzinfo=pytz.UTC)
-            end_dt = datetime.combine(day, time.max).replace(tzinfo=pytz.UTC)
-            df_today = df[(df['time'] >= start_dt) & (df['time'] <= end_dt)].copy()
-            df_today_5min = df_5min[(df_5min['time'] >= start_dt) & (df_5min['time'] <= end_dt)].copy()
-            df_min_today = df_min[(df_min['time'] >= start_dt) & (df_min['time'] <= end_dt)].copy()
+            
+            # Get today's data only (for trading logic)
+            df_today = self.get_today_data_only(df, day)
+            df_today_5min = self.get_today_data_only(df_5min, day)
+            df_min_today = self.get_today_data_only(df_min, day)
 
             entry_row = None
 

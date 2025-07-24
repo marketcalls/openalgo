@@ -2,6 +2,7 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from psycopg2.extras import execute_batch
+from psycopg2 import pool
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 import pytz
@@ -1021,37 +1022,34 @@ if __name__ == "__main__":
             
             
             # Process data in simulation mode     
-            def run_backtest_for_symbol(symbol, db_config, start_date, end_date, base_output_dir):
-                # Create new connection per thread
-                conn = psycopg2.connect(
-                    user=db_config['user'],
-                    password=db_config['password'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    dbname=db_config['dbname']
-                )
+            def run_backtest_for_symbol(symbol, connection_pool, start_date, end_date, base_output_dir):
+                # get connection from pool
+                conn = connection_pool.getconn()
 
-                engine = BacktestEngine(
-                    conn=conn,
-                    symbol=symbol,                    
-                    start_date=start_date.strftime("%Y-%m-%d"),
-                    end_date=end_date.strftime("%Y-%m-%d")
-                )
-                trades_df = engine.run()
+                try:
+                    engine = BacktestEngine(
+                        conn=conn,
+                        symbol=symbol,                    
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    trades_df = engine.run()
+                    
+                    output_dir = os.path.join(base_output_dir)
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    trades_file = os.path.join(output_dir, f"backtest_trades_{symbol}.csv")
+                    summary_file = os.path.join(output_dir, f"summary_{symbol}.csv")
+
+                    trades_df.to_csv(trades_file, index=False)
+
+                    #if hasattr(engine, 'export_trail_charts'):
+                    #    engine.export_trail_charts()
+                    #                     
+                    logger.info(f"✅ Backtest completed for {symbol} → Trades: {len(trades_df)} → Saved: backtest_trades_{symbol}.csv")
                 
-                output_dir = os.path.join(base_output_dir)
-                os.makedirs(output_dir, exist_ok=True)
-
-                trades_file = os.path.join(output_dir, f"backtest_trades_{symbol}.csv")
-                summary_file = os.path.join(output_dir, f"summary_{symbol}.csv")
-
-                trades_df.to_csv(trades_file, index=False)
-
-                #if hasattr(engine, 'export_trail_charts'):
-                #    engine.export_trail_charts()
-
-                conn.close()
-                logger.info(f"✅ Backtest completed for {symbol} → Trades: {len(trades_df)} → Saved: backtest_trades_{symbol}.csv")
+                finally:
+                    connection_pool.putconn(conn)
 
 
             def aggregate_all_summaries(base_output_dir="backtest_results", output_filename="master_summary.csv"):
@@ -1462,18 +1460,28 @@ if __name__ == "__main__":
                 
                 return filtered_df
                     
-            # Run backtests in parallel     
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = []
-                db_config = {
+            # Run backtests in parallel 
+            # Create connection pool once
+            db_config = {
                     "user": processor.db_manager.user,
                     "password": processor.db_manager.password,
                     "host": processor.db_manager.host,
                     "port": processor.db_manager.port,
                     "dbname": processor.db_manager.dbname
-                }
+            }
+
+            connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1, maxconn=8,  # Adjust based on your needs
+                user=db_config['user'],
+                password=db_config['password'],
+                host=db_config['host'],
+                port=db_config['port'],
+                dbname=db_config['dbname']
+            )    
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = []                
                 for symbol in symbol_list:
-                    futures.append(executor.submit(run_backtest_for_symbol, symbol, db_config, from_date, to_date, base_output_dir))
+                    futures.append(executor.submit(run_backtest_for_symbol, symbol, connection_pool, from_date, to_date, base_output_dir))
                 try:
                     for future in futures:
                         future.result()
