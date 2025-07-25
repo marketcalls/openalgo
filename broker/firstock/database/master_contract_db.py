@@ -1,5 +1,4 @@
 import os
-import requests
 import pandas as pd
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
@@ -7,9 +6,9 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
-
 
 # Database setup
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -73,7 +72,7 @@ firstock_urls = {
 
 def download_firstock_data(output_path):
     """
-    Downloads CSV files from Firstock's API endpoints.
+    Downloads CSV files from Firstock's API endpoints using shared httpx client with connection pooling.
     
     CSV Columns:
     NSE/BSE: Exchange, Token, LotSize, TradingSymbol, CompanyName, ISIN, TickSize, FreezeQty
@@ -86,23 +85,41 @@ def download_firstock_data(output_path):
         os.makedirs(output_path)
     
     downloaded_files = []
-    for exchange, url in firstock_urls.items():
-        try:
-            logger.info(f"Downloading {{exchange}} data from {url}")
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                file_path = f'{output_path}/{exchange}_symbols.csv'
-                with open(file_path, 'w') as f:
-                    f.write(response.text)
-                downloaded_files.append(f"{exchange}_symbols.csv")
-                logger.info(f"Successfully downloaded {exchange} data")
-            else:
-                logger.error(f"Failed to download {{exchange}} data. Status code: {response.status_code}")
+    
+    try:
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        for exchange, url in firstock_urls.items():
+            try:
+                logger.info(f"Downloading {exchange} data from {url}")
                 
-        except Exception as e:
-            logger.error(f"Error downloading {{exchange}} data: {e}")
-            
+                # Make request using shared httpx client
+                response = client.get(url, timeout=30)
+                
+                # Add status attribute for compatibility
+                response.status = response.status_code
+                
+                if response.status_code == 200:
+                    file_path = f'{output_path}/{exchange}_symbols.csv'
+                    with open(file_path, 'w') as f:
+                        f.write(response.text)
+                    downloaded_files.append(f"{exchange}_symbols.csv")
+                    logger.info(f"Successfully downloaded {exchange} data")
+                else:
+                    logger.error(f"Failed to download {exchange} data. Status code: {response.status_code}")
+                    
+            except Exception as e:
+                if "timeout" in str(e).lower():
+                    logger.error(f"Timeout while downloading {exchange} data - please try again")
+                elif "connection" in str(e).lower():
+                    logger.error(f"Connection error while downloading {exchange} data - please check your internet connection")
+                else:
+                    logger.error(f"Error downloading {exchange} data: {str(e)}")
+                    
+    except Exception as e:
+        logger.error(f"Error initializing HTTP client: {str(e)}")
+    
     return downloaded_files
 
 def process_firstock_nse_data(output_path):
