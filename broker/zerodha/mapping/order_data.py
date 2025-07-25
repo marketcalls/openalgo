@@ -209,7 +209,7 @@ def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:  
         # Handle zero average price case
-        average_price = holdings.get('average_price', 0.0)
+        average_price = float(holdings.get('average_price') or 0.0)
         if average_price == 0:
             logger.debug(f"Encountering zero average price for symbol: {holdings.get('tradingsymbol', 'Unknown')}")
             pnlpercent = 0.0
