@@ -42,7 +42,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
         }
 
         # Use the full endpoint path as provided
-        url = f"https://connect.thefirstock.com/api/V4{endpoint}"
+        url = f"https://api.firstock.in/V1{endpoint}"
         
         # Make request using shared httpx client
         response = client.request(method, url, json=data, headers=headers, timeout=30)

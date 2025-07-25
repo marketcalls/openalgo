@@ -31,7 +31,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
             }
         
         headers = {'Content-Type': 'application/json'}
-        url = f"https://connect.thefirstock.com/api/V4{endpoint}"
+        url = f"https://api.firstock.in/V1{endpoint}"
         
         # Make request using shared httpx client
         response = client.request(method, url, json=payload, headers=headers, timeout=30)
@@ -176,7 +176,7 @@ def place_order_api(data, auth):
         client = get_httpx_client()
         
         headers = {'Content-Type': 'application/json'}
-        url = f"https://connect.thefirstock.com/api/V4/placeOrder"
+        url = f"https://api.firstock.in/V1/placeOrder"
         
         # Make request using shared httpx client
         response = client.request("POST", url, json=transformed_data, headers=headers, timeout=30)
@@ -430,7 +430,7 @@ def cancel_order(orderid, auth):
         client = get_httpx_client()
         
         headers = {'Content-Type': 'application/json'}
-        url = f"https://connect.thefirstock.com/api/V4/cancelOrder"
+        url = f"https://api.firstock.in/V1/cancelOrder"
         
         # Make request using shared httpx client
         response = client.request("POST", url, json=request_data, headers=headers, timeout=30)
@@ -500,7 +500,7 @@ def modify_order(data, auth):
         client = get_httpx_client()
         
         headers = {'Content-Type': 'application/json'}
-        url = f"https://connect.thefirstock.com/api/V4/modifyOrder"
+        url = f"https://api.firstock.in/V1/modifyOrder"
         
         # Make request using shared httpx client
         response = client.request("POST", url, json=transformed_data, headers=headers, timeout=30)
