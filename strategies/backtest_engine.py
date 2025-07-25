@@ -76,228 +76,7 @@ class BacktestEngine:
         ema1 = series.ewm(span=period, adjust=False).mean()
         ema2 = ema1.ewm(span=period, adjust=False).mean()
         return ema1 + (ema1 - ema2)
-
-    def trading_indicator_calculations(self, df, df_daily, df_5min):
         
-        #self.logger.info(f"Calculating trading indicators for {self.symbol}")
-        # Calculate the 10 day ATR
-        atr_period = 5  # Standard ATR period is 14, but you can use 10
-        volume_period = 5
-        df_daily['prev_close'] = df_daily['close'].shift(1)  # Previous day's close
-        df_daily['tr1'] = df_daily['high'] - df_daily['low']  # Current High - Current Low
-        df_daily['tr2'] = abs(df_daily['high'] - df_daily['prev_close'])  # |High - Prev Close|
-        df_daily['tr3'] = abs(df_daily['low'] - df_daily['prev_close'])   # |Low - Prev Close|
-        df_daily['tr'] = df_daily[['tr1', 'tr2', 'tr3']].max(axis=1)  # True Range = max(tr1, tr2, tr3)        
-        df_daily['atr_10'] = df_daily['tr'].ewm(span=atr_period, adjust=False).mean()
-        #df_daily['atr_10'] = df_daily['tr'].rolling(window=atr_period).mean()  # SMA
-        df_daily.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)  # Remove temp columns
-
-        # Calculate the 10 day Volume
-        df_daily['volume_10'] = df_daily['volume'].rolling(window=volume_period).mean()
-        
-        # Convert time to date for merging (if not already in datetime format)
-        df['date'] = pd.to_datetime(df['time'].dt.date)
-        df_5min['date'] = pd.to_datetime(df_5min['time'].dt.date)
-        df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
-
-        # Merge ATR from daily data into 15m and 5m data
-        df = df.merge(
-            df_daily[['date', 'atr_10', 'volume_10']], 
-            on='date', 
-            how='left'
-        )
-
-        df_5min = df_5min.merge(
-            df_daily[['date', 'atr_10', 'volume_10']],
-            on='date',
-            how='left'
-        )
-        
-        # Drop the temporary 'date' column if no longer needed
-        df.drop('date', axis=1, inplace=True)
-        df_5min.drop('date', axis=1, inplace=True)
-        #self.logger.info(f"Calculated ATR for {self.symbol}")
-
-        # Calculate EMA_50, EMA_100 and EMA_200 (Needed only for 5min data)
-        df_5min['ema_50'] = df_5min['close'].ewm(span=50, adjust=False).mean()
-        df_5min['ema_100'] = df_5min['close'].ewm(span=100, adjust=False).mean()
-        df_5min['ema_200'] = df_5min['close'].ewm(span=200, adjust=False).mean()
-        #self.logger.info(f"Calculated EMA for {self.symbol}")
-
-        # Range calculation(Needed for both 5min and 15min data)
-        df['range'] = df['high'] - df['low']
-        df['date'] = df['time'].dt.date  # Extract date from timestamp
-        # 1. Average Range (All Candles)
-        df['avg_range_all'] = df.groupby('date')['range'].expanding().mean().reset_index(level=0, drop=True)
-        # 2. Average Range (Excluding First 30 Minutes) - Per Day
-        # Apply per-day, then reindex to original DataFrame
-        avg_ex_first_30min = df.groupby('date').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
-        df['avg_range_ex_first_30min'] = avg_ex_first_30min.reindex(df.index).ffill()
-
-        # Bullish calculation based on range
-        df['is_range_bullish'] = (df['range'] > 0.7 * df['avg_range_ex_first_30min']) & (df['close'] > df['open']) & (df['close'] > (((df['high'] - df['open']) * 0.5) + df['open']))
-        df['is_range_bearish'] = (df['range'] > 0.7 * df['avg_range_ex_first_30min']) & (df['close'] < df['open']) & (df['close'] < (((df['open'] - df['low']) * 0.5) + df['low']))
-
-        df_5min['range'] = df_5min['high'] - df_5min['low']
-        df_5min['date'] = df_5min['time'].dt.date  # Extract date from timestamp        
-        df_5min['avg_range_all'] = df_5min.groupby('date')['range'].expanding().mean().reset_index(level=0, drop=True)
-        avg_ex_first_30min_5 = df_5min.groupby('date').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
-        df_5min['avg_range_ex_first_30min'] = avg_ex_first_30min_5.reindex(df_5min.index).ffill()
-        df_5min['is_range_bullish'] = (df_5min['range'] > 0.7 * df_5min['avg_range_ex_first_30min']) & (df_5min['close'] > df_5min['open']) & (df_5min['close'] > (((df_5min['high'] - df_5min['open']) * 0.5) + df_5min['open']))
-        df_5min['is_range_bearish'] = (df_5min['range'] > 0.7 * df_5min['avg_range_ex_first_30min']) & (df_5min['close'] < df_5min['open']) & (df_5min['close'] < (((df_5min['open'] - df_5min['low']) * 0.5) + df_5min['low']))
-        #self.logger.info(f"Calculated Range Bullish/Bearish for {self.symbol}")
-
-        # Zero Lag MACD Calculation (Need only for 15min data)
-        fast_period = 12
-        slow_period = 26
-        signal_period = 9
-
-        df['fast_zlema'] = self.zero_lag_ema(df['close'], fast_period)
-        df['slow_zlema'] = self.zero_lag_ema(df['close'], slow_period)
-        df['zl_macd'] = df['fast_zlema'] - df['slow_zlema']
-        df['zl_signal'] = df['zl_macd'].ewm(span=signal_period, adjust=False).mean()
-        df['zl_hist'] = df['zl_macd'] - df['zl_signal']
-
-        # Generate Signals (1 for buy, -1 for sell, 0 for no signal)
-        df['zl_macd_signal'] = 0
-        df.loc[(df['zl_macd'] > df['zl_signal']) & 
-            (df['zl_macd'].shift(1) <= df['zl_signal'].shift(1)), 'zl_macd_signal'] = 1
-        df.loc[(df['zl_macd'] < df['zl_signal']) & 
-            (df['zl_macd'].shift(1) >= df['zl_signal'].shift(1)), 'zl_macd_signal'] = -1
-        df.drop(['fast_zlema', 'slow_zlema', 'zl_macd', 'zl_signal', 'zl_hist'], axis=1, inplace=True)  # Drop intermediate columns
-        #self.logger.info(f"Calculated Zero Lag MACD for {self.symbol}")
-        
-        # Single Print Calculations
-        df['is_first_bullish_confirmed'] = False
-        df['is_first_bearish_confirmed'] = False
-        df['candle_count'] = df.groupby(df['date']).cumcount() + 1
-        # Compute cumulative high/low up to previous row per day
-        df['cum_high_prev'] = df.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
-        df['cum_low_prev'] = df.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
-        df['sp_confirmed_bullish'] = (df['close'] > df['cum_high_prev']) & (df['close'] > df['open']) & (df['candle_count'] >= 2)
-        df['sp_confirmed_bearish'] = (df['close'] < df['cum_low_prev']) & (df['close'] < df['open']) & (df['candle_count'] >= 2)
-        bullish_conf = df[df['sp_confirmed_bullish']]
-        bearish_conf = df[df['sp_confirmed_bearish']]
-        # Step 3: Get index of first bullish and bearish confirmation per day
-        first_bullish_idx = bullish_conf.groupby('date').head(1).index
-        first_bearish_idx = bearish_conf.groupby('date').head(1).index
-        # Step 4: Mark them in the original DataFrame
-        df.loc[first_bullish_idx, 'is_first_bullish_confirmed'] = True
-        df.loc[first_bearish_idx, 'is_first_bearish_confirmed'] = True
-        # Get SP levels
-        # Step 1: Extract sp_high and sp_low values from first bullish confirmations
-        sp_levels_bullish = df[df['is_first_bullish_confirmed']][['date', 'close', 'cum_high_prev']]
-        sp_levels_bearish = df[df['is_first_bearish_confirmed']][['date', 'close', 'cum_low_prev']]
-        sp_levels_bullish['sp_high_bullish'] = sp_levels_bullish['close']
-        sp_levels_bullish['sp_low_bullish'] = sp_levels_bullish['cum_high_prev']
-        sp_levels_bearish['sp_high_bearish'] = sp_levels_bearish['cum_low_prev']
-        sp_levels_bearish['sp_low_bearish'] = sp_levels_bearish['close']
-        sp_levels_bullish.drop(['close', 'cum_high_prev'], axis=1, inplace=True)
-        sp_levels_bearish.drop(['close', 'cum_low_prev'], axis=1, inplace=True)
-
-        # Step 2: Merge these levels back into the original DataFrame by date
-        df = df.merge(sp_levels_bullish, on='date', how='left')
-        df = df.merge(sp_levels_bearish, on='date', how='left')
-
-        # Step 3: Forward-fill values within each day — only after confirmation
-        df['sp_high_bullish'] = (df.groupby('date')['sp_high_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df['sp_low_bullish'] = (df.groupby('date')['sp_low_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df['sp_high_bearish'] = (df.groupby('date')['sp_high_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df['sp_low_bearish'] = (df.groupby('date')['sp_low_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        
-        # Step 4 (Optional): Set values before confirmation to NaN
-        df.loc[~df['sp_confirmed_bullish'].cummax(), ['sp_high_bullish', 'sp_low_bullish']] = None
-        df.loc[~df['sp_confirmed_bearish'].cummax(), ['sp_high_bearish', 'sp_low_bearish']] = None
-        df['sp_bullish_range_pct'] = (df['sp_high_bullish'] - df['sp_low_bullish']) / df['sp_low_bullish'] * 100
-        df['sp_bearish_range_pct'] = (df['sp_high_bearish'] - df['sp_low_bearish']) / df['sp_low_bearish'] * 100
-
-        # Cumulative sum of sp_cofirmed_bullish and sp_confirmed_bearish grouped by day
-        df['cum_sp_bullish'] = df.groupby('date')['sp_confirmed_bullish'].cumsum()
-        df['cum_sp_bearish'] = df.groupby('date')['sp_confirmed_bearish'].cumsum()
-
-        # Single Print Calculations(for 5min)
-        df_5min['is_first_bullish_confirmed'] = False
-        df_5min['is_first_bearish_confirmed'] = False
-        df_5min['candle_count'] = df_5min.groupby(df_5min['date']).cumcount() + 1
-        df_5min['cum_high_prev'] = df_5min.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
-        df_5min['cum_low_prev'] = df_5min.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
-        df_5min['sp_confirmed_bullish'] = (df_5min['close'] > df_5min['cum_high_prev']) & (df_5min['close'] > df_5min['open']) & (df_5min['candle_count'] >= 2)
-        df_5min['sp_confirmed_bearish'] = (df_5min['close'] < df_5min['cum_low_prev']) & (df_5min['close'] < df_5min['open']) & (df_5min['candle_count'] >= 2)
-        bullish_conf_5min = df_5min[df_5min['sp_confirmed_bullish']]
-        bearish_conf_5min = df_5min[df_5min['sp_confirmed_bearish']]
-        first_bullish_idx_5min = bullish_conf_5min.groupby('date').head(1).index
-        first_bearish_idx_5min = bearish_conf_5min.groupby('date').head(1).index
-        df_5min.loc[first_bullish_idx_5min, 'is_first_bullish_confirmed'] = True
-        df_5min.loc[first_bearish_idx_5min, 'is_first_bearish_confirmed'] = True
-        sp_levels_bullish_5min = df_5min[df_5min['is_first_bullish_confirmed']][['date', 'close', 'cum_high_prev']]
-        sp_levels_bearish_5min = df_5min[df_5min['is_first_bearish_confirmed']][['date', 'close', 'cum_low_prev']]
-        sp_levels_bullish_5min['sp_high_bullish'] = sp_levels_bullish_5min['close']
-        sp_levels_bullish_5min['sp_low_bullish'] = sp_levels_bullish_5min['cum_high_prev']
-        sp_levels_bearish_5min['sp_high_bearish'] = sp_levels_bearish_5min['cum_low_prev']
-        sp_levels_bearish_5min['sp_low_bearish'] = sp_levels_bearish_5min['close']
-        sp_levels_bullish_5min.drop(['close', 'cum_high_prev'], axis=1, inplace=True)
-        sp_levels_bearish_5min.drop(['close', 'cum_low_prev'], axis=1, inplace=True)
-        df_5min = df_5min.merge(sp_levels_bullish_5min, on='date', how='left')
-        df_5min = df_5min.merge(sp_levels_bearish_5min, on='date', how='left')
-        df_5min['sp_high_bullish'] = (df_5min.groupby('date')['sp_high_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df_5min['sp_low_bullish'] = (df_5min.groupby('date')['sp_low_bullish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df_5min['sp_high_bearish'] = (df_5min.groupby('date')['sp_high_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df_5min['sp_low_bearish'] = (df_5min.groupby('date')['sp_low_bearish'].transform(lambda x: x.ffill() if x.notna().any() else x))
-        df_5min.loc[~df_5min['sp_confirmed_bullish'].cummax(), ['sp_high_bullish', 'sp_low_bullish']] = None
-        df_5min.loc[~df_5min['sp_confirmed_bearish'].cummax(), ['sp_high_bearish', 'sp_low_bearish']] = None
-        df_5min['sp_bullish_range_pct'] = (df_5min['sp_high_bullish'] - df_5min['sp_low_bullish']) / df_5min['sp_low_bullish'] * 100
-        df_5min['sp_bearish_range_pct'] = (df_5min['sp_high_bearish'] - df_5min['sp_low_bearish']) / df_5min['sp_low_bearish'] * 100
-        df_5min['cum_sp_bullish'] = df_5min.groupby('date')['sp_confirmed_bullish'].cumsum()
-        df_5min['cum_sp_bearish'] = df_5min.groupby('date')['sp_confirmed_bearish'].cumsum()
-        #self.logger.info(f"Calculated Single Print for {self.symbol}")
-
-        # Cumulative intraday volume(Needed for both 15m and 5m) 
-        df['cum_intraday_volume'] = df.groupby('date')['volume'].cumsum()
-        df['curtop'] = df.groupby('date')['high'].cummax()
-        df['curbot'] = df.groupby('date')['low'].cummin()
-        df['today_range'] = df['curtop'] - df['curbot']
-        df['today_range_pct'] = df['today_range'] / df['atr_10'] 
-        df['volume_range_pct'] = (df['cum_intraday_volume'] / df['volume_10']) / df['today_range_pct']
-
-        df_5min['cum_intraday_volume'] = df_5min.groupby('date')['volume'].cumsum()
-        df_5min['curtop'] = df_5min.groupby('date')['high'].cummax()
-        df_5min['curbot'] = df_5min.groupby('date')['low'].cummin()
-        df_5min['today_range'] = df_5min['curtop'] - df_5min['curbot']
-        df_5min['today_range_pct'] = df_5min['today_range'] / df_5min['atr_10'] 
-        df_5min['volume_range_pct'] = (df_5min['cum_intraday_volume'] / df_5min['volume_10']) / df_5min['today_range_pct']
-
-        # Strategy definitions
-        df['s_8'] = (df['time'].dt.time >= time(4, 00)) & (df['time'].dt.time < time(8, 15)) & (df['cum_sp_bullish'] >= 1) & (df['sp_bullish_range_pct'] > 1) & (df['zl_macd_signal'] == -1) & (df['volume_range_pct'] > 1) 
-        df['strategy_8'] = False 
-        # Get the index of first True condition per day
-        first_true_idx_8 = df[df['s_8']].groupby('date').head(1).index
-        # Set final_flag to True only at these rows
-        df.loc[first_true_idx_8, 'strategy_8'] = True  
-
-        df['s_12'] = (df['time'].dt.time >= time(4, 00)) & (df['time'].dt.time < time(8, 15)) & (df['cum_sp_bearish'] >= 1) & (df['sp_bearish_range_pct'] > 0.8) & (df['zl_macd_signal'] == 1) & (df['volume_range_pct'] < 0.2)
-        df['strategy_12'] = False 
-        first_true_idx_12 = df[df['s_12']].groupby('date').head(1).index
-        df.loc[first_true_idx_12, 'strategy_12'] = True
-
-        df_5min['s_10'] = (df_5min['time'].dt.time >= time(3, 50)) & (df_5min['time'].dt.time < time(8, 15)) & (df_5min['cum_sp_bearish'] >= 1) & (df_5min['sp_bearish_range_pct'] > 0.6) & (df_5min['close'] < df_5min['ema_50']) & (df_5min['close'] < df_5min['ema_100']) & (df_5min['close'] < df_5min['ema_200']) & (df_5min['is_range_bearish']) & (df_5min['volume_range_pct'] > 0.2) & (df_5min['volume_range_pct'] < 0.3)
-        df_5min['strategy_10'] = False 
-        first_true_idx_10 = df_5min[df_5min['s_10']].groupby('date').head(1).index
-        df_5min.loc[first_true_idx_10, 'strategy_10'] = True
-
-        df_5min['s_11'] = (df_5min['time'].dt.time >= time(3, 50)) & (df_5min['time'].dt.time < time(8, 15)) & (df_5min['cum_sp_bullish'] >= 1) & (df_5min['sp_bullish_range_pct'] > 0.8) & (df_5min['close'] > df_5min['ema_50']) & (df_5min['close'] > df_5min['ema_100']) & (df_5min['close'] > df_5min['ema_200']) & (df_5min['is_range_bullish']) & (df_5min['volume_range_pct'] > 0.2) & (df_5min['volume_range_pct'] < 0.3)
-        df_5min['strategy_11'] = False 
-        first_true_idx_11 = df_5min[df_5min['s_11']].groupby('date').head(1).index
-        df_5min.loc[first_true_idx_11, 'strategy_11'] = True
-
-        # Outputs to see all the indicators
-        #df.to_csv('df.csv', index=False)
-        #df_5min.to_csv('df_5min.csv', index=False)
-
-        # Drop temporary 'date' column if needed
-        df.drop('date', axis=1, inplace=True)
-        df_5min.drop('date', axis=1, inplace=True)
-        return df, df_5min
-    
     def calculate_all_indicators_once(self, df_all_dict):
         """
         Calculate all indicators once for the entire dataset
@@ -312,15 +91,17 @@ class BacktestEngine:
         df_daily = df_all_dict['d'].copy()
         
         # === DAILY INDICATORS (ATR & Volume) ===
-        atr_period = 5
-        volume_period = 5
+        atr_period = 14
+        volume_period = 14
         df_daily['prev_close'] = df_daily['close'].shift(1)
         df_daily['tr1'] = df_daily['high'] - df_daily['low']
         df_daily['tr2'] = abs(df_daily['high'] - df_daily['prev_close'])
         df_daily['tr3'] = abs(df_daily['low'] - df_daily['prev_close'])
         df_daily['tr'] = df_daily[['tr1', 'tr2', 'tr3']].max(axis=1)
-        df_daily['atr_10'] = df_daily['tr'].ewm(span=atr_period, adjust=False).mean()
-        df_daily['volume_10'] = df_daily['volume'].rolling(window=volume_period).mean()
+        df_daily['atr_10'] = df_daily['tr'].ewm(span=10, adjust=False).mean()
+        df_daily['volume_10'] = df_daily['volume'].rolling(window=10).mean()
+        df_daily['atr_14'] = df_daily['tr'].ewm(span=14, adjust=False).mean()
+        df_daily['volume_14'] = df_daily['volume'].rolling(window=14).mean()
         df_daily.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)
         
         # Add date columns for merging
@@ -329,8 +110,8 @@ class BacktestEngine:
         df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
         
         # Merge ATR from daily data
-        df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10']], on='date', how='left')
-        df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10']], on='date', how='left')
+        df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'atr_14', 'volume_14']], on='date', how='left')
+        df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10', 'atr_14', 'volume_14']], on='date', how='left')
         
         # === 5MIN INDICATORS (EMAs) ===
         df_5m['ema_50'] = df_5m['close'].ewm(span=50, adjust=False).mean()
@@ -504,16 +285,20 @@ class BacktestEngine:
         df_15m['curtop'] = df_15m.groupby('date')['high'].cummax()
         df_15m['curbot'] = df_15m.groupby('date')['low'].cummin()
         df_15m['today_range'] = df_15m['curtop'] - df_15m['curbot']
-        df_15m['today_range_pct'] = df_15m['today_range'] / df_15m['atr_10']
-        df_15m['volume_range_pct'] = (df_15m['cum_intraday_volume'] / df_15m['volume_10']) / df_15m['today_range_pct']
+        df_15m['today_range_pct_10'] = df_15m['today_range'] / df_15m['atr_10']
+        df_15m['today_range_pct_14'] = df_15m['today_range'] / df_15m['atr_14']
+        df_15m['volume_range_pct_10'] = (df_15m['cum_intraday_volume'] / df_15m['volume_10']) / df_15m['today_range_pct_10']
+        df_15m['volume_range_pct_14'] = (df_15m['cum_intraday_volume'] / df_15m['volume_14']) / df_15m['today_range_pct_14']
         
         # === VOLUME & RANGE CALCULATIONS - 5m ===
         df_5m['cum_intraday_volume'] = df_5m.groupby('date')['volume'].cumsum()
         df_5m['curtop'] = df_5m.groupby('date')['high'].cummax()
         df_5m['curbot'] = df_5m.groupby('date')['low'].cummin()
         df_5m['today_range'] = df_5m['curtop'] - df_5m['curbot']
-        df_5m['today_range_pct'] = df_5m['today_range'] / df_5m['atr_10']
-        df_5m['volume_range_pct'] = (df_5m['cum_intraday_volume'] / df_5m['volume_10']) / df_5m['today_range_pct']
+        df_5m['today_range_pct_10'] = df_5m['today_range'] / df_5m['atr_10']
+        df_5m['today_range_pct_14'] = df_5m['today_range'] / df_5m['atr_14']
+        df_5m['volume_range_pct_10'] = (df_5m['cum_intraday_volume'] / df_5m['volume_10']) / df_5m['today_range_pct_10']
+        df_5m['volume_range_pct_14'] = (df_5m['cum_intraday_volume'] / df_5m['volume_14']) / df_5m['today_range_pct_14']
         
         # === STRATEGY DEFINITIONS ===
         # Strategy 8 & 12 (15m)
@@ -521,9 +306,9 @@ class BacktestEngine:
             (df_15m['time'].dt.time >= time(4, 0)) & 
             (df_15m['time'].dt.time < time(8, 15)) & 
             (df_15m['cum_sp_bullish'] >= 1) & 
-            (df_15m['sp_bullish_range_pct'] > 1) & 
+            (df_15m['sp_bullish_range_pct'] > 0.8) & 
             (df_15m['zl_macd_signal'] == -1) & 
-            (df_15m['volume_range_pct'] > 1)
+            (df_15m['volume_range_pct_10'] > 1)
         )
         df_15m['strategy_8'] = False
         first_true_idx_8 = df_15m[df_15m['s_8']].groupby('date').head(1).index
@@ -534,8 +319,9 @@ class BacktestEngine:
             (df_15m['time'].dt.time < time(8, 15)) & 
             (df_15m['cum_sp_bearish'] >= 1) & 
             (df_15m['sp_bearish_range_pct'] > 0.8) & 
-            (df_15m['zl_macd_signal'] == 1) & 
-            (df_15m['volume_range_pct'] < 0.2)
+            (df_15m['zl_macd_signal'] == 1) &
+            (df_15m['volume_range_pct_10'] > 0) &
+            (df_15m['volume_range_pct_10'] < 0.4)
         )
         df_15m['strategy_12'] = False
         first_true_idx_12 = df_15m[df_15m['s_12']].groupby('date').head(1).index
@@ -551,8 +337,8 @@ class BacktestEngine:
             (df_5m['close'] < df_5m['ema_100']) & 
             (df_5m['close'] < df_5m['ema_200']) & 
             (df_5m['is_range_bearish']) & 
-            (df_5m['volume_range_pct'] > 0.2) & 
-            (df_5m['volume_range_pct'] < 0.3)
+            (df_5m['volume_range_pct_10'] > 0.3) & 
+            (df_5m['volume_range_pct_10'] < 0.7)
         )
         df_5m['strategy_10'] = False
         first_true_idx_10 = df_5m[df_5m['s_10']].groupby('date').head(1).index
@@ -567,12 +353,28 @@ class BacktestEngine:
             (df_5m['close'] > df_5m['ema_100']) & 
             (df_5m['close'] > df_5m['ema_200']) & 
             (df_5m['is_range_bullish']) & 
-            (df_5m['volume_range_pct'] > 0.2) & 
-            (df_5m['volume_range_pct'] < 0.3)
+            (df_5m['volume_range_pct_10'] > 0) & 
+            (df_5m['volume_range_pct_10'] < 0.3)
         )
         df_5m['strategy_11'] = False
         first_true_idx_11 = df_5m[df_5m['s_11']].groupby('date').head(1).index
         df_5m.loc[first_true_idx_11, 'strategy_11'] = True
+
+        df_5m['s_9'] = (
+            (df_5m['time'].dt.time >= time(3, 50)) & 
+            (df_5m['time'].dt.time < time(8, 15)) & 
+            (df_5m['cum_sp_bullish'] >= 1) & 
+            (df_5m['sp_bullish_range_pct'] > 0.8) & 
+            (df_5m['close'] > df_5m['ema_50']) & 
+            (df_5m['close'] > df_5m['ema_100']) & 
+            (df_5m['close'] > df_5m['ema_200']) & 
+            (df_5m['is_range_bullish']) & 
+            (df_5m['volume_range_pct_10'] > 0.3) & 
+            (df_5m['volume_range_pct_10'] < 0.6)
+        )
+        df_5m['strategy_9'] = False
+        first_true_idx_9 = df_5m[df_5m['s_9']].groupby('date').head(1).index
+        df_5m.loc[first_true_idx_9, 'strategy_9'] = True
         
         # Clean up date columns
         df_15m.drop('date', axis=1, inplace=True)
@@ -842,7 +644,7 @@ class BacktestEngine:
                         
             
             entry_row = None
-            # 5m dataframe - Strategy 10 and 11
+            # 5m dataframe - Strategy 9, 10 and 11
             for i in range(1, len(df_today_5min)):
                 prev = df_today_5min.iloc[i - 1]
                 curr = df_today_5min.iloc[i]
@@ -852,7 +654,7 @@ class BacktestEngine:
 
                 buy = curr['strategy_11']
                 sell = False
-                short = curr['strategy_10']
+                short = curr['strategy_10'] or curr['strategy_9']
                 cover = False  
 
                 # ENTRY: Long
@@ -886,7 +688,8 @@ class BacktestEngine:
                     trail_history = []
                     in_position = True
                     self.entry_price = entry_row['close']
-                    strategy_id = '10'
+                    #strategy_id = '10'
+                    strategy_id = '10' if curr['strategy_10'] else '9'
                     entry_time = curr['time'] + timedelta(minutes=4) # 5min as we are working on 5min candles, else replace it with 15min
                     #self.logger.info(f"Entry confirmed: position={self.position}, entry_price={entry_row['close']}, in_position={in_position}")
                     break  # Exit the 15m loop after entry
@@ -1031,43 +834,9 @@ class BacktestEngine:
                         last_trail_price = None
                         in_position = False 
                         break  # only one trade per symbol per strategy per day
-            # Clean up
-            # del df_today
-            # del df_today_5min
-            # del df_min_today
-            # del df
-            # del df_5min
-            # del df_min
-            # del df_daily
-            # gc.collect()
             
         self.trades = pd.DataFrame(trades)
         return self.trades
-
-    
-    def visualize_trade(df, entry_time, exit_time, entry_price, trail_stops=None, title="Trade Chart"):
-        trade_df = df[(df['time'] >= entry_time) & (df['time'] <= exit_time)].copy()
-        if trade_df.empty:
-            print("No data for this trade.")
-            return
-
-        plt.figure(figsize=(12, 6))
-        plt.plot(trade_df['time'], trade_df['close'], label='Price', color='blue')
-        plt.axhline(entry_price, color='green', linestyle='--', label='Entry Price')
-        plt.axvline(entry_time, color='green', linestyle=':', label='Entry Time')
-        plt.axvline(exit_time, color='red', linestyle=':', label='Exit Time')
-
-        if trail_stops:
-            plt.plot(trail_stops['time'], trail_stops['value'], color='orange', linestyle='--', label='Trailing Stop')
-
-        plt.legend()
-        plt.title(title)
-        plt.xlabel("Time")
-        plt.ylabel("Price")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
 
     def export_trail_charts(self, output_dir="trail_charts"):
         os.makedirs(output_dir, exist_ok=True)

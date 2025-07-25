@@ -322,18 +322,18 @@ class MarketDataProcessor:
         self.db_conn = self.db_manager.initialize_database()
         self.logger = logging.getLogger(f"MarketDataProcessor")
         
-        # self.consumer = KafkaConsumer(
-        #     'tick_data',
-        #     bootstrap_servers='localhost:9092',
-        #     group_id='tick-processor',
-        #     auto_offset_reset='earliest'
-        #     #key_deserializer=lambda k: k.decode('utf-8') if k else None,
-        #     #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
-        # )
+        self.consumer = KafkaConsumer(
+            'tick_data',
+            bootstrap_servers='localhost:9092',
+            group_id='tick-processor',
+            auto_offset_reset='earliest'
+            #key_deserializer=lambda k: k.decode('utf-8') if k else None,
+            #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
+        )
 
-        # self.logger.info("Starting consumer with configuration:")
-        # self.logger.info(f"Group ID: {self.consumer.config['group_id']}")
-        # self.logger.info(f"Brokers: {self.consumer.config['bootstrap_servers']}")
+        self.logger.info("Starting consumer with configuration:")
+        self.logger.info(f"Group ID: {self.consumer.config['group_id']}")
+        self.logger.info(f"Brokers: {self.consumer.config['bootstrap_servers']}")
 
         self.aggregation_lock = Lock()
 
@@ -876,7 +876,7 @@ class MarketDataProcessor:
         """Clean shutdown"""
         logger.info("Shutting down processors")
         self.executor.shutdown(wait=True)
-        #self.consumer.close()
+        self.consumer.close()
         self.db_conn.close()
         logger.info("Clean shutdown complete")
 
@@ -981,30 +981,30 @@ if __name__ == "__main__":
             symbol_interval_pairs = list(product(symbol_list, intervals))
 
             # UNCOMMENT THIS BLOCK FOR FETCHING HISTORICAL DATA FOR ALL INTERVALS
-            # with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
-            #     futures = []
-            #     for symbol, interval in symbol_interval_pairs:
-            #         time.sleep(1)
-            #         futures.append(
-            #             executor.submit(
-            #                 processor.process_symbol_interval,
-            #                 symbol,
-            #                 interval,
-            #                 client,
-            #                 start_date,
-            #                 end_date
-            #             )
-            #         )
+            with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
+                futures = []
+                for symbol, interval in symbol_interval_pairs:
+                    time.sleep(1)
+                    futures.append(
+                        executor.submit(
+                            processor.process_symbol_interval,
+                            symbol,
+                            interval,
+                            client,
+                            start_date,
+                            end_date
+                        )
+                    )
                 
-            #     # Wait for all tasks to complete (optional)
-            #     try:
-            #         for future in futures:                        
-            #             future.result()  # This will re-raise any exceptions from the thread
-            #     except KeyboardInterrupt:
-            #         print("Interrupted by user. Cancelling all futures.")
-            #         for future in futures:
-            #             future.cancel()
-            #         executor.shutdown(wait=False, cancel_futures=True)
+                # Wait for all tasks to complete (optional)
+                try:
+                    for future in futures:                        
+                        future.result()  # This will re-raise any exceptions from the thread
+                except KeyboardInterrupt:
+                    print("Interrupted by user. Cancelling all futures.")
+                    for future in futures:
+                        future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
 
             
             # Without threading
@@ -1126,6 +1126,10 @@ if __name__ == "__main__":
                         master_df = pd.concat(all_dfs, ignore_index=True)
                         master_df.sort_values(by='entry_time', inplace=True)
 
+                        # Save master trades in the base output directory                        
+                        master_output_path_raw = os.path.join(base_output_dir, "backtest_trades_master_raw.csv")
+                        master_df.to_csv(master_output_path_raw, index=False)
+
                         # Process the trades with constraints
                         master_df = process_trades_with_constraints(master_df)
                       
@@ -1149,10 +1153,30 @@ if __name__ == "__main__":
                         ).reset_index()
                         strat_summary = strat_summary.round(2)
 
-                        # MONTH-STRATEGY SUMMARY
+                        # MONTH SUMMARY
                         master_df['entry_time'] = pd.to_datetime(master_df['entry_time'])
                         master_df['month'] = master_df['entry_time'].dt.to_period('M').astype(str)
 
+                        month_summary = master_df.groupby('month').agg(
+                            tot_trades=('gross_pnl', 'count'),
+                            proftrades=('net_pnl', lambda x: (x > 0).sum()),
+                            losstrades=('net_pnl', lambda x: (x < 0).sum()),
+                            win_rate=('net_pnl', lambda x: (x > 0).mean() * 100),
+                            gross_pnl=('gross_pnl', 'sum'),
+                            brokerage=('brokerage', 'sum'),
+                            tax_amount=('tax', 'sum'),
+                            net_pnl__=('net_pnl', 'sum'),
+                            avg_pnl__=('net_pnl', 'mean'),         
+                            max_dd__=('net_pnl', lambda x: (x.cumsum() - x.cumsum().cummax()).min()),
+                            avg_dd_=('net_pnl', lambda x: 
+                                (lambda dd: dd[dd > 0].mean() if (dd > 0).any() else 0)(
+                                    x.cumsum() - x.cumsum().cummax()
+                                )
+                            )
+                        ).reset_index()
+                        month_summary = month_summary.round(2)                        
+
+                        # MONTH-STRATEGY SUMMARY
                         month_strat_summary = master_df.groupby(['month', 'strategy']).agg(
                             tottrades=('gross_pnl', 'count'),
                             p_trades=('net_pnl', lambda x: (x > 0).sum()),
@@ -1180,13 +1204,17 @@ if __name__ == "__main__":
                         master_output_path = os.path.join(base_output_dir, "master_summary_by_strategy.csv")
                         strat_summary.to_csv(master_output_path, index=False)
 
+                        # Save month summary in the base output directory
+                        master_output_path = os.path.join(base_output_dir, "master_summary_by_month.csv")
+                        month_summary.to_csv(master_output_path, index=False)   
+
                         # Save month-strategy summary in the base output directory
                         master_output_path = os.path.join(base_output_dir, "master_summary_by_strategy_month.csv")
                         month_strat_summary.to_csv(master_output_path, index=False)
 
                         # Remove the backtest_trades_* except backtest_trades_master.csv
                         for file in os.listdir(base_output_dir):
-                            if file.startswith("backtest_trades_") and file != "backtest_trades_master.csv":
+                            if file.startswith("backtest_trades_") and file != "backtest_trades_master.csv" and file != "backtest_trades_master_raw.csv":
                                 file_path = os.path.join(base_output_dir, file)
                                 os.remove(file_path)
                         
@@ -1195,6 +1223,9 @@ if __name__ == "__main__":
                         
                         if not strat_summary.empty:                            
                             print_aggregate_totals_1(strat_summary, 'PERFORMANCE STRATEGY_WISE')
+                        
+                        if not month_summary.empty:                            
+                            print_aggregate_totals_1(month_summary, 'PERFORMANCE MONTH_WISE')
 
                         if not month_strat_summary.empty:                            
                             print_aggregate_totals_2(month_strat_summary, "PERFORMANCE MONTH_STRATEGY_WISE")
@@ -1462,37 +1493,37 @@ if __name__ == "__main__":
                     
             # Run backtests in parallel 
             # Create connection pool once
-            db_config = {
-                    "user": processor.db_manager.user,
-                    "password": processor.db_manager.password,
-                    "host": processor.db_manager.host,
-                    "port": processor.db_manager.port,
-                    "dbname": processor.db_manager.dbname
-            }
+            # db_config = {
+            #         "user": processor.db_manager.user,
+            #         "password": processor.db_manager.password,
+            #         "host": processor.db_manager.host,
+            #         "port": processor.db_manager.port,
+            #         "dbname": processor.db_manager.dbname
+            # }
 
-            connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=1, maxconn=8,  # Adjust based on your needs
-                user=db_config['user'],
-                password=db_config['password'],
-                host=db_config['host'],
-                port=db_config['port'],
-                dbname=db_config['dbname']
-            )    
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = []                
-                for symbol in symbol_list:
-                    futures.append(executor.submit(run_backtest_for_symbol, symbol, connection_pool, from_date, to_date, base_output_dir))
-                try:
-                    for future in futures:
-                        future.result()
-                except KeyboardInterrupt:
-                    print("Interrupted by user. Cancelling all futures.")
-                    for future in futures:
-                        future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
+            # connection_pool = psycopg2.pool.ThreadedConnectionPool(
+            #     minconn=1, maxconn=8,  # Adjust based on your needs
+            #     user=db_config['user'],
+            #     password=db_config['password'],
+            #     host=db_config['host'],
+            #     port=db_config['port'],
+            #     dbname=db_config['dbname']
+            # )    
+            # with ThreadPoolExecutor(max_workers=8) as executor:
+            #     futures = []                
+            #     for symbol in symbol_list:
+            #         futures.append(executor.submit(run_backtest_for_symbol, symbol, connection_pool, from_date, to_date, base_output_dir))
+            #     try:
+            #         for future in futures:
+            #             future.result()
+            #     except KeyboardInterrupt:
+            #         print("Interrupted by user. Cancelling all futures.")
+            #         for future in futures:
+            #             future.cancel()
+            #         executor.shutdown(wait=False, cancel_futures=True)
                 
-            # Aggregate summaries from the organized folder structure                
-            aggregate_all_summaries(base_output_dir, "master_summary.csv")               
+            # # Aggregate summaries from the organized folder structure                
+            # aggregate_all_summaries(base_output_dir, "master_summary.csv")               
             
             # End the timer
             end_time = time.time()
