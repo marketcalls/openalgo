@@ -30,6 +30,9 @@ from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+
+from blueprints.python_strategy import python_strategy_bp
+
 from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 
@@ -150,11 +153,16 @@ def create_app():
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
     app.register_blueprint(strategy_bp)
+
+    app.register_blueprint(python_strategy_bp)
+
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     
 
+
     # Exempt webhook endpoints from CSRF protection after app initialization
+
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions['chartink_bp.webhook'])
@@ -243,8 +251,10 @@ if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
+
     # Log the OpenAlgo access URL with enhanced styling
     url = f"http://{host_ip}:{port}"
     log_startup_banner(logger, "OpenAlgo is running!", url)
 
     socketio.run(app, host=host_ip, port=port, debug=debug)
+
