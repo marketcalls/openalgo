@@ -268,8 +268,8 @@ class BrokerData:
                             if ' ' in time_str:
                                 date_part = time_str.split(' ')[1]  # Get date part
                                 dt = datetime.strptime(date_part, '%d-%m-%Y')
-                                # Set to market close time for daily data
-                                dt = dt.replace(hour=15, minute=30, second=0)
+                                # Set to market opening time for daily data (09:15:00 IST)
+                                dt = dt.replace(hour=9, minute=15, second=0)
                             else:
                                 # ISO format: "2025-02-10T09:15:00"
                                 dt = datetime.fromisoformat(time_str.replace('T', ' '))
@@ -280,6 +280,11 @@ class BrokerData:
                     else:
                         logger.warning(f"No timestamp found in candle: {candle}")
                         continue
+                    
+                    # Debug logging for daily data timestamps
+                    if interval == 'D':
+                        debug_dt = datetime.fromtimestamp(timestamp)
+                        logger.info(f"DEBUG: Daily candle timestamp: {timestamp} -> {debug_dt}")
                     
                     # Extract OHLCV data according to new API format
                     data.append({
@@ -302,6 +307,21 @@ class BrokerData:
             # Convert to DataFrame and sort by timestamp
             df = pd.DataFrame(data)
             df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            # Ensure timestamp is Unix timestamp (integer)
+            # The API should return Unix timestamps, but let's ensure it
+            if df['timestamp'].dtype != 'int64':
+                logger.warning(f"Timestamp dtype is {df['timestamp'].dtype}, converting to int64")
+                df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+            
+            # For daily timeframe, adjust timestamp to show market opening time (9:15 AM IST)
+            if interval == 'D':
+                # Convert Unix timestamp to datetime
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                # Ensure it's at 9:15 AM IST
+                df['timestamp'] = df['timestamp'].dt.normalize() + pd.Timedelta(hours=9, minutes=15)
+                # Convert back to Unix timestamp
+                df['timestamp'] = df['timestamp'].astype('int64') // 10**9
             
             # Log summary
             logger.info(f"Retrieved {len(df)} candles")
