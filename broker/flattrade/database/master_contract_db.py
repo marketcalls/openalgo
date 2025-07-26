@@ -497,66 +497,139 @@ def process_flattrade_mcx_data(output_path):
 def process_flattrade_bse_data(output_path):
     """
     Processes the Flattrade BSE data (BSE_Equity.csv) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
+    Maps various BSE instrument types to appropriate categories.
     """
     logger.info("Processing Flattrade BSE Data")
     file_path = f'{output_path}/BSE.csv'
 
-    # First read the CSV to check columns
-    df = pd.read_csv(file_path)
-    logger.info(f"Available columns in BSE CSV: {df.columns.tolist()}")
+    try:
+        # Read the CSV file
+        df = pd.read_csv(file_path)
+        
+        if df.empty:
+            logger.warning("Warning: BSE CSV file is empty")
+            return pd.DataFrame()
+            
+        logger.info(f"Available columns in BSE CSV: {df.columns.tolist()}")
 
-    # Rename columns to match your schema
-    column_mapping = {
-        'Token': 'token',
-        'Lotsize': 'lotsize',
-        'Symbol': 'name',
-        'Tradingsymbol': 'brsymbol',
-        'Instrument': 'instrumenttype',
-        'Expiry': 'expiry',
-        'Strike': 'strike',
-        'Optiontype': 'optiontype'
-    }
-    
-    df = df.rename(columns=column_mapping)
+        # Validate required columns
+        required_columns = ['Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns in BSE CSV: {missing_columns}")
 
-    # Add missing columns
-    df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
-    df['tick_size'] = 0.05  # Default tick size for BSE
+        # Rename columns to match your schema
+        column_mapping = {
+            'Token': 'token',
+            'Lotsize': 'lotsize',
+            'Symbol': 'name',
+            'Tradingsymbol': 'brsymbol',
+            'Instrument': 'original_instrument',  # Keep original for mapping
+            'Expiry': 'expiry',
+            'Strike': 'strike',
+            'Optiontype': 'optiontype'
+        }
+        
+        df = df.rename(columns=column_mapping)
 
-    # Apply transformation for OpenAlgo symbols (no special logic needed here)
-    def get_openalgo_symbol(broker_symbol):
-        return broker_symbol
+        # Fill NaN values in required fields
+        df['name'] = df['name'].fillna('')
+        df['brsymbol'] = df['brsymbol'].fillna('')
+        df['token'] = df['token'].fillna('').astype(str)
+        df['original_instrument'] = df['original_instrument'].fillna('A')
+        
+        # Remove rows where brsymbol is empty (required field)
+        df = df[df['brsymbol'] != '']
+        
+        # Add missing columns
+        df['symbol'] = df['brsymbol'].copy()  # Initialize 'symbol' with 'brsymbol'
+        df['tick_size'] = 0.05  # Default tick size for BSE
 
-    # Update the 'symbol' column
-    df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
+        # Map BSE instrument types to standard instrument types
+        def map_instrument_type(instrument):
+            instrument_mapping = {
+                'UNDIND': 'INDEX',     # Underlying indices (SENSEX, BANKEX, etc.)
+                'A': 'EQ',             # Equity stocks category A
+                'B': 'EQ',             # Equity stocks category B  
+                'T': 'EQ',             # Equity stocks category T
+                'X': 'EQ',             # Equity stocks category X
+                'XT': 'EQ',            # Equity stocks category XT
+                'Z': 'EQ',             # Suspended/delisted stocks (you might want to filter these out)
+                'E': 'ETF',            # ETFs and Gold-related instruments
+                'IF': 'INVIT',         # Investment Funds/InvITs (Infrastructure Investment Trusts)
+                'R': 'RIGHTS',         # Rights issues
+                'W': 'WARRANTS'        # Warrants
+            }
+            return instrument_mapping.get(instrument, 'EQ')  # Default to EQ if not found
 
-    # Set Exchange: 'BSE' for all rows
-    df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']
+        # Apply instrument type mapping
+        df['instrumenttype'] = df['original_instrument'].apply(map_instrument_type)
 
-    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    if 'expiry' not in df.columns:
-        df['expiry'] = ''  # No expiry for these instruments
-    if 'strike' not in df.columns:
-        df['strike'] = -1  # Set default value -1 for strike price where missing
+        # Set exchange based on instrument type
+        def set_exchange(row):
+            if row['instrumenttype'] == 'INDEX':
+                return 'BSE_INDEX'
+            else:
+                return 'BSE'
 
-    # Ensure the instrument type is consistent
-    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
+        df['exchange'] = df.apply(set_exchange, axis=1)
+        df['brexchange'] = df['exchange']  # Broker exchange same as exchange
 
-    # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+        # Set empty columns for 'expiry' and fill -1 for 'strike' where missing
+        df['expiry'] = df.get('expiry', '').fillna('')
+        df['strike'] = pd.to_numeric(df.get('strike', pd.Series([-1] * len(df))), errors='coerce').fillna(-1)
 
-    # Reorder the columns to match the database structure
-    columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
-    df_filtered = df[columns_to_keep]
+        # Handle missing or invalid numeric values in 'lotsize'
+        df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(1).astype(int)
 
-    # Replace 'BSE' with 'BSE_INDEX' for specific symbols
-    df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
+        # Apply OpenAlgo symbol transformation (remove -EQ, -BE suffixes if any)
+        def get_openalgo_symbol(broker_symbol):
+            if pd.isna(broker_symbol) or not broker_symbol:
+                return broker_symbol
+            broker_symbol = str(broker_symbol)
+            # Remove common suffixes if present
+            if '-EQ' in broker_symbol:
+                return broker_symbol.replace('-EQ', '')
+            elif '-BE' in broker_symbol:
+                return broker_symbol.replace('-BE', '')
+            else:
+                return broker_symbol
 
+        # Update the 'symbol' column
+        df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Return the processed DataFrame
-    return df_filtered
+        # Optional: Filter out suspended stocks (Z category) if desired
+        # df = df[df['original_instrument'] != 'Z']
+
+        # Optional: Map specific index names for consistency
+        df['symbol'] = df['symbol'].replace({
+            'SENSEX': 'SENSEX',
+            'BANKEX': 'BANKEX', 
+            'SENSEX50': 'SENSEX50'
+        })
+
+        # Reorder columns to match database structure
+        columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+        df_filtered = df[columns_to_keep]
+
+        # Final validation - remove any rows with empty required fields
+        df_filtered = df_filtered[
+            (df_filtered['symbol'].notna()) & 
+            (df_filtered['brsymbol'].notna()) & 
+            (df_filtered['token'].notna()) & 
+            (df_filtered['symbol'] != '') & 
+            (df_filtered['brsymbol'] != '') & 
+            (df_filtered['token'] != '')
+        ]
+
+        logger.info(f"Successfully processed {len(df_filtered)} BSE records")
+        logger.info(f"Instrument type distribution: {df_filtered['instrumenttype'].value_counts().to_dict()}")
+        
+        return df_filtered
+        
+    except Exception as e:
+        logger.error(f"Error processing BSE data: {e}")
+        raise
 
 def process_flattrade_bfo_data(output_path):
     """
