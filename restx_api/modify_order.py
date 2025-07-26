@@ -11,7 +11,7 @@ from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+ORDER_RATE_LIMIT = os.getenv("ORDER_RATE_LIMIT", "10 per second")
 api = Namespace('modify_order', description='Modify Order API')
 
 # Initialize logger
@@ -22,7 +22,7 @@ modify_order_schema = ModifyOrderSchema()
 
 @api.route('/', strict_slashes=False)
 class ModifyOrder(Resource):
-    @limiter.limit(API_RATE_LIMIT)
+    @limiter.limit(ORDER_RATE_LIMIT)
     def post(self):
         """Modify an existing order"""
         try:

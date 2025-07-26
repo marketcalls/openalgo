@@ -143,6 +143,10 @@ def load_and_check_env_variables():
         'LOGIN_RATE_LIMIT_MIN', 
         'LOGIN_RATE_LIMIT_HOUR',
         'API_RATE_LIMIT', 
+        'ORDER_RATE_LIMIT',  # Rate limit for order placement, modification, and cancellation
+        'SMART_ORDER_RATE_LIMIT',  # Rate limit for smart order placement
+        'WEBHOOK_RATE_LIMIT',  # Rate limit for webhook endpoints
+        'STRATEGY_RATE_LIMIT',  # Rate limit for strategy operations
         'SMART_ORDER_DELAY',
         'SESSION_EXPIRY_TIME',  # Added SESSION_EXPIRY_TIME as it's required for session management
         'WEBSOCKET_HOST',  # Host for the WebSocket server
@@ -296,7 +300,7 @@ def load_and_check_env_variables():
         sys.exit(1)
 
     # Validate rate limits format
-    rate_limit_vars = ['LOGIN_RATE_LIMIT_MIN', 'LOGIN_RATE_LIMIT_HOUR', 'API_RATE_LIMIT']
+    rate_limit_vars = ['LOGIN_RATE_LIMIT_MIN', 'LOGIN_RATE_LIMIT_HOUR', 'API_RATE_LIMIT', 'ORDER_RATE_LIMIT', 'SMART_ORDER_RATE_LIMIT', 'WEBHOOK_RATE_LIMIT', 'STRATEGY_RATE_LIMIT']
     rate_limit_pattern = re.compile(r'^\d+\s+per\s+(second|minute|hour|day)$')
     
     for var in rate_limit_vars:
