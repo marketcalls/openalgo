@@ -1,0 +1,896 @@
+{
+	"info": {
+		"_postman_id": "049aeb42-50ed-4ada-9834-aa11f5e8cbcd",
+		"name": "OpenAlgo",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "9801551"
+	},
+	"item": [
+		{
+			"name": "v1",
+			"item": [
+				{
+					"name": "account",
+					"item": [
+						{
+							"name": "analyzer",
+							"item": [
+								{
+									"name": "analyzer-status",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Content-Type",
+												"value": "application/json",
+												"type": "text"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+											"options": {
+												"raw": {
+													"language": "json"
+												}
+											}
+										},
+										"url": {
+											"raw": "{{base}}api/v1/analyzer",
+											"host": [
+												"{{base}}api"
+											],
+											"path": [
+												"v1",
+												"analyzer"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "analyzer-toggle",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Content-Type",
+												"value": "application/json",
+												"type": "text"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"mode\": false\n}",
+											"options": {
+												"raw": {
+													"language": "json"
+												}
+											}
+										},
+										"url": {
+											"raw": "{{base}}api/v1/analyzer/toggle",
+											"host": [
+												"{{base}}api"
+											],
+											"path": [
+												"v1",
+												"analyzer",
+												"toggle"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						},
+						{
+							"name": "funds",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/funds",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"funds"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "orderbook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/orderbook",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"orderbook"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "tradebook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/tradebook",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"tradebook"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "positionbook",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/positionbook",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"positionbook"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "holdings",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/holdings",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"holdings"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "orders",
+					"item": [
+						{
+							"name": "placeorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\", \n    \"symbol\":\"SAIL\", \n    \"action\":\"BUY\", \n    \"exchange\":\"NSE\", \n    \"pricetype\":\"MARKET\", \n    \"product\":\"MIS\", \n    \"quantity\":\"1\" \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/placeorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"placeorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "placesmartorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"IDEA\",\n    \"action\": \"BUY\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"1\",\n    \"position_size\": \"5\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/placesmartorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"placesmartorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "basketorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"your-strategy\",\n    \"orders\": [\n        {\n            \"symbol\": \"RELIANCE\",\n            \"exchange\": \"NSE\",\n            \"action\": \"BUY\",\n            \"quantity\": \"1\",\n            \"pricetype\": \"MARKET\",\n            \"product\": \"MIS\"\n        },\n        {\n            \"symbol\": \"INFY\",\n            \"exchange\": \"NSE\",\n            \"action\": \"SELL\",\n            \"quantity\": \"1\",\n            \"pricetype\": \"MARKET\",\n            \"product\": \"MIS\"\n        }\n    ]\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/basketorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"basketorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "splitorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"SELL\",\n    \"quantity\": \"105\",\n    \"splitsize\": \"20\",\n    \"pricetype\": \"MARKET\",\n    \"product\": \"MIS\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/splitorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"splitorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "modifyorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Message\",\n    \"symbol\": \"USDINR15MAR2483CE\",\n    \"action\": \"BUY\",\n    \"exchange\": \"CDS\",\n    \"orderid\":\"240307000562466\",\n    \"product\":\"NRML\",\n    \"pricetype\":\"LIMIT\",\n    \"price\":\"0.0050\",\n    \"quantity\":\"1\",\n    \"disclosed_quantity\":\"0\",\n    \"trigger_price\":\"0\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/modifyorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"modifyorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "cancelorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\",\n    \"orderid\": \"1000000123665912\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/cancelorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"cancelorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "cancelallorder",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\":\"Test Strategy\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/cancelallorder",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"cancelallorder"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "closeposition",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\":\"Test Strategy\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/closeposition",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"closeposition"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "orderstatus",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\",\n    \"orderid\": \"24120900146469\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/orderstatus",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"orderstatus"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "openposition",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"strategy\": \"Test Strategy\",\n    \"symbol\": \"YESBANK\",\n    \"exchange\": \"NSE\",\n    \"product\": \"CNC\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/openposition",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"openposition"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "data",
+					"item": [
+						{
+							"name": "quotes",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"symbol\": \"ITC\",\n    \"exchange\": \"NSE\"    \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/quotes",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"quotes"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "depth",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"symbol\": \"NIFTY31JUL25FUT\",\n    \"exchange\": \"NFO\"   \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/depth",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"depth"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "history",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"symbol\": \"ITC\",\n    \"exchange\": \"NSE\",\n    \"interval\": \"1m\",\n    \"start_date\": \"2025-06-26\",\n    \"end_date\": \"2025-06-27\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/history",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"history"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "intervals",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/intervals",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"intervals"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "symbol",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"symbol\":\"SBIN\", \n    \"exchange\":\"NSE\"   \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/symbol",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"symbol"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "search",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"query\":\"TATA\", \n    \"exchange\":\"NFO\"   \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/search",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"search"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "expiry",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"apikey\": \"{{apiKey}}\",\n    \"symbol\":\"TATACHEM31JUL25860CE\", \n    \"exchange\":\"NFO\",\n    \"instrumenttype\":\"options\"   \n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{base}}api/v1/expiry",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"expiry"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "ticker",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "X-API-KEY",
+										"value": "{{apiKey}}",
+										"type": "text",
+										"disabled": true
+									}
+								],
+								"url": {
+									"raw": "{{base}}api/v1/ticker/NSE:ITC?interval=15m&from=2025-07-01&to=2025-07-22&adjusted=false&sort=asc&apikey={{apiKey}}",
+									"host": [
+										"{{base}}api"
+									],
+									"path": [
+										"v1",
+										"ticker",
+										"NSE:ITC"
+									],
+									"query": [
+										{
+											"key": "interval",
+											"value": "15m"
+										},
+										{
+											"key": "from",
+											"value": "2025-07-01"
+										},
+										{
+											"key": "to",
+											"value": "2025-07-22"
+										},
+										{
+											"key": "adjusted",
+											"value": "false"
+										},
+										{
+											"key": "sort",
+											"value": "asc"
+										},
+										{
+											"key": "apikey",
+											"value": "{{apiKey}}"
+										}
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	]
+}
