@@ -58,11 +58,14 @@ class BrokerData:
         self.timeframe_map = {
             # Minutes
             '1m': '1',    # 1 minute
+            '3m': '3',    # 3 minutes
             '5m': '5',    # 5 minutes
+            '10m': '10',  # 10 minutes
             '15m': '15',  # 15 minutes
             '30m': '30',  # 30 minutes
             # Hours
             '1h': '60',   # 1 hour (60 minutes)
+            '2h': '120',  # 2 hours (120 minutes)
             # Daily
             'D': 'D'      # Daily data
         }
