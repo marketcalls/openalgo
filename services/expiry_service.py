@@ -185,8 +185,9 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, api_key: s
                         # Try alternative format like "31-JUL-2025"
                         return datetime.strptime(date_str, "%d-%b-%Y")
                     except ValueError:
-                        # If parsing fails, return the original string for alphabetical sorting
-                        return date_str
+                        # If parsing fails, return a very distant future date to put unparseable dates at the end
+                        logger.warning(f"Could not parse expiry date: {date_str}, placing at end of list")
+                        return datetime.max
             
             # Sort by parsed date
             return sorted(date_list, key=parse_date)
