@@ -9,6 +9,7 @@ from database.strategy_db import (
 from database.symbol import enhanced_search_symbols
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity, is_session_valid
+from limiter import limiter
 import json
 from datetime import datetime, time
 import pytz
@@ -25,6 +26,10 @@ from time import time
 import re
 
 logger = get_logger(__name__)
+
+# Rate limiting configuration
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
+STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 
 strategy_bp = Blueprint('strategy_bp', __name__, url_prefix='/strategy')
 
@@ -287,6 +292,7 @@ def index():
 
 @strategy_bp.route('/new', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def new_strategy():
     """Create new strategy"""
     if request.method == 'POST':
@@ -417,6 +423,7 @@ def toggle_strategy_route(strategy_id):
 
 @strategy_bp.route('/<int:strategy_id>/delete', methods=['POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_strategy_route(strategy_id):
     """Delete strategy"""
     user_id = session.get('user')
@@ -448,6 +455,7 @@ def delete_strategy_route(strategy_id):
 
 @strategy_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def configure_symbols(strategy_id):
     """Configure symbols for strategy"""
     user_id = session.get('user')
@@ -555,6 +563,7 @@ def configure_symbols(strategy_id):
 
 @strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_symbol(strategy_id, mapping_id):
     """Delete symbol mapping"""
     username = session.get('user')
@@ -594,6 +603,7 @@ def search_symbols():
     })
 
 @strategy_bp.route('/webhook/<webhook_id>', methods=['POST'])
+@limiter.limit(WEBHOOK_RATE_LIMIT)
 def webhook(webhook_id):
     """Handle webhook from trading platform"""
     try:
