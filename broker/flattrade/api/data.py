@@ -74,7 +74,7 @@ class BrokerData:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Simplified quote data with required fields
+            dict: Simplified quote data with required fields including OI
         """
         try:
             # Convert symbol to broker format and get token
@@ -97,7 +97,7 @@ class BrokerData:
             if response.get('stat') != 'Ok':
                 raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data as dict (not list)
+            # Return simplified quote data as dict (not list) - NOW INCLUDING OI
             return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)), 
@@ -106,11 +106,13 @@ class BrokerData:
                 'low': float(response.get('l', 0)),
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                'volume': int(float(response.get('v', 0)))
+                'volume': int(float(response.get('v', 0))),
+                'oi': int(response.get('oi', 0))  # 🔥 ADDED OPEN INTEREST
             }
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
+
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
