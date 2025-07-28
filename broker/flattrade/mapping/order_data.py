@@ -40,7 +40,7 @@ def map_order_data(order_data):
                 order['tsym'] = symbol_from_db
                 if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
                     order['prd'] = 'CNC'
-                               
+                            
                 elif order['prd'] == 'I':
                     order['prd'] = 'MIS'
                 
@@ -55,11 +55,18 @@ def map_order_data(order_data):
                     order['prctyp']="SL-M"
                 elif(order['prctyp']=="SL-LMT"):
                     order['prctyp']="SL"
+                    
+                # 🔥 ADD: Price logic INSIDE the symbol_found block
+                if order['prctyp'] in ["MARKET", "SL-M"] and float(order.get('prc', 0)) == 0.0:
+                    rprc = order.get('rprc', 0)
+                    if rprc and float(rprc) > 0:
+                        order['prc'] = rprc
+                        logger.debug(f"Updated price from rprc for {order['prctyp']} order: {order.get('norenordno', '')}")
                 
             else:
                 logger.warning(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
-    return order_data
+        return order_data
 
 
 def calculate_order_statistics(order_data):
