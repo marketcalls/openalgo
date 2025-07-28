@@ -297,6 +297,14 @@ def process_flattrade_nfo_data(output_path):
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
+
     # Define Exchange
     df['exchange'] = 'NFO'
     df['brexchange'] = df['exchange']
@@ -381,6 +389,14 @@ def process_flattrade_cds_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'CDS'
@@ -467,6 +483,14 @@ def process_flattrade_mcx_data(output_path):
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
+
     # Define Exchange
     df['exchange'] = 'MCX'
     df['brexchange'] = df['exchange']
@@ -531,30 +555,35 @@ def process_flattrade_bse_data(output_path):
     # Update the 'symbol' column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Set Exchange: 'BSE' for all rows
-    df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']
+    # Set Exchange based on Instrument type: BSE_INDEX for UNDIND, BSE for others
+    df['exchange'] = df['instrumenttype'].apply(lambda x: 'BSE_INDEX' if x == 'UNDIND' else 'BSE')
+    df['brexchange'] = 'BSE'  # Broker exchange is always BSE
 
-    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    if 'expiry' not in df.columns:
-        df['expiry'] = ''  # No expiry for these instruments
-    if 'strike' not in df.columns:
-        df['strike'] = -1  # Set default value -1 for strike price where missing
+    # Handle expiry and strike like NSE data
+    df['expiry'] = df.get('expiry', '').fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = pd.to_numeric(df.get('strike', pd.Series([-1] * len(df))), errors='coerce').fillna(-1)  # Fill strike with -1 if missing
 
-    # Ensure the instrument type is consistent
-    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
+    # Set instrument type: keep UNDIND for index instruments, set EQ for others
+    df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'INDEX' if x == 'UNDIND' else 'EQ')
 
     # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(1).astype(int)  # Convert to int, default to 1 like NSE
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
 
-    # Replace 'BSE' with 'BSE_INDEX' for specific symbols
-    df_filtered.loc[df_filtered['symbol'].isin(['SENSEX', 'SENSEX50', 'BANKEX']) & (df_filtered['exchange'] == 'BSE'), 'exchange'] = 'BSE_INDEX'
+    # Final validation - remove any rows with empty required fields
+    df_filtered = df_filtered[
+        (df_filtered['symbol'].notna()) & 
+        (df_filtered['brsymbol'].notna()) & 
+        (df_filtered['token'].notna()) & 
+        (df_filtered['symbol'] != '') & 
+        (df_filtered['brsymbol'] != '') & 
+        (df_filtered['token'] != '')
+    ]
 
-
+    logger.info(f"Successfully processed {len(df_filtered)} BSE records")
     # Return the processed DataFrame
     return df_filtered
 
@@ -615,6 +644,14 @@ def process_flattrade_bfo_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'BFO'
