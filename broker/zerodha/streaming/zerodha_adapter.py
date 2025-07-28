@@ -54,6 +54,11 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             2: ZerodhaWebSocket.MODE_QUOTE,  # Quote
             3: ZerodhaWebSocket.MODE_FULL    # Full/Depth
         }
+        
+        # Batch subscription management
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms delay to collect more subscriptions in a batch
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Initialize the adapter with broker credentials"""
@@ -139,12 +144,62 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error connecting: {e}")
             return {'status': 'error', 'message': str(e)}
     
+    def _start_batch_timer(self):
+        """Start a timer to process batch subscriptions"""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.start()
+    
+    def _process_batch_subscriptions(self):
+        """Process queued subscriptions in batches"""
+        with self.lock:
+            if not self.subscription_queue:
+                return
+            
+            # Group by mode for efficient batch subscription
+            mode_groups = {}
+            token_exchange_map = {}
+            
+            for sub in self.subscription_queue:
+                mode = sub['mode']
+                token = sub['token']
+                exchange = sub['exchange']
+                
+                if mode not in mode_groups:
+                    mode_groups[mode] = []
+                mode_groups[mode].append(token)
+                
+                # Build token to exchange mapping
+                token_exchange_map[token] = exchange
+            
+            # Clear the queue
+            self.subscription_queue.clear()
+        
+        # Update token exchange mapping in WebSocket client
+        if token_exchange_map and self.ws_client:
+            self.ws_client.set_token_exchange_mapping(token_exchange_map)
+        
+        # Subscribe in batches by mode
+        for mode, tokens in mode_groups.items():
+            try:
+                self.logger.info(f"📦 Batch subscribing {len(tokens)} tokens in {mode} mode")
+                self.ws_client.subscribe_tokens(tokens, mode)
+            except Exception as e:
+                self.logger.error(f"❌ Batch subscription failed for {mode} mode: {e}")
+    
     def disconnect(self) -> Dict[str, Any]:
         """
         Disconnect from WebSocket and clean up resources.
         Ensures proper cleanup of ZMQ ports and WebSocket connections.
         """
         try:
+            # Cancel any pending batch timer
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            
             with self.lock:
                 if self.ws_client:
                     # Stop the WebSocket client
@@ -228,12 +283,25 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if not self.ws_client.wait_for_connection(timeout=10.0):
                     return {'status': 'error', 'message': 'WebSocket connection timeout'}
             
-            # Subscribe using WebSocket client
-            self.ws_client.subscribe_tokens([token], zerodha_mode)
-            
             # Track subscription with mapped exchange for consistency
             subscription_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
             
+            # Add to queue for batch processing
+            with self.lock:
+                self.subscription_queue.append({
+                    'token': token,
+                    'mode': zerodha_mode,
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'subscription_exchange': subscription_exchange,
+                    'mode_int': mode
+                })
+                
+                # If this is the first subscription in queue, start the batch timer
+                if len(self.subscription_queue) == 1:
+                    self._start_batch_timer()
+            
+            # Immediately track subscription (even before actual WebSocket subscription)
             with self.lock:
                 self.subscribed_symbols[f"{exchange}:{symbol}"] = {
                     'exchange': exchange,  # Original exchange for unsubscribe
@@ -244,7 +312,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 }
                 self.token_to_symbol[token] = (symbol, exchange)
             
-            self.logger.info(f"✅ Subscribed to {exchange}:{symbol} (token: {token}, mode: {zerodha_mode})")
+            self.logger.info(f"✅ Subscribed to {exchange}:{symbol} (token: [REDACTED], mode: {zerodha_mode})")
             return {'status': 'success', 'message': f'Subscribed to {symbol}'}
             
         except Exception as e:
