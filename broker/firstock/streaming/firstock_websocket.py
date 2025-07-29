@@ -97,8 +97,12 @@ class FirstockWebSocket:
             
             connection_url = f"{self.ROOT_URI}?{urlencode(params)}"
             self.logger.info(f"Connecting to Firstock WebSocket: {self.ROOT_URI}")
+            self.logger.info(f"Using userId: {self.user_id}")
             self.logger.debug(f"Connection URL: {connection_url}")
-            self.logger.debug(f"Using auth token: {self.auth_token[:10]}...{self.auth_token[-5:] if len(self.auth_token) > 15 else self.auth_token}")
+            self.logger.debug(f"Using auth token (jKey): {self.auth_token[:10]}...{self.auth_token[-5:] if len(self.auth_token) > 15 else self.auth_token}")
+            
+            # Important note about authentication
+            self.logger.info("Note: The jKey must be the 'susertoken' obtained from Firstock's login API")
             
             # Create WebSocket connection
             self.wsapp = websocket.WebSocketApp(
@@ -125,11 +129,13 @@ class FirstockWebSocket:
     def _run_websocket(self):
         """Run WebSocket with retry logic"""
         try:
+            self.logger.info("Starting WebSocket connection thread")
             self.wsapp.run_forever(
                 ping_interval=self.HEART_BEAT_INTERVAL,
                 ping_timeout=10,
                 sslopt={"cert_reqs": ssl.CERT_NONE}  # Add SSL options to avoid SSL errors
             )
+            self.logger.info("WebSocket run_forever completed")
         except Exception as e:
             self.logger.error(f"WebSocket connection failed: {e}")
             self.connection_state = self.ERROR
@@ -164,11 +170,13 @@ class FirstockWebSocket:
         """
         if self.connection_state != self.CONNECTED:
             self.logger.error("Cannot subscribe: WebSocket not connected")
+            self.logger.error(f"Current connection state: {self.get_connection_state()}")
             return
         
         # If not authenticated yet, queue the subscription
         if not self.authenticated:
             self.logger.info(f"Queuing subscription for {correlation_id} until authentication completes")
+            self.logger.info("WebSocket is connected but waiting for authentication response from Firstock")
             self.pending_subscriptions.append((correlation_id, mode, token_list))
             return
         
@@ -247,7 +255,7 @@ class FirstockWebSocket:
         self.current_retry_attempt = 0
         self.last_pong_time = time.time()
         
-        self.logger.info("Firstock WebSocket connection established")
+        self.logger.info("Firstock WebSocket connection established - waiting for authentication response")
         
         # Start ping monitoring
         self.ping_thread = threading.Thread(target=self._monitor_connection, daemon=True)
@@ -278,8 +286,17 @@ class FirstockWebSocket:
                             self.authenticated = True
                             # Process any pending subscriptions
                             self._process_pending_subscriptions()
-                        elif data.get('status') == 'failed':
+                        elif data.get('status') == 'failed' or data.get('message') == 'unauthenticated':
+                            # Log more details about the auth failure
                             self.logger.error(f"Authentication failed: {data.get('message', 'Unknown error')}")
+                            self.logger.error(f"Full response: {data}")
+                            self.logger.error(f"Using userId: {self.user_id}")
+                            self.logger.error(f"Using jKey (first 10 chars): {self.auth_token[:10] if self.auth_token else 'None'}...")
+                            self.logger.error("IMPORTANT: The jKey must be the 'susertoken' from Firstock's login API response")
+                            self.logger.error("Make sure you have:")
+                            self.logger.error("1. Logged in via Firstock's login API")
+                            self.logger.error("2. Stored the 'susertoken' from the login response as the auth_token")
+                            self.logger.error("3. The token is not expired (tokens may have limited validity)")
                             self.authenticated = False
                             # Close connection on auth failure to prevent spam
                             self.is_running = False
