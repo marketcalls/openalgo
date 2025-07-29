@@ -163,6 +163,18 @@ def process_firstock_nse_data(output_path):
 
     # Update the symbol column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
+    
+    # Map index symbols to OpenAlgo standard format
+    index_symbol_mapping = {
+        'Nifty 50': 'NIFTY',
+        'Nifty Fin Service': 'FINNIFTY',
+        'Nifty Bank': 'BANKNIFTY',
+        'NIFTY MID SELECT': 'MIDCPNIFTY',
+        'INDIAVIX': 'INDIAVIX'
+    }
+    
+    # Apply index symbol mapping
+    df['symbol'] = df['symbol'].replace(index_symbol_mapping)
 
     # Set instrument type based on is_index flag and trading symbol
     def get_instrument_type(row):
@@ -178,7 +190,8 @@ def process_firstock_nse_data(output_path):
 
     # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
     df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
-    df['brexchange'] = df['exchange']
+    # brexchange should always be 'NSE' for Firstock (including indices)
+    df['brexchange'] = 'NSE'
 
     # Set empty columns for expiry and strike
     df['expiry'] = ''
