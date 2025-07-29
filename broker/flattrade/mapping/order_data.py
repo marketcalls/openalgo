@@ -114,6 +114,14 @@ def calculate_order_statistics(order_data):
 
 def transform_order_data(orders):
     
+    # Handle None or empty orders
+    if orders is None:
+        logger.warning("No order data available - orders is None")
+        return []
+    
+    if not orders:
+        logger.info("No orders found - empty list")
+        return []
 
     transformed_orders = []
     
