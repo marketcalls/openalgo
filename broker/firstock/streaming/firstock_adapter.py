@@ -3,12 +3,16 @@ import json
 import logging
 import time
 from typing import Dict, Any, Optional, List
+import os
+from dotenv import load_dotenv
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 
 import sys
-import os
+
+# Load environment variables
+load_dotenv()
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -48,26 +52,62 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
+            # IMPORTANT: For Firstock, this must be the 'susertoken' from login API response
             auth_token = get_auth_token(user_id)
+            
+            # Auth token must come from database (after Firstock login)
             
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")
-                raise ValueError(f"No authentication token found for user {user_id}")
+                self.logger.error("For Firstock, the auth_token must be the 'susertoken' from the login API")
+                raise ValueError(f"No authentication token found for user {user_id}. Please login through Firstock's login API first.")
                 
             self.auth_token = auth_token
+            
+            # For Firstock, we need to get the broker-specific user ID from BROKER_API_KEY
+            # The BROKER_API_KEY contains the Firstock user ID (e.g., RR0884_API)
+            broker_api_key = os.getenv('BROKER_API_KEY', '')
+            if broker_api_key:
+                # Extract the user ID part (remove _API suffix if present)
+                self.firstock_user_id = broker_api_key.replace('_API', '')
+                self.logger.info(f"Using Firstock user ID '{self.firstock_user_id}' from BROKER_API_KEY")
+            else:
+                # Fallback to OpenAlgo user ID if BROKER_API_KEY not set
+                self.firstock_user_id = user_id
+                self.logger.warning(f"BROKER_API_KEY not found in environment. Using OpenAlgo user ID '{user_id}' which may fail authentication")
+            
         else:
             # Use provided tokens
+            # IMPORTANT: For Firstock, this must be the 'susertoken' from login API response
             auth_token = auth_data.get('auth_token')
             
             if not auth_token:
                 self.logger.error("Missing required authentication data")
+                self.logger.error("For Firstock, the auth_token must be the 'susertoken' from the login API")
                 raise ValueError("Missing required authentication data")
                 
             self.auth_token = auth_token
+            
+            # Check if broker-specific user ID is provided
+            if 'broker_user_id' in auth_data:
+                self.firstock_user_id = auth_data['broker_user_id']
+                self.logger.info(f"Using Firstock user ID '{self.firstock_user_id}' from auth_data")
+            else:
+                # Get from BROKER_API_KEY environment variable
+                broker_api_key = os.getenv('BROKER_API_KEY', '')
+                if broker_api_key:
+                    # Extract the user ID part (remove _API suffix if present)
+                    self.firstock_user_id = broker_api_key.replace('_API', '')
+                    self.logger.info(f"Using Firstock user ID '{self.firstock_user_id}' from BROKER_API_KEY")
+                else:
+                    # Fallback to OpenAlgo user ID if BROKER_API_KEY not set
+                    self.firstock_user_id = user_id
+                    self.logger.warning(f"BROKER_API_KEY not found in environment. Using OpenAlgo user ID '{user_id}' which may fail authentication")
         
         # Create FirstockWebSocket instance
+        # Use Firstock-specific user ID if available
         self.ws_client = FirstockWebSocket(
-            user_id=user_id,
+            user_id=self.firstock_user_id,
             auth_token=self.auth_token,
             max_retry_attempt=5,
             retry_delay=5
@@ -261,6 +301,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, ws, data) -> None:
         """Callback for data messages from the WebSocket"""
         try:
+            self.logger.info(f"Received data from Firstock WebSocket: {data}")
+            
             # Handle market data
             if isinstance(data, dict) and 'c_symbol' in data:
                 self._process_market_data(data)
@@ -283,6 +325,9 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = data.get('c_symbol', '')
             exchange_seg = data.get('c_exch_seg', '')
             
+            self.logger.debug(f"Processing market data for token: {token}, exchange: {exchange_seg}")
+            self.logger.debug(f"Raw data keys: {list(data.keys())}")
+            
             # Find the subscription that matches this token
             subscription = None
             with self.lock:
@@ -293,6 +338,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             if not subscription:
                 self.logger.warning(f"Received data for unsubscribed token: {token} on {exchange_seg}")
+                self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
                 return
             
             # Create topic for ZeroMQ
@@ -315,6 +361,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
             
+            self.logger.info(f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}")
+            
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
             
@@ -332,42 +380,42 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # Firstock prices are already in correct format (not in paise)
+        # Firstock prices are in paise, convert to rupees by dividing by 100
         
         if mode == 1:  # LTP mode
             return {
-                'ltp': float(data.get('i_last_traded_price', 0)),
+                'ltp': float(data.get('i_last_traded_price', 0)) / 100.0,
                 'ltt': data.get('i_last_trade_time', 0)
             }
         elif mode == 2:  # Quote mode
             return {
-                'ltp': float(data.get('i_last_traded_price', 0)),
+                'ltp': float(data.get('i_last_traded_price', 0)) / 100.0,
                 'ltt': data.get('i_last_trade_time', 0),
                 'volume': data.get('i_volume_traded_today', 0),
-                'open': float(data.get('i_open_price', 0)),
-                'high': float(data.get('i_high_price', 0)),
-                'low': float(data.get('i_low_price', 0)),
-                'close': float(data.get('i_closing_price', 0)),
+                'open': float(data.get('i_open_price', 0)) / 100.0,
+                'high': float(data.get('i_high_price', 0)) / 100.0,
+                'low': float(data.get('i_low_price', 0)) / 100.0,
+                'close': float(data.get('i_closing_price', 0)) / 100.0,
                 'last_quantity': data.get('i_last_trade_quantity', 0),
-                'average_price': float(data.get('i_average_trade_price', 0)),
+                'average_price': float(data.get('i_average_trade_price', 0)) / 100.0,
                 'total_buy_quantity': data.get('i_total_buy_quantity', 0),
                 'total_sell_quantity': data.get('i_total_sell_quantity', 0),
                 'oi': data.get('i_open_interest', 0),
-                'upper_circuit': float(data.get('i_upper_circuit_limit', 0)),
-                'lower_circuit': float(data.get('i_lower_circuit_limit', 0))
+                'upper_circuit': float(data.get('i_upper_circuit_limit', 0)) / 100.0,
+                'lower_circuit': float(data.get('i_lower_circuit_limit', 0)) / 100.0
             }
         elif mode == 3:  # Depth mode
             result = {
-                'ltp': float(data.get('i_last_traded_price', 0)),
+                'ltp': float(data.get('i_last_traded_price', 0)) / 100.0,
                 'ltt': data.get('i_last_trade_time', 0),
                 'volume': data.get('i_volume_traded_today', 0),
-                'open': float(data.get('i_open_price', 0)),
-                'high': float(data.get('i_high_price', 0)),
-                'low': float(data.get('i_low_price', 0)),
-                'close': float(data.get('i_closing_price', 0)),
+                'open': float(data.get('i_open_price', 0)) / 100.0,
+                'high': float(data.get('i_high_price', 0)) / 100.0,
+                'low': float(data.get('i_low_price', 0)) / 100.0,
+                'close': float(data.get('i_closing_price', 0)) / 100.0,
                 'oi': data.get('i_total_open_interest', 0),
-                'upper_circuit': float(data.get('i_upper_circuit_limit', 0)),
-                'lower_circuit': float(data.get('i_lower_circuit_limit', 0))
+                'upper_circuit': float(data.get('i_upper_circuit_limit', 0)) / 100.0,
+                'lower_circuit': float(data.get('i_lower_circuit_limit', 0)) / 100.0
             }
             
             # Extract depth data
@@ -408,7 +456,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 orders = 0
             
             depth.append({
-                'price': float(price),
+                'price': float(price) / 100.0,  # Convert from paise to rupees
                 'quantity': quantity,
                 'orders': orders
             })
