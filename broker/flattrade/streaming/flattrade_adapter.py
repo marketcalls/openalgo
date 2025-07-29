@@ -148,33 +148,34 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise
 
     def disconnect(self) -> None:
-        """Clean disconnect with complete resource cleanup"""
+        """Clean disconnect with complete resource cleanup and market data cache purge."""
         with self._instance_lock:
             self.logger.debug(f"Disconnecting instance {self.instance_id}")
-            
+
             self._instance_state['running'] = False
             self.running = False
-            self._should_reconnect = False  # Prevent reconnection attempts
-            
-            # Cleanup WebSocket
+            self._should_reconnect = False
+
+            # Stop and cleanup websocket in background to avoid blocking this thread
             if self._instance_state['ws_client']:
-                try:
-                    self._instance_state['ws_client'].stop()
-                except Exception as e:
-                    self.logger.error(f"Error stopping WebSocket for instance {self.instance_id}: {e}")
-                finally:
-                    self._instance_state['ws_client'] = None
-            
-            # Cleanup ZeroMQ
+                def cleanup_websocket():
+                    try:
+                        self._instance_state['ws_client'].stop()
+                    except Exception as e:
+                        self.logger.error(f"Error stopping WebSocket for instance {self.instance_id}: {e}")
+                    finally:
+                        self._instance_state['ws_client'] = None
+
+                threading.Thread(target=cleanup_websocket, daemon=True).start()
+
+            # Immediately cleanup ZMQ and all caches/snapshots
             self.cleanup_zmq()
-            
-            # Reset all instance state
             self._reset_instance_state()
-            
-            self.logger.debug(f"Instance {self.instance_id} completely disconnected and cleaned up")
+
+            self.logger.debug(f"Instance {self.instance_id} disconnect and data purge complete")
 
     def _reset_instance_state(self):
-        """Reset all instance-specific state"""
+        """Reset all instance-specific state, including ALL caches and snapshots."""
         self._instance_state.update({
             'connected': False,
             'user_id': None,
@@ -191,12 +192,15 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'last_heartbeat': None
             }
         })
-        
-        # Update direct attributes for backward compatibility
+        # Make sure all attributes clear for Python GC
         self.subscriptions = self._instance_state['active_subscriptions']
         self.token_symbol_map = self._instance_state['token_symbol_map']
         self.connected = False
         self.running = False
+        # FULLY purge all historical snapshots to avoid leaks/stale data
+        if hasattr(self, '_market_snapshots'):
+            self._market_snapshots.clear()
+
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """Enhanced subscription with proper correlation tracking and multi-mode support"""
@@ -293,6 +297,10 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self._instance_state['token_symbol_map'].pop(token, None)
                     self._instance_state['market_data_cache'].pop(token, None)
                     self.token_symbol_map.pop(token, None)
+
+                    # Remove snapshot data to prevent memory leaks
+                    if hasattr(self, '_market_snapshots'):
+                        self._market_snapshots.pop(token, None)
                 
                 self.logger.debug(f"Instance {self.instance_id} unsubscribed: {correlation_id}")
                 return self._create_success_response(f"Unsubscribed {symbol}.{exchange} mode {mode}")
