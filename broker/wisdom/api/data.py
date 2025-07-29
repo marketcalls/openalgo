@@ -102,9 +102,11 @@ class BrokerData:
         # Exchange segment mapping
         exchange_segment_map = {
             "NSE": 1,
+            "NSE_INDEX": 1,  # NSE indices use the same segment as NSE
             "NFO": 2,
             "CDS": 3,
             "BSE": 11,
+            "BSE_INDEX": 11,  # BSE indices use the same segment as BSE
             "BFO": 12,
             "MCX": 51
         }
@@ -157,7 +159,13 @@ class BrokerData:
                 logger.warning(f"Error fetching market data (code {message_code}): {error_msg}")
                 return None
                 
-            raw_data = response.get('result', {}).get('listQuotes', [None])[0]
+            # Handle empty listQuotes array
+            list_quotes = response.get('result', {}).get('listQuotes', [])
+            if not list_quotes:
+                logger.warning(f"Empty listQuotes in response (code {message_code})")
+                return None
+                
+            raw_data = list_quotes[0]
             if not raw_data:
                 logger.warning(f"No data in response (code {message_code})")
                 return None
