@@ -154,24 +154,28 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             self._instance_state['running'] = False
             self.running = False
-            self._should_reconnect = False  # Prevent reconnection attempts
+            self._should_reconnect = False
             
-            # Cleanup WebSocket
+            # Cleanup WebSocket in background to avoid blocking
             if self._instance_state['ws_client']:
-                try:
-                    self._instance_state['ws_client'].stop()
-                except Exception as e:
-                    self.logger.error(f"Error stopping WebSocket for instance {self.instance_id}: {e}")
-                finally:
-                    self._instance_state['ws_client'] = None
+                def cleanup_websocket():
+                    try:
+                        self._instance_state['ws_client'].stop()
+                    except Exception as e:
+                        self.logger.error(f"Error stopping WebSocket for instance {self.instance_id}: {e}")
+                    finally:
+                        self._instance_state['ws_client'] = None
+                
+                # Run cleanup in background thread to avoid blocking
+                threading.Thread(target=cleanup_websocket, daemon=True).start()
             
-            # Cleanup ZeroMQ
+            # Cleanup ZeroMQ immediately
             self.cleanup_zmq()
             
-            # Reset all instance state
+            # Reset state immediately
             self._reset_instance_state()
             
-            self.logger.debug(f"Instance {self.instance_id} completely disconnected and cleaned up")
+            self.logger.debug(f"Instance {self.instance_id} disconnect initiated")
 
     def _reset_instance_state(self):
         """Reset all instance-specific state"""

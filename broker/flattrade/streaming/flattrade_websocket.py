@@ -135,38 +135,56 @@ class FlattradeWebSocket:
         self.logger.debug(f"Instance {self.instance_id} heartbeat stopped")
 
     def _heartbeat_worker(self):
-        """Enhanced heartbeat worker with better connection detection"""
+        """Enhanced heartbeat worker with better connection detection and fast shutdown response"""
         while self._heartbeat_enabled and not self._stop_event.is_set():
             try:
                 if self.connected and self.ws and not self._connection_dead:
                     current_time = time.time()
-                    
+
                     # Send heartbeat if interval has passed
                     if (self._last_heartbeat_sent is None or 
                         current_time - self._last_heartbeat_sent >= self.HEARTBEAT_INTERVAL):
                         
                         if self._send_heartbeat():
                             self._last_heartbeat_sent = current_time
-                    
+
                     # **IMPROVED: Check for ANY message activity, not just pongs**
                     if self._last_message_received:
                         time_since_last_message = current_time - self._last_message_received
-                        
+
                         if time_since_last_message > self.HEARTBEAT_TIMEOUT:
-                            self.logger.error(f"Instance {self.instance_id} no messages received for {time_since_last_message:.1f}s - connection appears dead")
+                            self.logger.error(
+                                f"Instance {self.instance_id} no messages received for {time_since_last_message:.1f}s - connection appears dead"
+                            )
                             self._connection_dead = True
                             # Force close the connection to trigger reconnection
                             self._force_reconnect()
                             break
                         elif time_since_last_message > self.HEARTBEAT_TIMEOUT * 0.7:  # 70% of timeout
-                            self.logger.warning(f"Instance {self.instance_id} no messages for {time_since_last_message:.1f}s - connection may be unstable")
-                
-                # Sleep for connection check interval
-                time.sleep(self.CONNECTION_CHECK_INTERVAL)
-                
+                            self.logger.warning(
+                                f"Instance {self.instance_id} no messages for {time_since_last_message:.1f}s - connection may be unstable"
+                            )
+
+                # Sleep in small increments for responsiveness
+                total_sleep = 0
+                step = 0.25  # 250ms steps for fast shutdown response
+                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
+                    if not self._heartbeat_enabled or self._stop_event.is_set():
+                        break
+                    time.sleep(step)
+                    total_sleep += step
+
             except Exception as e:
                 self.logger.error(f"Instance {self.instance_id} heartbeat error: {e}")
-                time.sleep(self.CONNECTION_CHECK_INTERVAL)
+                # Also sleep in small steps on error
+                total_sleep = 0
+                step = 0.25
+                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
+                    if not self._heartbeat_enabled or self._stop_event.is_set():
+                        break
+                    time.sleep(step)
+                    total_sleep += step
+
 
     def _send_heartbeat(self):
         """Send heartbeat message with better error handling"""
