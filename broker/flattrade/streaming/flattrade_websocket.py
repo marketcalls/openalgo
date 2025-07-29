@@ -128,10 +128,11 @@ class FlattradeWebSocket:
         self.logger.debug(f"Instance {self.instance_id} heartbeat started")
 
     def _stop_heartbeat(self):
-        """Stop heartbeat thread"""
+        """Stop heartbeat thread promptly and cleanly."""
         self._heartbeat_enabled = False
         if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=2)
+            if self._heartbeat_thread.is_alive() and threading.current_thread() != self._heartbeat_thread:
+                self._heartbeat_thread.join(timeout=2)
         self.logger.debug(f"Instance {self.instance_id} heartbeat stopped")
 
     def _heartbeat_worker(self):
@@ -221,35 +222,36 @@ class FlattradeWebSocket:
         self.logger.debug(f"Instance {self.instance_id} received pong")
 
     def stop(self):
-        """Enhanced stop with heartbeat cleanup"""
-        self.logger.debug(f"Stopping instance {self.instance_id}")
-        
+        """Enhanced stop with heartbeat cleanup and robust thread termination."""
+        self.logger.debug(f"Stopping instance {self.instance_id} ...")
         self._stop_event.set()
         self.connected = False
         self._connection_dead = True
-        
-        # Stop heartbeat first
+
         self._stop_heartbeat()
-        
+
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.warning(f"Error closing WebSocket for instance {self.instance_id}: {e}")
-        
+
+        thread_stopped = True
         if self._thread and self._thread.is_alive():
-            self.logger.debug(f"Waiting for thread termination for instance {self.instance_id}")
+            self.logger.debug(f"Waiting for WS thread termination for instance {self.instance_id} ...")
             self._thread.join(timeout=5)
-            
-            if self._thread.is_alive():
-                self.logger.warning(f"Thread did not terminate cleanly for instance {self.instance_id}")
-        
-        # Clean up references
+            thread_stopped = not self._thread.is_alive()
+            if not thread_stopped:
+                self.logger.debug(f"WS thread not stopped in 5s, sleeping up to 3s more...")
+                self._thread.join(timeout=3)
+                thread_stopped = not self._thread.is_alive()
+        if not thread_stopped:
+            self.logger.error(f"WS thread for instance {self.instance_id} still not stopped after extra wait. Potential stuck thread.")
+
         self.ws = None
         self._thread = None
         self._heartbeat_thread = None
-        
-        self.logger.debug(f"Instance {self.instance_id} stopped")
+        self.logger.debug(f"Instance {self.instance_id} stopped.")
 
     def _on_open(self, ws):
         """Connection opened callback with heartbeat initialization"""
