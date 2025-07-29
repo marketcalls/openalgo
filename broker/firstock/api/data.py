@@ -102,15 +102,18 @@ class BrokerData:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Simplified quote data with required fields
+            dict: Simplified quote data with required fields including Open Interest
         """
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
+            # Map exchange to Firstock format (NSE_INDEX -> NSE)
+            firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
+            
             payload = {
                 "userId": os.getenv('BROKER_API_KEY')[:-4],
-                "exchange": exchange,
+                "exchange": firstock_exchange,
                 "tradingSymbol": br_symbol,
                 "jKey": self.auth_token
             }
@@ -122,6 +125,11 @@ class BrokerData:
             
             quote_data = response.get('data', {})
             
+            # Debug logging to check response structure
+            if not quote_data:
+                logger.warning(f"Empty quote data received for {br_symbol} on {firstock_exchange}")
+                logger.debug(f"Full response: {response}")
+            
             # Create the quote data without any wrapping - let the API handle the wrapping
             return {
                 "ask": float(quote_data.get('bestSellPrice1', 0)),
@@ -131,7 +139,8 @@ class BrokerData:
                 "ltp": float(quote_data.get('lastTradedPrice', 0)),
                 "open": float(quote_data.get('dayOpenPrice', 0)),
                 "prev_close": float(quote_data.get('dayClosePrice', 0)),
-                "volume": int(quote_data.get('volume', 0))
+                "volume": int(quote_data.get('volume', 0)),
+                "oi": int(float(quote_data.get('openInterest', 0)))
             }
             
         except Exception as e:
@@ -151,9 +160,12 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
             
+            # Map exchange to Firstock format (NSE_INDEX -> NSE)
+            firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
+            
             payload = {
                 "userId": os.getenv('BROKER_API_KEY')[:-4],
-                "exchange": exchange,
+                "exchange": firstock_exchange,
                 "tradingSymbol": br_symbol,
                 "jKey": self.auth_token
             }
@@ -251,11 +263,14 @@ class BrokerData:
             
             logger.info(f"Getting {interval} data for {br_symbol} from {start_str} to {end_str}")
             
+            # Map exchange to Firstock format (NSE_INDEX -> NSE)
+            firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
+            
             # Prepare payload according to new API format
             payload = {
                 "userId": os.getenv('BROKER_API_KEY')[:-4],
                 "jKey": self.auth_token,
-                "exchange": exchange,
+                "exchange": firstock_exchange,
                 "tradingSymbol": br_symbol,
                 "startTime": start_str,
                 "endTime": end_str,

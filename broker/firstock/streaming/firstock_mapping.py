@@ -12,7 +12,8 @@ class FirstockExchangeMapper:
         'NFO': 'NFO',
         'CDS': 'CDS',
         'MCX': 'MCX',
-        'BFO': 'BFO'
+        'BFO': 'BFO',
+        'NSE_INDEX': 'NSE'  # NSE indices use NSE exchange in Firstock
     }
     
     # Reverse mapping

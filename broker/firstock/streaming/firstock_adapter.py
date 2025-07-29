@@ -301,6 +301,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, ws, data) -> None:
         """Callback for data messages from the WebSocket"""
         try:
+            self.logger.info(f"Received data from Firstock WebSocket: {data}")
+            
             # Handle market data
             if isinstance(data, dict) and 'c_symbol' in data:
                 self._process_market_data(data)
@@ -323,6 +325,9 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = data.get('c_symbol', '')
             exchange_seg = data.get('c_exch_seg', '')
             
+            self.logger.debug(f"Processing market data for token: {token}, exchange: {exchange_seg}")
+            self.logger.debug(f"Raw data keys: {list(data.keys())}")
+            
             # Find the subscription that matches this token
             subscription = None
             with self.lock:
@@ -333,6 +338,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             if not subscription:
                 self.logger.warning(f"Received data for unsubscribed token: {token} on {exchange_seg}")
+                self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
                 return
             
             # Create topic for ZeroMQ
@@ -354,6 +360,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'mode': mode,
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
+            
+            self.logger.info(f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}")
             
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)

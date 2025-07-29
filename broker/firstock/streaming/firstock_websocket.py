@@ -307,9 +307,13 @@ class FirstockWebSocket:
                     # Handle market data
                     if 'c_symbol' in data:
                         # This is market data - call the data callback
+                        self.logger.info(f"Received market data for symbol: {data.get('c_symbol')} on exchange: {data.get('c_exch_seg')}")
                         if self.on_data:
                             self.on_data(wsapp, data)
                         return
+                    
+                    # Log any other message types we receive
+                    self.logger.info(f"Received other message type: {list(data.keys())}")
                     
                     # Handle other message types
                     if self.on_message:
@@ -322,6 +326,7 @@ class FirstockWebSocket:
                         self.on_message(wsapp, message)
             else:
                 # Handle binary messages (if any)
+                self.logger.info(f"Received binary message of length: {len(message) if hasattr(message, '__len__') else 'unknown'}")
                 if self.on_data:
                     self.on_data(wsapp, message)
                     
