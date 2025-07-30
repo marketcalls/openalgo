@@ -89,6 +89,14 @@ class WebSocketProxy:
             # Start WebSocket server
             stop = aio.Future()  # Used to stop the server
             
+            # Create a task to monitor the running flag
+            async def monitor_shutdown():
+                while self.running:
+                    await aio.sleep(0.5)
+                stop.set_result(None)
+            
+            monitor_task = aio.create_task(monitor_shutdown())
+            
             # Handle graceful shutdown
             # Windows doesn't support add_signal_handler, so we'll use a simpler approach
             # Also, when running in a thread on Unix systems, signal handlers can't be set
@@ -128,6 +136,13 @@ class WebSocketProxy:
                 
                 await stop  # Wait until stopped
                 
+                # Cancel the monitor task
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except aio.CancelledError:
+                    pass
+                
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
@@ -146,9 +161,21 @@ class WebSocketProxy:
             if hasattr(self, 'server') and self.server:
                 try:
                     logger.info("Closing WebSocket server...")
-                    self.server.close()
-                    await self.server.wait_closed()
-                    logger.info("WebSocket server closed and port released")
+                    # On Windows, we need to handle the case where we're in a different event loop
+                    try:
+                        self.server.close()
+                        await self.server.wait_closed()
+                        logger.info("WebSocket server closed and port released")
+                    except RuntimeError as e:
+                        if "attached to a different loop" in str(e):
+                            logger.warning(f"WebSocket server cleanup skipped due to event loop mismatch: {e}")
+                            # Force close the server without waiting
+                            try:
+                                self.server.close()
+                            except:
+                                pass
+                        else:
+                            raise
                 except Exception as e:
                     logger.error(f"Error closing WebSocket server: {e}")
             
@@ -835,6 +862,10 @@ class WebSocketProxy:
         
         while self.running:
             try:
+                # Check if we should stop
+                if not self.running:
+                    break
+                    
                 # Receive message from ZeroMQ with a timeout
                 try:
                     [topic, data] = await aio.wait_for(

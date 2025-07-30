@@ -50,40 +50,35 @@ def cleanup_websocket_server():
         logger.info("Cleaning up WebSocket server...")
         
         if _websocket_proxy_instance:
-            # Stop the WebSocket proxy
+            # For Windows compatibility, set a shutdown flag instead of trying to 
+            # manipulate the event loop from a different thread
+            _websocket_proxy_instance.running = False
+            
+            # Try to close the server gracefully
             try:
-                # Create new event loop for cleanup if needed
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_closed():
-                        raise RuntimeError("Event loop is closed")
-                except RuntimeError:
-                    # Create new event loop if current one is closed/unavailable
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
-                # Run cleanup in the event loop with timeout
-                if loop.is_running():
-                    # If loop is running, create a task
-                    task = loop.create_task(_websocket_proxy_instance.stop())
-                    # Don't wait for it, just schedule it
-                else:
-                    # If loop is not running, run until complete with timeout
+                if hasattr(_websocket_proxy_instance, 'server') and _websocket_proxy_instance.server:
                     try:
-                        loop.run_until_complete(
-                            asyncio.wait_for(_websocket_proxy_instance.stop(), timeout=5.0)
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("Timeout during WebSocket server cleanup")
-                    
-            except Exception as e:
-                logger.error(f"Error stopping WebSocket proxy: {e}")
-                # Force close any remaining resources
-                try:
-                    if hasattr(_websocket_proxy_instance, 'socket') and _websocket_proxy_instance.socket:
+                        _websocket_proxy_instance.server.close()
+                    except Exception as e:
+                        logger.warning(f"Error closing server handle: {e}")
+                
+                # Close ZMQ resources immediately
+                if hasattr(_websocket_proxy_instance, 'socket') and _websocket_proxy_instance.socket:
+                    try:
+                        import zmq
+                        _websocket_proxy_instance.socket.setsockopt(zmq.LINGER, 0)
                         _websocket_proxy_instance.socket.close()
-                except:
-                    pass
+                    except Exception as e:
+                        logger.warning(f"Error closing ZMQ socket: {e}")
+                
+                if hasattr(_websocket_proxy_instance, 'context') and _websocket_proxy_instance.context:
+                    try:
+                        _websocket_proxy_instance.context.term()
+                    except Exception as e:
+                        logger.warning(f"Error terminating ZMQ context: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Error during WebSocket cleanup: {e}")
             finally:
                 _websocket_proxy_instance = None
         
