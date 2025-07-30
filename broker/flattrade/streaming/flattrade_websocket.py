@@ -5,13 +5,15 @@ import websocket
 import time
 import uuid
 
+
 class FlattradeWebSocket:
-    """Enhanced Flattrade WebSocket client with improved heartbeat management"""
+    """Enhanced Flattrade WebSocket client with improved heartbeat management and reconnection debouncing"""
     
     WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
+    # Enhanced heartbeat configuration - less aggressive timing
     HEARTBEAT_INTERVAL = 30  # Send heartbeat every 30 seconds
-    HEARTBEAT_TIMEOUT = 120   # Consider connection dead if no response for 2 minutes (more lenient)
-    CONNECTION_CHECK_INTERVAL = 5  # Check connection health every 5 seconds
+    HEARTBEAT_TIMEOUT = 180   # Increase from 120 to 180 seconds for more tolerance
+    CONNECTION_CHECK_INTERVAL = 10  # Increase from 5 to 10 seconds
     
     def __init__(self, user_id, actid, susertoken, on_message=None, on_error=None, on_close=None, on_open=None):
         # Create unique instance identifier
@@ -45,6 +47,10 @@ class FlattradeWebSocket:
         self._connection_start_time = None
         self._message_count = 0
         
+        # Enhanced state management
+        self._reconnecting = False
+        self._force_reconnecting = False
+        
         self.logger.debug(f"Initialized WebSocket instance: {self.instance_id}")
 
     def connect(self) -> bool:
@@ -53,6 +59,8 @@ class FlattradeWebSocket:
             self.logger.debug(f"Instance {self.instance_id} attempting connection")
             self._connection_start_time = time.time()
             self._connection_dead = False
+            self._reconnecting = False
+            self._force_reconnecting = False
             
             self.ws = websocket.WebSocketApp(
                 self.WS_URL,
@@ -128,45 +136,63 @@ class FlattradeWebSocket:
         self.logger.debug(f"Instance {self.instance_id} heartbeat started")
 
     def _stop_heartbeat(self):
-        """Stop heartbeat thread"""
+        """Stop heartbeat thread promptly and cleanly."""
         self._heartbeat_enabled = False
         if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=2)
+            if self._heartbeat_thread.is_alive() and threading.current_thread() != self._heartbeat_thread:
+                self._heartbeat_thread.join(timeout=2)
         self.logger.debug(f"Instance {self.instance_id} heartbeat stopped")
 
     def _heartbeat_worker(self):
-        """Enhanced heartbeat worker with better connection detection"""
+        """Enhanced heartbeat worker with better connection detection and fast shutdown response"""
         while self._heartbeat_enabled and not self._stop_event.is_set():
             try:
                 if self.connected and self.ws and not self._connection_dead:
                     current_time = time.time()
-                    
+
                     # Send heartbeat if interval has passed
                     if (self._last_heartbeat_sent is None or 
                         current_time - self._last_heartbeat_sent >= self.HEARTBEAT_INTERVAL):
                         
                         if self._send_heartbeat():
                             self._last_heartbeat_sent = current_time
-                    
+
                     # **IMPROVED: Check for ANY message activity, not just pongs**
                     if self._last_message_received:
                         time_since_last_message = current_time - self._last_message_received
-                        
+
                         if time_since_last_message > self.HEARTBEAT_TIMEOUT:
-                            self.logger.error(f"Instance {self.instance_id} no messages received for {time_since_last_message:.1f}s - connection appears dead")
+                            self.logger.error(
+                                f"Instance {self.instance_id} no messages received for {time_since_last_message:.1f}s - connection appears dead"
+                            )
                             self._connection_dead = True
                             # Force close the connection to trigger reconnection
                             self._force_reconnect()
                             break
                         elif time_since_last_message > self.HEARTBEAT_TIMEOUT * 0.7:  # 70% of timeout
-                            self.logger.warning(f"Instance {self.instance_id} no messages for {time_since_last_message:.1f}s - connection may be unstable")
-                
-                # Sleep for connection check interval
-                time.sleep(self.CONNECTION_CHECK_INTERVAL)
-                
+                            self.logger.warning(
+                                f"Instance {self.instance_id} no messages for {time_since_last_message:.1f}s - connection may be unstable"
+                            )
+
+                # Sleep in small increments for responsiveness
+                total_sleep = 0
+                step = 0.25  # 250ms steps for fast shutdown response
+                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
+                    if not self._heartbeat_enabled or self._stop_event.is_set():
+                        break
+                    time.sleep(step)
+                    total_sleep += step
+
             except Exception as e:
                 self.logger.error(f"Instance {self.instance_id} heartbeat error: {e}")
-                time.sleep(self.CONNECTION_CHECK_INTERVAL)
+                # Also sleep in small steps on error
+                total_sleep = 0
+                step = 0.25
+                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
+                    if not self._heartbeat_enabled or self._stop_event.is_set():
+                        break
+                    time.sleep(step)
+                    total_sleep += step
 
     def _send_heartbeat(self):
         """Send heartbeat message with better error handling"""
@@ -183,7 +209,13 @@ class FlattradeWebSocket:
         return False
 
     def _force_reconnect(self):
-        """Force connection closure to trigger reconnection"""
+        """Force connection closure to trigger reconnection with state management"""
+        # Improved connection state management
+        if self._force_reconnecting:
+            self.logger.debug(f"Instance {self.instance_id} already force reconnecting, skipping")
+            return
+            
+        self._force_reconnecting = True
         try:
             self.logger.warning(f"Instance {self.instance_id} forcing reconnection due to dead connection")
             self.connected = False
@@ -191,6 +223,12 @@ class FlattradeWebSocket:
                 self.ws.close()
         except Exception as e:
             self.logger.error(f"Instance {self.instance_id} error forcing reconnect: {e}")
+        finally:
+            # Reset after a delay to prevent rapid force reconnects
+            def reset_force_flag():
+                time.sleep(5)  # 5-second cooldown
+                self._force_reconnecting = False
+            threading.Thread(target=reset_force_flag, daemon=True).start()
 
     def _on_ping(self, ws, message):
         """Handle incoming ping"""
@@ -203,41 +241,44 @@ class FlattradeWebSocket:
         self.logger.debug(f"Instance {self.instance_id} received pong")
 
     def stop(self):
-        """Enhanced stop with heartbeat cleanup"""
-        self.logger.debug(f"Stopping instance {self.instance_id}")
-        
+        """Enhanced stop with heartbeat cleanup and robust thread termination."""
+        self.logger.debug(f"Stopping instance {self.instance_id} ...")
         self._stop_event.set()
         self.connected = False
         self._connection_dead = True
-        
-        # Stop heartbeat first
+
         self._stop_heartbeat()
-        
+
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.warning(f"Error closing WebSocket for instance {self.instance_id}: {e}")
-        
+
+        thread_stopped = True
         if self._thread and self._thread.is_alive():
-            self.logger.debug(f"Waiting for thread termination for instance {self.instance_id}")
+            self.logger.debug(f"Waiting for WS thread termination for instance {self.instance_id} ...")
             self._thread.join(timeout=5)
-            
-            if self._thread.is_alive():
-                self.logger.warning(f"Thread did not terminate cleanly for instance {self.instance_id}")
-        
-        # Clean up references
+            thread_stopped = not self._thread.is_alive()
+            if not thread_stopped:
+                self.logger.debug(f"WS thread not stopped in 5s, sleeping up to 3s more...")
+                self._thread.join(timeout=3)
+                thread_stopped = not self._thread.is_alive()
+        if not thread_stopped:
+            self.logger.error(f"WS thread for instance {self.instance_id} still not stopped after extra wait. Potential stuck thread.")
+
         self.ws = None
         self._thread = None
         self._heartbeat_thread = None
-        
-        self.logger.debug(f"Instance {self.instance_id} stopped")
+        self.logger.debug(f"Instance {self.instance_id} stopped.")
 
     def _on_open(self, ws):
         """Connection opened callback with heartbeat initialization"""
         self.connected = True
         self._last_message_received = time.time()  # Initialize message timestamp
         self._connection_dead = False
+        self._reconnecting = False  # Reset reconnection state
+        self._force_reconnecting = False
         
         self.logger.debug(f"Instance {self.instance_id} WebSocket opened, sending auth")
         
@@ -306,9 +347,10 @@ class FlattradeWebSocket:
                 self.logger.error(f"Instance {self.instance_id} on_error callback error: {e}")
 
     def _on_close(self, ws, close_status_code, close_msg):
-        """Connection closed callback"""
+        """Connection closed callback with enhanced monitoring"""
         self.connected = False
-        self.logger.warning(f"Instance {self.instance_id} closed: {close_status_code} - {close_msg}")
+        # Enhanced monitoring as recommended
+        self.logger.warning(f"Instance {self.instance_id} WebSocket closed: {close_status_code} - {close_msg} - TRIGGERING RECONNECTION")
         
         if self.on_close:
             try:
@@ -359,5 +401,7 @@ class FlattradeWebSocket:
             'message_count': self._message_count,
             'uptime': current_time - self._connection_start_time if self._connection_start_time else 0,
             'last_message_age': current_time - self._last_message_received if self._last_message_received else None,
-            'thread_alive': self._thread.is_alive() if self._thread else False
+            'thread_alive': self._thread.is_alive() if self._thread else False,
+            'reconnecting': self._reconnecting,
+            'force_reconnecting': self._force_reconnecting
         }

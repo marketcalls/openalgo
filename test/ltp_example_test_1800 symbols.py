@@ -1,6 +1,6 @@
 """
 OpenAlgo WebSocket LTP Example - 1800 Symbols Test
-Tests LTP data streaming for 1800+ NSE symbols from CSV file
+Tests LTP data streaming for 1800+ symbols from CSV file including exchange info
 """
 
 import sys
@@ -12,8 +12,10 @@ from datetime import datetime
 from collections import defaultdict
 import threading
 
+
 # Add parent directory to path to import openalgo
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 try:
     from openalgo import api
@@ -21,31 +23,32 @@ except ImportError:
     print("Error: Could not import openalgo. Make sure you're running from the correct directory.")
     sys.exit(1)
 
-def load_nse_symbols(limit=1800):
-    """Load NSE symbols from CSV file"""
+
+def load_symbols(limit=1800):
+    """Load symbols with exchange info from CSV file in current directory"""
     symbols = []
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'NSE SYMBOLS.csv')
+    csv_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "symbols.csv")
     
-    print(f"Loading NSE symbols from: {csv_path}")
+    print(f"Loading symbols from: {csv_path}")
     
     try:
         with open(csv_path, 'r', encoding='utf-8') as file:
-            csv_reader = csv.reader(file)
+            csv_reader = csv.DictReader(file)
             count = 0
             
             for row in csv_reader:
                 if count >= limit:
                     break
-                    
-                # Handle different CSV formats
-                if row and len(row) > 0:
-                    symbol = row[0].strip()
-                    if symbol and symbol != 'SYMBOL':  # Skip header if present
-                        symbols.append({
-                            "exchange": "NSE",
-                            "symbol": symbol
-                        })
-                        count += 1
+                
+                exchange = row.get('exchange', '').strip()
+                symbol = row.get('symbol', '').strip()
+                
+                if exchange and symbol:
+                    symbols.append({
+                        "exchange": exchange,
+                        "symbol": symbol
+                    })
+                    count += 1
         
         print(f"✅ Successfully loaded {len(symbols)} symbols from CSV")
         return symbols
@@ -54,7 +57,7 @@ def load_nse_symbols(limit=1800):
         print(f"❌ NSE SYMBOLS.csv not found at {csv_path}")
         print("Using fallback symbols...")
         
-        # Fallback to popular NSE symbols
+        # Fallback to popular NSE symbols only
         fallback_symbols = [
             "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "KOTAKBANK", "SBIN", "BHARTIARTL",
             "ITC", "LT", "ASIANPAINT", "AXISBANK", "MARUTI", "SUNPHARMA", "ULTRACEMCO", "NESTLEIND",
@@ -64,7 +67,8 @@ def load_nse_symbols(limit=1800):
             "HEROMOTOCO", "BAJAJ-AUTO", "APOLLOHOSP", "SHREECEM", "UPL", "BPCL", "IOC", "ADANIENT"
         ]
         
-        return [{"exchange": "NSE", "symbol": symbol} for symbol in fallback_symbols[:min(limit, len(fallback_symbols))]]
+        return [{"exchange": "NSE", "symbol": sym} for sym in fallback_symbols[:min(limit, len(fallback_symbols))]]
+
 
 def main():
     print("OpenAlgo WebSocket LTP Example - 1800 Symbols Test")
@@ -72,13 +76,13 @@ def main():
     
     # Initialize the API client
     client = api(
-        api_key="20bec157c9cf179952c6d7594788b0172664e2a8cd1b08ced7fce6887e5f7785",  # Replace with your actual API key
+        api_key="be51d361903e0898eafeee5824b2997430acb34116c5677240e1b97fc9c4d068",  # Replace with your actual API key
         host="http://127.0.0.1:5000",
         ws_url="ws://127.0.0.1:8765"
     )
     
-    # Load 1800 symbols from CSV
-    test_symbols = load_nse_symbols(1800)
+    # Load 1800 symbols with exchanges from CSV
+    test_symbols = load_symbols(1800)
     
     # Statistics with thread safety
     update_count = 0
@@ -200,7 +204,9 @@ def main():
         client.connect()
         print("✅ Connected successfully!")
         
-        print(f"📊 Subscribing to {len(test_symbols):,} NSE symbols...")
+        # Inform about all exchanges subscribed
+        exchanges = sorted(set(s['exchange'] for s in test_symbols))
+        print(f"📊 Subscribing to {len(test_symbols):,} symbols across exchanges: {', '.join(exchanges)}")
         print("⏳ This may take a few minutes due to batching...")
         
         subscription_start_time = datetime.now()
@@ -302,6 +308,7 @@ def main():
         
         print("\n🎉 1800 Symbol LTP Test Completed!")
         print("="*80)
+
 
 if __name__ == "__main__":
     main()
