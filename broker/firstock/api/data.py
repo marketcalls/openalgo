@@ -42,11 +42,19 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
         # Use the full endpoint path as provided
         url = f"https://api.firstock.in/V1{endpoint}"
         
-        # For historical data endpoints, use a custom httpx client with longer timeout
+        # For historical data endpoints, use a dedicated client with much longer timeout
+        # This bypasses the shared client's 30-second timeout which causes ReadTimeout errors
         if endpoint == "/timePriceSeries" or custom_timeout:
             import httpx
-            timeout_value = custom_timeout or 120
-            with httpx.Client(timeout=timeout_value) as temp_client:
+            # Use a dedicated client with very long timeout for historical data
+            timeout_value = custom_timeout or 600  # 10 minutes timeout for historical data
+            # Create a dedicated client with proper connection limits and long timeout
+            with httpx.Client(
+                timeout=httpx.Timeout(timeout_value, connect=30.0),  # Long read timeout, normal connect timeout
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http1=True,  # Use HTTP/1.1 for better compatibility
+                http2=False
+            ) as temp_client:
                 response = temp_client.request(method, url, json=data, headers=headers)
         else:
             # Get the shared httpx client with connection pooling for regular requests
@@ -375,14 +383,9 @@ class BrokerData:
                 date_str = current_date.strftime('%d-%m-%Y')  # Firstock uses DD-MM-YYYY format
                 logger.info(f"Processing date: {date_str}")
                 
-                # Define trading session chunks (1-hour chunks for maximum safety)
+                # Define trading session chunks using full day to avoid hardcoded timings
                 time_chunks = [
-                    ("09:15:00", "10:15:00"),  # Hour 1
-                    ("10:15:00", "11:15:00"),  # Hour 2
-                    ("11:15:00", "12:15:00"),  # Hour 3
-                    ("12:15:00", "13:15:00"),  # Hour 4
-                    ("13:15:00", "14:15:00"),  # Hour 5
-                    ("14:15:00", "15:29:00")   # Hour 6 (partial)
+                    ("00:00:00", "23:59:59")  # Full day - let API determine available data
                 ]
                 
                 for start_time, end_time in time_chunks:
@@ -403,8 +406,8 @@ class BrokerData:
                         
                         logger.info(f"Fetching chunk: {start_time} to {end_time} on {date_str}")
                         
-                        # Make request with shorter timeout for smaller chunks
-                        response = get_api_response("/timePriceSeries", self.auth_token, payload=payload, custom_timeout=45)
+                        # Make request with long timeout to prevent ReadTimeout errors
+                        response = get_api_response("/timePriceSeries", self.auth_token, payload=payload, custom_timeout=600)
                         
                         if response.get('status') == 'success':
                             chunk_data = []
@@ -628,9 +631,10 @@ class BrokerData:
                     raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
                 
                 api_interval = interval_map[interval]
-                # Intraday data: use market hours format as shown in API docs
-                start_str = f"09:15:00 {start_dt.strftime('%d-%m-%Y')}"
-                end_str = f"15:29:00 {end_dt.strftime('%d-%m-%Y')}"
+                # Intraday data: use full day time range to allow API to determine available data
+                # This removes dependency on specific market hours and supports special sessions
+                start_str = f"00:00:00 {start_dt.strftime('%d-%m-%Y')}"
+                end_str = f"23:59:59 {end_dt.strftime('%d-%m-%Y')}"
             
             logger.info(f"Getting {interval} data for {br_symbol} from {start_str} to {end_str}")
             
@@ -670,8 +674,9 @@ class BrokerData:
                             if ' ' in time_str:
                                 date_part = time_str.split(' ')[1]  # Get date part
                                 dt = datetime.strptime(date_part, '%d-%m-%Y')
-                                # Set to market opening time for daily data (09:15:00 IST)
-                                dt = dt.replace(hour=9, minute=15, second=0)
+                                # Use the timestamp as provided by the API without adjusting to market hours
+                                # This ensures we use whatever time the exchange actually operated
+                                pass
                             else:
                                 # ISO format: "2025-02-10T09:15:00"
                                 dt = datetime.fromisoformat(time_str.replace('T', ' '))
