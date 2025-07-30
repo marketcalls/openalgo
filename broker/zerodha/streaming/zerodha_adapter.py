@@ -406,57 +406,75 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if transformed_tick:
                     symbol = transformed_tick['symbol']
                     token = tick.get('instrument_token')
-                    subscription_mode = 'ltp'  # Default
+                    original_tick_mode = transformed_tick.get('mode', 'ltp')  # Original mode from the tick
                     subscription_exchange = None
+                    subscribed_modes = set()  # Track which modes this symbol is subscribed to
                     
-                    # Get subscription info to determine mode and exchange
+                    # Get subscription info to determine exchange and subscribed modes
                     with self.lock:
                         for key, sub_info in self.subscribed_symbols.items():
                             if sub_info['token'] == token:
-                                # Map OpenAlgo mode to string
-                                mode_num = sub_info['mode']
-                                if mode_num == 1:
-                                    subscription_mode = 'ltp'
-                                elif mode_num == 2:
-                                    subscription_mode = 'quote'
-                                elif mode_num == 3:
-                                    subscription_mode = 'full'
+                                # Found a subscription for this token
                                 subscription_exchange = sub_info['exchange']
-                                break
+                                mode_num = sub_info['mode']
+                                subscribed_modes.add(mode_num)
                     
                     if not subscription_exchange:
                         self.logger.warning(f"No subscription info found for token: {token}")
                         continue
                     
-                    # Override the tick mode with subscription mode
-                    transformed_tick['mode'] = subscription_mode
-                    
-                    # Map mode to string format
-                    mode_str = {
-                        'ltp': 'LTP',
-                        'quote': 'QUOTE', 
-                        'full': 'DEPTH'
-                    }.get(subscription_mode, 'LTP')
-                    
-                    # ✅ Set the data exchange field (always include, never remove)
+                    # Set the data exchange field
                     data_exchange = self._map_data_exchange(subscription_exchange)
                     transformed_tick['exchange'] = data_exchange
                     
-                    # ✅ Generate topic using dedicated function
-                    topic = self._generate_topic(symbol, subscription_exchange, mode_str)
-                    
-                    # Debug log to verify correct topic and data structure
-                    self.logger.info(f"📊 Publishing to topic: {topic}")
-                    self.logger.info(f"📊 Data structure: {transformed_tick}")
-                    self.logger.info(f"📊 Subscription exchange: {subscription_exchange} -> Topic: {topic}, Data exchange: {data_exchange}")
-                    
-                    # Publish to ZeroMQ exactly like Angel adapter
-                    self.publish_market_data(topic, transformed_tick)
-                    
-                    # Debug log for troubleshooting polling data issues
-                    if subscription_mode == 'ltp':
-                        self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
-                    
+                    # If we have a 'full' mode tick, create and publish separate messages for each subscribed mode
+                    if original_tick_mode == 'full':
+                        # Always publish the full depth data first
+                        depth_tick = transformed_tick.copy()
+                        depth_tick['mode'] = 'full'
+                        depth_topic = self._generate_topic(symbol, subscription_exchange, 'DEPTH')
+                        self.logger.info(f"📊 Publishing DEPTH data to topic: {depth_topic}")
+                        self.publish_market_data(depth_topic, depth_tick)
+                        
+                        # If subscribed to Quote (mode 2), publish quote data
+                        if 2 in subscribed_modes:
+                            quote_tick = transformed_tick.copy()
+                            # Remove depth data for quote message
+                            if 'depth' in quote_tick:
+                                del quote_tick['depth']
+                            quote_tick['mode'] = 'quote'
+                            quote_topic = self._generate_topic(symbol, subscription_exchange, 'QUOTE')
+                            self.logger.info(f"📊 Publishing QUOTE data to topic: {quote_topic}")
+                            self.publish_market_data(quote_topic, quote_tick)
+                        
+                        # If subscribed to LTP (mode 1), publish LTP data
+                        if 1 in subscribed_modes:
+                            ltp_tick = {
+                                'symbol': symbol,
+                                'exchange': data_exchange,
+                                'mode': 'ltp',
+                                'ltp': transformed_tick.get('ltp', 0),
+                                'timestamp': transformed_tick.get('timestamp', int(time.time() * 1000))
+                            }
+                            ltp_topic = self._generate_topic(symbol, subscription_exchange, 'LTP')
+                            self.logger.info(f"📊 Publishing LTP data to topic: {ltp_topic}")
+                            self.publish_market_data(ltp_topic, ltp_tick)
+                            self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
+                    else:
+                        # For non-full modes, just publish as-is
+                        mode_str = {
+                            'ltp': 'LTP',
+                            'quote': 'QUOTE',
+                            'full': 'DEPTH'
+                        }.get(original_tick_mode, 'LTP')
+                        
+                        topic = self._generate_topic(symbol, subscription_exchange, mode_str)
+                        self.logger.info(f"📊 Publishing to topic: {topic}")
+                        self.logger.info(f"📊 Data structure: {transformed_tick}")
+                        
+                        # Publish to ZeroMQ
+                        self.publish_market_data(topic, transformed_tick)
+                        
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
     
