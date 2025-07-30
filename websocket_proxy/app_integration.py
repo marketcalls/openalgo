@@ -3,6 +3,8 @@ import threading
 import sys
 import platform
 import os
+import signal
+import atexit
 
 from .server import main as websocket_main
 from utils.logging import get_logger, highlight_url
@@ -14,6 +16,8 @@ if platform.system() == 'Windows':
 # Global flag to track if the WebSocket server has been started
 # Used to prevent multiple instances in Flask debug mode
 _websocket_server_started = False
+_websocket_proxy_instance = None
+_websocket_thread = None
 
 logger = get_logger(__name__)
 
@@ -38,31 +42,154 @@ def should_start_websocket():
     # In non-debug mode, always start
     return True
 
+def cleanup_websocket_server():
+    """Clean up WebSocket server resources - cross-platform compatible"""
+    global _websocket_proxy_instance, _websocket_thread
+    
+    try:
+        logger.info("Cleaning up WebSocket server...")
+        
+        if _websocket_proxy_instance:
+            # Stop the WebSocket proxy
+            try:
+                # Create new event loop for cleanup if needed
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        raise RuntimeError("Event loop is closed")
+                except RuntimeError:
+                    # Create new event loop if current one is closed/unavailable
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # Run cleanup in the event loop with timeout
+                if loop.is_running():
+                    # If loop is running, create a task
+                    task = loop.create_task(_websocket_proxy_instance.stop())
+                    # Don't wait for it, just schedule it
+                else:
+                    # If loop is not running, run until complete with timeout
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(_websocket_proxy_instance.stop(), timeout=5.0)
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout during WebSocket server cleanup")
+                    
+            except Exception as e:
+                logger.error(f"Error stopping WebSocket proxy: {e}")
+                # Force close any remaining resources
+                try:
+                    if hasattr(_websocket_proxy_instance, 'socket') and _websocket_proxy_instance.socket:
+                        _websocket_proxy_instance.socket.close()
+                except:
+                    pass
+            finally:
+                _websocket_proxy_instance = None
+        
+        if _websocket_thread and _websocket_thread.is_alive():
+            logger.info("Waiting for WebSocket thread to finish...")
+            _websocket_thread.join(timeout=3.0)  # Reduced timeout for faster shutdown
+            if _websocket_thread.is_alive():
+                logger.warning("WebSocket thread did not finish gracefully")
+                # On Windows, we might need to force terminate
+                if platform.system() == 'Windows':
+                    logger.warning("Force terminating WebSocket thread on Windows")
+            _websocket_thread = None
+            
+        logger.info("WebSocket server cleanup completed")
+        
+    except Exception as e:
+        logger.error(f"Error during WebSocket cleanup: {e}")
+        # Last resort: force cleanup
+        _websocket_proxy_instance = None
+        _websocket_thread = None
+
+def signal_handler(signum, frame):
+    """Handle SIGINT (Ctrl+C) and SIGTERM signals"""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    cleanup_websocket_server()
+    # Use os._exit() for immediate termination across all platforms
+    os._exit(0)
+
 def start_websocket_server():
     """
     Start the WebSocket proxy server in a separate thread.
     This function should be called when the Flask app starts.
     """
+    global _websocket_proxy_instance, _websocket_thread
+    
     logger.info("Starting WebSocket proxy server in a separate thread")
     
     def run_websocket_server():
         """Run the WebSocket server in an event loop"""
+        global _websocket_proxy_instance
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(websocket_main())
+            
+            # Import here to avoid circular imports
+            from .server import WebSocketProxy
+            import os
+            from dotenv import load_dotenv
+            
+            load_dotenv()
+            ws_host = os.getenv('WEBSOCKET_HOST', '127.0.0.1')
+            ws_port = int(os.getenv('WEBSOCKET_PORT', '8765'))
+            
+            # Create and store the proxy instance
+            _websocket_proxy_instance = WebSocketProxy(host=ws_host, port=ws_port)
+            
+            # Start the proxy
+            loop.run_until_complete(_websocket_proxy_instance.start())
+            
         except Exception as e:
             logger.exception(f"Error in WebSocket server thread: {e}")
+            _websocket_proxy_instance = None
     
     # Start the WebSocket server in a daemon thread
-    websocket_thread = threading.Thread(
+    _websocket_thread = threading.Thread(
         target=run_websocket_server,
-        daemon=True  # This ensures the thread will exit when the main program exits
+        daemon=False  # Changed to False so we can properly clean up
     )
-    websocket_thread.start()
+    _websocket_thread.start()
+    
+    # Register cleanup handlers
+    atexit.register(cleanup_websocket_server)
+    
+    # Register signal handlers for graceful shutdown (platform-specific)
+    try:
+        # SIGINT (Ctrl+C) - Available on all platforms
+        signal.signal(signal.SIGINT, signal_handler)
+        signals_registered = ["SIGINT"]
+        
+        # SIGTERM - Available on Unix-like systems (Mac, Linux) but not Windows
+        if hasattr(signal, 'SIGTERM') and platform.system() != 'Windows':
+            signal.signal(signal.SIGTERM, signal_handler)
+            signals_registered.append("SIGTERM")
+        
+        # Windows-specific: Handle console control events
+        if platform.system() == 'Windows':
+            try:
+                import win32api
+                def windows_handler(dwCtrlType):
+                    if dwCtrlType in (0, 1, 2, 5, 6):  # Various Windows close events
+                        logger.info(f"Windows control event {dwCtrlType}, initiating cleanup...")
+                        cleanup_websocket_server()
+                        return True
+                    return False
+                win32api.SetConsoleCtrlHandler(windows_handler, True)
+                signals_registered.append("Windows console events")
+            except ImportError:
+                logger.info("win32api not available - Windows console close events will not trigger cleanup")
+                logger.info("For better Windows support, install: pip install pywin32")
+        
+        logger.info(f"Signal handlers registered: {', '.join(signals_registered)}")
+    except Exception as e:
+        logger.warning(f"Could not register signal handlers: {e}")
     
     logger.info("WebSocket proxy server thread started")
-    return websocket_thread
+    return _websocket_thread
     
 def start_websocket_proxy(app):
     """

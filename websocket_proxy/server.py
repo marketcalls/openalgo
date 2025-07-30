@@ -8,6 +8,7 @@ import zmq.asyncio
 import threading
 import time
 import os
+import socket
 from typing import Dict, Set, Any, Optional
 from dotenv import load_dotenv
 
@@ -28,7 +29,7 @@ class WebSocketProxy:
     Supports dynamic broker selection based on user configuration.
     """
     
-    def __init__(self, host: str = "localhost", port: int = 8765):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         """
         Initialize the WebSocket Proxy
         
@@ -37,21 +38,21 @@ class WebSocketProxy:
             port: Port number to bind the WebSocket server to
         """
         self.host = host
+        self.port = port
         
-        # Check if the port is already in use and find an available one if needed
-        if is_port_in_use(host, port):
-            # Debug mode starts two instances, so original port may be taken
-            available_port = find_available_port(port + 1)
-            if available_port:
-                logger.info(f"Port {port} is in use, using port {available_port} instead")
-                self.port = available_port
-            else:
-                # If no port is available, we'll try the original port anyway
-                # This will likely fail, but we'll handle the error gracefully
-                logger.warning(f"Could not find an available port, using {port} anyway")
-                self.port = port
-        else:
-            self.port = port
+        # Check if the required port is already in use - wait briefly for cleanup to complete
+        if is_port_in_use(host, port, wait_time=2.0):  # Wait up to 2 seconds for port release
+            error_msg = (
+                f"WebSocket port {port} is already in use on {host}.\n"
+                f"This port is required for SDK compatibility (see strategies/ltp_example.py).\n"
+                f"Please:\n"
+                f"1. Stop any other OpenAlgo instances running on port {port}\n"
+                f"2. Kill any processes using port {port}: lsof -ti:{port} | xargs kill -9\n"
+                f"3. Or wait for the port to be released\n"
+                f"Cannot start WebSocket server with port switching as it would break SDK clients."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         self.clients = {}  # Maps client_id to websocket connection
         self.subscriptions = {}  # Maps client_id to set of subscriptions
@@ -64,7 +65,7 @@ class WebSocketProxy:
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
         # Connecting to ZMQ
-        ZMQ_HOST = os.getenv('ZMQ_HOST', 'localhost')
+        ZMQ_HOST = os.getenv('ZMQ_HOST', '127.0.0.1')
         ZMQ_PORT = os.getenv('ZMQ_PORT')
         self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")  # Connect to broker adapter publisher
         
@@ -111,19 +112,27 @@ class WebSocketProxy:
             highlighted_address = highlight_url(f"{self.host}:{self.port}")
             logger.info(f"Starting WebSocket server on {highlighted_address}")
             
-            # Try to start the WebSocket server with more detailed error logging
+            # Try to start the WebSocket server with proper socket options for immediate port reuse
             try:
-                async with websockets.serve(self.handle_client, self.host, self.port):
-                    highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
-                    logger.info(f"WebSocket server successfully started on {highlighted_success_address}")
-                    
-                    # Log additional helpful addresses
-                    if self.host == 'localhost':
-                        ipv4_address = highlight_url("127.0.0.1:{}".format(self.port))
-                        ipv6_address = highlight_url("[::1]:{}".format(self.port))
-                        logger.info(f"WebSocket server also accessible at {ipv4_address} (IPv4) and {ipv6_address} (IPv6)")
-                    
-                    await stop  # Wait until stopped
+                # Start WebSocket server with socket reuse options
+                self.server = await websockets.serve(
+                    self.handle_client, 
+                    self.host, 
+                    self.port,
+                    # Enable socket reuse for immediate port availability after close
+                    reuse_port=True if hasattr(socket, 'SO_REUSEPORT') else False
+                )
+                
+                highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
+                logger.info(f"WebSocket server successfully started on {highlighted_success_address}")
+                
+                # Log additional helpful addresses
+                if self.host == '127.0.0.1':
+                    localhost_address = highlight_url("localhost:{}".format(self.port))
+                    logger.info(f"WebSocket server also accessible at {localhost_address}")
+                
+                await stop  # Wait until stopped
+                
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
@@ -133,16 +142,66 @@ class WebSocketProxy:
             raise
     
     async def stop(self):
-        """Stop the WebSocket server"""
+        """Stop the WebSocket server and clean up all resources"""
+        logger.info("Stopping WebSocket server...")
         self.running = False
         
-        # Close all client connections
-        for client_id, websocket in self.clients.items():
-            await websocket.close()
-        
-        # Disconnect all broker adapters
-        for user_id, adapter in self.broker_adapters.items():
-            adapter.disconnect()
+        try:
+            # Close the WebSocket server first (this releases the port)
+            if hasattr(self, 'server') and self.server:
+                try:
+                    logger.info("Closing WebSocket server...")
+                    self.server.close()
+                    await self.server.wait_closed()
+                    logger.info("WebSocket server closed and port released")
+                except Exception as e:
+                    logger.error(f"Error closing WebSocket server: {e}")
+            
+            # Close all client connections
+            close_tasks = []
+            for client_id, websocket in self.clients.items():
+                try:
+                    if hasattr(websocket, 'open') and websocket.open:
+                        close_tasks.append(websocket.close())
+                except Exception as e:
+                    logger.error(f"Error preparing to close client {client_id}: {e}")
+            
+            # Wait for all connections to close with timeout
+            if close_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*close_tasks, return_exceptions=True),
+                        timeout=2.0  # 2 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout waiting for client connections to close")
+            
+            # Disconnect all broker adapters
+            for user_id, adapter in self.broker_adapters.items():
+                try:
+                    adapter.disconnect()
+                except Exception as e:
+                    logger.error(f"Error disconnecting adapter for user {user_id}: {e}")
+            
+            # Close ZeroMQ socket with linger=0 for immediate close
+            if hasattr(self, 'socket') and self.socket:
+                try:
+                    self.socket.setsockopt(zmq.LINGER, 0)  # Don't wait for pending messages
+                    self.socket.close()
+                except Exception as e:
+                    logger.error(f"Error closing ZMQ socket: {e}")
+            
+            # Close ZeroMQ context with timeout
+            if hasattr(self, 'context') and self.context:
+                try:
+                    self.context.term()
+                except Exception as e:
+                    logger.error(f"Error terminating ZMQ context: {e}")
+            
+            logger.info("WebSocket server stopped and resources cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Error during WebSocket server stop: {e}")
     
     async def handle_client(self, websocket):
         """
@@ -893,37 +952,45 @@ class WebSocketProxy:
 # Entry point for running the server standalone
 async def main():
     """Main entry point for running the WebSocket proxy server"""
-
-    
-    # Load environment variables
-    load_dotenv()
-    
-    # Get WebSocket configuration from environment variables
-    ws_host = os.getenv('WEBSOCKET_HOST', 'localhost')
-    ws_port = int(os.getenv('WEBSOCKET_PORT', '8765'))
-    
-    # Create and start the WebSocket proxy
-    proxy = WebSocketProxy(host=ws_host, port=ws_port)
+    proxy = None
     
     try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Get WebSocket configuration from environment variables
+        ws_host = os.getenv('WEBSOCKET_HOST', '127.0.0.1')
+        ws_port = int(os.getenv('WEBSOCKET_PORT', '8765'))
+        
+        # Create and start the WebSocket proxy
+        proxy = WebSocketProxy(host=ws_host, port=ws_port)
+        
         await proxy.start()
+        
     except KeyboardInterrupt:
-        logger.info("Server stopped by user")
+        logger.info("Server stopped by user (KeyboardInterrupt)")
     except RuntimeError as e:
         if "set_wakeup_fd only works in main thread" in str(e):
             logger.error(f"Error in start method: {e}")
             logger.info("Starting ZeroMQ listener without signal handlers")
             # Continue with ZeroMQ listener even if signal handlers fail
-            await proxy.zmq_listener()
+            if proxy:
+                await proxy.zmq_listener()
         else:
-            logger.error(f"Server error: {e}")
+            logger.error(f"Runtime error: {e}")
             raise
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         logger.error(f"Server error: {e}\n{error_details}")
+        raise
     finally:
-        await proxy.stop()
+        # Always clean up resources
+        if proxy:
+            try:
+                await proxy.stop()
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {cleanup_error}")
 
 if __name__ == "__main__":
     aio.run(main())
