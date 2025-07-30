@@ -27,7 +27,7 @@ except ImportError:
 def load_symbols(limit=1800):
     """Load symbols with exchange info from CSV file in current directory"""
     symbols = []
-    csv_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "NSE SYMBOLS.csv")
+    csv_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "symbols.csv")
     
     print(f"Loading symbols from: {csv_path}")
     
