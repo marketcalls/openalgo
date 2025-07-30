@@ -15,7 +15,8 @@
       "Bash(timeout:*)",
       "Bash(ls:*)",
       "Bash(uv run:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(chmod:*)"
     ],
     "deny": []
   }
