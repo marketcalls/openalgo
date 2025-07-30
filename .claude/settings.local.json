@@ -15,9 +15,7 @@
       "Bash(timeout:*)",
       "Bash(ls:*)",
       "Bash(uv run:*)",
-      "Bash(curl:*)",
-      "Bash(mkdir:*)",
-      "Bash(npm run build:*)"
+      "Bash(curl:*)"
     ],
     "deny": []
   }
