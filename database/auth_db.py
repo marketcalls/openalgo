@@ -48,9 +48,9 @@ broker_cache = TTLCache(maxsize=1024, ttl=3000)
 
 engine = create_engine(
     DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
+    pool_size=300,
+    max_overflow=600,
+    pool_timeout=60
 )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))

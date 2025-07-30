@@ -41,7 +41,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     data = response.text
     
     # Print raw response for debugging
-    logger.info(f"Raw Response: {data}")
+    # logger.info(f"Raw Response: {data}")
     
     try:
         return json.loads(data)
