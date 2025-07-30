@@ -24,7 +24,7 @@ except ImportError:
 def load_nse_symbols(limit=1800):
     """Load NSE symbols from CSV file"""
     symbols = []
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'NSE SYMBOLS.csv')
+    csv_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'NSE_SYMBOLS.csv')
     
     print(f"Loading NSE symbols from: {csv_path}")
     
