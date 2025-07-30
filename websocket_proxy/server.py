@@ -126,11 +126,6 @@ class WebSocketProxy:
                 highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
                 logger.info(f"WebSocket server successfully started on {highlighted_success_address}")
                 
-                # Log additional helpful addresses
-                if self.host == '127.0.0.1':
-                    localhost_address = highlight_url("localhost:{}".format(self.port))
-                    logger.info(f"WebSocket server also accessible at {localhost_address}")
-                
                 await stop  # Wait until stopped
                 
             except Exception as e:

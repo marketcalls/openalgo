@@ -92,9 +92,6 @@ def cleanup_websocket_server():
             _websocket_thread.join(timeout=3.0)  # Reduced timeout for faster shutdown
             if _websocket_thread.is_alive():
                 logger.warning("WebSocket thread did not finish gracefully")
-                # On Windows, we might need to force terminate
-                if platform.system() == 'Windows':
-                    logger.warning("Force terminating WebSocket thread on Windows")
             _websocket_thread = None
             
         logger.info("WebSocket server cleanup completed")
@@ -157,32 +154,16 @@ def start_websocket_server():
     # Register cleanup handlers
     atexit.register(cleanup_websocket_server)
     
-    # Register signal handlers for graceful shutdown (platform-specific)
+    # Register signal handlers for graceful shutdown
     try:
         # SIGINT (Ctrl+C) - Available on all platforms
         signal.signal(signal.SIGINT, signal_handler)
         signals_registered = ["SIGINT"]
         
-        # SIGTERM - Available on Unix-like systems (Mac, Linux) but not Windows
-        if hasattr(signal, 'SIGTERM') and platform.system() != 'Windows':
+        # SIGTERM - Available on Unix-like systems (Mac, Linux)
+        if hasattr(signal, 'SIGTERM'):
             signal.signal(signal.SIGTERM, signal_handler)
             signals_registered.append("SIGTERM")
-        
-        # Windows-specific: Handle console control events
-        if platform.system() == 'Windows':
-            try:
-                import win32api
-                def windows_handler(dwCtrlType):
-                    if dwCtrlType in (0, 1, 2, 5, 6):  # Various Windows close events
-                        logger.info(f"Windows control event {dwCtrlType}, initiating cleanup...")
-                        cleanup_websocket_server()
-                        return True
-                    return False
-                win32api.SetConsoleCtrlHandler(windows_handler, True)
-                signals_registered.append("Windows console events")
-            except ImportError:
-                logger.info("win32api not available - Windows console close events will not trigger cleanup")
-                logger.info("For better Windows support, install: pip install pywin32")
         
         logger.info(f"Signal handlers registered: {', '.join(signals_registered)}")
     except Exception as e:
