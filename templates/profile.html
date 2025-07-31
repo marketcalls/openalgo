@@ -56,7 +56,7 @@
     </div>
 
     <!-- Account & Password Tab -->
-    <div id="account-tab" class="tab-content">
+    <div id="account-tab" class="tab-content block">
         <!-- User Info Card -->
         <div class="card bg-base-100 shadow-lg mb-8">
             <div class="card-body">
@@ -212,7 +212,7 @@
                             </label>
                             <input type="text" 
                                    name="smtp_server" 
-                                   value="{{ smtp_settings.smtp_server if smtp_settings and smtp_settings.smtp_server else 'smtp.gmail.com' }}"
+                                   value="{{ smtp_settings['smtp_server'] if smtp_settings and smtp_settings.get('smtp_server') else 'smtp.gmail.com' }}"
                                    class="input input-bordered" 
                                    placeholder="smtp.gmail.com">
                         </div>
@@ -223,7 +223,7 @@
                             </label>
                             <input type="number" 
                                    name="smtp_port" 
-                                   value="{{ smtp_settings.smtp_port if smtp_settings and smtp_settings.smtp_port else '587' }}"
+                                   value="{{ smtp_settings['smtp_port'] if smtp_settings and smtp_settings.get('smtp_port') else '587' }}"
                                    class="input input-bordered" 
                                    placeholder="587">
                             <label class="label">
@@ -238,7 +238,7 @@
                         </label>
                         <input type="email" 
                                name="smtp_username" 
-                               value="{{ smtp_settings.smtp_username if smtp_settings and smtp_settings.smtp_username else 'your-email@gmail.com' }}"
+                               value="{{ smtp_settings['smtp_username'] if smtp_settings and smtp_settings.get('smtp_username') else 'your-email@gmail.com' }}"
                                class="input input-bordered" 
                                placeholder="your-email@gmail.com">
                     </div>
@@ -252,9 +252,9 @@
                                    name="smtp_password" 
                                    id="smtp_password"
                                    class="input input-bordered w-full pr-12" 
-                                   value="{{ '********' if smtp_settings and smtp_settings.smtp_password_encrypted else '' }}"
-                                   placeholder="{{ 'Password is set (enter new to change)' if smtp_settings and smtp_settings.smtp_password_encrypted else 'Enter your App Password' }}">
-                            {% if smtp_settings and smtp_settings.smtp_password_encrypted %}
+                                   value="{{ '********' if smtp_settings and smtp_settings.get('smtp_password') else '' }}"
+                                   placeholder="{{ 'Password is set (enter new to change)' if smtp_settings and smtp_settings.get('smtp_password') else 'Enter your App Password' }}">
+                            {% if smtp_settings and smtp_settings.get('smtp_password') %}
                             <button type="button" 
                                     id="clearPasswordBtn"
                                     class="absolute right-2 top-1/2 transform -translate-y-1/2 btn btn-ghost btn-xs"
@@ -276,7 +276,7 @@
                         </label>
                         <input type="email" 
                                name="smtp_from_email" 
-                               value="{{ smtp_settings.smtp_from_email if smtp_settings and smtp_settings.smtp_from_email else 'your-email@gmail.com' }}"
+                               value="{{ smtp_settings['smtp_from_email'] if smtp_settings and smtp_settings.get('smtp_from_email') else 'your-email@gmail.com' }}"
                                class="input input-bordered" 
                                placeholder="your-email@gmail.com">
                     </div>
@@ -287,7 +287,7 @@
                         </label>
                         <input type="text" 
                                name="smtp_helo_hostname" 
-                               value="{{ smtp_settings.smtp_helo_hostname if smtp_settings and smtp_settings.smtp_helo_hostname else 'smtp.gmail.com' }}"
+                               value="{{ smtp_settings['smtp_helo_hostname'] if smtp_settings and smtp_settings.get('smtp_helo_hostname') else 'smtp.gmail.com' }}"
                                class="input input-bordered" 
                                placeholder="smtp.gmail.com">
                         <label class="label">
@@ -299,7 +299,7 @@
                         <label class="label cursor-pointer justify-start gap-2">
                             <input type="checkbox" 
                                    name="smtp_use_tls" 
-                                   {% if not smtp_settings or smtp_settings.smtp_use_tls %}checked{% endif %}
+                                   {% if not smtp_settings or smtp_settings.get('smtp_use_tls', True) %}checked{% endif %}
                                    class="checkbox">
                             <span class="label-text">Use TLS/SSL</span>
                         </label>
@@ -332,7 +332,7 @@
                                        id="testEmailInput" 
                                        class="input input-bordered input-sm" 
                                        placeholder="Enter email address to test"
-                                       value="{{ smtp_settings.smtp_username if smtp_settings and smtp_settings.smtp_username else 'your-email@gmail.com' }}">
+                                       value="{{ smtp_settings['smtp_username'] if smtp_settings and smtp_settings.get('smtp_username') else 'your-email@gmail.com' }}">
                             </div>
                             <button type="button" 
                                     id="sendTestEmailBtn" 
@@ -446,7 +446,10 @@ document.addEventListener('DOMContentLoaded', function() {
         tabs.forEach(t => t.classList.remove('tab-active'));
         
         // Hide all tab contents
-        tabContents.forEach(content => content.classList.add('hidden'));
+        tabContents.forEach(content => {
+            content.classList.add('hidden');
+            content.classList.remove('block');
+        });
         
         // Find and activate the target tab
         const targetTab = document.querySelector(`[data-tab="${tabName}"]`);
@@ -455,6 +458,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (targetTab && targetContent) {
             targetTab.classList.add('tab-active');
             targetContent.classList.remove('hidden');
+            targetContent.classList.add('block');
         } else {
             // Default to account tab if target not found
             const defaultTab = document.querySelector('[data-tab="account"]');
@@ -462,6 +466,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (defaultTab && defaultContent) {
                 defaultTab.classList.add('tab-active');
                 defaultContent.classList.remove('hidden');
+                defaultContent.classList.add('block');
             }
         }
     }
