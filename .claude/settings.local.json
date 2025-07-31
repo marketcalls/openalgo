@@ -16,7 +16,9 @@
       "Bash(ls:*)",
       "Bash(uv run:*)",
       "Bash(curl:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(source:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ],
     "deny": []
   }
