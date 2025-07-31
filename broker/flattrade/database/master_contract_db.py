@@ -5,6 +5,10 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from extensions import socketio  # Import SocketIO
 except ImportError:
@@ -40,7 +44,7 @@ class SymToken(Base):
 
 def init_db():
     """Initialize the database and create tables"""
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     
     # Create database directory if it doesn't exist
     db_path = os.path.dirname(DATABASE_URL.replace('sqlite:///', ''))
@@ -50,12 +54,12 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -70,11 +74,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info(f"No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Define the Flattrade URLs for downloading the symbol files
@@ -93,7 +97,7 @@ def download_csv_data(output_path):
     """
     Downloads CSV files directly to the tmp folder.
     """
-    print("Downloading CSV Data")
+    logger.info("Downloading CSV Data")
 
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -104,15 +108,15 @@ def download_csv_data(output_path):
         try:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
-                print(f"Successfully downloaded {key} from {url}")
+                logger.info(f"Successfully downloaded {key} from {url}")
                 output_file = os.path.join(output_path, f"{key}.csv")
                 with open(output_file, 'wb') as f:
                     f.write(response.content)
                 downloaded_files.append(f"{key}.csv")
             else:
-                print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+                logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
         except Exception as e:
-            print(f"Error downloading {key} from {url}: {e}")
+            logger.error(f"Error downloading {key} from {url}: {e}")
 
     # Combine NFO and BFO files
     combine_nfo_files(output_path)
@@ -127,7 +131,7 @@ def process_flattrade_nse_data(output_path):
     Processes the Flattrade NSE data (NSE_Equity.csv) to generate OpenAlgo symbols.
     Separates EQ, BE symbols, and Index symbols.
     """
-    print("Processing Flattrade NSE Data")
+    logger.info("Processing Flattrade NSE Data")
     file_path = f'{output_path}/NSE.csv'
 
     try:
@@ -135,10 +139,10 @@ def process_flattrade_nse_data(output_path):
         df = pd.read_csv(file_path)
         
         if df.empty:
-            print("Warning: NSE CSV file is empty")
+            logger.warning("Warning: NSE CSV file is empty")
             return pd.DataFrame()  # Return empty DataFrame if file is empty
             
-        print("Available columns in NSE CSV:", df.columns.tolist())
+        logger.info(f"Available columns in NSE CSV: {df.columns.tolist()}")
 
         # Validate required columns
         required_columns = ['Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument']
@@ -218,11 +222,21 @@ def process_flattrade_nse_data(output_path):
             (df_filtered['token'] != '')
         ]
 
-        print(f"Successfully processed {len(df_filtered)} NSE records")
+        df_filtered['symbol'] = df_filtered['symbol'].replace({
+            'Nifty 50': 'NIFTY',
+            'Nifty Bank': 'BANKNIFTY',
+            'Nifty Fin': 'FINNIFTY',
+            'Nifty Next 50': 'NIFTYNXT50',
+            'NIFTY MID SELECT': 'MIDCPNIFTY',
+            'INDIAVIX': 'INDIAVIX'
+        })
+
+      
+        logger.info(f"Successfully processed {len(df_filtered)} NSE records")
         return df_filtered
         
     except Exception as e:
-        print(f"Error processing NSE data: {str(e)}")
+        logger.error(f"Error processing NSE data: {e}")
         raise  # Re-raise the exception after logging
 
 def process_flattrade_nfo_data(output_path):
@@ -230,12 +244,12 @@ def process_flattrade_nfo_data(output_path):
     Processes the Flattrade NFO data (NFO.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Flattrade NFO Data")
+    logger.info("Processing Flattrade NFO Data")
     file_path = f'{output_path}/NFO.csv'
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    print("Available columns in NFO CSV:", df.columns.tolist())
+    logger.info(f"Available columns in NFO CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -263,7 +277,7 @@ def process_flattrade_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -282,6 +296,14 @@ def process_flattrade_nfo_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'NFO'
@@ -315,12 +337,12 @@ def process_flattrade_cds_data(output_path):
     Processes the Flattrade CDS data (Currency_Derivatives.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Flattrade CDS Data")
+    logger.info("Processing Flattrade CDS Data")
     file_path = f'{output_path}/CDS.csv'
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    print("Available columns in CDS CSV:", df.columns.tolist())
+    logger.info(f"Available columns in CDS CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -348,7 +370,7 @@ def process_flattrade_cds_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -367,6 +389,14 @@ def process_flattrade_cds_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'CDS'
@@ -400,12 +430,12 @@ def process_flattrade_mcx_data(output_path):
     Processes the Flattrade MCX data (Commodity.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Flattrade MCX Data")
+    logger.info("Processing Flattrade MCX Data")
     file_path = f'{output_path}/MCX.csv'
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    print("Available columns in MCX CSV:", df.columns.tolist())
+    logger.info(f"Available columns in MCX CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -433,7 +463,7 @@ def process_flattrade_mcx_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -452,6 +482,14 @@ def process_flattrade_mcx_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'MCX'
@@ -485,12 +523,12 @@ def process_flattrade_bse_data(output_path):
     Processes the Flattrade BSE data (BSE_Equity.csv) to generate OpenAlgo symbols.
     Ensures that the instrument type is always 'EQ'.
     """
-    print("Processing Flattrade BSE Data")
+    logger.info("Processing Flattrade BSE Data")
     file_path = f'{output_path}/BSE.csv'
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    print("Available columns in BSE CSV:", df.columns.tolist())
+    logger.info(f"Available columns in BSE CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -517,26 +555,35 @@ def process_flattrade_bse_data(output_path):
     # Update the 'symbol' column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Set Exchange: 'BSE' for all rows
-    df['exchange'] = 'BSE'
-    df['brexchange'] = df['exchange']
+    # Set Exchange based on Instrument type: BSE_INDEX for UNDIND, BSE for others
+    df['exchange'] = df['instrumenttype'].apply(lambda x: 'BSE_INDEX' if x == 'UNDIND' else 'BSE')
+    df['brexchange'] = 'BSE'  # Broker exchange is always BSE
 
-    # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
-    if 'expiry' not in df.columns:
-        df['expiry'] = ''  # No expiry for these instruments
-    if 'strike' not in df.columns:
-        df['strike'] = -1  # Set default value -1 for strike price where missing
+    # Handle expiry and strike like NSE data
+    df['expiry'] = df.get('expiry', '').fillna('')  # Fill expiry with empty strings if missing
+    df['strike'] = pd.to_numeric(df.get('strike', pd.Series([-1] * len(df))), errors='coerce').fillna(-1)  # Fill strike with -1 if missing
 
-    # Ensure the instrument type is consistent
-    df['instrumenttype'] = 'EQ'  # All BSE instruments are EQ
+    # Set instrument type: keep UNDIND for index instruments, set EQ for others
+    df['instrumenttype'] = df['instrumenttype'].apply(lambda x: 'INDEX' if x == 'UNDIND' else 'EQ')
 
     # Handle missing or invalid numeric values in 'lotsize'
-    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
+    df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(1).astype(int)  # Convert to int, default to 1 like NSE
 
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
 
+    # Final validation - remove any rows with empty required fields
+    df_filtered = df_filtered[
+        (df_filtered['symbol'].notna()) & 
+        (df_filtered['brsymbol'].notna()) & 
+        (df_filtered['token'].notna()) & 
+        (df_filtered['symbol'] != '') & 
+        (df_filtered['brsymbol'] != '') & 
+        (df_filtered['token'] != '')
+    ]
+
+    logger.info(f"Successfully processed {len(df_filtered)} BSE records")
     # Return the processed DataFrame
     return df_filtered
 
@@ -545,12 +592,12 @@ def process_flattrade_bfo_data(output_path):
     Processes the Flattrade BFO data (BFO.csv) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Flattrade BFO Data")
+    logger.info("Processing Flattrade BFO Data")
     file_path = f'{output_path}/BFO.csv'
 
     # First read the CSV to check columns
     df = pd.read_csv(file_path)
-    print("Available columns in BFO CSV:", df.columns.tolist())
+    logger.info(f"Available columns in BFO CSV: {df.columns.tolist()}")
 
     # Rename columns to match your schema
     column_mapping = {
@@ -578,7 +625,7 @@ def process_flattrade_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -597,6 +644,14 @@ def process_flattrade_bfo_data(output_path):
             return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
+
+    # Convert expiry format to hyphenated format for database storage (28AUG25 -> 28-AUG-25)
+    def add_hyphens_to_expiry(expiry_str):
+        if expiry_str and len(expiry_str) == 7:  # Format: 28AUG25
+            return f"{expiry_str[:2]}-{expiry_str[2:5]}-{expiry_str[5:]}"
+        return expiry_str
+    
+    df['expiry'] = df['expiry'].apply(add_hyphens_to_expiry)
 
     # Define Exchange
     df['exchange'] = 'BFO'
@@ -627,7 +682,7 @@ def process_flattrade_bfo_data(output_path):
 
 def combine_nfo_files(output_path):
     """Combines NFO equity and index files into one"""
-    print("Combining NFO files")
+    logger.info("Combining NFO files")
     nfo_eq = pd.read_csv(f"{output_path}/NFO_EQ.csv")
     nfo_idx = pd.read_csv(f"{output_path}/NFO_IDX.csv")
     combined = pd.concat([nfo_eq, nfo_idx], ignore_index=True)
@@ -635,7 +690,7 @@ def combine_nfo_files(output_path):
 
 def combine_bfo_files(output_path):
     """Combines BFO equity and index files into one"""
-    print("Combining BFO files")
+    logger.info("Combining BFO files")
     bfo_eq = pd.read_csv(f"{output_path}/BFO_EQ.csv")
     bfo_idx = pd.read_csv(f"{output_path}/BFO_IDX.csv")
     combined = pd.concat([bfo_eq, bfo_idx], ignore_index=True)
@@ -649,13 +704,13 @@ def delete_flattrade_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info(f"Deleted {file_path}")
 
 def master_contract_download():
     """
     Downloads, processes, and deletes Flattrade data.
     """
-    print("Downloading Flattrade Master Contract")
+    logger.info("Downloading Flattrade Master Contract")
 
     output_path = 'tmp'
     try:
@@ -681,10 +736,10 @@ def master_contract_download():
         if socketio:
             return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
         else:
-            print("Successfully downloaded and processed all contracts")
+            logger.info("Successfully downloaded and processed all contracts")
     except Exception as e:
         error_msg = f"Error in master contract download: {e}"
-        print(error_msg)
+        logger.error(f"{error_msg}")
         if socketio:
             return socketio.emit('master_contract_download', {'status': 'error', 'message': error_msg})
         raise e

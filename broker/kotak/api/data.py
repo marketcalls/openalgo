@@ -2,12 +2,14 @@ from .HSWebSocketLib import HSWebSocket
 import json
 import time
 import threading
-import logging
 import pandas as pd
 from database.token_db import get_token
+from utils.logging import get_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+logger = get_logger(__name__)
 
 class KotakWebSocket:
     def __init__(self):
@@ -107,9 +109,9 @@ class KotakWebSocket:
         )
 
 class BrokerData:
-    def __init__(self, auth_token, ws_url="wss://mlhsm.kotaksecurities.com"):
+    def __init__(self, auth_token):
         self.auth_token, self.sid, _, _ = auth_token.split(":::")
-        self.ws_url = ws_url
+        self.ws_url = "wss://mlhsm.kotaksecurities.com"
         # Define empty timeframe map since Kotak Neo doesn't support historical data
         self.timeframe_map = {
             # Empty mapping to maintain compatibility
@@ -123,7 +125,9 @@ class BrokerData:
                 raise ValueError(f"Token not found for {symbol} on {exchange}")
 
             exchange_map = {'NSE': 'nse_cm', 'BSE': 'bse_cm', 'NFO': 'nse_fo',
-                            "BFO": "bse_fo", "CDS": "cde_fo", "MCX": "mcx_fo"}
+                            "BFO": "bse_fo", "CDS": "cde_fo", "MCX": "mcx_fo", 
+                            "NSE_INDEX": "nse_cm", "BSE_INDEX": "bse_cm"
+                            }
             kotak_exchange = exchange_map.get(exchange)
             if not kotak_exchange:
                 raise ValueError(f"Unsupported exchange: {exchange}")

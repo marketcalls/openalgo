@@ -1,14 +1,32 @@
 import os
-import http.client
 import json
+import httpx
+from typing import Dict, Any
+from utils.httpx_client import get_httpx_client
 from broker.fivepaisa.api.order_api import get_positions
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 # Retrieve the BROKER_API_KEY environment variable
 broker_api_key = os.getenv('BROKER_API_KEY')
 
-def get_margin_data(auth_token):
-    """Fetch margin data from the broker's API using the provided auth token."""
+def get_margin_data(auth_token: str) -> Dict[str, Any]:
+    """Fetch margin data from the broker's API using the provided auth token.
+    
+    Args:
+        auth_token (str): Authentication token for the broker API
+        
+    Returns:
+        Dict[str, Any]: Processed margin data with keys:
+            - availablecash: Net available margin
+            - collateral: Total collateral value
+            - m2munrealized: Total mark-to-market unrealized P&L
+            - m2mrealized: Total booked P&L
+            - utiliseddebits: Utilized margin
+    """
     if not broker_api_key:
         raise ValueError("BROKER_API_KEY not found in environment variables")
 
@@ -18,18 +36,18 @@ def get_margin_data(auth_token):
     except ValueError:
         raise ValueError("BROKER_API_KEY format is incorrect. Expected format: 'api_key:::client_id'")
 
-    conn = http.client.HTTPSConnection("Openapi.5paisa.com")
+    # Get the shared httpx client
+    client = get_httpx_client()
 
     json_data = {
         "head": {
-            "key": api_key  # Ensure key matches the expected capitalization
+            "key": api_key
         },
         "body": {
             "ClientCode": client_id
         }
     }
 
-    payload = json.dumps(json_data)
     headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -37,11 +55,14 @@ def get_margin_data(auth_token):
     }
 
     try:
-        conn.request("POST", "/VendorsAPI/Service1.svc/V4/Margin", payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        margin_data = json.loads(data.decode("utf-8"))
-        print(f"Margin Data is : {margin_data}")
+        response = client.post(
+            "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/V4/Margin",
+            json=json_data,
+            headers=headers
+        )
+        response.raise_for_status()
+        margin_data = response.json()
+        logger.info(f"Margin Data is : {margin_data}")
         
         equity_margin = margin_data.get('body', {}).get('EquityMargin', [])[0]  # Access the first element of the list
         positions_data = get_positions(auth_token)
@@ -63,5 +84,12 @@ def get_margin_data(auth_token):
         }
 
         return processed_margin_data
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        return {}
+    except httpx.RequestError as e:
+        logger.error(f"Request error occurred: {e}")
+        return {}
     except Exception as e:
+        logger.error(f"An error occurred: {e}")
         return {}

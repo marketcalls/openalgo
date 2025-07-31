@@ -9,11 +9,12 @@ from database.strategy_db import (
 from database.symbol import enhanced_search_symbols
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity, is_session_valid
+from limiter import limiter
 import json
 from datetime import datetime, time
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-import logging
+from utils.logging import get_logger
 import requests
 import os
 import uuid
@@ -24,7 +25,11 @@ from collections import deque
 from time import time
 import re
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Rate limiting configuration
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
+STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 
 strategy_bp = Blueprint('strategy_bp', __name__, url_prefix='/strategy')
 
@@ -246,11 +251,11 @@ def squareoff_positions(strategy_id):
             # Use placesmartorder with quantity=0 and position_size=0 for squareoff
             payload = {
                 'apikey': api_key,
-                'strategy': strategy.name,
                 'symbol': mapping.symbol,
                 'exchange': mapping.exchange,
-                'action': 'SELL',  # Direction doesn't matter for closing
                 'product': mapping.product_type,
+                'strategy': strategy.name,
+                'action': 'SELL',  # Direction doesn't matter for closing
                 'pricetype': 'MARKET',
                 'quantity': '0',
                 'position_size': '0',  # This will close the position
@@ -287,6 +292,7 @@ def index():
 
 @strategy_bp.route('/new', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def new_strategy():
     """Create new strategy"""
     if request.method == 'POST':
@@ -394,28 +400,43 @@ def toggle_strategy_route(strategy_id):
         
     try:
         strategy = toggle_strategy(strategy_id)
-        if strategy.is_active:
-            # Schedule squareoff if being activated
-            schedule_squareoff(strategy_id)
-            flash('Strategy activated successfully', 'success')
-        else:
-            # Remove squareoff job if being deactivated
-            try:
-                scheduler.remove_job(f'squareoff_{strategy_id}')
-            except Exception:
-                pass
-            flash('Strategy deactivated successfully', 'success')
+        if strategy:
+            if strategy.is_active:
+                # Schedule squareoff if being activated
+                schedule_squareoff(strategy_id)
+                flash('Strategy activated successfully', 'success')
+            else:
+                # Remove squareoff job if being deactivated
+                try:
+                    scheduler.remove_job(f'squareoff_{strategy_id}')
+                except Exception:
+                    pass
+                flash('Strategy deactivated successfully', 'success')
             
-        return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+            return redirect(url_for('strategy_bp.view_strategy', strategy_id=strategy_id))
+        else:
+            flash('Error toggling strategy: Strategy not found', 'error')
+            return redirect(url_for('strategy_bp.index'))
     except Exception as e:
         flash(f'Error toggling strategy: {str(e)}', 'error')
         return redirect(url_for('strategy_bp.index'))
 
 @strategy_bp.route('/<int:strategy_id>/delete', methods=['POST'])
+@check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_strategy_route(strategy_id):
     """Delete strategy"""
-    if not is_session_valid():
-        return redirect(url_for('auth.login'))
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'error': 'Session expired'}), 401
+        
+    strategy = get_strategy(strategy_id)
+    if not strategy:
+        return jsonify({'status': 'error', 'error': 'Strategy not found'}), 404
+    
+    # Check if strategy belongs to user
+    if strategy.user_id != user_id:
+        return jsonify({'status': 'error', 'error': 'Unauthorized'}), 403
     
     try:
         # Remove squareoff job if exists
@@ -425,16 +446,16 @@ def delete_strategy_route(strategy_id):
             pass
             
         if delete_strategy(strategy_id):
-            flash('Strategy deleted successfully', 'success')
+            return jsonify({'status': 'success'})
         else:
-            flash('Error deleting strategy', 'error')
+            return jsonify({'status': 'error', 'error': 'Failed to delete strategy'}), 500
     except Exception as e:
-        flash(f'Error deleting strategy: {str(e)}', 'error')
-    
-    return redirect(url_for('strategy_bp.index'))
+        logger.error(f'Error deleting strategy {strategy_id}: {str(e)}')
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 @strategy_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def configure_symbols(strategy_id):
     """Configure symbols for strategy"""
     user_id = session.get('user')
@@ -542,6 +563,7 @@ def configure_symbols(strategy_id):
 
 @strategy_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_symbol(strategy_id, mapping_id):
     """Delete symbol mapping"""
     username = session.get('user')
@@ -581,6 +603,7 @@ def search_symbols():
     })
 
 @strategy_bp.route('/webhook/<webhook_id>', methods=['POST'])
+@limiter.limit(WEBHOOK_RATE_LIMIT)
 def webhook(webhook_id):
     """Handle webhook from trading platform"""
     try:
@@ -692,22 +715,36 @@ def webhook(webhook_id):
         }
         
         # Set quantity based on order type
-        if use_smart_order:
+        if strategy.trading_mode == 'BOTH':
+            # For BOTH mode, always use placesmartorder with direct position size
+            # Set quantity to 0 if position_size is 0 (for exits)
+            quantity = '0' if position_size == 0 else str(mapping.quantity)
             payload.update({
-                'quantity': '0',
-                'position_size': '0',  # This will close the position
+                'quantity': quantity,
+                'position_size': str(position_size),  # Use position_size directly from webhook data
                 'price': '0',
                 'trigger_price': '0',
                 'disclosed_quantity': '0'
             })
             endpoint = 'placesmartorder'
         else:
-            # For regular orders, use absolute value of position_size if provided, otherwise use mapping quantity
-            quantity = abs(position_size) if position_size != 0 else mapping.quantity
-            payload.update({
-                'quantity': str(quantity)
-            })
-            endpoint = 'placeorder'
+            # For LONG/SHORT modes, keep existing logic
+            if use_smart_order:
+                payload.update({
+                    'quantity': '0',
+                    'position_size': '0',  # This will close the position
+                    'price': '0',
+                    'trigger_price': '0',
+                    'disclosed_quantity': '0'
+                })
+                endpoint = 'placesmartorder'
+            else:
+                # For regular orders, use absolute value of position_size if provided, otherwise use mapping quantity
+                quantity = abs(position_size) if position_size != 0 else mapping.quantity
+                payload.update({
+                    'quantity': str(quantity)
+                })
+                endpoint = 'placeorder'
             
         # Queue the order
         queue_order(endpoint, payload)

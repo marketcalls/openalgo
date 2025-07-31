@@ -3,14 +3,13 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
 import pandas as pd
 import gzip
 import io
+from utils.httpx_client import get_httpx_client
 
 
 from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
@@ -18,6 +17,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -81,16 +84,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -105,19 +108,20 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
 
 
 def download_csv_aliceblue_data(output_path):
+    """Download AliceBlue master contract CSV files using shared connection pooling."""
 
-    print("Downloading Master Contract CSV Files")
+    logger.info("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
     csv_urls = {
         "CDS": "https://v2api.aliceblueonline.com/restpy/static/contract_master/CDS.csv",
@@ -130,23 +134,32 @@ def download_csv_aliceblue_data(output_path):
         "INDICES": "https://v2api.aliceblueonline.com/restpy/static/contract_master/INDICES.csv"
     }
     
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     # Create a list to hold the paths of the downloaded files
     downloaded_files = []
 
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
-        # Send GET request
-        response = requests.get(url,timeout=10)
-        # Check if the request was successful
-        if response.status_code == 200:
+        try:
+            # Send GET request using the shared httpx client
+            response = client.get(url, timeout=10)
+            response.raise_for_status()  # Raise exception for error status codes
+            
             # Construct the full output path for the file
             file_path = f"{output_path}/{key}.csv"
-            # Write the content to the file
+            
+            # Write the content to the file with a larger chunk size for better performance
             with open(file_path, 'wb') as file:
                 file.write(response.content)
+                
             downloaded_files.append(file_path)
-        else:
-            print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+            logger.info(f"Successfully downloaded {key} master contract")
+            
+        except Exception as e:
+            logger.error(f"Failed to download {key} from {url}. Error: {e}")
+
     
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
@@ -158,7 +171,7 @@ def process_aliceblue_nse_csv(path):
     """
     Processes the aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing aliceblue NSE CSV Data")
+    logger.info("Processing aliceblue NSE CSV Data")
     file_path = f'{path}/NSE.csv'
 
     df = pd.read_csv(file_path)
@@ -179,6 +192,9 @@ def process_aliceblue_nse_csv(path):
     token_df['instrumenttype'] = 'EQ'
     token_df['tick_size'] = filter_df['Tick Size']
     
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -186,7 +202,7 @@ def process_aliceblue_bse_csv(path):
     """
     Processes the aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing aliceblue BSE CSV Data")
+    logger.info("Processing aliceblue BSE CSV Data")
     file_path = f'{path}/BSE.csv'
 
     df = pd.read_csv(file_path)
@@ -207,20 +223,23 @@ def process_aliceblue_bse_csv(path):
     token_df['instrumenttype'] = 'EQ'
     token_df['tick_size'] = filtered_df['Tick Size']
     
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
 def process_aliceblue_nfo_csv(path):
     """
-    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the AliceBlue NFO CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing AliceBlue NFO CSV Data")
+    logger.info("Processing AliceBlue NFO CSV Data")
     file_path = f'{path}/NFO.csv'
 
     df = pd.read_csv(file_path)
 
-        # Convert 'Expiry Date' column to datetime format
-    df['Expiry Date'] = pd.to_datetime(df['Expiry Date'])
+    # Convert 'Expiry Date' column to datetime format with error handling
+    df['Expiry Date'] = pd.to_datetime(df['Expiry Date'], errors='coerce')  # 'coerce' will set invalid dates to NaT
 
     # Define the function to reformat symbol details
     def reformat_symbol_detail(row):
@@ -228,7 +247,14 @@ def process_aliceblue_nfo_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
@@ -248,8 +274,8 @@ def process_aliceblue_nfo_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -259,6 +285,9 @@ def process_aliceblue_nfo_csv(path):
     })
     token_df['tick_size'] = df['Tick Size'].values
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -266,7 +295,7 @@ def process_aliceblue_cds_csv(path):
     """
     Processes the AliceBlue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue CDS CSV Data")
+    logger.info("Processing Aliceblue CDS CSV Data")
     file_path = f'{path}/CDS.csv'
 
     df = pd.read_csv(file_path)
@@ -280,7 +309,14 @@ def process_aliceblue_cds_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df['Option Type'] == 'XX', 'symbol'] = df['Trading Symbol'] + 'UT'
@@ -300,8 +336,8 @@ def process_aliceblue_cds_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -311,6 +347,9 @@ def process_aliceblue_cds_csv(path):
     })
     token_df['tick_size'] = df['Tick Size'].values
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -318,7 +357,7 @@ def process_aliceblue_bfo_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue BFO CSV Data")
+    logger.info("Processing Aliceblue BFO CSV Data")
     file_path = f'{path}/BFO.csv'
 
     df = pd.read_csv(file_path)
@@ -347,8 +386,8 @@ def process_aliceblue_bfo_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -361,6 +400,9 @@ def process_aliceblue_bfo_csv(path):
     # Drop rows where 'symbol' is NaN
     token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df_cleaned
 
 
@@ -368,7 +410,7 @@ def process_aliceblue_mcx_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue MCX CSV Data")
+    logger.info("Processing Aliceblue MCX CSV Data")
     file_path = f'{path}/MCX.csv'
 
     df = pd.read_csv(file_path)
@@ -384,7 +426,14 @@ def process_aliceblue_mcx_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     df.loc[df['Instrument Type'] == 'FUTCOM', 'Option Type'] = 'XX'
     df.loc[df['Instrument Type'] == 'FUTIDX', 'Option Type'] = 'XX'
@@ -407,8 +456,8 @@ def process_aliceblue_mcx_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -421,13 +470,16 @@ def process_aliceblue_mcx_csv(path):
     # Drop rows where 'symbol' is NaN
     # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 def process_aliceblue_bcd_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue BCD CSV Data")
+    logger.info("Processing Aliceblue BCD CSV Data")
     file_path = f'{path}/BCD.csv'
 
     df = pd.read_csv(file_path)
@@ -441,7 +493,14 @@ def process_aliceblue_bcd_csv(path):
             Strike_price = int(row['Strike Price'])
         else:
             Strike_price = float(row['Strike Price'])
-        return f"{row['Symbol']}{row['Expiry Date'].strftime('%d%b%y').upper()}{Strike_price}"
+        
+        # Check if the date is NaT (Not a Time) before formatting
+        if pd.notna(row['Expiry Date']):
+            date_str = row['Expiry Date'].strftime('%d%b%y').upper()
+        else:
+            date_str = 'NOEXP'  # Use a placeholder for missing dates
+            
+        return f"{row['Symbol']}{date_str}{Strike_price}"
 
     df.loc[df['Instrument Type'] == 'FUTCUR', 'Option Type'] = 'XX'
     df.loc[df['Instrument Type'] == 'FUTCUR', 'Strike Price'] = 1
@@ -464,8 +523,8 @@ def process_aliceblue_bcd_csv(path):
     token_df['brexchange'] = df['Exch'].values
     token_df['token'] = df['Token'].values
 
-    # Convert 'Expiry Date' to desired format
-    token_df['expiry'] = df['Expiry Date'].dt.strftime('%d-%b-%y').str.upper()
+    # Convert 'Expiry Date' to desired format with NaT handling
+    token_df['expiry'] = df['Expiry Date'].apply(lambda x: x.strftime('%d-%b-%y').upper() if pd.notna(x) else None)
     token_df['strike'] = df['Strike Price'].values
     token_df['lotsize'] = df['Lot Size'].values
     token_df['instrumenttype'] = df['Option Type'].map({
@@ -478,6 +537,9 @@ def process_aliceblue_bcd_csv(path):
     # Drop rows where 'symbol' is NaN
     # token_df_cleaned = token_df.dropna(subset=['symbol'])
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -485,7 +547,7 @@ def process_aliceblue_indices_csv(path):
     """
     Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
     """
-    print("Processing Aliceblue INDICES CSV Data")
+    logger.info("Processing Aliceblue INDICES CSV Data")
     file_path = f'{path}/INDICES.csv'
 
     df = pd.read_csv(file_path)
@@ -508,8 +570,25 @@ def process_aliceblue_indices_csv(path):
         'BSE': 'BSE_INDEX',
         'MCX': 'MCX_INDEX'
     })
+    token_df['exchange'] = df['exch'].map({
+        'NSE': 'NSE_INDEX',
+        'BSE': 'BSE_INDEX',
+        'MCX': 'MCX_INDEX'
+    })
     token_df['tick_size'] = 0.01
+    token_df['symbol'] = token_df['symbol'].replace({
+    'NIFTY 50': 'NIFTY',
+    'NIFTY NEXT 50': 'NIFTYNXT50',
+    'NIFTY FIN SERVICE': 'FINNIFTY',
+    'NIFTY BANK': 'BANKNIFTY',
+    'NIFTY MIDCAP SELECT': 'MIDCPNIFTY',
+    'INDIA VIX': 'INDIAVIX',
+    'SNSX50': 'SENSEX50'
+    })
 
+    # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
+    token_df = token_df.dropna(subset=['symbol'])
+    
     return token_df
 
 
@@ -521,11 +600,11 @@ def delete_aliceblue_temp_data(output_path):
         # If the file is a CSV, delete it
         if filename.endswith(".csv") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info(f"Deleted {file_path}")
     
 
 def master_contract_download():
-    print("Downloading Master Contract")
+    logger.info("Downloading Master Contract")
     
 
     output_path = 'tmp'
@@ -554,7 +633,7 @@ def master_contract_download():
 
     
     except Exception as e:
-        print(str(e))
+        logger.info(f"{e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 

@@ -1,4 +1,5 @@
 venopenalgo
+.venv/
 .env
 openalgo.db
 .env
@@ -12,16 +13,21 @@ Thumbs.db
 .idea/
 .python-version
 config.ini
+.venvv
 
-
-#DB Files and Log/Tmp Files
+#DB Files, CSV Files and Log/Tmp Files
 
 *.egg-info/
 *.db
 *.sqlite
 *.log
 *.tmp
+checkpoint.txt
+checkpoints.json
 
+# CSV Files (except symbols.csv)
+*.csv
+!symbols.csv
 
 # Environments 
 .env 
@@ -43,4 +49,3 @@ venv.bak/
 
 # Tailwind CSS output
 # **/output.css
-

@@ -9,11 +9,12 @@ from database.chartink_db import (
 from database.symbol import enhanced_search_symbols
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
+from limiter import limiter
 import json
 from datetime import datetime, time
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-import logging
+from utils.logging import get_logger
 import requests
 import os
 import uuid
@@ -23,7 +24,11 @@ import threading
 from collections import deque
 from time import time
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Rate limiting configuration
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
+STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 
 chartink_bp = Blueprint('chartink_bp', __name__, url_prefix='/chartink')
 
@@ -244,6 +249,7 @@ def index():
 
 @chartink_bp.route('/new', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def new_strategy():
     """Create new strategy"""
     if request.method == 'POST':
@@ -332,6 +338,7 @@ def view_strategy(strategy_id):
 
 @chartink_bp.route('/<int:strategy_id>/delete', methods=['POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_strategy_route(strategy_id):
     """Delete a strategy"""
     user_id = session.get('user')
@@ -363,6 +370,7 @@ def delete_strategy_route(strategy_id):
 
 @chartink_bp.route('/<int:strategy_id>/configure', methods=['GET', 'POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def configure_symbols(strategy_id):
     """Configure symbols for strategy"""
     user_id = session.get('user')
@@ -470,6 +478,7 @@ def configure_symbols(strategy_id):
 
 @chartink_bp.route('/<int:strategy_id>/symbol/<int:mapping_id>/delete', methods=['POST'])
 @check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
 def delete_symbol(strategy_id, mapping_id):
     """Delete symbol mapping"""
     user_id = session.get('user')
@@ -533,6 +542,7 @@ def search_symbols():
     })
 
 @chartink_bp.route('/webhook/<webhook_id>', methods=['POST'])
+@limiter.limit(WEBHOOK_RATE_LIMIT)
 def webhook(webhook_id):
     """Handle webhook from Chartink"""
     try:

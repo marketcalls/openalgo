@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Set default values and generate JSON
     if (symbolInput && exchangeSelect && productSelect) {
-        symbolInput.value = 'ZOMATO';
+        symbolInput.value = 'ETERNAL';
         exchangeSelect.value = 'NSE';
         productSelect.value = 'MIS';
         
@@ -128,7 +128,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             body: JSON.stringify(formData),
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
             }
         })
         .then(response => response.json().then(data => ({status: response.status, data: data})))

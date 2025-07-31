@@ -93,6 +93,7 @@
 
                     <div class="card-actions justify-end mt-4 space-y-2">
                         <form method="POST" action="{{ url_for('strategy_bp.toggle_strategy_route', strategy_id=strategy.id) }}" class="w-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <button type="submit" class="btn btn-primary btn-block">
                                 {{ 'Deactivate' if strategy.is_active else 'Activate' }} Strategy
                             </button>
@@ -383,6 +384,50 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const csrfToken = csrfTokenInput ? csrfTokenInput.value : null;
+
+    if (!csrfToken && document.getElementById('confirm_strategy_delete')) {
+        console.error('CSRF token not found! Strategy deletion and other protected actions may fail.');
+        if (typeof showToast === 'function') showToast('error', 'Security token missing. Actions may fail.');
+    }
+
+    const confirmDeleteButton = document.getElementById('confirm_strategy_delete');
+    if (confirmDeleteButton) {
+        confirmDeleteButton.addEventListener('click', function() {
+            if (!csrfToken) {
+                console.error('CSRF token is missing, cannot delete strategy.');
+                if (typeof showToast === 'function') showToast('error', 'Error: CSRF token missing.');
+                return;
+            }
+            fetch(`{{ url_for('strategy_bp.delete_strategy_route', strategy_id=strategy.id) }}`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRFToken': csrfToken
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    window.location.href = "{{ url_for('strategy_bp.index') }}";
+                } else {
+                    if (typeof showToast === 'function') showToast('error', data.message || data.error || 'Error deleting strategy');
+                    else alert(data.message || data.error || 'Error deleting strategy');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                if (typeof showToast === 'function') showToast('error', 'Error deleting strategy');
+                else alert('Error deleting strategy');
+            });
+        });
+    }
+
+    // Existing DOMContentLoaded content starts below
+    const webhookUrlContainer = document.getElementById('webhookUrl');
     // Initialize copy functionality for all copyable containers
     const copyableContainers = [
         { id: 'webhookUrl', label: 'Webhook URL' },
@@ -408,28 +453,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Handle strategy deletion
-    document.getElementById('confirm_strategy_delete').addEventListener('click', function() {
-        fetch(`/strategy/{{ strategy.id }}/delete`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                window.location.href = "{{ url_for('strategy_bp.index') }}";
-            } else {
-                showToast('error', data.error || 'Error deleting strategy');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('error', 'Error deleting strategy');
-        });
-    });
 });
 
 function showToast(type, message) {

@@ -1,15 +1,17 @@
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request, session, Response
 from database.latency_db import OrderLatency, latency_session
 from utils.session import check_session_validity
 from limiter import limiter
-import logging
+from utils.logging import get_logger
 from sqlalchemy import func
 from collections import defaultdict
 import numpy as np
 from datetime import datetime
 import pytz
+import csv
+import io
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 latency_bp = Blueprint('latency_bp', __name__, url_prefix='/latency')
 
@@ -74,7 +76,7 @@ def get_histogram_data(broker=None):
             'max_rtt': float(max_rtt)
         }
         
-        logger.info(f"Histogram data for broker {broker}: {data}")
+        # logger.info(f"Histogram data for broker {broker}: {data}")  # Commented out to reduce log verbosity
         return data
         
     except Exception as e:
@@ -86,6 +88,30 @@ def get_histogram_data(broker=None):
             'min_rtt': 0,
             'max_rtt': 0
         }
+
+def generate_csv(logs):
+    """Generate CSV file from latency logs"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(['Timestamp', 'Broker', 'Order ID', 'Symbol', 'Order Type', 'RTT (ms)', 'Overhead (ms)', 'Total Latency (ms)', 'Status'])
+    
+    # Write data
+    for log in logs:
+        writer.writerow([
+            format_ist_time(log.timestamp),
+            log.broker,
+            log.order_id,
+            log.symbol,
+            log.order_type,
+            round(log.rtt_ms, 2),
+            round(log.overhead_ms, 2),
+            round(log.total_latency_ms, 2),
+            log.status
+        ])
+    
+    return output.getvalue()
 
 @latency_bp.route('/', methods=['GET'])
 @check_session_validity
@@ -102,7 +128,7 @@ def latency_dashboard():
         if broker:  # Skip None values
             broker_histograms[broker] = get_histogram_data(broker)
     
-    logger.info(f"Broker histograms data: {broker_histograms}")
+    # logger.info(f"Broker histograms data: {broker_histograms}")  # Commented out to reduce log verbosity
     
     # Format timestamps in IST
     for log in recent_logs:
@@ -175,6 +201,31 @@ def get_broker_stats(broker):
         return jsonify(broker_stats)
     except Exception as e:
         logger.error(f"Error fetching broker stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@latency_bp.route('/export', methods=['GET'])
+@check_session_validity
+@limiter.limit("10/minute")
+def export_logs():
+    """Export latency logs to CSV"""
+    try:
+        # Get all logs for the current day
+        logs = OrderLatency.get_recent_logs(limit=None)  # None to get all logs
+        
+        # Generate CSV
+        csv_data = generate_csv(logs)
+        
+        # Create the response
+        response = Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=latency_logs.csv'}
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error exporting latency logs: {e}")
         return jsonify({'error': str(e)}), 500
 
 @latency_bp.teardown_app_request

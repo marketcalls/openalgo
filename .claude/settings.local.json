@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(sed:*)",
+      "Bash(python test:*)",
+      "Bash(python3:*)",
+      "Bash(LOG_LEVEL=DEBUG python3 test_colored_logging.py)",
+      "Bash(rm:*)",
+      "Bash(FORCE_COLOR=1 python3 debug_colors.py)",
+      "Bash(rg:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "Bash(ls:*)",
+      "Bash(uv run:*)",
+      "Bash(curl:*)",
+      "Bash(chmod:*)",
+      "Bash(source:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
+    ],
+    "deny": []
+  }
+}

@@ -2,13 +2,18 @@
 from utils.env_check import load_and_check_env_variables  # Import the environment check function
 load_and_check_env_variables()
 
-from flask import Flask, render_template
+from flask import Flask, render_template, session
+from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from cors import cors        # Import the CORS instance
+from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+from utils.logging import get_logger, log_startup_banner  # Import centralized logging
+# Import WebSocket proxy server - using relative import to avoid @ symbol issues
+from websocket_proxy.app_integration import start_websocket_proxy
 
 from blueprints.auth import auth_bp
 from blueprints.dashboard import dashboard_bp
@@ -25,6 +30,8 @@ from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
+from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 
 from restx_api import api_v1_bp, api
 
@@ -43,6 +50,9 @@ from utils.plugin_loader import load_broker_auth_functions
 
 import os
 
+# Initialize logger
+logger = get_logger(__name__)
+
 def create_app():
     # Initialize Flask application
     app = Flask(__name__)
@@ -50,18 +60,76 @@ def create_app():
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
 
+    # Initialize CSRF protection
+    csrf = CSRFProtect(app)
+    
+    # Store csrf instance in app config for use in other modules
+    app.csrf = csrf
+
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
-    # Initialize Flask-CORS with the app object
-    cors.init_app(app)
+    # Initialize Flask-CORS with the app object using configuration from environment variables
+    from cors import get_cors_config
+    cors.init_app(app, **get_cors_config())
+
+    # Apply Content Security Policy middleware
+    apply_csp_middleware(app)
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+    
+    # Dynamic cookie security configuration based on HOST_SERVER
+    HOST_SERVER = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+    USE_HTTPS = HOST_SERVER.startswith('https://')
+    
+    # Configure session cookie security
+    session_cookie_name = os.getenv('SESSION_COOKIE_NAME', 'session')
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=USE_HTTPS,
+        SESSION_COOKIE_NAME=session_cookie_name
+        # PERMANENT_SESSION_LIFETIME is dynamically set at login to expire at 3:30 AM IST
+    )
+    
+    # Add cookie prefix for HTTPS environments
+    if USE_HTTPS:
+        app.config['SESSION_COOKIE_NAME'] = f'__Secure-{session_cookie_name}'
+    
+    # CSRF configuration from environment variables
+    csrf_enabled = os.getenv('CSRF_ENABLED', 'TRUE').upper() == 'TRUE'
+    app.config['WTF_CSRF_ENABLED'] = csrf_enabled
+    
+    # Configure CSRF cookie security to match session cookie
+    csrf_cookie_name = os.getenv('CSRF_COOKIE_NAME', 'csrf_token')
+    app.config.update(
+        WTF_CSRF_COOKIE_HTTPONLY=True,
+        WTF_CSRF_COOKIE_SAMESITE='Lax',
+        WTF_CSRF_COOKIE_SECURE=USE_HTTPS,
+        WTF_CSRF_COOKIE_NAME=csrf_cookie_name
+    )
+    
+    # Add cookie prefix for CSRF token in HTTPS environments
+    if USE_HTTPS:
+        app.config['WTF_CSRF_COOKIE_NAME'] = f'__Secure-{csrf_cookie_name}'
+    
+    # Parse CSRF time limit from environment
+    csrf_time_limit = os.getenv('CSRF_TIME_LIMIT', '').strip()
+    if csrf_time_limit:
+        try:
+            app.config['WTF_CSRF_TIME_LIMIT'] = int(csrf_time_limit)
+        except ValueError:
+            app.config['WTF_CSRF_TIME_LIMIT'] = None  # Default to no limit if invalid
+    else:
+        app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit if empty
 
     # Register RESTx API blueprint first
     app.register_blueprint(api_v1_bp)
+    
+    # Exempt API endpoints from CSRF protection (they use API key authentication)
+    csrf.exempt(api_v1_bp)
 
     # Initialize traffic logging middleware after RESTx but before other blueprints
     init_traffic_logging(app)
@@ -82,15 +150,56 @@ def create_app():
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
     app.register_blueprint(strategy_bp)
+    app.register_blueprint(master_contract_status_bp)
+    app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
+    
 
-    # Initialize latency monitoring (after registering API blueprint)
+    # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
+        # Exempt webhook endpoints from CSRF protection
+        csrf.exempt(app.view_functions['chartink_bp.webhook'])
+        csrf.exempt(app.view_functions['strategy_bp.webhook'])
+        
+        # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
+        csrf.exempt(app.view_functions['brlogin.broker_callback'])
+        
+        # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
+    @app.before_request
+    def check_session_expiry():
+        """Check session validity before each request"""
+        from flask import request
+        from utils.session import is_session_valid, revoke_user_tokens
+        
+        # Skip session check for static files, API endpoints, and public routes
+        if (request.path.startswith('/static/') or 
+            request.path.startswith('/api/') or 
+            request.path in ['/', '/auth/login', '/auth/reset-password', '/setup', '/download', '/faq'] or
+            request.path.startswith('/auth/broker/') or  # OAuth callbacks
+            request.path.startswith('/_reload-ws')):  # WebSocket reload endpoint
+            return
+        
+        # Check if user is logged in and session is expired
+        if session.get('logged_in') and not is_session_valid():
+            logger.info(f"Session expired for user: {session.get('user')} - revoking tokens")
+            revoke_user_tokens()
+            session.clear()
+            # Don't redirect here, let individual routes handle it
+    
     @app.errorhandler(404)
     def not_found_error(error):
         return render_template('404.html'), 404
-    
+
+    @app.errorhandler(500)
+    def internal_server_error(e):
+        """Custom handler for 500 Internal Server Error"""
+        # Log the error (optional)
+        logger.error(f"Server Error: {e}")
+
+        # Provide a logout option
+        return render_template("500.html"), 500
+        
     @app.context_processor
     def inject_version():
         return dict(version=get_version())
@@ -117,12 +226,15 @@ def setup_environment(app):
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
-        print(" * ngrok URL: " + public_url + " *")
+        logger.info(f"ngrok URL: {public_url}")
 
 app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Integrate the WebSocket proxy server with the Flask app
+start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
@@ -130,5 +242,9 @@ if __name__ == '__main__':
     host_ip = os.getenv('FLASK_HOST_IP', '127.0.0.1')  # Default to '127.0.0.1' if not set
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
+
+    # Log the OpenAlgo access URL with enhanced styling
+    url = f"http://{host_ip}:{port}"
+    log_startup_banner(logger, "OpenAlgo is running!", url)
 
     socketio.run(app, host=host_ip, port=port, debug=debug)

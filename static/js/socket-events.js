@@ -192,9 +192,9 @@ async function refreshAnalyzer() {
                         </td>
                         <td class="badge-cell">
                             <div class="badge-container">
-                                <button class="btn btn-sm btn-primary view-details" 
-                                        data-request='${JSON.stringify(request.request_data)}'
-                                        data-response='${JSON.stringify(request.response_data)}'>
+                                <button class="btn btn-sm btn-primary view-details"
+                                        data-request="${encodeURIComponent(JSON.stringify(request.request_data))}"
+                                        data-response="${encodeURIComponent(JSON.stringify(request.response_data))}">
                                     View
                                 </button>
                             </div>
@@ -207,14 +207,13 @@ async function refreshAnalyzer() {
             document.querySelectorAll('.view-details').forEach(button => {
                 button.addEventListener('click', function() {
                     try {
-                        const requestData = JSON.parse(this.getAttribute('data-request'));
-                        const responseData = JSON.parse(this.getAttribute('data-response'));
-                        
+                        const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                        const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
                         // Remove apikey from request data if present
                         if (requestData.apikey) {
                             delete requestData.apikey;
                         }
-                        
+
                         document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                         document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                         document.getElementById('requestModal').showModal();
@@ -266,14 +265,14 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('password_change', function(data) {
         playAlertSound();
         showToast(data.message, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Master contract download notification
     socket.on('master_contract_download', function(data) {
         playAlertSound();
         showToast(`Master Contract: ${data.message}`, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Cancel order notification
@@ -297,7 +296,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshOrderbook();
+            //refreshOrderbook();
             refreshCurrentPageContent();
         }
     });
@@ -309,8 +308,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshPositions();
-            refreshCurrentPageContent();
+            // Add a 1-second delay before refreshing content
+            setTimeout(() => {
+                refreshCurrentPageContent();
+            }, 1000);
         }
     });
 
@@ -327,7 +328,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isOnAnalyzerPage) {
                 refreshAnalyzer();
             } else {
-                refreshCurrentPageContent();
+                // Add a 1-second delay before refreshing content
+                setTimeout(() => {
+                    refreshCurrentPageContent();
+                }, 1000);
             }
         }
     });
@@ -439,9 +443,10 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.view-details').forEach(button => {
             button.addEventListener('click', function() {
                 try {
-                    const requestData = JSON.parse(this.getAttribute('data-request'));
-                    const responseData = JSON.parse(this.getAttribute('data-response'));
-                    
+                    const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                    const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
+                    console.log(responseData);
+
                     // Remove apikey from request data if present
                     if (requestData.apikey) {
                         delete requestData.apikey;

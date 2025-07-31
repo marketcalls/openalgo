@@ -9,6 +9,9 @@ from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 import pyotp
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
@@ -18,7 +21,13 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 PASSWORD_PEPPER = os.getenv('API_KEY_PEPPER')  # We'll use the same pepper for consistency
 
 # Engine and session setup
-engine = create_engine(DATABASE_URL, echo=False)
+engine = create_engine(
+    DATABASE_URL, 
+    echo=False,
+    pool_size=50,
+    max_overflow=100,
+    pool_timeout=10
+)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -66,7 +75,7 @@ class User(Base):
         return totp.verify(token)
 
 def init_db():
-    print("Initializing User DB")
+    logger.info("Initializing User DB")
     Base.metadata.create_all(bind=engine)
 
 def add_user(username, email, password, is_admin=False):

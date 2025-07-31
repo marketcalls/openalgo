@@ -1,7 +1,12 @@
-import requests
+import httpx
 import hashlib
 import json
 import os
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def sha256_hash(text):
     """Generate SHA256 hash."""
@@ -13,21 +18,21 @@ def authenticate_broker(code, password=None, totp_code=None):
     """
     try:
         full_api_key = os.getenv('BROKER_API_KEY')
-        print(f"Full API Key: {full_api_key}")  # Debug print
+        logger.debug(f"Full API Key: {full_api_key}")  # Debug print
         
         # Split the API key to get the actual key part
         BROKER_API_KEY = full_api_key.split(':::')[1]
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         
-        print(f"Using API Key: {BROKER_API_KEY}")  # Debug print
-        print(f"Request Code: {code}")  # Debug print
+        logger.debug(f"Using API Key: {BROKER_API_KEY}")  # Debug print
+        logger.debug(f"Request Code: {code}")  # Debug print
         
         # Create the security hash as per Flattrade docs
         hash_input = f"{BROKER_API_KEY}{code}{BROKER_API_SECRET}"
         security_hash = hashlib.sha256(hash_input.encode()).hexdigest()
         
-        print(f"Hash Input: {hash_input}")  # Debug print
-        print(f"Security Hash: {security_hash}")  # Debug print
+        logger.debug(f"Hash Input: {hash_input}")  # Debug print
+        logger.debug(f"Security Hash: {security_hash}")  # Debug print
         
         url = 'https://authapi.flattrade.in/trade/apitoken'
         data = {
@@ -36,12 +41,15 @@ def authenticate_broker(code, password=None, totp_code=None):
             'api_secret': security_hash
         }
         
-        print(f"Request Data: {data}")  # Debug print
+        logger.debug(f"Request Data: {data}")  # Debug print
         
-        response = requests.post(url, json=data)
+        # Get the shared httpx client
+        client = get_httpx_client()
         
-        print(f"Response Status: {response.status_code}")  # Debug print
-        print(f"Response Content: {response.text}")  # Debug print
+        response = client.post(url, json=data)
+        
+        logger.debug(f"Response Status: {response.status_code}")  # Debug print
+        logger.debug(f"Response Content: {response.text}")  # Debug print
         
         if response.status_code == 200:
             response_data = response.json()
@@ -49,7 +57,7 @@ def authenticate_broker(code, password=None, totp_code=None):
                 return response_data['token'], None
             else:
                 error_msg = response_data.get('emsg', 'Authentication failed without specific error')
-                print(f"Auth Error: {error_msg}")  # Debug print
+                logger.error(f"Auth Error: {error_msg}")  # Debug print
                 return None, error_msg
         else:
             try:
@@ -57,11 +65,11 @@ def authenticate_broker(code, password=None, totp_code=None):
                 error_msg = f"API error: {error_detail.get('emsg', 'Unknown error')}"
             except:
                 error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
-            print(f"Request Error: {error_msg}")  # Debug print
+            logger.error(f"Request Error: {error_msg}")  # Debug print
             return None, error_msg
             
     except Exception as e:
-        print(f"Exception: {str(e)}")  # Debug print
+        logger.debug(f"Exception: {e}")  # Debug print
         return None, f"An exception occurred: {str(e)}"
 
 def authenticate_broker_oauth(code):
@@ -81,7 +89,10 @@ def authenticate_broker_oauth(code):
             'api_secret': security_hash
         }
         
-        response = requests.post(url, json=data)
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
+        response = client.post(url, json=data)
         
         if response.status_code == 200:
             response_data = response.json()

@@ -3,8 +3,20 @@
 {% block content %}
 <!-- Dashboard Header -->
 <div class="mb-12">
-    <h1 class="text-3xl font-bold text-base-content">Trading Dashboard</h1>
-    <p class="text-base-content/60 mt-2">Overview of your trading account and market positions</p>
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-3xl font-bold text-base-content">Trading Dashboard</h1>
+            <p class="text-base-content/60 mt-2">Overview of your trading account and market positions</p>
+        </div>
+        <!-- Master Contract Status Indicator -->
+        <div class="flex items-center gap-3 bg-base-200 rounded-lg px-4 py-3">
+            <span class="text-sm font-medium">Master Contract Status:</span>
+            <div class="flex items-center gap-2">
+                <div id="master-contract-led" class="w-3 h-3 rounded-full bg-gray-400 animate-pulse"></div>
+                <span id="master-contract-status-text" class="text-sm">Checking...</span>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Stats Grid -->
@@ -129,4 +141,110 @@
         </div>
     </div>
 </div>
+
+<script>
+// Master Contract Status LED Controller
+class MasterContractStatus {
+    constructor() {
+        this.led = document.getElementById('master-contract-led');
+        this.statusText = document.getElementById('master-contract-status-text');
+        this.checkInterval = null;
+        this.init();
+    }
+
+    init() {
+        // Check status immediately
+        this.checkStatus();
+        
+        // Set up periodic checking every 5 seconds
+        this.checkInterval = setInterval(() => this.checkStatus(), 5000);
+        
+        // Listen for WebSocket events
+        if (typeof socket !== 'undefined') {
+            socket.on('master_contract_download', (data) => {
+                this.handleWebSocketUpdate(data);
+            });
+        }
+    }
+
+    async checkStatus() {
+        try {
+            const response = await fetch('/api/master-contract/status');
+            const data = await response.json();
+            this.updateDisplay(data);
+        } catch (error) {
+            console.error('Error checking master contract status:', error);
+            this.updateDisplay({ status: 'error', message: 'Failed to check status' });
+        }
+    }
+
+    handleWebSocketUpdate(data) {
+        // WebSocket update received, fetch fresh status
+        this.checkStatus();
+    }
+
+    updateDisplay(data) {
+        const { status, message, total_symbols } = data;
+        
+        // Remove all animation classes first
+        this.led.classList.remove('animate-pulse', 'animate-spin');
+        
+        switch (status) {
+            case 'success':
+                this.led.className = 'w-3 h-3 rounded-full bg-green-500';
+                this.statusText.textContent = total_symbols ? `Ready (${total_symbols} symbols)` : 'Ready';
+                this.statusText.className = 'text-sm text-green-600';
+                // Clear interval once successful
+                if (this.checkInterval) {
+                    clearInterval(this.checkInterval);
+                    this.checkInterval = null;
+                }
+                break;
+                
+            case 'downloading':
+                this.led.className = 'w-3 h-3 rounded-full bg-yellow-500 animate-pulse';
+                this.statusText.textContent = 'Downloading...';
+                this.statusText.className = 'text-sm text-yellow-600';
+                break;
+                
+            case 'error':
+                this.led.className = 'w-3 h-3 rounded-full bg-red-500';
+                this.statusText.textContent = 'Error';
+                this.statusText.className = 'text-sm text-red-600';
+                // Show detailed error in tooltip
+                this.statusText.title = message || 'Download failed';
+                break;
+                
+            case 'pending':
+                this.led.className = 'w-3 h-3 rounded-full bg-gray-400 animate-pulse';
+                this.statusText.textContent = 'Pending';
+                this.statusText.className = 'text-sm text-gray-600';
+                break;
+                
+            default:
+                this.led.className = 'w-3 h-3 rounded-full bg-gray-400';
+                this.statusText.textContent = 'Unknown';
+                this.statusText.className = 'text-sm text-gray-600';
+        }
+    }
+
+    destroy() {
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+        }
+    }
+}
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    window.masterContractStatus = new MasterContractStatus();
+});
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (window.masterContractStatus) {
+        window.masterContractStatus.destroy();
+    }
+});
+</script>
 {% endblock %}

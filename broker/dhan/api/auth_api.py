@@ -1,7 +1,8 @@
-import http.client
-import requests
+import httpx
 import json
 import os
+from utils.httpx_client import get_httpx_client
+from broker.dhan.api.baseurl import get_url, BASE_URL
 
 
 
@@ -11,6 +12,11 @@ def authenticate_broker(code):
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
         REDIRECT_URL = os.getenv('REDIRECT_URL')
         
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
+        # Your authentication implementation here
+        # For now, returning API secret as a placeholder like the original code
         return BROKER_API_SECRET, None
 
         if response.status_code == 200:

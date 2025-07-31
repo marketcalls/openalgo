@@ -2,10 +2,11 @@ import time
 from functools import wraps
 from flask import g, request
 from database.latency_db import OrderLatency, latency_session, init_latency_db
-import logging
+from database.auth_db import get_broker_name
+from utils.logging import get_logger
 from flask_restx import Resource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class LatencyTracker:
     """Helper class to track latencies across different stages of order execution"""
@@ -105,10 +106,20 @@ def track_latency(api_type):
                 total = rtt + overhead
                 
                 # Log the latency data
+                # Handle the case where orderid might be null in the response
+                order_id = response_data.get('orderid')
+                if order_id is None:
+                    order_id = response_data.get('request_id', 'unknown')
+                
+                # Get broker name from auth_db using API key
+                broker_name = None
+                if 'apikey' in request_data:
+                    broker_name = get_broker_name(request_data['apikey'])
+                
                 OrderLatency.log_latency(
-                    order_id=response_data.get('orderid', response_data.get('request_id', 'unknown')),
+                    order_id=order_id,
                     user_id=g.get('user_id'),
-                    broker=request_data.get('broker'),
+                    broker=broker_name,
                     symbol=request_data.get('symbol'),
                     order_type=api_type,
                     latencies={
@@ -132,10 +143,15 @@ def track_latency(api_type):
                 rtt = tracker.get_rtt()
                 overhead = tracker.get_overhead()
                 
+                # Get broker name from auth_db using API key if available
+                broker_name = None
+                if 'request_data' in locals() and 'apikey' in request_data:
+                    broker_name = get_broker_name(request_data['apikey'])
+                
                 OrderLatency.log_latency(
                     order_id='error',
                     user_id=g.get('user_id'),
-                    broker=request_data.get('broker') if 'request_data' in locals() else None,
+                    broker=broker_name,
                     symbol=request_data.get('symbol') if 'request_data' in locals() else None,
                     order_type=api_type,
                     latencies={

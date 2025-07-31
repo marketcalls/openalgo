@@ -1,22 +1,22 @@
 #Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
+#Mapping Fyers Broking Parameters
 
 from database.token_db import get_br_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 def transform_data(data):
     """
     Transforms the OpenAlgo Platform API request structure to the format expected by the Fyers API.
     """
-    # Assuming get_br_symbol, map_order_type, map_action, and map_product_type are defined elsewhere correctly.
     symbol = get_br_symbol(data['symbol'], data['exchange'])
 
-    # Convert fields to correct data types as required by Fyers API
-    quantity = int(data["quantity"])  # Ensuring quantity is an integer
-    price = float(data.get("price", 0))  # Ensuring price is a float
-    trigger_price = float(data.get("trigger_price", 0))  # Ensuring trigger price is a float
-    disclosed_quantity = int(data.get("disclosed_quantity", 0))  # Ensuring disclosed quantity is an integer
+    quantity = int(data["quantity"])
+    price = float(data.get("price", 0))
+    trigger_price = float(data.get("trigger_price", 0))
+    disclosed_quantity = int(data.get("disclosed_quantity", 0))
 
-    # Map to Fyers API field names and structure
     transformed = {
         "symbol": symbol,
         "qty": quantity,
@@ -35,24 +35,41 @@ def transform_data(data):
 
     return transformed
 
-
-
 def transform_modify_order_data(data):
+    """
+    Transforms the order modification data to the format expected by Fyers API.
+    Handles empty strings and None values for price and trigger_price.
+    """
+    order_id = data.get("orderid", "N/A")
+    try:
+        quantity = int(data.get("quantity", 0))
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Could not parse quantity for order modification {order_id}. Defaulting to 0. Error: {e}")
+        quantity = 0
+    
+    try:
+        price = float(data.get("price", 0)) if data.get("price") else 0.0
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Could not parse price for order modification {order_id}. Defaulting to 0.0. Error: {e}")
+        price = 0.0
+    
+    try:
+        trigger_price = float(data.get("trigger_price", 0)) if data.get("trigger_price") else 0.0
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Could not parse trigger_price for order modification {order_id}. Defaulting to 0.0. Error: {e}")
+        trigger_price = 0.0
+    
     return {
-        "id" : data["orderid"],  
-        "qty": int(data["quantity"]),  # Convert quantity to integer
-        "type": map_order_type(data["pricetype"]),  # Assuming map_order_type returns an integer
-        "side": map_action(data["action"]),  # Assuming map_action returns an integer
-        "limitPrice": float(data["price"]),  # Convert price to float
-        "stopPrice": float(data.get("trigger_price", 0))  # Convert trigger_price to float, default is 0
+        "id": data["orderid"],
+        "qty": quantity,
+        "type": map_order_type(data.get("pricetype", "")),
+        "limitPrice": price,
+        "stopPrice": trigger_price
     }
-
-
-
 
 def map_order_type(pricetype):
     """
-    Maps the new pricetype to the existing order type.
+    Maps the OpenAlgo pricetype to the Fyers order type.
     """
     order_type_mapping = {
         "MARKET": 2,
@@ -60,41 +77,55 @@ def map_order_type(pricetype):
         "SL": 4,
         "SL-M": 3
     }
-    return order_type_mapping.get(pricetype, 2)  # Default to MARKET if not found
-
+    order_type = order_type_mapping.get(pricetype)
+    if order_type is None:
+        logger.warning(f"Unknown pricetype '{pricetype}' received. Defaulting to MARKET (2).")
+        return 2  # Default to MARKET
+    return order_type
 
 def map_action(action):
     """
-    Maps the new action to side
+    Maps the OpenAlgo action to the Fyers side.
     """
     action_mapping = {
         "BUY": 1,
         "SELL": -1
     }
-    return action_mapping.get(action) 
-
+    side = action_mapping.get(action)
+    if side is None:
+        logger.warning(f"Unknown action '{action}' received. Cannot map to a side.")
+    return side
 
 def map_product_type(product):
     """
-    Maps the new product type to the existing product type.
+    Maps the OpenAlgo product type to the Fyers product type.
     """
     product_type_mapping = {
         "CNC": "CNC",
         "NRML": "MARGIN",
         "MIS": "INTRADAY",
+        "CO": "CO",
+        "BO": "BO"
     }
-    return product_type_mapping.get(product, "MIS")  # Default to INTRADAY if not found
+    fyers_product = product_type_mapping.get(product)
+    if fyers_product is None:
+        logger.warning(f"Unknown product type '{product}' received. Defaulting to INTRADAY.")
+        return "INTRADAY"  # Default to INTRADAY
+    return fyers_product
 
-def reverse_map_product_type(exchange,product):
+def reverse_map_product_type(product):
     """
-    Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
+    Reverse maps the Fyers product type to the OpenAlgo product type.
     """
-    # Exchange to OpenAlgo product type mapping for 'D'
-    exchange_mapping = {
+    reverse_product_mapping = {
         "CNC": "CNC",
-        "NRML": "NRML",
-        "MIS": "MIS",
+        "MARGIN": "NRML",
+        "INTRADAY": "MIS",
+        "CO": "CO",
+        "BO": "BO"
     }
-   
-    return exchange_mapping.get(product)
+    oa_product = reverse_product_mapping.get(product)
+    if oa_product is None:
+        logger.warning(f"Unknown Fyers product type '{product}' received. Cannot map to OpenAlgo product type.")
+    return oa_product
     

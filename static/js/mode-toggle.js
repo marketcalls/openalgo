@@ -8,46 +8,35 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
 
+    // State management variables
+    let isInitialized = false;
+    let currentMode = false; // false = Live Mode, true = Analyze Mode
+    
     // Set initial badge text to prevent flash of empty content
-    modeBadge.textContent = 'Live Mode';
-    modeBadge.classList.add('badge-success');
+    // Don't set specific mode here - wait for server response
+    modeBadge.textContent = 'Loading...';
+    modeBadge.classList.add('badge-neutral');
 
-    function updateBadge(isAnalyzeMode) {
-        if (isAnalyzeMode) {
-            // Store current theme before switching to garden
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            if (currentTheme !== 'garden') {
-                localStorage.setItem('previousTheme', currentTheme);
-                sessionStorage.setItem('previousTheme', currentTheme);
-            }
-            
-            // Set garden theme when switching to analyze mode
-            window.themeManager.setTheme('garden');
-            
-            modeBadge.textContent = 'Analyze Mode';
-            modeBadge.classList.remove('badge-success');
-            modeBadge.classList.add('badge-warning');
-        } else {
-            modeBadge.textContent = 'Live Mode';
-            modeBadge.classList.remove('badge-warning');
-            modeBadge.classList.add('badge-success');
-            
-            // Only restore theme if we're switching from analyze mode
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            if (currentTheme === 'garden') {
-                window.themeManager.restorePreviousTheme();
-            }
+    function updateBadge(isAnalyzeMode, skipThemeChange = false) {
+        // Prevent unnecessary updates if mode hasn't actually changed
+        if (isInitialized && currentMode === isAnalyzeMode) {
+            return;
         }
-    }
-
-    // Initialize mode from server
-    fetch('/settings/analyze-mode')
-        .then(response => response.json())
-        .then(data => {
-            modeToggle.checked = data.analyze_mode;
+        
+        currentMode = isAnalyzeMode;
+        
+        // Update toggle state
+        modeToggle.checked = isAnalyzeMode;
+        
+        // Clear all badge classes first
+        modeBadge.classList.remove('badge-success', 'badge-warning', 'badge-neutral');
+        
+        if (isAnalyzeMode) {
+            modeBadge.textContent = 'Analyze Mode';
+            modeBadge.classList.add('badge-warning');
             
-            if (data.analyze_mode) {
-                // If in analyze mode, ensure we store the current theme before switching
+            if (!skipThemeChange && window.themeManager) {
+                // Store current theme before switching to garden
                 const currentTheme = document.documentElement.getAttribute('data-theme');
                 if (currentTheme !== 'garden') {
                     localStorage.setItem('previousTheme', currentTheme);
@@ -55,63 +44,102 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 window.themeManager.setTheme('garden');
             }
-            updateBadge(data.analyze_mode);
-        })
-        .catch(error => {
-            console.error('[Mode] Error fetching analyze mode:', error);
-            // Ensure badge shows Live Mode if fetch fails
-            updateBadge(false);
-        });
+        } else {
+            modeBadge.textContent = 'Live Mode';
+            modeBadge.classList.add('badge-success');
+            
+            if (!skipThemeChange && window.themeManager) {
+                // Only restore theme if we're switching from analyze mode
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                if (currentTheme === 'garden') {
+                    window.themeManager.restorePreviousTheme();
+                }
+            }
+        }
+        
+        // Update session storage
+        sessionStorage.setItem('analyzeMode', isAnalyzeMode.toString());
+        localStorage.setItem('analyzeMode', isAnalyzeMode.toString()); // For cross-tab sync
+    }
+
+    // Initialize mode from server (authoritative source)
+    function initializeFromServer() {
+        fetch('/settings/analyze-mode')
+            .then(response => response.json())
+            .then(data => {
+                const serverMode = Boolean(data.analyze_mode);
+                updateBadge(serverMode);
+                isInitialized = true;
+                console.log('[Mode] Initialized from server:', serverMode ? 'Analyze Mode' : 'Live Mode');
+            })
+            .catch(error => {
+                console.error('[Mode] Error fetching analyze mode:', error);
+                // Fallback to Live Mode if server fetch fails
+                updateBadge(false);
+                isInitialized = true;
+            });
+    }
+    
+    // Initialize immediately
+    initializeFromServer();
 
     // Handle mode toggle
     modeToggle.addEventListener('change', function(e) {
-        const mode = e.target.checked ? 1 : 0;
+        // Prevent multiple rapid clicks
+        if (!isInitialized) {
+            e.target.checked = currentMode;
+            return;
+        }
         
-        fetch(`/settings/analyze-mode/${mode}`, {
+        const newMode = e.target.checked ? 1 : 0;
+        const newModeBoolean = Boolean(newMode);
+        
+        // Optimistically update UI
+        updateBadge(newModeBoolean);
+        
+        fetch(`/settings/analyze-mode/${newMode}`, {
             method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                updateBadge(data.analyze_mode);
+                // Ensure UI matches server response
+                updateBadge(Boolean(data.analyze_mode));
                 showToast(data.message, 'success');
-                
-                // Store current state in sessionStorage before reload
-                sessionStorage.setItem('analyzeMode', data.analyze_mode);
                 
                 // Reload page to ensure all components update
                 setTimeout(() => window.location.reload(), 1000);
+            } else {
+                throw new Error(data.error || 'Unknown error');
             }
         })
         .catch(error => {
             console.error('[Mode] Error updating mode:', error);
             showToast('Failed to update mode', 'error');
-            // Reset toggle state
-            e.target.checked = !e.target.checked;
+            
+            // Revert to previous state on error
+            updateBadge(!newModeBoolean);
         });
     });
 
-    // Handle page visibility changes
+    // Handle page visibility changes - re-sync with server when page becomes visible
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) {
-            // When page becomes visible, check and restore theme state
-            const analyzeMode = sessionStorage.getItem('analyzeMode') === 'true';
-            if (analyzeMode) {
-                const currentTheme = document.documentElement.getAttribute('data-theme');
-                if (currentTheme !== 'garden') {
-                    window.themeManager.setTheme('garden');
-                }
-            }
-            updateBadge(analyzeMode);
+        if (!document.hidden && isInitialized) {
+            // Re-sync with server when page becomes visible
+            console.log('[Mode] Page visible, re-syncing with server');
+            initializeFromServer();
         }
     });
 
-    // Handle storage events for cross-tab consistency
+    // Handle storage events for cross-tab consistency  
     window.addEventListener('storage', function(e) {
-        if (e.key === 'analyzeMode') {
+        if (e.key === 'analyzeMode' && isInitialized) {
             const isAnalyzeMode = e.newValue === 'true';
-            modeToggle.checked = isAnalyzeMode;
-            updateBadge(isAnalyzeMode);
+            console.log('[Mode] Storage event received, updating to:', isAnalyzeMode ? 'Analyze Mode' : 'Live Mode');
+            updateBadge(isAnalyzeMode, true); // Skip theme change for storage events
         }
     });
 });

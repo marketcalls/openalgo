@@ -3,11 +3,15 @@ from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
 from utils.auth_utils import handle_auth_success, handle_auth_failure
+from utils.logging import get_logger
 import http.client
 import json
 import jwt
 import base64
 import hashlib
+
+# Initialize logger
+logger = get_logger(__name__)
 
 BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
@@ -23,10 +27,20 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
-    print(f'Broker is {broker}')
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
+    logger.info(f'Broker callback initiated for: {broker}')
+    logger.info(f'Session contents: {dict(session)}')
+    logger.info(f'Session has user key: {"user" in session}')
+    
+    # Special handling for Compositedge - it comes from external OAuth and might lose session
+    if broker == 'compositedge' and 'user' not in session:
+        # For Compositedge OAuth callback, we'll handle authentication differently
+        # The session will be established after successful auth token validation
+        logger.info("Compositedge callback without session - will establish session after auth")
+    else:
+        # Check if user is not in session first for other brokers
+        if 'user' not in session:
+            logger.warning(f'User not in session for {broker} callback, redirecting to login')
+            return redirect(url_for('auth.login'))
 
     if session.get('logged_in'):
         # Store broker in session and g
@@ -39,6 +53,9 @@ def broker_callback(broker,para=None):
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
     
+    # Initialize feed_token to None by default
+    feed_token = None
+    
     if broker == 'fivepaisa':
         if request.method == 'GET':
             return render_template('5paisa.html')
@@ -50,7 +67,7 @@ def broker_callback(broker,para=None):
 
             auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = '5paisa.html'
-
+        
     elif broker == 'angel':
         if request.method == 'GET':
             return render_template('angel.html')
@@ -59,7 +76,9 @@ def broker_callback(broker,para=None):
             clientcode = request.form.get('clientid')
             broker_pin = request.form.get('pin')
             totp_code = request.form.get('totp')
-            auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
+            #to store user_id in the DB
+            user_id = clientcode
+            auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
     
     elif broker == 'aliceblue':
@@ -67,45 +86,225 @@ def broker_callback(broker,para=None):
             return render_template('aliceblue.html')
         
         elif request.method == 'POST':
-            print('Aliceblue Login Flow')
+            logger.info('Aliceblue Login Flow initiated')
             userid = request.form.get('userid')
-            conn = http.client.HTTPSConnection("ant.aliceblueonline.com")
-            payload = json.dumps({
+            # Step 1: Get encryption key
+            # Use the shared httpx client with connection pooling
+            from utils.httpx_client import get_httpx_client
+            client = get_httpx_client()
+            
+            # AliceBlue API expects only userId in the encryption key request
+            # Do not include API key in this initial request
+            payload = {
                 "userId": userid
-            })
+            }
             headers = {
                 'Content-Type': 'application/json'
             }
             try:
-                conn.request("POST", "/rest/AliceBlueAPIService/api/customer/getAPIEncpkey", payload, headers)
-                res = conn.getresponse()
-                data = res.read().decode("utf-8")
-                data_dict = json.loads(data)
-                print(data_dict)
-                auth_token, error_message = auth_function(userid, data_dict['encKey'])
-                forward_url = 'aliceblue.html'
-            
+                # Get encryption key
+                url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/customer/getAPIEncpkey"
+                response = client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data_dict = response.json()
+                logger.debug(f'Aliceblue response data: {data_dict}')
+                
+                # Check if we successfully got the encryption key
+                if data_dict.get('stat') == 'Ok' and data_dict.get('encKey'):
+                    enc_key = data_dict['encKey']
+                    # Step 2: Authenticate with encryption key
+                    auth_token, error_message = auth_function(userid, enc_key)
+                    
+                    if auth_token:
+                        return handle_auth_success(auth_token, session['user'], broker)
+                    else:
+                        return handle_auth_failure(error_message, forward_url='aliceblue.html')
+                else:
+                    # Failed to get encryption key
+                    error_msg = data_dict.get('emsg', 'Failed to get encryption key')
+                    return handle_auth_failure(f"Failed to get encryption key: {error_msg}", forward_url='aliceblue.html')
             except Exception as e:
-                return jsonify({"error": str(e)}), 500
+                return jsonify({"error": f"Authentication error: {str(e)}"}), 500     
+                
+    elif broker=='fivepaisaxts':
+        code = 'fivepaisaxts'
+        logger.debug(f'FivePaisaXTS broker - code: {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+
+    elif broker=='compositedge':
+        # For Compositedge, check if we need to handle a special case where session might be lost
+        if 'user' not in session:
+            # Check if this is coming from a valid OAuth callback
+            # Log the issue but try to continue if we have valid data
+            logger.warning("Session 'user' key missing in Compositedge callback, attempting to recover")
+            
+        try:
+            # Get the raw data from the request
+            if request.method == 'POST':
+                # Handle form data
+                if request.headers.get('Content-Type') == 'application/x-www-form-urlencoded':
+                    raw_data = request.get_data().decode('utf-8')
+                    
+                    
+                    # Extract session data from form
+                    if raw_data.startswith('session='):
+                        from urllib.parse import unquote
+                        session_data = unquote(raw_data[8:])  # Remove 'session=' and URL decode
+                        
+                    else:
+                        session_data = raw_data
+                else:
+                    session_data = request.get_data().decode('utf-8')
+                
+            else:
+                session_data = request.args.get('session')
+                
+                
+            if not session_data:
+                
+                return jsonify({"error": "No session data received"}), 400
+
+            # Parse the session data
+            try:
+                             
+                # Try to clean the data if it's malformed
+                if isinstance(session_data, str):
+                    # Remove any leading/trailing whitespace
+                    session_data = session_data.strip()
+                    
+                    session_json = json.loads(session_data)
+                    
+                    # Handle double-encoded JSON
+                    if isinstance(session_json, str):
+                        session_json = json.loads(session_json)
+                        
+                else:
+                    session_json = session_data
+                    
+                    
+            except json.JSONDecodeError as e:
+                
+                return jsonify({
+                    "error": f"Invalid JSON format: {str(e)}", 
+                    "raw_data": session_data
+                }), 400
+
+            # Extract access token
+            access_token = session_json.get('accessToken')
+            #print(f'Access token is {access_token}')
+            
+            if not access_token:
+                
+                return jsonify({"error": "No access token found"}), 400
+                
+            # Fetch auth token, feed token and user ID
+            auth_token, feed_token, user_id, error_message = auth_function(access_token)
+
+            #print(f'Auth token is {auth_token}')
+            #print(f'Feed token is {feed_token}')
+            #print(f'User ID is {user_id}')
+            forward_url = 'broker.html'
+
+        except Exception as e:
+            #print(f"Error in compositedge callback: {str(e)}")
+            return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
     elif broker=='fyers':
         code = request.args.get('auth_code')
-        print(f'The code is {code}')
+        logger.debug(f'Fyers broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='tradejini':
+        if request.method == 'GET':
+            return render_template('tradejini.html')
+        
+        elif request.method == 'POST':
+            password = request.form.get('password')
+            twofa = request.form.get('twofa')
+            twofatype = request.form.get('twofatype')
+            
+            # Get auth token using individual token service
+            auth_token, error_message = auth_function(password=password, twofa=twofa, twofa_type=twofatype)
+            
+            if auth_token:
+                return handle_auth_success(auth_token, session['user'], broker)
+            else:
+                return render_template('tradejini.html', error=error_message)
+        
+        forward_url = 'broker.html'
+       
     elif broker=='icici':
         full_url = request.full_path
-        print(f'Full URL: {full_url}') 
+        logger.debug(f'ICICI broker - Full URL: {full_url}') 
         code = request.args.get('apisession')
-        print(f'The code is {code}')
+        logger.debug(f'ICICI broker - The code is {code}')
         auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker=='ibulls':
+        code = 'ibulls'
+        logger.debug(f'Indiabulls broker - code: {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker=='iifl':
+        code = 'iifl'
+        logger.debug(f'IIFL broker - The code is {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker=='dhan':
         code = 'dhan'
-        print(f'The code is {code}')
+        logger.debug(f'Dhan broker - The code is {code}')
         auth_token, error_message = auth_function(code)
+        
+        # Validate authentication by testing funds API before proceeding
+        if auth_token:
+            # Import the funds function to test authentication
+            from broker.dhan.api.funds import test_auth_token
+            is_valid, validation_error = test_auth_token(auth_token)
+            
+            if not is_valid:
+                logger.error(f"Dhan authentication validation failed: {validation_error}")
+                return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
+            
+            logger.info("Dhan authentication validation successful")
+        
+        forward_url = 'broker.html'
+    elif broker=='indmoney':
+        code = 'indmoney'
+        logger.debug(f'IndMoney broker - The code is {code}')
+        auth_token, error_message = auth_function(code)
+        
+       
+        forward_url = 'broker.html'
+
+    elif broker=='dhan_sandbox':
+        code = 'dhan_sandbox'
+        logger.debug(f'Dhan Sandbox broker - The code is {code}')
+        auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+        
+
+    elif broker == 'groww':
+        code = 'groww'
+        logger.debug(f'Groww broker - The code is {code}')
+        auth_token, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
+    elif broker == 'wisdom':
+        code = 'wisdom'
+        logger.debug(f'Wisdom broker - The code is {code}')
+        auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
     elif broker == 'zebu':  
@@ -147,12 +346,12 @@ def broker_callback(broker,para=None):
     elif broker == 'flattrade':
         code = request.args.get('code')
         client = request.args.get('client')  # Flattrade returns client ID as well
-        print(f'The code is {code} for client {client}')
+        logger.debug(f'Flattrade broker - The code is {code} for client {client}')
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = 'broker.html'
 
     elif broker=='kotak':
-        print(f"The Broker is {broker}")
+        logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
         
@@ -167,21 +366,72 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
             forward_url = 'kotak.html'
 
+    elif broker == 'paytm':
+         request_token = request.args.get('requestToken')
+         logger.debug(f'Paytm broker - The request token is {request_token}')
+         auth_token, error_message = auth_function(request_token)
+
+    elif broker == 'pocketful':
+        # Handle the OAuth2 authorization code from the callback
+        auth_code = request.args.get('code')
+        state = request.args.get('state')
+        error = request.args.get('error')
+        error_description = request.args.get('error_description')
+        
+        # Check if there was an error in the OAuth process
+        if error:
+            error_msg = f"OAuth error: {error}. {error_description if error_description else ''}"
+            logger.error(error_msg)
+            return handle_auth_failure(error_msg, forward_url='broker.html')
+        
+        # Check if authorization code was provided
+        if not auth_code:
+            error_msg = "Authorization code not provided"
+            logger.error(error_msg)
+            return handle_auth_failure(error_msg, forward_url='broker.html')
+            
+        logger.debug(f'Pocketful broker - Received authorization code: {auth_code}')
+        # Exchange auth code for access token and fetch client_id
+        auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
+        forward_url = 'broker.html'
+        
+
     else:
         code = request.args.get('code') or request.args.get('request_token')
-        print(f'The code is {code}')
+        logger.debug(f'Generic broker - The code is {code}')
         auth_token, error_message = auth_function(code)
         forward_url = 'broker.html'
     
     if auth_token:
         # Store broker in session
         session['broker'] = broker
-        print(f'Connected broker: {broker}')
+        logger.info(f'Successfully connected broker: {broker}')
         if broker == 'zerodha':
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
             auth_token = f'{auth_token}'
-        return handle_auth_success(auth_token, session['user'], broker)
+        
+        # For compositedge and pocketful, we have the user_id from authenticate_broker
+        if broker =='angel' or broker == 'compositedge' or broker == 'pocketful':
+            # For Compositedge, handle missing session user
+            if broker == 'compositedge' and 'user' not in session:
+                # Get the admin user from the database
+                from database.user_db import find_user_by_username
+                admin_user = find_user_by_username()
+                if admin_user:
+                    # Use the admin user's username
+                    username = admin_user.username
+                    session['user'] = username
+                    logger.info(f"Compositedge callback: Set session user to {username}")
+                else:
+                    logger.error("No admin user found in database for Compositedge callback")
+                    return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
+            
+            # Pass the feed token and user_id to handle_auth_success
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
+        else:
+            # Pass just the feed token to handle_auth_success (other brokers don't have user_id)
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     

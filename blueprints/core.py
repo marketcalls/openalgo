@@ -3,12 +3,12 @@ from database.user_db import add_user, find_user_by_username
 from utils.session import invalidate_session_if_invalid
 from blueprints.apikey import generate_api_key
 from database.auth_db import upsert_api_key
-import logging
+from utils.logging import get_logger
 import qrcode
 import io
 import base64
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 core_bp = Blueprint('core_bp', __name__)
 
@@ -60,13 +60,15 @@ def setup():
             qr.make_image(fill_color="black", back_color="white").save(img_buffer, format='PNG')
             qr_code = base64.b64encode(img_buffer.getvalue()).decode()
             
-            # Store TOTP setup in session temporarily
+            # Store TOTP setup in session temporarily for later access if needed
             session['totp_setup'] = True
             session['username'] = username
+            session['qr_code'] = qr_code
+            session['totp_secret'] = user.totp_secret
             
-            return render_template('totp_setup.html', 
-                                 qr_code=qr_code,
-                                 secret=user.totp_secret)
+            # Flash message with SMTP setup info and redirect to login
+            flash('Account created successfully! Please configure your SMTP credentials in Profile settings for password recovery.', 'success')
+            return redirect(url_for('auth.login'))
         else:
             # If the user already exists or an error occurred, show an error message
             logger.error(f"Failed to create admin user {username}")

@@ -9,6 +9,9 @@ from sqlalchemy.sql import func
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your SQLite path
@@ -33,13 +36,13 @@ class OrderLog(Base):
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
-    print("Initializing API Log DB")
+    logger.info("Initializing API Log DB")
     Base.metadata.create_all(bind=engine)
 
 
 
 # Executor for asynchronous tasks
-executor = ThreadPoolExecutor(2)
+executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency
 
 def async_log_order(api_type,request_data, response_data):
     try:
@@ -55,6 +58,6 @@ def async_log_order(api_type,request_data, response_data):
         db_session.add(order_log)
         db_session.commit()
     except Exception as e:
-        print(f"Error saving order log: {e}")
+        logger.error(f"Error saving order log: {e}")
     finally:
         db_session.remove()

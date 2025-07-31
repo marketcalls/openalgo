@@ -1,4 +1,3 @@
-import http.client
 import json
 import os
 from datetime import datetime, timedelta
@@ -6,12 +5,13 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from broker.dhan.mapping.transform_data import map_exchange_type
 import urllib.parse
-import logging
 import jwt
-import requests
+import httpx
+from utils.httpx_client import get_httpx_client
+from broker.dhan.api.baseurl import get_url
+from utils.logging import get_logger
 
-# Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=''):
@@ -21,7 +21,9 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     if not client_id:
         raise Exception("Could not extract client ID from auth token")
     
-    conn = http.client.HTTPSConnection("api.dhan.co")
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+    
     headers = {
         'access-token': AUTH_TOKEN,
         'client-id': client_id,
@@ -29,14 +31,22 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
         'Accept': 'application/json',
     }
     
-    logger.info(f"Making request to {endpoint}")
+    url = get_url(endpoint)
+    
+    logger.info(f"Making request to {url}")
     logger.info(f"Headers: {headers}")
     logger.info(f"Payload: {payload}")
     
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    response = json.loads(data.decode("utf-8"))
+    if method == "GET":
+        res = client.get(url, headers=headers)
+    elif method == "POST":
+        res = client.post(url, headers=headers, content=payload)
+    else:
+        res = client.request(method, url, headers=headers, content=payload)
+    
+    # Add status attribute for compatibility with existing codebase
+    res.status = res.status_code
+    response = json.loads(res.text)
     
     logger.info(f"Response status: {res.status}")
     logger.info(f"Response: {json.dumps(response, indent=2)}")
@@ -83,11 +93,15 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        
+        logger.info(f"exchange: {exchange}")
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
             exchange_segment = "BSE_EQ"
+        elif exchange == "NSE_INDEX":
+            exchange_segment = "IDX_I"
+        elif exchange == "BSE_INDEX":
+            exchange_segment = "IDX_I"
         else:
             raise ValueError(f"Unsupported exchange: {exchange}")
             
@@ -132,7 +146,9 @@ class BrokerData:
             'BFO': 'BSE_FNO',     # BSE F&O
             'MCX': 'MCX_COMM',    # MCX Commodity
             'CDS': 'NSE_CURRENCY',  # NSE Currency
-            'BCD': 'BSE_CURRENCY'   # BSE Currency
+            'BCD': 'BSE_CURRENCY',   # BSE Currency
+            'NSE_INDEX': 'IDX_I',  # NSE Index
+            'BSE_INDEX': 'IDX_I'   # BSE Index
         }
         return exchange_map.get(exchange)
 
@@ -140,25 +156,30 @@ class BrokerData:
         """Get instrument type based on exchange and symbol"""
         # For cash market (NSE, BSE)
         if exchange in ['NSE', 'BSE']:
-            # For indices like NIFTY, BANKNIFTY etc.
-            if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
-                return 'INDEX'
-            # For regular equity
             return 'EQUITY'
+        
+        elif exchange in ['NSE_INDEX', 'BSE_INDEX']:
+            return 'INDEX'
+
+
             
         # For F&O market (NFO, BFO)
         elif exchange in ['NFO', 'BFO']:
             # First check for options (CE/PE at the end)
             if symbol.endswith('CE') or symbol.endswith('PE'):
                 # For index options like NIFTY23JAN20200CE
-                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                if any(index in symbol for index in [
+                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
+                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
                     return 'OPTIDX'
                 # For stock options
                 return 'OPTSTK'
             # Then check for futures
             else:
                 # For index futures like NIFTY23JAN
-                if any(index in symbol for index in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX']):
+                if any(index in symbol for index in [
+                    'NIFTY', 'NIFTYNXT50', 'FINNIFTY', 'BANKNIFTY', 
+                    'MIDCPNIFTY', 'INDIAVIX', 'SENSEX', 'BANKEX', 'SENSEX50']):
                     return 'FUTIDX'
                 # For stock futures
                 return 'FUTSTK'
@@ -240,7 +261,7 @@ class BrokerData:
             # If both dates are weekends, return empty DataFrame
             if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
                 logger.info("Both start and end dates are non-trading days")
-                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
 
             # If start and end dates are same, increase end date by one day
             if start_date == end_date:
@@ -252,12 +273,12 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            
+            logger.info(f"exchange: {exchange}")
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-
+            logger.info(f"exchange segment: {exchange_segment}")
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []
@@ -278,7 +299,8 @@ class BrokerData:
                     "exchangeSegment": exchange_segment,
                     "instrument": instrument_type,
                     "fromDate": utc_start_date,
-                    "toDate": utc_end_date
+                    "toDate": utc_end_date,
+                    "oi": True
                 }
                 
                 # Add expiryCode only for EQUITY
@@ -297,6 +319,7 @@ class BrokerData:
                 lows = response.get('low', [])
                 closes = response.get('close', [])
                 volumes = response.get('volume', [])
+                openinterest = response.get('open_interest', [])
 
                 for i in range(len(timestamps)):
                     # Convert UTC timestamp to IST
@@ -307,7 +330,8 @@ class BrokerData:
                         'high': float(highs[i]) if highs[i] else 0,
                         'low': float(lows[i]) if lows[i] else 0,
                         'close': float(closes[i]) if closes[i] else 0,
-                        'volume': int(float(volumes[i])) if volumes[i] else 0
+                        'volume': int(float(volumes[i])) if volumes[i] else 0,
+                        'oi': int(float(openinterest[i])) if openinterest[i] else 0
                     })
             else:
                 # For intraday data
@@ -324,7 +348,8 @@ class BrokerData:
                         "instrument": instrument_type,
                         "interval": self.timeframe_map[interval],
                         "fromDate": from_time,
-                        "toDate": to_time
+                        "toDate": to_time,
+                        "oi": True
                     }
                     
                     logger.info(f"Making intraday history request to {endpoint}")
@@ -340,6 +365,7 @@ class BrokerData:
                         lows = response.get('low', [])
                         closes = response.get('close', [])
                         volumes = response.get('volume', [])
+                        openinterest = response.get('open_interest', [])
 
                         for i in range(len(timestamps)):
                             # Convert UTC timestamp to IST
@@ -350,7 +376,8 @@ class BrokerData:
                                 'high': float(highs[i]) if highs[i] else 0,
                                 'low': float(lows[i]) if lows[i] else 0,
                                 'close': float(closes[i]) if closes[i] else 0,
-                                'volume': int(float(volumes[i])) if volumes[i] else 0
+                                'volume': int(float(volumes[i])) if volumes[i] else 0,
+                                'oi': int(float(openinterest[i])) if openinterest[i] else 0
                             })
                     except Exception as e:
                         logger.error(f"Error fetching intraday data: {str(e)}")
@@ -373,7 +400,8 @@ class BrokerData:
                             "instrument": instrument_type,
                             "interval": self.timeframe_map[interval],
                             "fromDate": from_time,
-                            "toDate": to_time
+                            "toDate": to_time,
+                            "oi": True
                         }
                         
                         logger.info(f"Making intraday history request to {endpoint}")
@@ -389,7 +417,7 @@ class BrokerData:
                             lows = response.get('low', [])
                             closes = response.get('close', [])
                             volumes = response.get('volume', [])
-
+                            openinterest = response.get('open_interest', [])
                             for i in range(len(timestamps)):
                                 # Convert UTC timestamp to IST
                                 ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
@@ -399,7 +427,8 @@ class BrokerData:
                                     'high': float(highs[i]) if highs[i] else 0,
                                     'low': float(lows[i]) if lows[i] else 0,
                                     'close': float(closes[i]) if closes[i] else 0,
-                                    'volume': int(float(volumes[i])) if volumes[i] else 0
+                                    'volume': int(float(volumes[i])) if volumes[i] else 0,
+                                    'oi': int(float(openinterest[i])) if openinterest[i] else 0
                                 })
                         except Exception as e:
                             logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}")
@@ -420,7 +449,8 @@ class BrokerData:
                                 'high': float(quotes.get('high', 0)),
                                 'low': float(quotes.get('low', 0)),
                                 'close': float(quotes.get('ltp', 0)),  # Use LTP as current close
-                                'volume': int(quotes.get('volume', 0))
+                                'volume': int(quotes.get('volume', 0)),
+                                'oi': int(quotes.get('open_interest', 0))
                             }
                             all_candles.append(today_candle)
                     except Exception as e:
@@ -429,7 +459,7 @@ class BrokerData:
             # Create DataFrame from all candles
             df = pd.DataFrame(all_candles)
             if df.empty:
-                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume','oi'])
             else:
                 # Sort by timestamp and remove duplicates
                 df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
@@ -451,17 +481,18 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
+                logger.info(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
                 
                 if not quote_data:
@@ -483,6 +514,7 @@ class BrokerData:
                     'high': float(quote_data.get('ohlc', {}).get('high', 0)),
                     'low': float(quote_data.get('ohlc', {}).get('low', 0)),
                     'volume': int(quote_data.get('volume', 0)),
+                    'oi': int(quote_data.get('oi', 0)),
                     'bid': 0,  # Will be updated from depth
                     'ask': 0,  # Will be updated from depth
                     'prev_close': float(quote_data.get('ohlc', {}).get('close', 0))
@@ -532,13 +564,13 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
-            exchange_type = map_exchange_type(exchange)
+            exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
             logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
             logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
-                exchange_type: [int(security_id)]
+                exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
             
             try:

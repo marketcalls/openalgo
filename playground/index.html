@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAlgo Playground</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-900 text-white font-sans">
+    <div id="app" class="h-screen flex flex-col">
+        <!-- Header & Settings -->
+        <div class="navbar bg-base-300 p-2 shadow-lg">
+            <div class="flex-1">
+                <h1 class="text-xl font-bold">OpenAlgo Playground</h1>
+            </div>
+            <div class="flex-none gap-2">
+                 <!-- Info Menu -->
+                 <details class="dropdown dropdown-end">
+                    <summary class="m-1 btn btn-info">Info</summary>
+                    <div class="p-4 shadow menu dropdown-content z-[1] bg-base-200 rounded-box w-80 text-xs">
+                        <h4 class="font-bold text-lg mb-2">Important Information</h4>
+                        <div class="p-2 bg-base-300 rounded-md">
+                            <p class="font-bold text-red-400">⚠️ SECURITY WARNING:</p>
+                            <p class="text-red-300">This playground is for DEVELOPMENT ONLY. Never use in production servers.</p>
+                            <p class="mt-2 font-bold">CORS Configuration:</p>
+                            <p>For this page to work, you must set <code class="bg-gray-900 px-1 rounded">CORS_ENABLED = 'FALSE'</code> in your project's <code>.env</code> file.</p>
+                            <p class="text-yellow-300 mt-2">⚠️ This setting disables CORS protection and should NEVER be used on production servers.</p>
+                        </div>
+                        <div class="p-2 bg-base-300 rounded-md mt-2">
+                            <p class="font-bold">Operating Modes:</p>
+                            <p><strong>Live Mode (Toggle ON):</strong> Uses WebSockets for real-time data on the watchlist and in the panels.</p>
+                            <p class="mt-1"><strong>Manual Mode (Toggle OFF):</strong> Uses REST API calls to fetch data on demand when you open a panel or click "Manual Refresh".</p>
+                        </div>
+                         <p class="mt-2 text-gray-400">Unavailable data fields will be marked with a hyphen (-).</p>
+                    </div>
+                </details>
+
+                 <!-- Settings Menu -->
+                 <details class="dropdown dropdown-end">
+                    <summary class="m-1 btn">Settings</summary>
+                    <div class="p-4 shadow menu dropdown-content z-[1] bg-base-200 rounded-box w-80">
+                         <div class="form-control">
+                            <label class="label"><span class="label-text">Host Server</span></label>
+                            <input type="text" id="host-server" placeholder="http://127.0.0.1:5000" class="input input-bordered input-sm">
+                        </div>
+                        <div class="form-control mt-2">
+                            <label class="label"><span class="label-text">WebSocket Server</span></label>
+                            <input type="text" id="ws-server" placeholder="ws://127.0.0.1:8765" class="input input-bordered input-sm">
+                        </div>
+                        <div class="form-control mt-2">
+                            <label class="label"><span class="label-text">API Key</span></label>
+                            <input type="text" id="api-key" placeholder="your_api_key" class="input input-bordered input-sm">
+                        </div>
+                        <button id="connect-btn" class="btn btn-primary btn-sm mt-4">Connect</button>
+                        <div class="mt-2 text-sm space-y-1">
+                            <div>WebSocket Status: <span id="ws-status" class="font-bold text-error">Disconnected</span></div>
+                            <div id="ws-diagnostics" class="text-xs text-gray-400 hidden">
+                                <div>Connected: <span id="ws-connect-time">-</span></div>
+                                <div>Messages: Sent <span id="ws-sent-count">0</span> | Recv <span id="ws-recv-count">0</span></div>
+                                <div>Last Ping: <span id="ws-last-ping">-</span></div>
+                                <div>Latency: <span id="ws-latency">-</span>ms</div>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-grow grid grid-cols-1 md:grid-cols-3 gap-4 p-4 overflow-hidden">
+            <!-- Left Panel -->
+            <div class="md:col-span-1 flex flex-col h-full overflow-hidden">
+                <div class="flex-shrink-0">
+                    <h2 class="text-xl font-bold mb-2">Watchlist</h2>
+                    <div class="form-control mb-2"><div class="join"><input type="text" id="search-symbol" placeholder="Search e.g., TATA" class="input input-bordered join-item w-full"><button id="search-btn" class="btn btn-accent join-item">Search</button></div></div>
+                    <div id="search-results-container" class="relative"></div>
+                    <div class="flex justify-between items-center my-2 p-2 bg-base-200 rounded-lg">
+                         <div class="form-control"><label class="cursor-pointer label"><span class="label-text mr-2">Live Updates</span> <input type="checkbox" id="live-mode-toggle" class="toggle toggle-success"></label></div>
+                        <button id="refresh-watchlist-btn" class="btn btn-sm">Manual Refresh</button>
+                    </div>
+                </div>
+                <div id="watchlist" class="flex-grow overflow-y-auto space-y-2 pr-2"></div>
+            </div>
+
+            <!-- Right Panel (WebSocket Inspector & Logs) -->
+            <div class="md:col-span-2 flex flex-col h-full overflow-hidden bg-base-200 rounded-lg p-4">
+                <!-- WebSocket Inspector Tabs -->
+                <div class="flex-shrink-0 mb-4">
+                    <div class="tabs tabs-bordered">
+                        <a class="tab tab-active" id="logs-tab">Logs</a>
+                        <a class="tab" id="inspector-tab">WebSocket Inspector</a>
+                    </div>
+                </div>
+                <!-- Logs Panel -->
+                <div id="logs-panel" class="flex-1 flex flex-col overflow-hidden">
+                    <div class="flex-shrink-0 flex justify-between items-center mb-2">
+                        <h2 class="text-xl font-bold">Logs</h2>
+                    <div class="flex items-center gap-2">
+                        <!-- Log Filter Dropdown -->
+                        <div class="dropdown dropdown-end">
+                            <label tabindex="0" class="btn btn-sm btn-outline btn-info">Filter Logs</label>
+                            <div tabindex="0" class="dropdown-content z-[1] menu p-4 shadow bg-base-300 rounded-box w-80 space-y-2">
+                                <h4 class="font-bold text-center">Log Filters</h4>
+                                <select id="log-filter-type" class="select select-bordered select-sm"><option value="">All Types</option><option value="api">API</option><option value="ws">WebSocket</option></select>
+                                <div id="log-filter-ws-container" class="hidden space-y-2">
+                                    <select id="log-filter-ws-direction" class="select select-bordered select-sm"><option value="">All Directions</option><option value="send">Send</option><option value="recv">Recv</option></select>
+                                    <div id="log-filter-ws-recv-container" class="hidden space-y-2">
+                                        <select id="log-filter-ws-recv-type" class="select select-bordered select-sm"><option value="">All Message Types</option></select>
+                                        <div id="log-filter-ws-market-data-container" class="hidden space-y-2">
+                                            <select id="log-filter-ws-market-data-mode" class="select select-bordered select-sm"><option value="">All Modes</option></select>
+                                            <select id="log-filter-ws-market-data-exchange" class="select select-bordered select-sm"><option value="">All Exchanges</option></select>
+                                            <select id="log-filter-ws-market-data-symbol" class="select select-bordered select-sm"><option value="">All Symbols</option></select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex gap-2 mt-2">
+                                    <button id="log-filter-apply-btn" class="btn btn-sm btn-success flex-1">Apply</button>
+                                    <button id="log-filter-reset-btn" class="btn btn-sm btn-ghost flex-1">Reset</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button id="clear-logs-btn" class="btn btn-error btn-xs">Clear</button>
+                    </div>
+                    </div>
+                    <div id="logs" class="flex-grow font-mono text-xs overflow-y-auto bg-gray-900 rounded p-2"></div>
+                </div>
+                
+                <!-- WebSocket Inspector Panel -->
+                <div id="inspector-panel" class="flex-1 flex flex-col overflow-hidden hidden">
+                    <div class="flex-shrink-0 mb-2">
+                        <h2 class="text-xl font-bold">WebSocket Inspector</h2>
+                        <div class="flex gap-2 mt-2">
+                            <button id="clear-inspector-btn" class="btn btn-error btn-xs">Clear</button>
+                            <button id="export-inspector-btn" class="btn btn-info btn-xs">Export JSON</button>
+                            <input type="text" id="inspector-search" placeholder="Search messages..." class="input input-bordered input-xs flex-1">
+                        </div>
+                    </div>
+                    <div id="inspector-content" class="flex-grow overflow-y-auto bg-gray-900 rounded p-2 font-mono text-xs"></div>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50"></div>
+
+    <!-- Depth Panel Modal (Draggable) -->
+    <div id="depth-panel-modal" class="modal">
+        <div class="modal-box w-auto max-w-none bg-base-200 p-4 shadow-2xl">
+            <div id="depth-panel-header" class="p-2 -m-4 mb-2"><div data-field="symbol" class="text-xl font-bold">- <span data-field="expiry" class="text-lg font-normal"></span></div><div><span data-field="ltp" class="text-2xl font-mono">-</span><span data-field="change" class="text-green-400"></span></div></div>
+            <button id="close-depth-panel-btn" class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+            <div class="grid grid-cols-2 gap-4 my-2 text-sm"><div id="depth-panel-bids"></div><div id="depth-panel-asks"></div></div>
+            <div class="bg-base-300 p-2 rounded-md text-center grid grid-cols-3 items-center"><span data-field="totalbuyqty" class="font-mono text-green-400 text-left"></span><span class="text-sm text-gray-400">Total Quantity</span><span data-field="totalsellqty" class="font-mono text-red-400 text-right"></span></div>
+            <div class="bg-base-300 p-2 rounded-md text-center my-2">Bid: <span data-field="bid" class="font-mono text-green-400"></span> | Ask: <span data-field="ask" class="font-mono text-red-400"></span></div>
+            <div class="grid grid-cols-4 gap-2 text-center bg-base-300 p-2 rounded-md">
+                <div><div class="market-panel-label">Open</div><div data-field="open" class="market-panel-value"></div></div><div><div class="market-panel-label">High</div><div data-field="high" class="market-panel-value"></div></div><div><div class="market-panel-label">Low</div><div data-field="low" class="market-panel-value"></div></div><div><div class="market-panel-label">Close</div><div data-field="close" class="market-panel-value"></div></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-sm mt-2 bg-base-300 p-2 rounded-md">
+                <div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">Avg Price</span> <span data-field="average_price" class="market-panel-value"></span></div><div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">Prev Close</span> <span data-field="prev_close" class="market-panel-value"></span></div><div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">Volume</span> <span data-field="volume" class="market-panel-value"></span></div><div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">OI</span> <span data-field="oi" class="market-panel-value"></span></div><div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">LTQ</span> <span data-field="ltq" class="market-panel-value"></span></div><div class="flex justify-between border-b border-gray-700 py-1"><span class="market-panel-label">LTT</span> <span data-field="ltt" class="market-panel-value"></span></div><div class="flex justify-between py-1"><span class="market-panel-label">LCL</span> <span data-field="lower_circuit" class="market-panel-value"></span></div><div class="flex justify-between py-1"><span class="market-panel-label">UCL</span> <span data-field="upper_circuit" class="market-panel-value"></span></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Quote Data Modal -->
+    <dialog id="quote-data-modal" class="modal"><div class="modal-box w-11/12 max-w-lg"><form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form><h3 class="font-bold text-lg mb-4" id="quote-data-symbol">Quote</h3><div id="quote-data-content" class="space-y-2"><div class="grid grid-cols-4 gap-2 text-center bg-base-300 p-2 rounded-md"><div><div class="market-panel-label">Open</div><div data-field="open" class="market-panel-value">-</div></div><div><div class="market-panel-label">High</div><div data-field="high" class="market-panel-value">-</div></div><div><div class="market-panel-label">Low</div><div data-field="low" class="market-panel-value">-</div></div><div><div class="market-panel-label">Prev Close</div><div data-field="prev_close" class="market-panel-value">-</div></div></div><div class="grid grid-cols-2 gap-2 text-sm bg-base-300 p-2 rounded-md"><div class="flex justify-between py-1"><span class="market-panel-label">LTP</span> <span data-field="ltp" class="market-panel-value text-accent">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Avg Price</span> <span data-field="average_price" class="market-panel-value">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Volume</span> <span data-field="volume" class="market-panel-value">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">OI</span> <span data-field="oi" class="market-panel-value">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Bid</span> <span data-field="bid" class="market-panel-value text-green-400">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Ask</span> <span data-field="ask" class="market-panel-value text-red-400">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Last Traded Qty</span> <span data-field="last_quantity" class="market-panel-value">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Last Trade Time</span> <span data-field="ltt" class="market-panel-value text-xs">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Total Buy Qty</span> <span data-field="total_buy_quantity" class="market-panel-value text-green-400">-</span></div><div class="flex justify-between py-1"><span class="market-panel-label">Total Sell Qty</span> <span data-field="total_sell_quantity" class="market-panel-value text-red-400">-</span></div></div></div></div></dialog>
+
+    <!-- Historical Data Modal -->
+    <dialog id="historical-data-modal" class="modal"><div class="modal-box w-11/12 max-w-4xl"><form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button></form><h3 class="font-bold text-lg mb-4" id="historical-data-symbol">Historical Data</h3><div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end"><div class="form-control"><label class="label"><span class="label-text">Interval</span></label><input type="text" id="historical-interval" value="D" class="input input-bordered"></div><div class="form-control"><label class="label"><span class="label-text">From Date</span></label><input type="date" id="historical-from" class="input input-bordered"></div><div class="form-control"><label class="label"><span class="label-text">To Date</span></label><input type="date" id="historical-to" class="input input-bordered"></div><button id="fetch-historical-btn" class="btn btn-primary">Fetch</button></div><div class="overflow-x-auto mt-4"><table class="table table-zebra table-sm"><thead><tr><th>Timestamp</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr></thead><tbody id="historical-data-results"></tbody></table></div></div></dialog>
+
+    <script src="script.js"></script>
+</body>
+</html>

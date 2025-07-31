@@ -10,16 +10,28 @@
         @apply mt-4 p-4 bg-base-200 rounded-lg;
     }
 
-    .requirement-item {
-        @apply flex items-center gap-2 text-sm;
+    .requirement-badge {
+        @apply flex items-center gap-1 px-2 py-1 rounded-full border transition-all duration-200;
     }
 
     .requirement-met {
+        @apply bg-success/10 border-success text-success;
+    }
+    
+    .requirement-met .req-icon {
         @apply text-success;
     }
 
     .requirement-not-met {
-        @apply text-base-content/60;
+        @apply bg-base-300/50 border-base-300 text-base-content/60;
+    }
+    
+    .requirement-not-met .req-icon {
+        @apply text-error;
+    }
+
+    .req-icon {
+        @apply font-bold text-xs transition-colors duration-200;
     }
 
     .password-match-indicator {
@@ -36,125 +48,468 @@
         <p class="text-base-content/60">Manage your account settings and security preferences</p>
     </div>
 
-    <!-- User Info Card -->
-    <div class="card bg-base-100 shadow-lg mb-8">
-        <div class="card-body">
-            <h2 class="card-title">Account Information</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                <div>
-                    <label class="label">
-                        <span class="label-text">Username</span>
-                    </label>
-                    <input type="text" value="{{ username }}" class="input input-bordered w-full" disabled>
+    <!-- Tab Navigation -->
+    <div class="tabs tabs-boxed mb-8 justify-center">
+        <a class="tab tab-active" data-tab="account">Account & Password</a>
+        <a class="tab" data-tab="smtp">SMTP Configuration</a>
+        <a class="tab" data-tab="totp">TOTP Authentication</a>
+    </div>
+
+    <!-- Account & Password Tab -->
+    <div id="account-tab" class="tab-content block">
+        <!-- User Info Card -->
+        <div class="card bg-base-100 shadow-lg mb-8">
+            <div class="card-body">
+                <h2 class="card-title">Account Information</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <div>
+                        <label class="label">
+                            <span class="label-text">Username</span>
+                        </label>
+                        <input type="text" value="{{ username }}" class="input input-bordered w-full" disabled>
+                    </div>
+                    <div>
+                        <label class="label">
+                            <span class="label-text">Account Type</span>
+                        </label>
+                        <div class="badge badge-primary">Administrator</div>
+                    </div>
                 </div>
-                <div>
-                    <label class="label">
-                        <span class="label-text">Account Type</span>
-                    </label>
-                    <div class="badge badge-primary">Administrator</div>
-                </div>
+            </div>
+        </div>
+
+        <!-- Password Change Form -->
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title">Change Password</h2>
+                <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <!-- Old Password -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Current Password</span>
+                        </label>
+                        <input type="password" 
+                               name="old_password" 
+                               id="old_password" 
+                               required 
+                               class="input input-bordered w-full" 
+                               placeholder="Enter your current password">
+                    </div>
+
+                    <!-- New Password -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">New Password</span>
+                        </label>
+                        <input type="password" 
+                               name="new_password" 
+                               id="new_password" 
+                               required 
+                               class="input input-bordered w-full" 
+                               placeholder="Enter your new password">
+                    </div>
+
+                    <!-- Confirm New Password -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Confirm New Password</span>
+                        </label>
+                        <input type="password" 
+                               name="confirm_password" 
+                               id="confirm_password" 
+                               required 
+                               class="input input-bordered w-full" 
+                               placeholder="Confirm your new password">
+                        <div id="passwordMatchMessage" class="password-match-indicator"></div>
+                    </div>
+
+                    <!-- Password Requirements -->
+                    <div class="password-requirements">
+                        <h3 class="font-semibold mb-3">Password Strength</h3>
+                        
+                        <!-- Strength Progress Bar -->
+                        <div class="mb-3">
+                            <div class="flex justify-between text-xs mb-1">
+                                <span>Strength</span>
+                                <span id="strength-text" class="font-medium">Weak</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div id="strength-bar" class="bg-red-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Requirements Grid -->
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <div id="req-length" class="requirement-badge requirement-not-met">
+                                <span class="req-icon">✗</span>
+                                <span>8+ chars</span>
+                            </div>
+                            <div id="req-uppercase" class="requirement-badge requirement-not-met">
+                                <span class="req-icon">✗</span>
+                                <span>A-Z</span>
+                            </div>
+                            <div id="req-lowercase" class="requirement-badge requirement-not-met">
+                                <span class="req-icon">✗</span>
+                                <span>a-z</span>
+                            </div>
+                            <div id="req-number" class="requirement-badge requirement-not-met">
+                                <span class="req-icon">✗</span>
+                                <span>0-9</span>
+                            </div>
+                            <div id="req-special" class="requirement-badge requirement-not-met col-span-2">
+                                <span class="req-icon">✗</span>
+                                <span>Special (@#$%^&*)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <div class="form-control mt-6">
+                        <button type="submit" class="btn btn-primary" id="submitButton" disabled>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                            </svg>
+                            Change Password
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
 
-    <!-- Password Change Form -->
-    <div class="card bg-base-100 shadow-lg">
-        <div class="card-body">
-            <h2 class="card-title">Change Password</h2>
-            <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm" class="space-y-4">
-                <!-- Old Password -->
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text">Current Password</span>
-                    </label>
-                    <input type="password" 
-                           name="old_password" 
-                           id="old_password" 
-                           required 
-                           class="input input-bordered w-full" 
-                           placeholder="Enter your current password">
+    <!-- SMTP Configuration Tab -->
+    <div id="smtp-tab" class="tab-content hidden">
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title">SMTP Configuration</h2>
+                <p class="text-base-content/60 mb-4">Configure email settings for password reset notifications</p>
+                
+                <!-- Gmail Configuration Hint -->
+                <div class="alert alert-info mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">Gmail Configuration Tips:</h3>
+                        <ul class="text-sm list-disc list-inside mt-1">
+                            <li><strong>Gmail Workspace:</strong> Server: smtp-relay.gmail.com:465, HELO: smtp.gmail.com <em>(requires IP registration)</em></li>
+                            <li><strong>Personal Gmail:</strong> Server: smtp.gmail.com:587, HELO: smtp.gmail.com <em>(recommended)</em></li>
+                            <li><strong>Password:</strong> Use App Password (not your regular password)</li>
+                            <li><strong>Setup App Password:</strong> Google Account → Security → 2-Step Verification → App passwords</li>
+                            <li><strong>Workspace Issue?</strong> If relay denied, register your server IP in Google Admin Console</li>
+                        </ul>
+                    </div>
                 </div>
+                
+                <form method="POST" action="{{ url_for('auth.configure_smtp') }}" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">SMTP Server</span>
+                            </label>
+                            <input type="text" 
+                                   name="smtp_server" 
+                                   value="{{ smtp_settings['smtp_server'] if smtp_settings and smtp_settings.get('smtp_server') else 'smtp.gmail.com' }}"
+                                   class="input input-bordered" 
+                                   placeholder="smtp.gmail.com">
+                        </div>
+                        
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">SMTP Port</span>
+                            </label>
+                            <input type="number" 
+                                   name="smtp_port" 
+                                   value="{{ smtp_settings['smtp_port'] if smtp_settings and smtp_settings.get('smtp_port') else '587' }}"
+                                   class="input input-bordered" 
+                                   placeholder="587">
+                            <label class="label">
+                                <span class="label-text-alt">Port 587 (STARTTLS) or 465 (SSL/TLS)</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Username/Email</span>
+                        </label>
+                        <input type="email" 
+                               name="smtp_username" 
+                               value="{{ smtp_settings['smtp_username'] if smtp_settings and smtp_settings.get('smtp_username') else 'your-email@gmail.com' }}"
+                               class="input input-bordered" 
+                               placeholder="your-email@gmail.com">
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Password/App Password</span>
+                        </label>
+                        <div class="relative">
+                            <input type="password" 
+                                   name="smtp_password" 
+                                   id="smtp_password"
+                                   class="input input-bordered w-full pr-12" 
+                                   value="{{ '********' if smtp_settings and smtp_settings.get('smtp_password') else '' }}"
+                                   placeholder="{{ 'Password is set (enter new to change)' if smtp_settings and smtp_settings.get('smtp_password') else 'Enter your App Password' }}">
+                            {% if smtp_settings and smtp_settings.get('smtp_password') %}
+                            <button type="button" 
+                                    id="clearPasswordBtn"
+                                    class="absolute right-2 top-1/2 transform -translate-y-1/2 btn btn-ghost btn-xs"
+                                    title="Clear password to enter new one">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                            {% endif %}
+                        </div>
+                        <label class="label">
+                            <span class="label-text-alt">For Gmail, use App Password instead of your regular password</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">From Email</span>
+                        </label>
+                        <input type="email" 
+                               name="smtp_from_email" 
+                               value="{{ smtp_settings['smtp_from_email'] if smtp_settings and smtp_settings.get('smtp_from_email') else 'your-email@gmail.com' }}"
+                               class="input input-bordered" 
+                               placeholder="your-email@gmail.com">
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">HELO Hostname</span>
+                        </label>
+                        <input type="text" 
+                               name="smtp_helo_hostname" 
+                               value="{{ smtp_settings['smtp_helo_hostname'] if smtp_settings and smtp_settings.get('smtp_helo_hostname') else 'smtp.gmail.com' }}"
+                               class="input input-bordered" 
+                               placeholder="smtp.gmail.com">
+                        <label class="label">
+                            <span class="label-text-alt">Hostname to identify as during SMTP handshake</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label cursor-pointer justify-start gap-2">
+                            <input type="checkbox" 
+                                   name="smtp_use_tls" 
+                                   {% if not smtp_settings or smtp_settings.get('smtp_use_tls', True) %}checked{% endif %}
+                                   class="checkbox">
+                            <span class="label-text">Use TLS/SSL</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-control mt-6">
+                        <button type="submit" class="btn btn-primary">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                            </svg>
+                            Save SMTP Settings
+                        </button>
+                    </div>
+                    
+                    <!-- Test Email Section -->
+                    <div class="divider">Test Configuration</div>
+                    
+                    <div class="bg-base-200 p-4 rounded-lg">
+                        <h3 class="font-semibold mb-3 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Test SMTP Configuration
+                        </h3>
+                        <p class="text-sm text-base-content/70 mb-4">Send a test email to verify your SMTP settings are working correctly.</p>
+                        
+                        <div class="flex gap-2">
+                            <div class="form-control flex-1">
+                                <input type="email" 
+                                       id="testEmailInput" 
+                                       class="input input-bordered input-sm" 
+                                       placeholder="Enter email address to test"
+                                       value="{{ smtp_settings['smtp_username'] if smtp_settings and smtp_settings.get('smtp_username') else 'your-email@gmail.com' }}">
+                            </div>
+                            <button type="button" 
+                                    id="sendTestEmailBtn" 
+                                    class="btn btn-outline btn-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                                <span class="btn-text">Send Test</span>
+                            </button>
+                            <button type="button" 
+                                    id="debugSmtpBtn" 
+                                    class="btn btn-ghost btn-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                                </svg>
+                                <span class="debug-btn-text">Debug</span>
+                            </button>
+                        </div>
+                        
+                        <!-- Test Results -->
+                        <div id="testEmailResult" class="mt-3 hidden"></div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
-                <!-- New Password -->
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text">New Password</span>
-                    </label>
-                    <input type="password" 
-                           name="new_password" 
-                           id="new_password" 
-                           required 
-                           class="input input-bordered w-full" 
-                           placeholder="Enter your new password">
-                </div>
-
-                <!-- Confirm New Password -->
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text">Confirm New Password</span>
-                    </label>
-                    <input type="password" 
-                           name="confirm_password" 
-                           id="confirm_password" 
-                           required 
-                           class="input input-bordered w-full" 
-                           placeholder="Confirm your new password">
-                    <div id="passwordMatchMessage" class="password-match-indicator"></div>
-                </div>
-
-                <!-- Password Requirements -->
-                <div class="password-requirements">
-                    <h3 class="font-semibold mb-2">Password Requirements:</h3>
-                    <div class="space-y-2">
-                        <div id="req-length" class="requirement-item requirement-not-met">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span>Minimum 8 characters</span>
-                        </div>
-                        <div id="req-uppercase" class="requirement-item requirement-not-met">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span>At least 1 uppercase letter (A-Z)</span>
-                        </div>
-                        <div id="req-lowercase" class="requirement-item requirement-not-met">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span>At least 1 lowercase letter (a-z)</span>
-                        </div>
-                        <div id="req-number" class="requirement-item requirement-not-met">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span>At least 1 number (0-9)</span>
-                        </div>
-                        <div id="req-special" class="requirement-item requirement-not-met">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span>At least 1 special character (@#$%^&*)</span>
+    <!-- TOTP Authentication Tab -->
+    <div id="totp-tab" class="tab-content hidden">
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title">TOTP Authentication</h2>
+                <p class="text-base-content/60 mb-4">Manage your Two-Factor Authentication settings</p>
+                
+                <div class="alert alert-info mb-6">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">About TOTP Authentication</h3>
+                        <div class="text-sm mt-1">
+                            TOTP (Time-based One-Time Password) provides an additional layer of security. 
+                            You'll need an authenticator app like Google Authenticator or Authy to generate codes 
+                            for password recovery.
                         </div>
                     </div>
                 </div>
 
-                <!-- Submit Button -->
-                <div class="form-control mt-6">
-                    <button type="submit" class="btn btn-primary" id="submitButton" disabled>
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                        </svg>
-                        Change Password
-                    </button>
+                <!-- TOTP Setup Display -->
+                {% if qr_code and totp_secret %}
+                <div class="bg-base-200 p-6 rounded-lg">
+                    <h3 class="font-semibold mb-4 text-center">Your TOTP QR Code</h3>
+                    
+                    <!-- QR Code -->
+                    <div class="flex justify-center mb-6">
+                        <div class="p-4 bg-white rounded-lg shadow-lg">
+                            <img src="data:image/png;base64,{{ qr_code }}" alt="TOTP QR Code" class="w-48 h-48">
+                        </div>
+                    </div>
+
+                    <!-- Manual Entry Section -->
+                    <div class="bg-base-300 p-4 rounded-lg mb-4">
+                        <h4 class="font-semibold mb-2">Manual Entry</h4>
+                        <p class="text-sm mb-2">Secret key for manual entry:</p>
+                        <div class="flex items-center gap-2">
+                            <code class="flex-1 bg-base-100 p-2 rounded select-all">{{ totp_secret }}</code>
+                            <button onclick="copyToClipboard('{{ totp_secret }}')" class="btn btn-square btn-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Setup Instructions -->
+                    <div class="space-y-2">
+                        <p class="font-medium">Setup Instructions:</p>
+                        <ol class="list-decimal list-inside space-y-1 text-sm">
+                            <li>Install an authenticator app (Google Authenticator, Authy, etc.)</li>
+                            <li>Scan the QR code above or enter the secret key manually</li>
+                            <li>Save your backup codes in a safe place</li>
+                            <li>You'll need the TOTP code to reset your password if you forget it</li>
+                        </ol>
+                    </div>
                 </div>
-            </form>
+                {% else %}
+                <div class="alert alert-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                    <div>
+                        <h3 class="font-bold">TOTP Not Available</h3>
+                        <div class="text-sm">Unable to load TOTP setup. Please contact your administrator.</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Tab functionality
+    const tabs = document.querySelectorAll('.tab');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    // Function to activate a specific tab
+    function activateTab(tabName) {
+        // Remove active class from all tabs
+        tabs.forEach(t => t.classList.remove('tab-active'));
+        
+        // Hide all tab contents
+        tabContents.forEach(content => {
+            content.classList.add('hidden');
+            content.classList.remove('block');
+        });
+        
+        // Find and activate the target tab
+        const targetTab = document.querySelector(`[data-tab="${tabName}"]`);
+        const targetContent = document.getElementById(tabName + '-tab');
+        
+        if (targetTab && targetContent) {
+            targetTab.classList.add('tab-active');
+            targetContent.classList.remove('hidden');
+            targetContent.classList.add('block');
+        } else {
+            // Default to account tab if target not found
+            const defaultTab = document.querySelector('[data-tab="account"]');
+            const defaultContent = document.getElementById('account-tab');
+            if (defaultTab && defaultContent) {
+                defaultTab.classList.add('tab-active');
+                defaultContent.classList.remove('hidden');
+                defaultContent.classList.add('block');
+            }
+        }
+    }
+    
+    // Check URL parameter for active tab
+    const urlParams = new URLSearchParams(window.location.search);
+    const activeTab = urlParams.get('tab');
+    
+    if (activeTab) {
+        activateTab(activeTab);
+    } else {
+        // Default to account tab
+        activateTab('account');
+    }
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const targetTab = this.getAttribute('data-tab');
+            activateTab(targetTab);
+            
+            // Update URL without page reload
+            const newUrl = new URL(window.location);
+            newUrl.searchParams.set('tab', targetTab);
+            window.history.replaceState({}, '', newUrl);
+        });
+    });
+    
+    // Password field management
+    const clearPasswordBtn = document.getElementById('clearPasswordBtn');
+    const smtpPasswordInput = document.getElementById('smtp_password');
+    
+    if (clearPasswordBtn && smtpPasswordInput) {
+        clearPasswordBtn.addEventListener('click', function() {
+            smtpPasswordInput.value = '';
+            smtpPasswordInput.placeholder = 'Enter your App Password';
+            smtpPasswordInput.focus();
+            // Hide the clear button after clearing
+            clearPasswordBtn.style.display = 'none';
+        });
+    }
+    
     const newPassword = document.getElementById('new_password');
     const confirmPassword = document.getElementById('confirm_password');
     const passwordMatchMessage = document.getElementById('passwordMatchMessage');
@@ -176,19 +531,60 @@ document.addEventListener('DOMContentLoaded', function() {
             special: /[!@#$%^&*]/.test(password)
         };
 
-        // Update requirement indicators
+        // Update requirement badges
         Object.keys(checks).forEach(req => {
             const element = requirements[req];
+            const icon = element.querySelector('.req-icon');
+            
             if (checks[req]) {
                 element.classList.remove('requirement-not-met');
                 element.classList.add('requirement-met');
+                icon.textContent = '✓';
             } else {
                 element.classList.remove('requirement-met');
                 element.classList.add('requirement-not-met');
+                icon.textContent = '✗';
             }
         });
 
+        // Update strength indicator
+        updatePasswordStrength(checks);
+
         return Object.values(checks).every(Boolean);
+    }
+
+    function updatePasswordStrength(checks) {
+        const strengthBar = document.getElementById('strength-bar');
+        const strengthText = document.getElementById('strength-text');
+        
+        const metCount = Object.values(checks).filter(Boolean).length;
+        const percentage = (metCount / 5) * 100;
+        
+        // Update progress bar
+        strengthBar.style.width = percentage + '%';
+        
+        // Update color and text based on strength
+        if (metCount === 0) {
+            strengthBar.className = 'bg-gray-400 h-2 rounded-full transition-all duration-300';
+            strengthText.textContent = 'None';
+            strengthText.className = 'font-medium text-gray-500';
+        } else if (metCount <= 2) {
+            strengthBar.className = 'bg-red-500 h-2 rounded-full transition-all duration-300';
+            strengthText.textContent = 'Weak';
+            strengthText.className = 'font-medium text-red-500';
+        } else if (metCount <= 3) {
+            strengthBar.className = 'bg-yellow-500 h-2 rounded-full transition-all duration-300';
+            strengthText.textContent = 'Fair';
+            strengthText.className = 'font-medium text-yellow-500';
+        } else if (metCount <= 4) {
+            strengthBar.className = 'bg-blue-500 h-2 rounded-full transition-all duration-300';
+            strengthText.textContent = 'Good';
+            strengthText.className = 'font-medium text-blue-500';
+        } else {
+            strengthBar.className = 'bg-green-500 h-2 rounded-full transition-all duration-300';
+            strengthText.textContent = 'Strong';
+            strengthText.className = 'font-medium text-green-500';
+        }
     }
 
     function updatePasswordMatchMessage() {
@@ -216,7 +612,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    newPassword.addEventListener('input', updatePasswordMatchMessage);
+    // Real-time password validation as user types
+    newPassword.addEventListener('input', function() {
+        const password = this.value;
+        checkPasswordRequirements(password);
+        updatePasswordMatchMessage();
+    });
+    
     confirmPassword.addEventListener('input', updatePasswordMatchMessage);
 
     // Form submission handler
@@ -230,6 +632,200 @@ document.addEventListener('DOMContentLoaded', function() {
             updatePasswordMatchMessage();
         }
     });
+});
+
+// Function to copy TOTP secret to clipboard
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Show toast notification
+        showToast('Secret copied to clipboard!', 'success');
+    }).catch(err => {
+        console.error('Failed to copy text: ', err);
+        showToast('Failed to copy text', 'error');
+    });
+}
+
+// Test Email Functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const sendTestEmailBtn = document.getElementById('sendTestEmailBtn');
+    const debugSmtpBtn = document.getElementById('debugSmtpBtn');
+    const testEmailInput = document.getElementById('testEmailInput');
+    const testEmailResult = document.getElementById('testEmailResult');
+    
+    if (sendTestEmailBtn && testEmailInput) {
+        sendTestEmailBtn.addEventListener('click', async function() {
+            const testEmail = testEmailInput.value.trim();
+            
+            if (!testEmail) {
+                showAlert('Please enter an email address to test', 'error');
+                return;
+            }
+            
+            // Email validation
+            const emailPattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+            if (!emailPattern.test(testEmail)) {
+                showAlert('Please enter a valid email address', 'error');
+                return;
+            }
+            
+            // Show loading state
+            const originalText = sendTestEmailBtn.querySelector('.btn-text').textContent;
+            const btnText = sendTestEmailBtn.querySelector('.btn-text');
+            
+            sendTestEmailBtn.disabled = true;
+            sendTestEmailBtn.classList.add('loading');
+            btnText.textContent = 'Sending...';
+            
+            // Hide previous results
+            testEmailResult.classList.add('hidden');
+            
+            try {
+                const formData = new FormData();
+                formData.append('test_email', testEmail);
+                formData.append('csrf_token', getCSRFToken());
+                
+                const response = await fetch('{{ url_for("auth.test_smtp") }}', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                    showTestResult(true, result.message);
+                } else {
+                    showAlert(result.message, 'error');
+                    showTestResult(false, result.message);
+                }
+                
+            } catch (error) {
+                console.error('Test email error:', error);
+                const errorMsg = 'Failed to send test email. Please check your internet connection and try again.';
+                showAlert(errorMsg, 'error');
+                showTestResult(false, errorMsg);
+            } finally {
+                // Reset button state
+                sendTestEmailBtn.disabled = false;
+                sendTestEmailBtn.classList.remove('loading');
+                btnText.textContent = originalText;
+            }
+        });
+        
+        // Enter key support for test email input
+        testEmailInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendTestEmailBtn.click();
+            }
+        });
+    }
+    
+    // Debug SMTP functionality
+    if (debugSmtpBtn) {
+        debugSmtpBtn.addEventListener('click', async function() {
+            // Show loading state
+            const originalText = debugSmtpBtn.querySelector('.debug-btn-text').textContent;
+            const btnText = debugSmtpBtn.querySelector('.debug-btn-text');
+            
+            debugSmtpBtn.disabled = true;
+            debugSmtpBtn.classList.add('loading');
+            btnText.textContent = 'Debugging...';
+            
+            // Hide previous results
+            testEmailResult.classList.add('hidden');
+            
+            try {
+                const formData = new FormData();
+                formData.append('csrf_token', getCSRFToken());
+                
+                const response = await fetch('{{ url_for("auth.debug_smtp") }}', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                // Show debug results
+                showDebugResult(result.success, result.message, result.details || []);
+                
+            } catch (error) {
+                console.error('Debug SMTP error:', error);
+                const errorMsg = 'Failed to debug SMTP connection. Please try again.';
+                showDebugResult(false, errorMsg, [`Network error: ${error.message}`]);
+            } finally {
+                // Reset button state
+                debugSmtpBtn.disabled = false;
+                debugSmtpBtn.classList.remove('loading');
+                btnText.textContent = originalText;
+            }
+        });
+    }
+    
+    function showDebugResult(success, message, details) {
+        if (testEmailResult) {
+            testEmailResult.className = success 
+                ? 'mt-3 alert alert-success' 
+                : 'mt-3 alert alert-warning';
+            
+            const icon = success 
+                ? '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+                : '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>';
+            
+            let detailsHtml = '';
+            if (details && details.length > 0) {
+                detailsHtml = '<div class="mt-2 text-xs"><strong>Debug Details:</strong><ul class="list-disc list-inside mt-1">';
+                details.forEach(detail => {
+                    detailsHtml += `<li>${detail}</li>`;
+                });
+                detailsHtml += '</ul></div>';
+            }
+            
+            testEmailResult.innerHTML = `
+                <div class="flex items-start gap-2">
+                    ${icon}
+                    <div class="flex-1">
+                        <div class="font-bold">${success ? 'SMTP Debug Complete' : 'SMTP Connection Issues'}</div>
+                        <div class="text-sm">${message}</div>
+                        ${detailsHtml}
+                    </div>
+                </div>
+            `;
+            testEmailResult.classList.remove('hidden');
+        }
+    }
+    
+    function showTestResult(success, message) {
+        if (testEmailResult) {
+            testEmailResult.className = success 
+                ? 'mt-3 alert alert-success' 
+                : 'mt-3 alert alert-error';
+            
+            const icon = success 
+                ? '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+                : '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+            
+            testEmailResult.innerHTML = `
+                <div class="flex items-start gap-2">
+                    ${icon}
+                    <div>
+                        <div class="font-bold">${success ? 'Test Email Sent!' : 'Test Failed'}</div>
+                        <div class="text-sm">${message}</div>
+                        ${success ? '<div class="text-xs mt-1 opacity-75">Check your inbox (and spam folder) for the test email.</div>' : ''}
+                    </div>
+                </div>
+            `;
+            testEmailResult.classList.remove('hidden');
+        }
+    }
+    
+    function showAlert(message, type) {
+        // Use the existing toast system if available, otherwise fallback to alert
+        if (typeof showToast === 'function') {
+            showToast(message, type);
+        } else {
+            alert(message);
+        }
+    }
 });
 </script>
 {% endblock %}

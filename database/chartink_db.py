@@ -57,7 +57,7 @@ class ChartinkSymbolMapping(Base):
 
 def init_db():
     """Initialize the database"""
-    print("Initializing Chartink DB")
+    logger.info("Initializing Chartink DB")
     Base.metadata.create_all(bind=engine)
 
 def create_strategy(name, webhook_id, user_id, is_intraday=True, start_time=None, end_time=None, squareoff_time=None):

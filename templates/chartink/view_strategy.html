@@ -85,6 +85,7 @@
 
                     <div class="card-actions justify-end mt-4 space-y-2">
                         <form method="POST" action="{{ url_for('chartink_bp.toggle_strategy_route', strategy_id=strategy.id) }}" class="w-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <button type="submit" class="btn btn-primary btn-block">
                                 {{ 'Deactivate' if strategy.is_active else 'Activate' }} Strategy
                             </button>
@@ -248,6 +249,13 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const csrfToken = csrfTokenInput ? csrfTokenInput.value : null;
+
+    if (!csrfToken && document.getElementById('confirm_strategy_delete')) {
+        console.error('CSRF token not found! Strategy deletion and other protected actions may fail.');
+        showToast('error', 'Security token missing. Actions may fail.');
+    }
     const deleteModal = document.getElementById('delete_strategy_modal');
     const webhookUrlContainer = document.getElementById('webhookUrl');
     const copyHint = webhookUrlContainer.querySelector('.copy-hint');
@@ -270,7 +278,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-CSRFToken': csrfToken
             }
         })
         .then(response => response.json())
