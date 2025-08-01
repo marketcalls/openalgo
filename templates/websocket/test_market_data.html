@@ -346,6 +346,9 @@
     let socket = null;
     let subscriptions = new Set();
     let lastPrices = {};
+    let reconnectAttempts = 0;
+    let maxReconnectAttempts = 5;
+    let reconnectDelay = 1000;
 
     // Initialize WebSocket connection to the proxy server
     function connectWebSocket() {
@@ -381,6 +384,9 @@
                         document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
                         logEvent('Connected to WebSocket server', 'success');
                         
+                        // Reset reconnection counter on successful connection
+                        reconnectAttempts = 0;
+                        
                         // Get API key and authenticate
                         fetchWithCSRF('/api/websocket/apikey')
                             .then(response => response.json())
@@ -402,11 +408,32 @@
                             });
                     };
 
-                    socket.onclose = () => {
+                    socket.onclose = (event) => {
                         document.getElementById('websocket-status').textContent = 'Disconnected';
                         document.getElementById('websocket-status').className = 'font-semibold text-error';
                         document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
-                        logEvent('Disconnected from WebSocket', 'error');
+                        
+                        if (event.wasClean) {
+                            logEvent('WebSocket connection closed cleanly', 'info');
+                        } else {
+                            logEvent('WebSocket connection lost unexpectedly', 'error');
+                            
+                            // Attempt to reconnect
+                            if (reconnectAttempts < maxReconnectAttempts) {
+                                reconnectAttempts++;
+                                logEvent(`Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`, 'info');
+                                
+                                document.getElementById('websocket-status').textContent = 'Reconnecting...';
+                                document.getElementById('websocket-status').className = 'font-semibold text-warning';
+                                document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connecting';
+                                
+                                setTimeout(() => {
+                                    connectWebSocket();
+                                }, reconnectDelay);
+                            } else {
+                                logEvent('Max reconnection attempts reached. Please refresh the page or click Connect WebSocket.', 'error');
+                            }
+                        }
                     };
 
                     socket.onerror = (error) => {
@@ -439,6 +466,12 @@
             case 'auth':
                 if (data.status === 'success') {
                     logEvent('WebSocket authentication successful', 'success');
+                    
+                    // Restore previous subscriptions if any
+                    if (subscriptions.size > 0) {
+                        logEvent(`Restoring ${subscriptions.size} previous subscriptions...`, 'info');
+                        restoreSubscriptions();
+                    }
                 } else {
                     logEvent(`Authentication failed: ${data.message}`, 'error');
                 }
@@ -488,8 +521,21 @@
         }
     }
 
+    // Restore subscriptions after reconnection
+    function restoreSubscriptions() {
+        if (subscriptions.size === 0) return;
+        
+        const subscriptionList = Array.from(subscriptions);
+        subscriptionList.forEach((sub, index) => {
+            const [exchange, symbol, mode] = sub.split(':');
+            setTimeout(() => {
+                subscribe(symbol, exchange, mode, true); // true flag for restore mode
+            }, index * 100); // Stagger subscriptions
+        });
+    }
+
     // Subscribe to a symbol
-    function subscribe(symbol, exchange, mode) {
+    function subscribe(symbol, exchange, mode, isRestore = false) {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             logEvent('Please connect to WebSocket first', 'error');
             return;
@@ -503,11 +549,15 @@
         
         socket.send(JSON.stringify(message));
         
-        logEvent(`📤 Sent subscribe: ${JSON.stringify(message)}`, 'info');
-
-        subscriptions.add(`${exchange}:${symbol}:${mode}`);
+        if (!isRestore) {
+            logEvent(`📤 Sent subscribe: ${JSON.stringify(message)}`, 'info');
+            subscriptions.add(`${exchange}:${symbol}:${mode}`);
+            logEvent(`✅ Subscribing to ${exchange}:${symbol} (${mode})`, 'success');
+        } else {
+            logEvent(`🔄 Restoring subscription: ${exchange}:${symbol} (${mode})`, 'info');
+        }
+        
         updateSubscriptionCount();
-        logEvent(`✅ Subscribing to ${exchange}:${symbol} (${mode})`, 'success');
     }
 
     // Unsubscribe from a symbol
@@ -675,6 +725,9 @@
         subscriptions.clear();
         updateSubscriptionCount();
         logEvent('Unsubscribed from all symbols', 'info');
+        
+        // Clear saved subscriptions from localStorage
+        localStorage.removeItem('websocket_subscriptions');
     }
 
     // Update market data display
@@ -871,9 +924,26 @@
         });
     }
 
-    // Update subscription count
+    // Update subscription count and save to localStorage
     function updateSubscriptionCount() {
         document.getElementById('subscription-count').textContent = subscriptions.size;
+        // Save subscriptions to localStorage
+        localStorage.setItem('websocket_subscriptions', JSON.stringify(Array.from(subscriptions)));
+    }
+
+    // Load subscriptions from localStorage
+    function loadSubscriptions() {
+        try {
+            const saved = localStorage.getItem('websocket_subscriptions');
+            if (saved) {
+                const savedSubscriptions = JSON.parse(saved);
+                savedSubscriptions.forEach(sub => subscriptions.add(sub));
+                updateSubscriptionCount();
+                logEvent(`Loaded ${savedSubscriptions.length} saved subscriptions from previous session`, 'info');
+            }
+        } catch (error) {
+            logEvent('Error loading saved subscriptions', 'error');
+        }
     }
 
     // Log events
@@ -942,7 +1012,12 @@
 
     // Auto-connect on page load
     document.addEventListener('DOMContentLoaded', () => {
-        // Check WebSocket server status via REST API
+        logEvent('Page loaded - checking WebSocket status...', 'info');
+        
+        // Load saved subscriptions first
+        loadSubscriptions();
+        
+        // Check WebSocket server status via REST API first
         fetchWithCSRF('/api/websocket/status')
             .then(response => response.json())
             .then(data => {
@@ -957,17 +1032,21 @@
                 }
                 
                 if (data.connected) {
-                    document.getElementById('ws-status').textContent = 'Connected';
-                    document.getElementById('ws-status').className = 'font-semibold text-success';
-                    document.querySelector('#ws-status').previousElementSibling.className = 'connection-indicator status-connected';
-                    logEvent(`WebSocket connected via ${data.broker || 'unknown broker'}`, 'success');
+                    logEvent(`WebSocket server is available via ${data.broker || 'unknown broker'}`, 'success');
+                    // Auto-connect to WebSocket client
+                    setTimeout(() => {
+                        logEvent('Auto-connecting to WebSocket...', 'info');
+                        connectWebSocket();
+                    }, 1000);
                 } else {
-                    logEvent('WebSocket not connected - you may need to configure your broker first', 'info');
+                    logEvent('WebSocket server not connected - you may need to configure your broker first', 'info');
+                    logEvent('You can still try to connect manually using the Connect WebSocket button', 'info');
                 }
             })
             .catch(error => {
                 console.error('Error checking WebSocket status:', error);
                 logEvent('Failed to check WebSocket status - network error', 'error');
+                logEvent('You can still try to connect manually using the Connect WebSocket button', 'info');
             });
     });
 </script>
