@@ -160,20 +160,74 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         try:
             if self.ws_client:
+                self.logger.info("Stopping WebSocket client and waiting for both endpoints to disconnect...")
                 self.ws_client.stop()
+                
+                # Wait for BOTH WebSocket endpoints to be fully disconnected before ZMQ cleanup
+                import time
+                max_wait = 15.0  # Increased timeout for 20-level depth cleanup
+                start_time = time.time()
+                
+                while time.time() - start_time < max_wait:
+                    # Check if main WebSocket connection is disconnected
+                    main_disconnected = (not hasattr(self.ws_client, 'connected') or 
+                                       not self.ws_client.connected or
+                                       not hasattr(self.ws_client, 'ws') or
+                                       self.ws_client.ws is None)
+                    
+                    # Check if 20-level depth WebSocket connection is disconnected  
+                    depth_20_disconnected = (not hasattr(self.ws_client, 'depth_20_connected') or
+                                            not self.ws_client.depth_20_connected or
+                                            not hasattr(self.ws_client, 'depth_20_ws') or
+                                            self.ws_client.depth_20_ws is None)
+                    
+                    # Check if threads are terminated
+                    main_thread_stopped = (not hasattr(self.ws_client, 'thread') or 
+                                         self.ws_client.thread is None or
+                                         not self.ws_client.thread.is_alive())
+                    
+                    depth_20_thread_stopped = (not hasattr(self.ws_client, 'depth_20_thread') or
+                                             self.ws_client.depth_20_thread is None or
+                                             not self.ws_client.depth_20_thread.is_alive())
+                    
+                    if main_disconnected and depth_20_disconnected and main_thread_stopped and depth_20_thread_stopped:
+                        self.logger.info("✅ Both WebSocket endpoints fully disconnected - safe to cleanup ZMQ")
+                        break
+                        
+                    # Log current status
+                    if not main_disconnected:
+                        self.logger.debug("🔄 Waiting for main WebSocket (5-level) to disconnect...")
+                    if not depth_20_disconnected:
+                        self.logger.debug("🔄 Waiting for 20-level depth WebSocket to disconnect...")
+                    if not main_thread_stopped:
+                        self.logger.debug("🔄 Waiting for main WebSocket thread to stop...")
+                    if not depth_20_thread_stopped:
+                        self.logger.debug("🔄 Waiting for 20-level depth thread to stop...")
+                        
+                    time.sleep(0.2)
+                else:
+                    self.logger.warning("⚠️ Timeout waiting for WebSocket endpoints to disconnect - forcing ZMQ cleanup")
+                
                 self.ws_client = None
                 
             self.connected = False
             self.running = False
             
-            # Clean up ZeroMQ resources
+            # Now both endpoints are confirmed disconnected - safe to cleanup ZMQ
+            self.logger.info("🧹 Cleaning up ZMQ resources after confirming both endpoints are disconnected")
             self.cleanup_zmq()
             
-            self.logger.info(f"Disconnected from {self.broker_name} WebSocket server")
+            self.logger.info(f"✅ Successfully disconnected from {self.broker_name} WebSocket server")
             return {"status": "success", "message": f"Disconnected from {self.broker_name} WebSocket server"}
             
         except Exception as e:
-            self.logger.error(f"Error disconnecting from {self.broker_name} WebSocket: {e}")
+            self.logger.error(f"❌ Error disconnecting from {self.broker_name} WebSocket: {e}")
+            # Force cleanup even on error to prevent resource leaks
+            try:
+                self.logger.warning("🚨 Performing emergency ZMQ cleanup due to disconnect error")
+                self.cleanup_zmq()
+            except Exception as cleanup_error:
+                self.logger.error(f"❌ Error during emergency ZMQ cleanup: {cleanup_error}")
             return {"status": "error", "message": f"Error disconnecting from {self.broker_name} WebSocket: {e}"}
     
     def resolve_token(self, symbol: str, exchange: str, token: int = None):
