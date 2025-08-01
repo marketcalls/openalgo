@@ -45,6 +45,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.RLock()  # Changed to RLock for reentrant locking
         self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
         self.token_to_symbol = {}  # {token: (symbol, exchange)}
+        # Flag to track intentional disconnection to prevent automatic reconnection
+        self.intentional_disconnect = False
         
         # Authentication
         self.client_id = None
@@ -114,6 +116,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         self.logger.info(f"Connecting to {self.broker_name} WebSocket server")
         
+        # Reset intentional disconnect flag when connecting
+        self.intentional_disconnect = False
+        
         try:
             # Initialize WebSocket client if not already done
             if not self.ws_client:
@@ -158,6 +163,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         self.logger.info(f"Disconnecting from {self.broker_name} WebSocket server")
         
+        # Mark this as an intentional disconnect to prevent automatic reconnection
+        self.intentional_disconnect = True
+        
         try:
             if self.ws_client:
                 self.logger.info("Stopping WebSocket client and waiting for both endpoints to disconnect...")
@@ -190,23 +198,30 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                              self.ws_client.depth_20_thread is None or
                                              not self.ws_client.depth_20_thread.is_alive())
                     
+                    # Check if depth_20_instruments is empty (all subscriptions unsubscribed)
+                    depth_20_cleared = (not hasattr(self.ws_client, 'depth_20_instruments') or
+                                       not self.ws_client.depth_20_instruments)
+                
                     if main_disconnected and depth_20_disconnected and main_thread_stopped and depth_20_thread_stopped:
-                        self.logger.info("✅ Both WebSocket endpoints fully disconnected - safe to cleanup ZMQ")
+                        self.logger.info(" Both WebSocket endpoints fully disconnected - safe to cleanup ZMQ")
+                        break
+                    elif main_disconnected and depth_20_cleared and main_thread_stopped:
+                        self.logger.info(" Main WebSocket disconnected and no 20-level depth subscriptions - safe to cleanup ZMQ")
                         break
                         
                     # Log current status
                     if not main_disconnected:
-                        self.logger.debug("🔄 Waiting for main WebSocket (5-level) to disconnect...")
+                        self.logger.debug(" Waiting for main WebSocket (5-level) to disconnect...")
                     if not depth_20_disconnected:
-                        self.logger.debug("🔄 Waiting for 20-level depth WebSocket to disconnect...")
+                        self.logger.debug(" Waiting for 20-level depth WebSocket to disconnect...")
                     if not main_thread_stopped:
-                        self.logger.debug("🔄 Waiting for main WebSocket thread to stop...")
+                        self.logger.debug(" Waiting for main WebSocket thread to stop...")
                     if not depth_20_thread_stopped:
-                        self.logger.debug("🔄 Waiting for 20-level depth thread to stop...")
+                        self.logger.debug(" Waiting for 20-level depth thread to stop...")
                         
                     time.sleep(0.2)
                 else:
-                    self.logger.warning("⚠️ Timeout waiting for WebSocket endpoints to disconnect - forcing ZMQ cleanup")
+                    self.logger.warning(" Timeout waiting for WebSocket endpoints to disconnect - forcing ZMQ cleanup")
                 
                 self.ws_client = None
                 
@@ -214,20 +229,20 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = False
             
             # Now both endpoints are confirmed disconnected - safe to cleanup ZMQ
-            self.logger.info("🧹 Cleaning up ZMQ resources after confirming both endpoints are disconnected")
+            self.logger.info(" Cleaning up ZMQ resources after confirming both endpoints are disconnected")
             self.cleanup_zmq()
             
-            self.logger.info(f"✅ Successfully disconnected from {self.broker_name} WebSocket server")
+            self.logger.info(f" Successfully disconnected from {self.broker_name} WebSocket server")
             return {"status": "success", "message": f"Disconnected from {self.broker_name} WebSocket server"}
             
         except Exception as e:
-            self.logger.error(f"❌ Error disconnecting from {self.broker_name} WebSocket: {e}")
+            self.logger.error(f" Error disconnecting from {self.broker_name} WebSocket: {e}")
             # Force cleanup even on error to prevent resource leaks
             try:
-                self.logger.warning("🚨 Performing emergency ZMQ cleanup due to disconnect error")
+                self.logger.warning(" Performing emergency ZMQ cleanup due to disconnect error")
                 self.cleanup_zmq()
             except Exception as cleanup_error:
-                self.logger.error(f"❌ Error during emergency ZMQ cleanup: {cleanup_error}")
+                self.logger.error(f" Error during emergency ZMQ cleanup: {cleanup_error}")
             return {"status": "error", "message": f"Error disconnecting from {self.broker_name} WebSocket: {e}"}
     
     def resolve_token(self, symbol: str, exchange: str, token: int = None):
@@ -352,8 +367,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.token_to_symbol[str(actual_token)] = (symbol, exchange)
                 self.token_to_symbol[int(actual_token)] = (symbol, exchange)
                 
-                self.logger.info(f"📝 Stored token mapping: {actual_token} -> ({symbol}, {exchange})")
-                self.logger.info(f"📝 Current token_to_symbol: {self.token_to_symbol}")
+                self.logger.info(f" Stored token mapping: {actual_token} -> ({symbol}, {exchange})")
+                self.logger.info(f" Current token_to_symbol: {self.token_to_symbol}")
             
             # Map OpenAlgo exchange to Dhan exchange code
             exchange_code = 1  # Default to NSE_EQ
@@ -380,11 +395,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(f"Exchange {exchange} mapped to Dhan exchange code {exchange_code}")
                 
             # Subscribe to token with Dhan WebSocket, passing exchange code
-            self.logger.info(f"🚀 Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
+            self.logger.info(f" Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
             
             # Check if WebSocket client is properly initialized and connected
             if not self.ws_client:
-                self.logger.error("❌ WebSocket client is None!")
+                self.logger.error(" WebSocket client is None!")
                 return {"status": "error", "message": "WebSocket client not initialized"}
                 
             # Check connection status
@@ -392,16 +407,16 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(f"WebSocket connection status: {is_connected}")
             
             if not is_connected:
-                self.logger.warning("⚠️ WebSocket client may not be connected, but attempting subscription anyway")
+                self.logger.warning(" WebSocket client may not be connected, but attempting subscription anyway")
                 # Don't fail here - let the subscription attempt proceed
             
             # Perform subscription
             success = self.ws_client.subscribe_tokens([actual_token], dhan_mode, exchange_codes={actual_token: exchange_code})
             
             if success:
-                self.logger.info(f"✅ Successfully subscribed to {exchange}:{symbol}")
+                self.logger.info(f" Successfully subscribed to {exchange}:{symbol}")
             else:
-                self.logger.error(f"❌ Failed to subscribe to {exchange}:{symbol}")
+                self.logger.error(f" Failed to subscribe to {exchange}:{symbol}")
                 return {"status": "error", "message": f"Failed to subscribe to {exchange}:{symbol}"}
             
             return {"status": "success", "message": f"Subscribed to {exchange}:{symbol}"}
@@ -434,11 +449,15 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # First, check if we already have this symbol in our subscription tracking
             # as that token would be most accurate for unsubscription
             stored_token = None
+            stored_depth_level = 5  # Default to 5-level depth
             with self.lock:
                 if symbol in self.subscribed_symbols:
                     stored_data = self.subscribed_symbols[symbol]
                     if stored_data["exchange"] == exchange:  # Make sure we match exchange too
                         stored_token = stored_data["token"]
+                        # Get stored depth_level if available
+                        if "depth_level" in stored_data:
+                            stored_depth_level = stored_data["depth_level"]
                         
             # If we found the stored token, use that. Otherwise resolve it.
             # IMPORTANT: token parameter was previously a method parameter, now handled internally
@@ -453,8 +472,18 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Cannot unsubscribe - not connected to {self.broker_name} WebSocket")
                 return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
                 
-            self.logger.info(f"Unsubscribing from token {actual_token} ({exchange}:{symbol})")
-            # Unsubscribe from token with Dhan WebSocket
+            self.logger.info(f"Unsubscribing from token {actual_token} ({exchange}:{symbol}) with depth_level={stored_depth_level}")
+            
+            # Special handling for 20-level depth - ensure cleanup happens
+            is_20_level = stored_depth_level == 20
+            if is_20_level:
+                self.logger.info(f"Detected 20-level depth unsubscription for {exchange}:{symbol}, performing extra cleanup")
+                # For 20-level depth, make sure to force cleanup
+                if hasattr(self.ws_client, '_unsubscribe_20_level_depth'):
+                    success = self.ws_client._unsubscribe_20_level_depth(actual_token)
+                    self.logger.info(f"20-level depth specific cleanup result: {success}")
+            
+            # Always call the regular unsubscribe method as well
             self.ws_client.unsubscribe(actual_token)
             
             # Remove from subscription tracking but keep token mapping for in-flight messages
@@ -508,19 +537,20 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Callback handler for WebSocket connection event.
         """
-        self.logger.info("🟢 WebSocket connected callback triggered")
+        self.logger.info(" WebSocket connected callback triggered")
         self.connected = True
         
     def _on_disconnect(self):
         """
         Callback handler for WebSocket disconnection event.
-        Attempts to reconnect if needed.
+        Attempts to reconnect if needed, but only if the disconnect was not intentional.
         """
-        self.logger.warning("🔴 WebSocket disconnected callback triggered")
+        self.logger.warning(" WebSocket disconnected callback triggered")
         self.connected = False
         
-        # Attempt to reconnect if we're still running
-        if self.running:
+        # Attempt to reconnect if we're still running AND this wasn't an intentional disconnect
+        if self.running and not self.intentional_disconnect:
+            self.logger.info("Disconnection was unexpected - attempting to reconnect...")
             # Start reconnection in a separate thread to avoid blocking
             reconnect_thread = threading.Thread(
                 target=self._try_reconnect,
@@ -528,6 +558,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 daemon=True
             )
             reconnect_thread.start()
+        elif self.intentional_disconnect:
+            self.logger.info("Disconnection was intentional - not attempting to reconnect")
             
     def _on_error(self, error):
         """
