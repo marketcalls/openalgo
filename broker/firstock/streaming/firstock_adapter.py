@@ -33,6 +33,8 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = "firstock"
         self.running = False
         self.lock = threading.Lock()
+        # Snapshot management for value retention (similar to Shoonya implementation)
+        self.market_snapshots = {}  # {token: snapshot_data} - retains previous values
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -140,6 +142,9 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         if self.ws_client:
             self.ws_client.close_connection()
+            
+        # Clear snapshots
+        self.market_snapshots.clear()
             
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -318,6 +323,101 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing data: {e}", exc_info=True)
     
+    def _update_market_snapshot(self, token: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update market snapshot for value retention.
+        Only updates non-zero/non-invalid values to retain previous valid data.
+        """
+        # Get existing snapshot or create empty one
+        snapshot = self.market_snapshots.get(token, {})
+        
+        # Fields to merge (only if not invalid/zero)
+        merge_fields = [
+            # Price fields
+            'i_last_traded_price', 'i_open_price', 'i_high_price', 'i_low_price', 'i_closing_price',
+            'i_average_trade_price', 'i_upper_circuit_limit', 'i_lower_circuit_limit',
+            # Quantity/volume fields  
+            'i_volume_traded_today', 'i_last_trade_quantity', 'i_total_buy_quantity', 'i_total_sell_quantity',
+            'i_open_interest', 'i_total_open_interest',
+            # Time fields
+            'i_last_trade_time', 'i_feed_time', 'c_exch_feed_time'
+        ]
+        
+        # Always update these fields (metadata)
+        always_update = ['c_symbol', 'c_exch_seg', 'c_net_change_indicator', 'i_buy_depth_size', 'i_sell_depth_size']
+        
+        # Update snapshot with always-update fields
+        for field in always_update:
+            if field in data:
+                snapshot[field] = data[field]
+        
+        # Merge non-invalid values from update
+        updated_fields = []
+        for field in merge_fields:
+            if field in data:
+                value = data[field]
+                # Skip Firstock's invalid values (9223372036854775808 or 0 for prices)
+                if (isinstance(value, (int, float)) and 
+                    value != 9223372036854775808 and 
+                    (field not in ['i_last_traded_price', 'i_open_price', 'i_high_price', 'i_low_price', 
+                                   'i_closing_price', 'i_average_trade_price', 'i_upper_circuit_limit', 
+                                   'i_lower_circuit_limit'] or value != 0)):
+                    snapshot[field] = value
+                    updated_fields.append(field)
+                elif not isinstance(value, (int, float)):
+                    # Non-numeric fields (like timestamps) - always update
+                    snapshot[field] = value
+                    updated_fields.append(field)
+        
+        # Handle depth data separately - only update if we have valid depth data
+        if 'best_buy' in data and 'best_sell' in data:
+            new_buy_depth = self._filter_depth_data(data.get('best_buy', []))
+            new_sell_depth = self._filter_depth_data(data.get('best_sell', []))
+            
+            self.logger.debug(f"Token {token} depth analysis - buy entries: {len(new_buy_depth)}, sell entries: {len(new_sell_depth)}")
+            
+            # Only update depth if we have valid new data, otherwise retain previous snapshot
+            if new_buy_depth:  # Has valid buy data
+                snapshot['best_buy'] = new_buy_depth
+                updated_fields.append('best_buy')
+                self.logger.debug(f"Token {token} updated buy depth with {len(new_buy_depth)} valid entries")
+            elif 'best_buy' not in snapshot:  # No previous data, initialize empty
+                snapshot['best_buy'] = []
+            else:
+                self.logger.debug(f"Token {token} retaining previous buy depth ({len(snapshot.get('best_buy', []))} entries)")
+                
+            if new_sell_depth:  # Has valid sell data  
+                snapshot['best_sell'] = new_sell_depth
+                updated_fields.append('best_sell')
+                self.logger.debug(f"Token {token} updated sell depth with {len(new_sell_depth)} valid entries")
+            elif 'best_sell' not in snapshot:  # No previous data, initialize empty
+                snapshot['best_sell'] = []
+            else:
+                self.logger.debug(f"Token {token} retaining previous sell depth ({len(snapshot.get('best_sell', []))} entries)")
+        
+        # Update stored snapshot
+        self.market_snapshots[token] = snapshot
+        
+        if updated_fields:
+            self.logger.debug(f"Updated snapshot fields for token {token}: {updated_fields}")
+        
+        return snapshot
+    
+    def _filter_depth_data(self, depth_list: List[Dict]) -> List[Dict]:
+        """Filter out invalid depth entries and retain valid ones"""
+        filtered_depth = []
+        for level in depth_list:
+            price = level.get('price', 0)
+            quantity = level.get('quantity', 0)
+            orders = level.get('orders', 0)
+            
+            # Keep entries that have valid data (not the invalid marker)
+            if (price != 9223372036854775808 and quantity != 9223372036854775808 and 
+                orders != 9223372036854775808 and (price > 0 or quantity > 0)):
+                filtered_depth.append(level)
+        
+        return filtered_depth
+
     def _process_market_data(self, data: Dict[str, Any]) -> None:
         """Process market data from Firstock"""
         try:
@@ -328,43 +428,46 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug(f"Processing market data for token: {token}, exchange: {exchange_seg}")
             self.logger.debug(f"Raw data keys: {list(data.keys())}")
             
-            # Find the subscription that matches this token
-            subscription = None
+            # Find ALL subscriptions that match this token - we need to publish for each mode
+            matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
                     if sub['token'] == token and sub['brexchange'] == exchange_seg:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
             
-            if not subscription:
+            if not matching_subscriptions:
                 self.logger.warning(f"Received data for unsubscribed token: {token} on {exchange_seg}")
                 self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
                 return
             
-            # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
-            mode = subscription['mode']
+            # Update snapshot with current data (retains previous values for invalid/zero fields)
+            processed_data = self._update_market_snapshot(token, data)
             
-            # Firstock provides all data in one feed, so we publish based on requested mode
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
-            topic = f"{exchange}_{symbol}_{mode_str}"
-            
-            # Normalize the data based on the requested mode
-            market_data = self._normalize_market_data(data, mode)
-            
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-            })
-            
-            self.logger.info(f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}")
-            
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
+            # Publish data for each subscribed mode
+            for subscription in matching_subscriptions:
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                mode = subscription['mode']
+                
+                # Firstock provides all data in one feed, so we publish based on requested mode
+                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+                topic = f"{exchange}_{symbol}_{mode_str}"
+                
+                # Normalize the data based on the requested mode using processed snapshot
+                market_data = self._normalize_market_data(processed_data, mode)
+                
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': mode,
+                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
+                })
+                
+                self.logger.info(f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}")
+                
+                # Publish to ZeroMQ
+                self.publish_market_data(topic, market_data)
             
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
@@ -430,10 +533,11 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def _extract_depth_data(self, depth_list: List[Dict], is_buy: bool) -> List[Dict[str, Any]]:
         """
-        Extract depth data from Firstock's format
+        Extract depth data from Firstock's format (used by normalize method)
+        This converts the retained snapshot depth data to the final output format
         
         Args:
-            depth_list: List of depth levels from Firstock
+            depth_list: List of depth levels from snapshot (already filtered)
             is_buy: Whether this is buy or sell side
             
         Returns:
@@ -442,17 +546,17 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         depth = []
         
         for level in depth_list:
-            # Skip invalid entries (Firstock uses large numbers for empty levels)
+            # These should already be filtered, but double-check
             price = level.get('price', 0)
-            if price == 9223372036854775808:  # Firstock's default value
-                price = 0
-                
             quantity = level.get('quantity', 0)
-            if quantity == 9223372036854775808:  # Firstock's default value
-                quantity = 0
-                
             orders = level.get('orders', 0)
-            if orders == 9223372036854775808:  # Firstock's default value
+            
+            # Convert invalid values to 0 for display
+            if price == 9223372036854775808:
+                price = 0
+            if quantity == 9223372036854775808:
+                quantity = 0
+            if orders == 9223372036854775808:
                 orders = 0
             
             depth.append({

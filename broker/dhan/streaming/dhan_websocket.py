@@ -2272,7 +2272,8 @@ class DhanWebSocket:
             if self.depth_20_thread and self.depth_20_thread.is_alive():
                 try:
                     self.depth_20_thread.join(timeout=5.0)
-                    if self.depth_20_thread.is_alive():
+                    # Re-check if thread still exists after join before calling is_alive()
+                    if self.depth_20_thread and self.depth_20_thread.is_alive():
                         logger.warning("20-level depth thread did not terminate within timeout")
                 except Exception as e:
                     logger.error(f"Error joining 20-level depth thread: {e}")
@@ -2323,6 +2324,9 @@ class DhanWebSocket:
         """
         logger.info("Closing 20-level depth WebSocket connection")
         
+        # Stop the 20-level depth event loop
+        self.depth_20_running = False
+        
         # Store the current ws reference and set to None to prevent race conditions
         ws = self.depth_20_ws
         self.depth_20_ws = None
@@ -2337,12 +2341,31 @@ class DhanWebSocket:
                     logger.warning("Timeout closing 20-level depth WebSocket connection")
                 except Exception as e:
                     logger.error(f"Error closing 20-level depth WebSocket: {e}")
+            elif ws:
+                # WebSocket exists but might not be open, still close it
+                try:
+                    await ws.close()
+                    logger.info("20-level depth WebSocket closed (was not open)")
+                except Exception as e:
+                    logger.error(f"Error closing non-open 20-level depth WebSocket: {e}")
                     
         except Exception as e:
             logger.error(f"Error during 20-level depth connection close: {e}")
         finally:
             # Ensure we always reset connection state
             self.depth_20_connected = False
+            
+            # Give a moment for the message loop to exit gracefully
+            await asyncio.sleep(0.1)
+            
+            # Stop the event loop to terminate the thread
+            if self.depth_20_loop and not self.depth_20_loop.is_closed():
+                try:
+                    self.depth_20_loop.call_soon_threadsafe(self.depth_20_loop.stop)
+                    logger.info("20-level depth event loop stop scheduled")
+                except Exception as e:
+                    logger.error(f"Error stopping 20-level depth event loop: {e}")
+            
             logger.info("20-level depth connection cleanup completed")
     
     def _handle_depth_20_bid(self, message, token=None):

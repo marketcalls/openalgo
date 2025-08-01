@@ -28,6 +28,7 @@ checkpoints.json
 # CSV Files (except symbols.csv)
 *.csv
 !symbols.csv
+!all_symbols.csv
 
 # Environments 
 .env 
