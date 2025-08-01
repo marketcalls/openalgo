@@ -9,6 +9,7 @@ import os
 import pytz
 IST = pytz.timezone('Asia/Kolkata')
 import gc
+import numpy as np
 
 matplotlib.use('Agg')  # use Anti-Grain Geometry backend (non-GUI)
 
@@ -59,9 +60,16 @@ class BacktestEngine:
             WHERE symbol = %s AND time >= %s AND time < %s
             ORDER BY time ASC
         """
-        df = pd.read_sql(query, self.conn, params=(self.symbol, start_day, end_day + timedelta(days=1)))
+        if interval != '1h':
+            df = pd.read_sql(query, self.conn, params=(self.symbol, start_day, end_day + timedelta(days=1)))
+        else:
+            df = pd.read_sql(query, self.conn, params=('NIFTY', start_day, end_day + timedelta(days=1)))
+
         if df.empty:
-            self.logger.warning(f"No data found for {self.symbol} {interval} between {start_day} and {end_day}")
+            if interval != '1h':
+                self.logger.warning(f"No data found for {self.symbol} {interval} between {start_day} and {end_day}")
+            else:
+                self.logger.warning(f"No data found for NIFTY {interval} between {start_day} and {end_day}")
 
         return df
     
@@ -89,6 +97,23 @@ class BacktestEngine:
         df_5m = df_all_dict['5m'].copy()
         df_1m = df_all_dict['1m'].copy()
         df_daily = df_all_dict['d'].copy()
+        df_nifty_1h = df_all_dict['1h'].copy()
+        
+        # === ENSURE TIME COLUMNS ARE DATETIME ===
+        for df in [df_15m, df_5m, df_1m, df_daily, df_nifty_1h]:
+            if not df.empty:
+                df['time'] = pd.to_datetime(df['time'])
+        
+        # === EARLY RETURN IF CRITICAL DATA IS MISSING ===
+        if df_15m.empty or df_5m.empty or df_1m.empty or df_daily.empty or df_nifty_1h.empty:
+            self.logger.warning(f"Missing critical data for {self.symbol} - skipping indicator calculations")
+            return {
+                '15m': df_15m,
+                '5m': df_5m,
+                '1m': df_1m,
+                'd': df_daily,
+                '1h': df_nifty_1h
+            }
         
         # === DAILY INDICATORS (ATR & Volume) ===
         atr_period = 14
@@ -102,6 +127,8 @@ class BacktestEngine:
         df_daily['volume_10'] = df_daily['volume'].rolling(window=10).mean()
         df_daily['atr_14'] = df_daily['tr'].ewm(span=14, adjust=False).mean()
         df_daily['volume_14'] = df_daily['volume'].rolling(window=14).mean()
+        df_daily['close_10'] = df_daily['close'].rolling(window=10).mean()
+        df_daily['close_14'] = df_daily['close'].rolling(window=14).mean()
         df_daily.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr'], axis=1, inplace=True)
         
         # Add date columns for merging
@@ -110,8 +137,22 @@ class BacktestEngine:
         df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
         
         # Merge ATR from daily data
-        df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'atr_14', 'volume_14']], on='date', how='left')
-        df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10', 'atr_14', 'volume_14']], on='date', how='left')
+        df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14']], on='date', how='left')
+        df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14']], on='date', how='left')
+        
+        # === HOURLY INDICATORS (Nifty 50EMA) ===
+
+        df_nifty_1h['nifty_1hr_ema_50'] = df_nifty_1h['close'].ewm(span=50, adjust=False).mean()
+        df_nifty_1h['nifty_1hr_ema_200'] = df_nifty_1h['close'].ewm(span=200, adjust=False).mean()
+        df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_ema_50'] > (df_nifty_1h['nifty_1hr_ema_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_ema_50'] < (df_nifty_1h['nifty_1hr_ema_200'] * 0.99), -1, 0))
+        #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['close'] > df_nifty_1h['nifty_1hr_ema_50'], 1, -1)
+
+        # Merge trend into the 5min and 15min df
+        df_nifty_1h['date'] = pd.to_datetime(df_nifty_1h['time'].dt.date)
+        # Keep only the first record each day
+        df_nifty_1h = df_nifty_1h.groupby('date').first().reset_index()
+        df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_1hr_ema_50', 'nifty_trend']], on='date', how='left')
+        df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_1hr_ema_50', 'nifty_trend']], on='date', how='left')
         
         # === 5MIN INDICATORS (EMAs) ===
         df_5m['ema_50'] = df_5m['close'].ewm(span=50, adjust=False).mean()
@@ -308,7 +349,9 @@ class BacktestEngine:
             (df_15m['cum_sp_bullish'] >= 1) & 
             (df_15m['sp_bullish_range_pct'] > 0.8) & 
             (df_15m['zl_macd_signal'] == -1) & 
-            (df_15m['volume_range_pct_10'] > 1)
+            (df_15m['volume_range_pct_10'] > 1) &
+            (df_15m['atr_10'] / df_15m['close_10'] > 0.03)
+            #(df_15m['nifty_trend'] != 1)
         )
         df_15m['strategy_8'] = False
         first_true_idx_8 = df_15m[df_15m['s_8']].groupby('date').head(1).index
@@ -321,11 +364,14 @@ class BacktestEngine:
             (df_15m['sp_bearish_range_pct'] > 0.8) & 
             (df_15m['zl_macd_signal'] == 1) &
             (df_15m['volume_range_pct_10'] > 0) &
-            (df_15m['volume_range_pct_10'] < 0.4)
+            (df_15m['volume_range_pct_10'] < 0.4) &
+            (df_15m['atr_10'] / df_15m['close_10'] > 0.03)
+            #(df_15m['nifty_trend'] != -1)
         )
         df_15m['strategy_12'] = False
         first_true_idx_12 = df_15m[df_15m['s_12']].groupby('date').head(1).index
         df_15m.loc[first_true_idx_12, 'strategy_12'] = True
+        
         
         # Strategy 10 & 11 (5m)
         df_5m['s_10'] = (
@@ -338,7 +384,9 @@ class BacktestEngine:
             (df_5m['close'] < df_5m['ema_200']) & 
             (df_5m['is_range_bearish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
-            (df_5m['volume_range_pct_10'] < 0.7)
+            (df_5m['volume_range_pct_10'] < 0.7) & 
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
+            #(df_5m['nifty_trend'] == -1)
         )
         df_5m['strategy_10'] = False
         first_true_idx_10 = df_5m[df_5m['s_10']].groupby('date').head(1).index
@@ -354,7 +402,9 @@ class BacktestEngine:
             (df_5m['close'] > df_5m['ema_200']) & 
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0) & 
-            (df_5m['volume_range_pct_10'] < 0.3)
+            (df_5m['volume_range_pct_10'] < 0.3) &
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
+            #(df_5m['nifty_trend'] == 1)
         )
         df_5m['strategy_11'] = False
         first_true_idx_11 = df_5m[df_5m['s_11']].groupby('date').head(1).index
@@ -370,7 +420,9 @@ class BacktestEngine:
             (df_5m['close'] > df_5m['ema_200']) & 
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
-            (df_5m['volume_range_pct_10'] < 0.6)
+            (df_5m['volume_range_pct_10'] < 0.6) &
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
+            #(df_5m['nifty_trend'] != 1)
         )
         df_5m['strategy_9'] = False
         first_true_idx_9 = df_5m[df_5m['s_9']].groupby('date').head(1).index
@@ -386,15 +438,23 @@ class BacktestEngine:
             '15m': df_15m,
             '5m': df_5m,
             '1m': df_1m,
-            'd': df_daily
+            'd': df_daily,
+            '1h': df_nifty_1h
         }
     
     def get_day_data_optimized(self, df_with_indicators, day, lookback_days):
         """
         Fast slicing of pre-calculated data for a specific day
         """
+        if df_with_indicators.empty:
+            return df_with_indicators
+            
         start_date = day - timedelta(days=lookback_days)
         end_date = day + timedelta(days=1)  # Include full day
+        
+        # Ensure time column is datetime
+        if not pd.api.types.is_datetime64_any_dtype(df_with_indicators['time']):
+            df_with_indicators['time'] = pd.to_datetime(df_with_indicators['time'])
         
         # Use boolean indexing (faster than .loc for large datasets)
         mask = (df_with_indicators['time'].dt.date >= start_date) & (df_with_indicators['time'].dt.date <= day)
@@ -402,6 +462,13 @@ class BacktestEngine:
 
     def get_today_data_only(self, df_with_indicators, day):
         """Get only today's data (for trading logic)"""
+        if df_with_indicators.empty:
+            return df_with_indicators
+            
+        # Ensure time column is datetime
+        if not pd.api.types.is_datetime64_any_dtype(df_with_indicators['time']):
+            df_with_indicators['time'] = pd.to_datetime(df_with_indicators['time'])
+            
         start_dt = datetime.combine(day, time.min).replace(tzinfo=pytz.UTC)
         end_dt = datetime.combine(day, time.max).replace(tzinfo=pytz.UTC)
         
@@ -428,27 +495,46 @@ class BacktestEngine:
         '15m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '15m'),
         '5m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '5m'),
         '1m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '1m'),
-        'd': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd')
+        'd': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd'),
+        '1h': self.fetch_lookback_data_2(self.start_date - timedelta(days=45), self.end_date, '1h')
         }
 
         # === STEP 2: Calculate all indicators once ===
-        data_with_indicators = self.calculate_all_indicators_once(df_all_dict)
+        try:
+            data_with_indicators = self.calculate_all_indicators_once(df_all_dict)
+        except Exception as e:
+            self.logger.error(f"Error in calculate_all_indicators_once for {self.symbol}: {e}")
+            raise
 
         # === STEP 3: Process each day with pre-calculated data ===
         for day in self.daterange():
-            # Fast slicing of pre-calculated data (no more daily filtering/copying)
-            df = self.get_day_data_optimized(data_with_indicators['15m'], day, 5)
-            df_5min = self.get_day_data_optimized(data_with_indicators['5m'], day, 7)
-            df_min = self.get_day_data_optimized(data_with_indicators['1m'], day, 2)
-            df_daily = self.get_day_data_optimized(data_with_indicators['d'], day, 20)
+            try:
+                # Fast slicing of pre-calculated data (no more daily filtering/copying)
+                df = self.get_day_data_optimized(data_with_indicators['15m'], day, 5)
+                df_5min = self.get_day_data_optimized(data_with_indicators['5m'], day, 7)
+                df_min = self.get_day_data_optimized(data_with_indicators['1m'], day, 2)
+                #df_daily = self.get_day_data_optimized(data_with_indicators['d'], day, 20)
+                #df_nifty_1h = self.get_day_data_optimized(data_with_indicators['1h'], day, 45)
+            except Exception as e:
+                self.logger.error(f"Error in get_day_data_optimized for {self.symbol} on {day}: {e}")
+                continue
 
-            if df.empty or df_5min.empty or df_daily.empty or df_min.empty:
+            if df.empty or df_5min.empty or df_min.empty:
                 continue
             
             # Get today's data only (for trading logic)
             df_today = self.get_today_data_only(df, day)
             df_today_5min = self.get_today_data_only(df_5min, day)
             df_min_today = self.get_today_data_only(df_min, day)
+            
+            # Safety check: Skip if strategy columns are missing
+            required_strategy_cols = ['strategy_8', 'strategy_12', 'strategy_10', 'strategy_11', 'strategy_9']
+            if not all(col in df_today.columns for col in required_strategy_cols[:2]) and not df_today.empty:
+                self.logger.warning(f"Missing 15m strategy columns for {self.symbol} on {day}, skipping")
+                continue
+            if not all(col in df_today_5min.columns for col in required_strategy_cols[2:]) and not df_today_5min.empty:
+                self.logger.warning(f"Missing 5m strategy columns for {self.symbol} on {day}, skipping") 
+                continue
 
             entry_row = None
 
@@ -460,9 +546,10 @@ class BacktestEngine:
                 curr_ist_time = curr['time'].astimezone(IST).time()  
                 curr_ist_time_2 = curr['time'].astimezone(IST)
 
-                buy = curr['strategy_12']
+                # Safely access strategy columns with defaults
+                buy = curr.get('strategy_12', False)
                 sell = False
-                short = curr['strategy_8']
+                short = curr.get('strategy_8', False)
                 cover = False  
 
                 # ENTRY: Long
@@ -652,9 +739,10 @@ class BacktestEngine:
                 curr_ist_time = curr['time'].astimezone(IST).time()  
                 curr_ist_time_2 = curr['time'].astimezone(IST)
 
-                buy = curr['strategy_11']
+                # Safely access strategy columns with defaults
+                buy = curr.get('strategy_11', False)
                 sell = False
-                short = curr['strategy_10'] or curr['strategy_9']
+                short = curr.get('strategy_10', False) or curr.get('strategy_9', False)
                 cover = False  
 
                 # ENTRY: Long
@@ -689,7 +777,7 @@ class BacktestEngine:
                     in_position = True
                     self.entry_price = entry_row['close']
                     #strategy_id = '10'
-                    strategy_id = '10' if curr['strategy_10'] else '9'
+                    strategy_id = '10' if curr.get('strategy_10', False) else '9'
                     entry_time = curr['time'] + timedelta(minutes=4) # 5min as we are working on 5min candles, else replace it with 15min
                     #self.logger.info(f"Entry confirmed: position={self.position}, entry_price={entry_row['close']}, in_position={in_position}")
                     break  # Exit the 15m loop after entry

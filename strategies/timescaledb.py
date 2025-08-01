@@ -18,6 +18,8 @@ import random
 from dateutil import parser  # For flexible ISO date parsing
 import traceback
 import argparse
+import signal
+import sys
 from openalgo import api
 import pandas as pd
 from backtest_engine import BacktestEngine
@@ -207,6 +209,21 @@ class TimescaleDBManager:
             SELECT create_hypertable('ohlc_15m', 'time', if_not_exists => TRUE)
             """,
             """
+            CREATE TABLE IF NOT EXISTS ohlc_1h (
+                time TIMESTAMPTZ NOT NULL,
+                symbol VARCHAR(20) NOT NULL,                
+                open DECIMAL(18, 2),
+                high DECIMAL(18, 2),
+                low DECIMAL(18, 2),
+                close DECIMAL(18, 2),
+                volume BIGINT,
+                PRIMARY KEY (time, symbol)
+            )
+            """,
+            """
+            SELECT create_hypertable('ohlc_1h', 'time', if_not_exists => TRUE)
+            """,
+            """
             CREATE TABLE IF NOT EXISTS ohlc_D (
                 time TIMESTAMPTZ NOT NULL,
                 symbol VARCHAR(20) NOT NULL,                
@@ -225,6 +242,7 @@ class TimescaleDBManager:
             """CREATE INDEX IF NOT EXISTS idx_ohlc_1m_symbol_time ON ohlc_1m (time, symbol)""",
             """CREATE INDEX IF NOT EXISTS idx_ohlc_5m_symbol_time ON ohlc_5m (time, symbol)""",
             """CREATE INDEX IF NOT EXISTS idx_ohlc_15m_symbol_time ON ohlc_15m (time, symbol)""",
+            """CREATE INDEX IF NOT EXISTS idx_ohlc_1h_symbol_time ON ohlc_1h (time, symbol)""",
             """CREATE INDEX IF NOT EXISTS idx_ohlc_d_symbol_time ON ohlc_D (time, symbol)"""
         ]
         
@@ -321,6 +339,7 @@ class MarketDataProcessor:
         self.db_manager = TimescaleDBManager()
         self.db_conn = self.db_manager.initialize_database()
         self.logger = logging.getLogger(f"MarketDataProcessor")
+        self.interrupt_flag = False  # Add interrupt flag
         
         self.consumer = KafkaConsumer(
             'tick_data',
@@ -354,7 +373,7 @@ class MarketDataProcessor:
         """Clear all records from all tables in the database"""
         try:
             self.logger.info("Cleaning database tables...")
-            tables = ['ticks', 'ohlc_1m', 'ohlc_5m', 'ohlc_15m', 'ohlc_D']  # Add all your table names here
+            tables = ['ticks', 'ohlc_1m', 'ohlc_5m', 'ohlc_15m', 'ohlc_1h', 'ohlc_D']  # Add all your table names here
             
             with self.db_conn.cursor() as cursor:
                 # Disable triggers temporarily to avoid hypertable constraints
@@ -555,22 +574,48 @@ class MarketDataProcessor:
                 condition_2 = range_start.weekday() in [0, 1, 2, 3, 4] and range_end.weekday() in [0, 1, 2, 3, 4] and (range_end - range_start).days == 0
                 if (condition_1 or condition_2): # Skip weekends
                     continue
-                df = client.history(
-                        symbol=symbol,
-                        exchange='NSE',
-                        interval=interval,
-                        start_date=range_start.strftime('%Y-%m-%d'),
-                        end_date=range_end.strftime('%Y-%m-%d')
-                    )
-                # Check if df is dictionary before accessing 'df'
-                if df.__class__ == dict:                    
-                    self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {range_start}")
-                    self.logger.info(f"API Response: {df}")
-                    continue
-                if not df.empty:
-                    self.insert_historical_data(df, symbol, interval)                    
-                else:
-                    self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {range_start}")
+                
+                # Add retry logic with exponential backoff
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        df = client.history(
+                                symbol=symbol,
+                                exchange='NSE_INDEX' if symbol.startswith('NIFTY') else 'NSE',
+                                interval=interval,
+                                start_date=range_start.strftime('%Y-%m-%d'),
+                                end_date=range_end.strftime('%Y-%m-%d')
+                            )
+                        
+                        # Check if df is dictionary (error response)
+                        if isinstance(df, dict):                    
+                            if 'timeout' in str(df.get('message', '')).lower():
+                                if attempt < max_retries - 1:
+                                    wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff
+                                    self.logger.warning(f"[{symbol}] ⏳ Timeout on attempt {attempt + 1}, retrying in {wait_time:.1f}s...")
+                                    time.sleep(wait_time)
+                                    continue
+                            self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {range_start}")
+                            self.logger.info(f"API Response: {df}")
+                            break  # Exit retry loop
+                        
+                        # Success - process the dataframe
+                        if hasattr(df, 'empty') and not df.empty:
+                            self.insert_historical_data(df, symbol, interval)
+                        else:
+                            self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {range_start}")
+                        break  # Exit retry loop on success
+                        
+                    except Exception as retry_e:
+                        if attempt < max_retries - 1:
+                            wait_time = (2 ** attempt) + random.uniform(0, 1)
+                            self.logger.warning(f"[{symbol}] ⏳ Error on attempt {attempt + 1}: {retry_e}, retrying in {wait_time:.1f}s...")
+                            time.sleep(wait_time)
+                        else:
+                            self.logger.error(f"[{symbol}] ❌ Failed after {max_retries} attempts: {retry_e}")
+                
+                # Add delay between requests to reduce server load
+                time.sleep(random.uniform(0.1, 0.3))
 
         except Exception as e:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
@@ -578,21 +623,56 @@ class MarketDataProcessor:
 
     def fetch_historical_data(self, symbol, interval, client, start_date, end_date):
         try:
-            df = client.history(
-                    symbol=symbol,
-                    exchange='NSE',
-                    interval=interval,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-            # Check if df is dictionary before accessing 'df'
-            if df.__class__ == dict:                    
-                self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {start_date}")
-                self.logger.info(f"API Response: {df}")
-            if not df.empty:
-                self.insert_historical_data(df, symbol, interval)                    
-            else:
-                self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {start_date}")
+            # Check for interrupt flag
+            if self.interrupt_flag:
+                self.logger.info(f"[{symbol}] 🛑 Task interrupted before starting")
+                return
+                
+            # Add retry logic with exponential backoff
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # Check for interrupt before each retry
+                    if self.interrupt_flag:
+                        self.logger.info(f"[{symbol}] 🛑 Task interrupted during retry {attempt + 1}")
+                        return
+                    df = client.history(
+                            symbol=symbol,
+                            exchange='NSE_INDEX' if symbol.startswith('NIFTY') else 'NSE',
+                            interval=interval,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                    
+                    # Check if df is dictionary (error response)
+                    if isinstance(df, dict):                    
+                        if 'timeout' in str(df.get('message', '')).lower():
+                            if attempt < max_retries - 1:
+                                wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff
+                                self.logger.warning(f"[{symbol}] ⏳ Timeout on attempt {attempt + 1}, retrying in {wait_time:.1f}s...")
+                                time.sleep(wait_time)
+                                continue
+                        self.logger.warning(f"[{symbol}] ⚠️ API Response error! No data on {start_date}")
+                        self.logger.info(f"API Response: {df}")
+                        return  # Exit function
+                    
+                    # Success - process the dataframe
+                    if hasattr(df, 'empty') and not df.empty:
+                        self.insert_historical_data(df, symbol, interval)
+                    else:
+                        self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {start_date}")
+                    return  # Exit function on success
+                    
+                except Exception as retry_e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) + random.uniform(0, 1)
+                        self.logger.warning(f"[{symbol}] ⏳ Error on attempt {attempt + 1}: {retry_e}, retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                    else:
+                        self.logger.error(f"[{symbol}] ❌ Failed after {max_retries} attempts: {retry_e}")
+            
+            # Add delay between requests to reduce server load
+            time.sleep(random.uniform(0.1, 0.3))
 
         except Exception as e:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
@@ -881,6 +961,26 @@ class MarketDataProcessor:
         logger.info("Clean shutdown complete")
 
 if __name__ == "__main__":
+    # Global variables for signal handling
+    processor = None
+    interrupt_requested = False
+    
+    def signal_handler(signum, frame):
+        """Handle Ctrl+C interrupt gracefully"""
+        global interrupt_requested, processor
+        if interrupt_requested:
+            print("\n🚨 Force quit! Terminating immediately...")
+            sys.exit(1)
+        
+        interrupt_requested = True
+        print("\n🛑 Interrupt signal received! Stopping gracefully...")
+        print("   Press Ctrl+C again to force quit.")
+        
+        if processor:
+            processor.interrupt_flag = True
+    
+    # Set up signal handler
+    signal.signal(signal.SIGINT, signal_handler)
 
     client = api(
         api_key="8009e08498f085ff1a3e7da718c5f4b585eaf9c2b7ce0c72740ab2b5d283d36c",  # Replace with your API key
@@ -917,7 +1017,7 @@ if __name__ == "__main__":
         except ValueError as e:
             parser.error(f"Invalid date format. Please use DD-MM-YYYY. Error: {e}")
 
-    # Initialize the processor
+    # Initialize the processor (update global variable for signal handler)
     processor = MarketDataProcessor()
     try:
         if args.mode == 'live':
@@ -974,37 +1074,78 @@ if __name__ == "__main__":
             symbol_list = pd.read_csv('symbol_list_backtest.csv')
             symbol_list = symbol_list['Symbol'].tolist()
 
+            # Randomly select 20 stocks from the symbol_list
+            # symbol_list = random.sample(symbol_list, 10)
+
             # Fetch historical data for each symbol
-            intervals = ["D", "15m", "5m", "1m"]
+            intervals = ["D", "15m", "5m", "1m"]                       
 
             # Create all combinations of (symbol, interval)
             symbol_interval_pairs = list(product(symbol_list, intervals))
 
+            # Add "NIFTY" "1h" in the symbol_interval_pairs
+            symbol_interval_pairs.append(("NIFTY", "1h")) 
+
             # UNCOMMENT THIS BLOCK FOR FETCHING HISTORICAL DATA FOR ALL INTERVALS
-            with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
-                futures = []
-                for symbol, interval in symbol_interval_pairs:
-                    time.sleep(1)
-                    futures.append(
-                        executor.submit(
-                            processor.process_symbol_interval,
-                            symbol,
-                            interval,
-                            client,
-                            start_date,
-                            end_date
-                        )
-                    )
+            # with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced to prevent server overload
+            #     futures = []
                 
-                # Wait for all tasks to complete (optional)
-                try:
-                    for future in futures:                        
-                        future.result()  # This will re-raise any exceptions from the thread
-                except KeyboardInterrupt:
-                    print("Interrupted by user. Cancelling all futures.")
-                    for future in futures:
-                        future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
+            #     try:
+            #         for symbol, interval in symbol_interval_pairs:
+            #             time.sleep(1.5)  # Increased delay to reduce server pressure
+            #             futures.append(
+            #                 executor.submit(
+            #                     processor.process_symbol_interval,
+            #                     symbol,
+            #                     interval,
+            #                     client,
+            #                     start_date,
+            #                     end_date
+            #                 )
+            #             )
+                    
+            #         # Wait for all tasks to complete with proper interrupt handling
+            #         completed = 0
+            #         total = len(futures)
+                    
+            #         for future in futures:
+            #             try:
+            #                 future.result(timeout=30)  # 30 second timeout per task
+            #                 completed += 1
+            #                 if completed % 10 == 0:  # Progress update every 10 tasks
+            #                     logger.info(f"📊 Progress: {completed}/{total} tasks completed")
+            #             except TimeoutError:
+            #                 logger.warning(f"⏰ Task timed out, continuing with next task")
+            #                 future.cancel()
+            #             except Exception as e:
+            #                 logger.error(f"❌ Task failed: {e}")
+                    
+            #         logger.info(f"✅ All {total} data fetching tasks completed")
+                    
+            #     except KeyboardInterrupt:
+            #         logger.warning("\n🛑 KeyboardInterrupt received! Stopping all tasks...")
+                    
+            #         # Set interrupt flag to stop running tasks
+            #         processor.interrupt_flag = True
+                    
+            #         # Cancel all pending futures
+            #         cancelled_count = 0
+            #         for future in futures:
+            #             if future.cancel():
+            #                 cancelled_count += 1
+                    
+            #         logger.info(f"📝 Cancelled {cancelled_count} pending tasks")
+                    
+            #         # Force shutdown the executor
+            #         logger.info("🔄 Shutting down executor...")
+            #         executor.shutdown(wait=False)
+                    
+            #         # Give running tasks a moment to cleanup and check interrupt flag
+            #         logger.info("⏳ Waiting for running tasks to cleanup...")
+            #         time.sleep(3)
+                    
+            #         logger.info("🛑 Data fetching interrupted by user")
+            #         raise  # Re-raise to exit the program
 
             
             # Without threading
@@ -1124,16 +1265,41 @@ if __name__ == "__main__":
                 if all_dfs:
                     try:
                         master_df = pd.concat(all_dfs, ignore_index=True)
-                        master_df.sort_values(by='entry_time', inplace=True)
+                        
+                        # Convert datetime columns before sorting (fix for .dt accessor error)
+                        if 'entry_time' in master_df.columns:
+                            master_df['entry_time'] = pd.to_datetime(master_df['entry_time'], errors='coerce')
+                        if 'exit_time' in master_df.columns:
+                            master_df['exit_time'] = pd.to_datetime(master_df['exit_time'], errors='coerce')
+                        
+                        # Only sort if entry_time column exists and has valid data
+                        if 'entry_time' in master_df.columns and not master_df['entry_time'].isna().all():
+                            master_df.sort_values(by='entry_time', inplace=True)
+                        else:
+                            logger.warning("entry_time column missing or contains no valid dates - skipping sort")
 
                         # Save master trades in the base output directory                        
                         master_output_path_raw = os.path.join(base_output_dir, "backtest_trades_master_raw.csv")
                         master_df.to_csv(master_output_path_raw, index=False)
 
                         # Process the trades with constraints
+                        logger.info(f"Master DF columns before constraints: {list(master_df.columns)}")
+                        logger.info(f"Master DF strategy values: {master_df['strategy'].unique() if 'strategy' in master_df.columns else 'No strategy column'}")
+                        
                         master_df = process_trades_with_constraints(master_df)
+
+                        # Save master trades in the base output directory                        
+                        master_output_path = os.path.join(base_output_dir, "backtest_trades_master.csv")
+                        master_df.to_csv(master_output_path, index=False)
                       
                         # STRATEGY SUMMARY
+                        logger.info(f"Creating strategy summary for {len(master_df)} trades")
+                        logger.info(f"Available columns: {list(master_df.columns)}")
+                        if 'strategy' in master_df.columns:
+                            logger.info(f"Strategy values: {master_df['strategy'].unique()}")
+                        else:
+                            logger.error("No 'strategy' column found in master_df!")
+                            
                         strat_summary = master_df.groupby('strategy').agg(
                             tot_trades=('gross_pnl', 'count'),
                             proftrades=('net_pnl', lambda x: (x > 0).sum()),
@@ -1194,11 +1360,7 @@ if __name__ == "__main__":
                                 )
                             )
                         ).reset_index()
-                        month_strat_summary = month_strat_summary.round(2)
-
-                        # Save master trades in the base output directory                        
-                        master_output_path = os.path.join(base_output_dir, "backtest_trades_master.csv")
-                        master_df.to_csv(master_output_path, index=False)
+                        month_strat_summary = month_strat_summary.round(2)                        
                         
                         # Save strategy summary in the base output directory     
                         master_output_path = os.path.join(base_output_dir, "master_summary_by_strategy.csv")
@@ -1327,12 +1489,15 @@ if __name__ == "__main__":
                     # Print summary
                     if 'net_pnl__' in summary_df.columns:
                         total_net = summary_df['net_pnl__'].sum()
+                        total_trades = summary_df['tot_trades'].sum()
+                        avg_net = total_net / total_trades
                         status = (f"{Fore.GREEN}↑PROFIT" if total_net > 0 else 
                                 f"{Fore.RED}↓LOSS" if total_net < 0 else 
                                 f"{Fore.YELLOW}➔BREAKEVEN")
                         print(f"| {status}{Style.RESET_ALL}  Net: {format_currency(total_net)}  "
-                            f"Trades: {summary_df['tot_trades'].sum():,}  "
-                            f"Win%: {summary_df['proftrades'].sum()/summary_df['tot_trades'].sum()*100:.1f}%".ljust(len(border)-1) + "|")
+                            f"Avg P/L: {format_currency(avg_net)}  "
+                            f"Trades: {total_trades:,}  "
+                            f"Win%: {summary_df['proftrades'].sum()/total_trades*100:.1f}%".ljust(len(border)-1) + "|")
                         print(border + Style.RESET_ALL)
 
                 except Exception as e:
@@ -1426,11 +1591,7 @@ if __name__ == "__main__":
                     print(f"{Fore.RED}❌ Error displaying table: {e}")
 
             def process_trades_with_constraints(trades_df):
-                # Convert string times to datetime objects
-                trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time'])
-                trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
-                
-                # Sort trades by entry time
+                # Sort trades by entry time (datetime conversion already done in aggregate_all_summaries)
                 trades_df = trades_df.sort_values('entry_time')
                 
                 # Initialize tracking variables
@@ -1493,37 +1654,45 @@ if __name__ == "__main__":
                     
             # Run backtests in parallel 
             # Create connection pool once
-            # db_config = {
-            #         "user": processor.db_manager.user,
-            #         "password": processor.db_manager.password,
-            #         "host": processor.db_manager.host,
-            #         "port": processor.db_manager.port,
-            #         "dbname": processor.db_manager.dbname
-            # }
+            db_config = {
+                    "user": processor.db_manager.user,
+                    "password": processor.db_manager.password,
+                    "host": processor.db_manager.host,
+                    "port": processor.db_manager.port,
+                    "dbname": processor.db_manager.dbname
+            }
 
-            # connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            #     minconn=1, maxconn=8,  # Adjust based on your needs
-            #     user=db_config['user'],
-            #     password=db_config['password'],
-            #     host=db_config['host'],
-            #     port=db_config['port'],
-            #     dbname=db_config['dbname']
-            # )    
-            # with ThreadPoolExecutor(max_workers=8) as executor:
-            #     futures = []                
-            #     for symbol in symbol_list:
-            #         futures.append(executor.submit(run_backtest_for_symbol, symbol, connection_pool, from_date, to_date, base_output_dir))
-            #     try:
-            #         for future in futures:
-            #             future.result()
-            #     except KeyboardInterrupt:
-            #         print("Interrupted by user. Cancelling all futures.")
-            #         for future in futures:
-            #             future.cancel()
-            #         executor.shutdown(wait=False, cancel_futures=True)
+            connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1, maxconn=8,  # Adjust based on your needs
+                user=db_config['user'],
+                password=db_config['password'],
+                host=db_config['host'],
+                port=db_config['port'],
+                dbname=db_config['dbname']
+            )    
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = []                
+                for symbol in symbol_list:
+                    futures.append(executor.submit(run_backtest_for_symbol, symbol, connection_pool, from_date, to_date, base_output_dir))
+                try:
+                    for i, future in enumerate(futures):
+                        try:
+                            future.result()
+                            logger.info(f"✅ Future {i+1}/{len(futures)} completed successfully")
+                        except Exception as e:
+                            logger.error(f"❌ Future {i+1}/{len(futures)} failed with error: {e}")
+                            logger.error(f"Error type: {type(e).__name__}")
+                            import traceback
+                            logger.error(f"Traceback: {traceback.format_exc()}")
+                            raise  # Re-raise the error
+                except KeyboardInterrupt:
+                    print("Interrupted by user. Cancelling all futures.")
+                    for future in futures:
+                        future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
                 
-            # # Aggregate summaries from the organized folder structure                
-            # aggregate_all_summaries(base_output_dir, "master_summary.csv")               
+            # Aggregate summaries from the organized folder structure                
+            aggregate_all_summaries(base_output_dir, "master_summary.csv")               
             
             # End the timer
             end_time = time.time()
