@@ -32,7 +32,6 @@ For detailed installation instructions, please refer to [INSTALL.md](https://doc
 - **Firstock**
 - **Flattrade**
 - **Fyers**
-- **ICICI Direct**
 - **IBulls**
 - **Indmoney**
 - **Kotak** 
