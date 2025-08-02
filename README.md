@@ -238,6 +238,34 @@ OpenAlgo is part of a larger ecosystem of open-source trading tools. The Mini FO
 
 Built for traders, by traders - making algo trading more accessible, powerful, and open for everyone. Visit [docs.openalgo.in/mini-foss-universe](https://docs.openalgo.in/mini-foss-universe) for more details.
 
+### Local MCP (Model Context Protocol) Integration
+OpenAlgo includes native MCP server capabilities, enabling AI assistants to execute trades and manage portfolios directly:
+
+#### Key Features
+- **AI-Powered Trading**: Connect AI assistants like Claude Desktop, Cursor, or Windsurf to execute trades
+- **Full Trading Capabilities**: 
+  - Order Management: Place, modify, cancel orders (market/limit/stop-loss)
+  - Smart Orders: Automatic position sizing and basket orders
+  - Position Management: Close positions, track P&L
+  - Market Data: Real-time quotes, market depth, historical data
+- **Multi-Platform Support**: Works with any MCP-compatible AI client
+- **Local & Secure**: Runs locally with your OpenAlgo instance
+
+#### Available MCP Tools
+- **Order Operations**: `place_order`, `place_smart_order`, `place_basket_order`, `modify_order`, `cancel_order`
+- **Position Tracking**: `get_open_position`, `get_position_book`, `close_all_positions`
+- **Market Data**: `get_quote`, `get_market_depth`, `get_historical_data`
+- **Account Info**: `get_funds`, `get_holdings`, `get_order_book`, `get_trade_book`
+- **Instrument Search**: `search_instruments`, `get_symbol_info`, `get_expiry_dates`
+
+#### Quick Setup
+1. Start your OpenAlgo server
+2. Generate an API key from Settings → API Keys
+3. Configure your AI assistant with the MCP server path and API key
+4. Start trading with natural language commands like "Buy 100 shares of RELIANCE"
+
+For detailed MCP setup instructions, see [mcp/README.md](mcp/README.md)
+
 ## Documentation
 
 For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to [https://docs.openalgo.in](https://docs.openalgo.in)
