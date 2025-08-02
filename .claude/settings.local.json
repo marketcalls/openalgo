@@ -18,7 +18,8 @@
       "Bash(curl:*)",
       "Bash(chmod:*)",
       "Bash(source:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "WebFetch(domain:docs.openalgo.in)"
     ],
     "deny": []
   }
