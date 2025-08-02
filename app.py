@@ -208,7 +208,7 @@ def create_app():
 
 def setup_environment(app):
     with app.app_context():
-        #load broker plugins
+        # load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
         # Ensure all the tables exist
         ensure_auth_tables_exists()
@@ -225,7 +225,10 @@ def setup_environment(app):
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
-        public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
+        public_url = ngrok.connect(
+            addr=f"{os.getenv("FLASK_HOST_IP", '127.0.0.1')}:{os.getenv("FLASK_PORT", 5000)}",
+            name="flask",
+        ).public_url
         logger.info(f"ngrok URL: {public_url}")
 
 app = create_app()
