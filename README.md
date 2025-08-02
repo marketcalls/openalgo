@@ -15,9 +15,8 @@
 OpenAlgo is an open-source, Flask-based Python application designed to bridge the gap between traders and major trading platforms such as Amibroker, Tradingview, Python, Chartink, MetaTrader, Excel, and Google Spreadsheets. With a focus on simplifying algotrading, OpenAlgo facilitates easy integration, automation, and execution of trading strategies, providing a user-friendly interface to enhance trading performance.
 
 ## Installation Guide
-[![OpenAlgo Windows Installation Tutorial](https://img.youtube.com/vi/PCPAeDKTh50/0.jpg)](https://www.youtube.com/watch?v=uZ6PD6UDxrg "Watch the Installation Tutorial")
 
-For detailed installation instructions, please refer to [INSTALL.md](INSTALL.md)
+For detailed installation instructions, please refer to [INSTALL.md](https://docs.openalgo.in/getting-started)
 
 ## What is OpenAlgo?
 [![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI "Watch the OpenAlgo Tutorial Video")
