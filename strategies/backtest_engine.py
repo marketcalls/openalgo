@@ -10,6 +10,7 @@ import pytz
 IST = pytz.timezone('Asia/Kolkata')
 import gc
 import numpy as np
+import talib
 
 matplotlib.use('Agg')  # use Anti-Grain Geometry backend (non-GUI)
 
@@ -74,16 +75,108 @@ class BacktestEngine:
         return df
     
     def exclude_first_30min(self, group):
-        mask = ~(
-            (group['time'].dt.time >= time(3, 45)) & 
-            (group['time'].dt.time < time(4, 15)) # Time in UTC - hence 3.45 to 4.15
-        )
-        return group[mask]['range'].expanding().mean()
+        """Calculate expanding mean of range excluding first 30 minutes"""
+        try:
+            if group.empty or 'range' not in group.columns:
+                return pd.Series(dtype=float)
+                
+            mask = ~(
+                (group['time'].dt.time >= time(3, 45)) & 
+                (group['time'].dt.time < time(4, 15)) # Time in UTC - hence 3.45 to 4.15
+            )
+            filtered_group = group[mask]
+            if filtered_group.empty:
+                return pd.Series(dtype=float, index=group.index)
+                
+            result = filtered_group['range'].expanding().mean()
+            # Ensure we return a Series aligned with the original group
+            return result.reindex(group.index).ffill()
+        except Exception as e:
+            # Return a Series of NaNs if there's an error
+            return pd.Series(float('nan'), index=group.index)
     
     def zero_lag_ema(self, series, period):
         ema1 = series.ewm(span=period, adjust=False).mean()
         ema2 = ema1.ewm(span=period, adjust=False).mean()
         return ema1 + (ema1 - ema2)
+
+    def hull_moving_average(self, close, window=50):
+        """HMA reduces lag significantly vs EMA."""
+        wma_half = talib.WMA(close, timeperiod=window//2)
+        wma_full = talib.WMA(close, timeperiod=window)
+        hma = talib.WMA(2 * wma_half - wma_full, timeperiod=int(np.sqrt(window)))
+        return hma
+
+    def zero_lag_macd(self, close, fast=12, slow=26, signal=9):
+        """MACD using Zero-Lag EMAs (TEMA)."""
+        ema_fast = talib.TEMA(close, timeperiod=fast)
+        ema_slow = talib.TEMA(close, timeperiod=slow)
+        macd = ema_fast - ema_slow
+        signal_line = talib.TEMA(macd, timeperiod=signal)
+        return macd, signal_line
+
+    def relative_momentum_index(self, close, window=14):
+        """RMI is a more responsive alternative to ADX."""
+        delta = close.diff(1)
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window).mean()
+        avg_loss = loss.rolling(window).mean()
+        rmi = 100 * (avg_gain / (avg_gain + avg_loss))
+        return rmi
+    
+    def classify_trend(self, row):
+        # Primary Conditions (1H)
+        ema_bullish = row['close'] > row['nifty_1hr_ema_50'] > row['nifty_1hr_ema_200']
+        ema_bearish = row['close'] < row['nifty_1hr_ema_50'] < row['nifty_1hr_ema_200']
+        hma_bullish = row['close'] > row['nifty_1hr_hma_50'] > row['nifty_1hr_hma_200']
+        hma_bearish = row['close'] < row['nifty_1hr_hma_50'] < row['nifty_1hr_hma_200']
+        rmi_strong = row['nifty_1hr_RMI'] > 60  # RMI > 60 = strong trend
+        adx_strong = row['nifty_1hr_adx'] > 20
+        di_bullish = row['nifty_1hr_+DI'] > row['nifty_1hr_-DI']
+        di_bearish = row['nifty_1hr_-DI'] > row['nifty_1hr_+DI']
+        macd_bullish = row['nifty_1hr_MACD'] > row['nifty_1hr_MACD_Signal']
+        macd_bearish = row['nifty_1hr_MACD'] < row['nifty_1hr_MACD_Signal']
+        #volume_ok = row['Volume_Spike']
+        
+        # Trend Logic
+        if ema_bullish and adx_strong and di_bullish and macd_bullish:
+            return 1
+        elif ema_bearish and adx_strong and di_bearish and macd_bearish:
+            return -1
+        else:
+            return 0
+        
+    
+    def classify_trend_2(self, row):
+        # Strong Uptrend
+        if (row['close'] > row['nifty_1hr_ema_50'] > row['nifty_1hr_ema_200']) and \
+        (row['nifty_1hr_MACD'] > row['nifty_1hr_MACD_Signal']) and \
+        (row['nifty_1hr_adx'] > 25) and (row['nifty_1hr_+DI'] > row['nifty_1hr_-DI']):
+            return 2
+        
+        # Strong Downtrend
+        elif (row['close'] < row['nifty_1hr_ema_50'] < row['nifty_1hr_ema_200']) and \
+            (row['nifty_1hr_MACD'] < row['nifty_1hr_MACD_Signal']) and \
+            (row['nifty_1hr_adx'] > 25) and (row['nifty_1hr_-DI'] > row['nifty_1hr_+DI']):
+            return -2
+        
+        # Up-Sideways
+        elif (row['close'] > row['nifty_1hr_ema_50']) and \
+            (row['nifty_1hr_adx'] < 25) and \
+            (abs(row['nifty_1hr_MACD'] - row['nifty_1hr_MACD_Signal']) < 1.0):  # MACD hovering near signal
+            return 1
+        
+        # Down-Sideways
+        elif (row['close'] < row['nifty_1hr_ema_50']) and \
+            (row['nifty_1hr_adx'] < 25) and \
+            (abs(row['nifty_1hr_MACD'] - row['nifty_1hr_MACD_Signal']) < 1.0):
+            return -1
+        
+        # Neutral Sideways
+        else:
+            return 0
+
         
     def calculate_all_indicators_once(self, df_all_dict):
         """
@@ -144,16 +237,37 @@ class BacktestEngine:
 
         df_nifty_1h['nifty_1hr_ema_50'] = df_nifty_1h['close'].ewm(span=50, adjust=False).mean()
         df_nifty_1h['nifty_1hr_ema_200'] = df_nifty_1h['close'].ewm(span=200, adjust=False).mean()
-        df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_ema_50'] > (df_nifty_1h['nifty_1hr_ema_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_ema_50'] < (df_nifty_1h['nifty_1hr_ema_200'] * 0.99), -1, 0))
-        #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['close'] > df_nifty_1h['nifty_1hr_ema_50'], 1, -1)
+        df_nifty_1h['nifty_1hr_adx'] = talib.ADX(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=14)
+        df_nifty_1h['nifty_1hr_+DI'] = talib.PLUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=14)
+        df_nifty_1h['nifty_1hr_-DI'] = talib.MINUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=14)
+        df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'], _ = talib.MACD(df_nifty_1h['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+        df_nifty_1h['nifty_1hr_Volume_MA20'] = talib.MA(df_nifty_1h['volume'], timeperiod=20)
+        df_nifty_1h['nifty_1hr_Volume_Spike'] = df_nifty_1h['volume'] > 1.5 * df_nifty_1h['nifty_1hr_Volume_MA20']
+
+        # Trend (HMA replaces EMA)
+        df_nifty_1h['nifty_1hr_hma_50'] = self.hull_moving_average(df_nifty_1h['close'], window=50)
+        df_nifty_1h['nifty_1hr_hma_200'] = self.hull_moving_average(df_nifty_1h['close'], window=200)
+        #df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'] = self.zero_lag_macd(df_nifty_1h['close'])
+        df_nifty_1h['nifty_1hr_RMI'] = self.relative_momentum_index(df_nifty_1h['close'])
+        # df_nifty_30m['nifty_30m_ema_50'] = df_nifty_30m['close'].ewm(span=50, adjust=False).mean()
+        # df_nifty_30m['nifty_30m_ema_200'] = df_nifty_30m['close'].ewm(span=200, adjust=False).mean()
+        # df_nifty_30m['nifty_30m_adx'] = talib.ADX(df_nifty_30m['high'], df_nifty_30m['low'], df_nifty_30m['close'], timeperiod=14)
+        # df_nifty_30m['nifty_30m_+DI'] = talib.PLUS_DI(df_nifty_30m['high'], df_nifty_30m['low'], df_nifty_30m['close'], timeperiod=14)
+        # df_nifty_30m['nifty_30m_-DI'] = talib.MINUS_DI(df_nifty_30m['high'], df_nifty_30m['low'], df_nifty_30m['close'], timeperiod=14)
+        # df_nifty_30m['nifty_30m_MACD'], df_nifty_30m['nifty_30m_MACD_Signal'], _ = talib.MACD(df_nifty_30m['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+        # df_nifty_30m['nifty_30m_Volume_MA20'] = talib.MA(df_nifty_30m['volume'], timeperiod=20)
+        # df_nifty_30m['nifty_30m_Volume_Spike'] = df_nifty_30m['volume'] > 1.5 * df_nifty_30m['nifty_30m_Volume_MA20']
+
+        df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_2(row), axis=1)
 
         # Merge trend into the 5min and 15min df
         df_nifty_1h['date'] = pd.to_datetime(df_nifty_1h['time'].dt.date)
         # Keep only the first record each day
-        df_nifty_1h = df_nifty_1h.groupby('date').first().reset_index()
-        df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_1hr_ema_50', 'nifty_trend']], on='date', how='left')
-        df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_1hr_ema_50', 'nifty_trend']], on='date', how='left')
-        
+        df_nifty_1h = df_nifty_1h.groupby('date').last().reset_index()
+        df_nifty_1h['nifty_trend'] = df_nifty_1h['nifty_trend'].shift(1)
+        df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
+        df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
+
         # === 5MIN INDICATORS (EMAs) ===
         df_5m['ema_50'] = df_5m['close'].ewm(span=50, adjust=False).mean()
         df_5m['ema_100'] = df_5m['close'].ewm(span=100, adjust=False).mean()
@@ -163,8 +277,18 @@ class BacktestEngine:
         df_15m['range'] = df_15m['high'] - df_15m['low']
         df_15m['date_only'] = df_15m['time'].dt.date
         df_15m['avg_range_all'] = df_15m.groupby('date_only')['range'].expanding().mean().reset_index(level=0, drop=True)
-        avg_ex_first_30min_15m = df_15m.groupby('date_only').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
-        df_15m['avg_range_ex_first_30min'] = avg_ex_first_30min_15m.reindex(df_15m.index).ffill()
+        
+        # Fix for "Cannot set a DataFrame with multiple columns" error
+        try:
+            avg_ex_first_30min_15m = df_15m.groupby('date_only').apply(self.exclude_first_30min)
+            # Ensure we get a Series, not DataFrame
+            if isinstance(avg_ex_first_30min_15m, pd.DataFrame):
+                avg_ex_first_30min_15m = avg_ex_first_30min_15m.iloc[:, 0]  # Take first column
+            avg_ex_first_30min_15m = avg_ex_first_30min_15m.reset_index(level=0, drop=True)
+            df_15m['avg_range_ex_first_30min'] = avg_ex_first_30min_15m.reindex(df_15m.index).ffill()
+        except Exception as e:
+            self.logger.warning(f"Error calculating avg_range_ex_first_30min for 15m: {e}, using avg_range_all instead")
+            df_15m['avg_range_ex_first_30min'] = df_15m['avg_range_all']
         df_15m['is_range_bullish'] = (
             (df_15m['range'] > 0.7 * df_15m['avg_range_ex_first_30min']) & 
             (df_15m['close'] > df_15m['open']) & 
@@ -181,8 +305,18 @@ class BacktestEngine:
         df_5m['range'] = df_5m['high'] - df_5m['low']
         df_5m['date_only'] = df_5m['time'].dt.date
         df_5m['avg_range_all'] = df_5m.groupby('date_only')['range'].expanding().mean().reset_index(level=0, drop=True)
-        avg_ex_first_30min_5m = df_5m.groupby('date_only').apply(self.exclude_first_30min).reset_index(level=0, drop=True)
-        df_5m['avg_range_ex_first_30min'] = avg_ex_first_30min_5m.reindex(df_5m.index).ffill()
+        
+        # Fix for "Cannot set a DataFrame with multiple columns" error
+        try:
+            avg_ex_first_30min_5m = df_5m.groupby('date_only').apply(self.exclude_first_30min)
+            # Ensure we get a Series, not DataFrame
+            if isinstance(avg_ex_first_30min_5m, pd.DataFrame):
+                avg_ex_first_30min_5m = avg_ex_first_30min_5m.iloc[:, 0]  # Take first column
+            avg_ex_first_30min_5m = avg_ex_first_30min_5m.reset_index(level=0, drop=True)
+            df_5m['avg_range_ex_first_30min'] = avg_ex_first_30min_5m.reindex(df_5m.index).ffill()
+        except Exception as e:
+            self.logger.warning(f"Error calculating avg_range_ex_first_30min for 5m: {e}, using avg_range_all instead")
+            df_5m['avg_range_ex_first_30min'] = df_5m['avg_range_all']
         df_5m['is_range_bullish'] = (
             (df_5m['range'] > 0.7 * df_5m['avg_range_ex_first_30min']) & 
             (df_5m['close'] > df_5m['open']) & 
@@ -217,6 +351,8 @@ class BacktestEngine:
         df_15m['candle_count'] = df_15m.groupby(df_15m['date']).cumcount() + 1
         df_15m['cum_high_prev'] = df_15m.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
         df_15m['cum_low_prev'] = df_15m.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
+        df_15m['cum_high'] = df_15m.groupby('date')['high'].expanding().max().reset_index(level=0, drop=True)
+        df_15m['cum_low'] = df_15m.groupby('date')['low'].expanding().min().reset_index(level=0, drop=True)
         df_15m['sp_confirmed_bullish'] = (
             (df_15m['close'] > df_15m['cum_high_prev']) & 
             (df_15m['close'] > df_15m['open']) & 
@@ -272,6 +408,8 @@ class BacktestEngine:
         df_5m['candle_count'] = df_5m.groupby(df_5m['date']).cumcount() + 1
         df_5m['cum_high_prev'] = df_5m.groupby('date')['high'].expanding().max().shift(1).reset_index(level=0, drop=True)
         df_5m['cum_low_prev'] = df_5m.groupby('date')['low'].expanding().min().shift(1).reset_index(level=0, drop=True)
+        df_5m['cum_high'] = df_5m.groupby('date')['high'].expanding().max().reset_index(level=0, drop=True)
+        df_5m['cum_low'] = df_5m.groupby('date')['low'].expanding().min().reset_index(level=0, drop=True)
         df_5m['sp_confirmed_bullish'] = (
             (df_5m['close'] > df_5m['cum_high_prev']) & 
             (df_5m['close'] > df_5m['open']) & 
@@ -325,6 +463,8 @@ class BacktestEngine:
         df_15m['cum_intraday_volume'] = df_15m.groupby('date')['volume'].cumsum()
         df_15m['curtop'] = df_15m.groupby('date')['high'].cummax()
         df_15m['curbot'] = df_15m.groupby('date')['low'].cummin()
+        df_15m['predicted_today_high'] = df_15m['curbot'] + df_15m['atr_10']
+        df_15m['predicted_today_low'] = df_15m['curtop'] - df_15m['atr_10']
         df_15m['today_range'] = df_15m['curtop'] - df_15m['curbot']
         df_15m['today_range_pct_10'] = df_15m['today_range'] / df_15m['atr_10']
         df_15m['today_range_pct_14'] = df_15m['today_range'] / df_15m['atr_14']
@@ -335,6 +475,8 @@ class BacktestEngine:
         df_5m['cum_intraday_volume'] = df_5m.groupby('date')['volume'].cumsum()
         df_5m['curtop'] = df_5m.groupby('date')['high'].cummax()
         df_5m['curbot'] = df_5m.groupby('date')['low'].cummin()
+        df_5m['predicted_today_high'] = df_5m['curbot'] + df_5m['atr_10']
+        df_5m['predicted_today_low'] = df_5m['curtop'] - df_5m['atr_10']
         df_5m['today_range'] = df_5m['curtop'] - df_5m['curbot']
         df_5m['today_range_pct_10'] = df_5m['today_range'] / df_5m['atr_10']
         df_5m['today_range_pct_14'] = df_5m['today_range'] / df_5m['atr_14']
@@ -350,8 +492,9 @@ class BacktestEngine:
             (df_15m['sp_bullish_range_pct'] > 0.8) & 
             (df_15m['zl_macd_signal'] == -1) & 
             (df_15m['volume_range_pct_10'] > 1) &
-            (df_15m['atr_10'] / df_15m['close_10'] > 0.03)
-            #(df_15m['nifty_trend'] != 1)
+            (df_15m['atr_10'] / df_15m['close_10'] > 0.03) &
+            #(df_15m['nifty_trend'] != -1)
+            (df_15m['nifty_trend'] > 0)
         )
         df_15m['strategy_8'] = False
         first_true_idx_8 = df_15m[df_15m['s_8']].groupby('date').head(1).index
@@ -365,8 +508,9 @@ class BacktestEngine:
             (df_15m['zl_macd_signal'] == 1) &
             (df_15m['volume_range_pct_10'] > 0) &
             (df_15m['volume_range_pct_10'] < 0.4) &
-            (df_15m['atr_10'] / df_15m['close_10'] > 0.03)
-            #(df_15m['nifty_trend'] != -1)
+            (df_15m['atr_10'] / df_15m['close_10'] > 0.03) &
+            #(df_15m['nifty_trend'] == -1)
+            (df_15m['nifty_trend'] < 0)
         )
         df_15m['strategy_12'] = False
         first_true_idx_12 = df_15m[df_15m['s_12']].groupby('date').head(1).index
@@ -385,8 +529,10 @@ class BacktestEngine:
             (df_5m['is_range_bearish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
             (df_5m['volume_range_pct_10'] < 0.7) & 
-            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
-            #(df_5m['nifty_trend'] == -1)
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03) &
+            (df_5m['predicted_today_low'] <= df_5m['close'] * 0.985) &
+            #(df_5m['nifty_trend'] != 1)
+            (df_5m['nifty_trend'] <= 0)
         )
         df_5m['strategy_10'] = False
         first_true_idx_10 = df_5m[df_5m['s_10']].groupby('date').head(1).index
@@ -403,8 +549,11 @@ class BacktestEngine:
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0) & 
             (df_5m['volume_range_pct_10'] < 0.3) &
-            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
-            #(df_5m['nifty_trend'] == 1)
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03) &
+            (df_5m['predicted_today_high'] >= df_5m['close'] * 1.015) &
+            #(df_5m['nifty_trend'] != -1)
+            (df_5m['nifty_trend'] >= 0)
+
         )
         df_5m['strategy_11'] = False
         first_true_idx_11 = df_5m[df_5m['s_11']].groupby('date').head(1).index
@@ -421,8 +570,9 @@ class BacktestEngine:
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
             (df_5m['volume_range_pct_10'] < 0.6) &
-            (df_5m['atr_10'] / df_5m['close_10'] > 0.03)
-            #(df_5m['nifty_trend'] != 1)
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.03) &
+            #(df_5m['nifty_trend'] == -1)
+            (df_5m['nifty_trend'] < 0)
         )
         df_5m['strategy_9'] = False
         first_true_idx_9 = df_5m[df_5m['s_9']].groupby('date').head(1).index
@@ -433,6 +583,10 @@ class BacktestEngine:
         df_5m.drop('date', axis=1, inplace=True)
         
         self.logger.info(f"✅ All indicators calculated once for {self.symbol}")
+
+        #df_15m.to_csv('15m.csv', index=False)
+        #df_5m.to_csv('5m.csv', index=False)
+        df_nifty_1h.to_csv('1h.csv', index=False)
         
         return {
             '15m': df_15m,
