@@ -8,14 +8,11 @@ import json
 import logging
 import struct
 from datetime import datetime
-import websockets
-import os
+import websockets.client
+import websockets.exceptions
 import time
 import threading
-from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable, Union
-
-import websockets
 
 # Set up logging
 logger = logging.getLogger("dhan_websocket")
@@ -121,6 +118,50 @@ class DhanWebSocket:
             time.sleep(0.1)
         return self.connected
     
+    def stop(self):
+        """Stop the WebSocket client"""
+        try:
+            logger.info("🛑 Stopping WebSocket client...")
+            
+            # Signal stop
+            self.running = False
+            if hasattr(self, '_stop_event'):
+                self._stop_event.set()
+            
+            # If we have a running loop, schedule disconnect
+            if self.loop and not self.loop.is_closed():
+                try:
+                    # Schedule disconnect in the event loop
+                    future = asyncio.run_coroutine_threadsafe(self._async_stop(), self.loop)
+                    future.result(timeout=5)  # Wait up to 5 seconds
+                except Exception as e:
+                    logger.error(f"❌ Error during async stop: {e}")
+            
+            # Wait for thread to finish
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=5)
+                if self.thread.is_alive():
+                    logger.warning("⚠️ WebSocket thread did not stop gracefully")
+            
+            # Reset state
+            self.connected = False
+            self.ws = None
+            
+            logger.info("🛑 WebSocket client stopped")
+            
+        except Exception as e:
+            logger.error(f"❌ Error stopping WebSocket client: {e}")
+    
+    async def _async_stop(self):
+        """Async stop method to run in the event loop"""
+        try:
+            await self._close_connection()
+            # Stop the event loop
+            if self.loop:
+                self.loop.stop()
+        except Exception as e:
+            logger.error(f"❌ Error in async stop: {e}")
+    
     def is_connected(self):
         """Check if WebSocket is connected"""
         try:
@@ -135,36 +176,69 @@ class DhanWebSocket:
             return True
 
         try:
-            self.loop = asyncio.new_event_loop()
-            self.thread = threading.Thread(target=self._run_event_loop, daemon=True)
-            self.thread.start()
             self.running = True
-            logger.info("WebSocket client thread started")
+            self._stop_event = threading.Event()
+            self._connection_ready = threading.Event()
+            
+            def _run_in_thread():
+                try:
+                    # Create new event loop for this thread
+                    self.loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(self.loop)
+                    
+                    # Run the WebSocket loop with proper exception handling
+                    self.loop.run_until_complete(self._run_client())
+                    
+                except asyncio.CancelledError:
+                    logger.info("🔄 WebSocket thread cancelled gracefully")
+                except RuntimeError as e:
+                    if "Event loop stopped before Future completed" in str(e):
+                        logger.debug("🔄 Event loop stopped during shutdown (normal)")
+                    else:
+                        logger.error(f"❌ Runtime error in WebSocket thread: {e}")
+                except Exception as e:
+                    logger.error(f"❌ Error in WebSocket thread: {e}")
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    # Clean up the event loop
+                    try:
+                        if self.loop and not self.loop.is_closed():
+                            # Cancel all pending tasks
+                            pending = asyncio.all_tasks(self.loop)
+                            for task in pending:
+                                task.cancel()
+                            
+                            # Wait for tasks to complete cancellation
+                            if pending:
+                                self.loop.run_until_complete(
+                                    asyncio.gather(*pending, return_exceptions=True)
+                                )
+                            
+                            self.loop.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing event loop: {e}")
+                    
+                    logger.info("🧹 WebSocket thread cleanup completed")
+            
+            # Start the thread with daemon=True for Unix compatibility
+            self.thread = threading.Thread(target=_run_in_thread, daemon=True, name="DhanWS")
+            self.thread.start()
+            
+            # Wait for thread to start
+            import time
+            time.sleep(0.5)
+            
+            logger.info("🚀 WebSocket client started")
             return True
             
         except Exception as e:
             logger.error(f"Failed to start WebSocket client: {e}")
+            self.running = False
             self.on_error(e)
             return False
     
-    def _run_event_loop(self):
-        """Run the event loop in a separate thread"""
-        try:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            self.loop.run_until_complete(self._run_client())
-        except Exception as e:
-            logger.error(f"Error in WebSocket event loop: {e}")
-        finally:
-            loop = self.loop
-            self.loop = None
-            
-            if loop and loop.is_running():
-                loop.stop()
-            if loop and not loop.is_closed():
-                loop.close()
-                
-            logger.info("WebSocket client thread stopped")
+
     
     async def _run_client(self):
         """Main WebSocket client loop with enhanced error handling"""
@@ -225,12 +299,19 @@ class DhanWebSocket:
             ws_url = f"{self.MARKET_FEED_WSS}?version=2&token={self.access_token}&clientId={self.client_id}&authType=2"
             logger.info(f"Connecting to WebSocket URL: {ws_url[:50]}...")
             
-            self.ws = await websockets.connect(
-                ws_url,
-                ping_interval=30,
-                ping_timeout=10,
-                close_timeout=10,
-                max_size=None
+            # WebSocket options following Zerodha's proven cross-platform approach
+            websocket_options = {
+                'ping_interval': None,  # Let Dhan handle heartbeats like Zerodha
+                'ping_timeout': 10,
+                'close_timeout': 5,  # Shorter timeout like Zerodha
+                'max_size': 10 * 1024 * 1024,  # 10MB like Zerodha
+                'compression': None  # Disable compression for binary data
+            }
+            
+            # Use asyncio.wait_for with timeout like Zerodha for better cross-platform compatibility
+            self.ws = await asyncio.wait_for(
+                websockets.client.connect(ws_url, **websocket_options),
+                timeout=10  # 10 second connection timeout
             )
             
             self.connected = True
@@ -1747,15 +1828,41 @@ class DhanWebSocket:
             # Set connected flag to False on error
             self.depth_20_connected = False
         finally:
+            # Ensure proper cleanup of the event loop
             if self.depth_20_loop:
                 try:
+                    # Cancel all pending tasks first
+                    if not self.depth_20_loop.is_closed():
+                        pending = asyncio.all_tasks(self.depth_20_loop)
+                        for task in pending:
+                            task.cancel()
+                        
+                        # Wait for tasks to complete cancellation
+                        if pending:
+                            try:
+                                self.depth_20_loop.run_until_complete(
+                                    asyncio.gather(*pending, return_exceptions=True)
+                                )
+                            except Exception as e:
+                                logger.debug(f"Error during task cancellation: {e}")
+                    
+                    # Now stop and close the loop
                     if self.depth_20_loop.is_running():
                         self.depth_20_loop.stop()
                     if not self.depth_20_loop.is_closed():
                         self.depth_20_loop.close()
+                        
                 except Exception as e:
                     logger.error(f"Error closing 20-level depth loop: {e}")
-            logger.info("20-level depth WebSocket thread stopped")
+                finally:
+                    # Clear the loop reference
+                    self.depth_20_loop = None
+                    
+            # Ensure connection state is reset
+            self.depth_20_connected = False
+            self.depth_20_running = False
+            
+            logger.info("20-level depth WebSocket thread stopped and cleaned up")
 
     async def _run_20_level_client(self):
         """Main client loop for 20-level depth WebSocket"""
@@ -1826,14 +1933,16 @@ class DhanWebSocket:
             ws_url = f"{self.DEPTH_20_FEED_WSS}?token={self.access_token}&clientId={self.client_id}&authType=2"
             logger.info(f"Connecting to 20-level depth endpoint: {ws_url[:50]}...")
             
-            # Connect using the same approach as the main WebSocket
-            self.depth_20_ws = await websockets.connect(
-                ws_url,
-                ping_interval=30,
-                ping_timeout=10,
-                close_timeout=10,
-                max_size=None
-            )
+            # Connect using the same cross-platform options as main WebSocket
+            websocket_options = {
+                'ping_interval': 30,
+                'ping_timeout': 10,
+                'close_timeout': 10,
+                'max_size': None,
+                'compression': None  # Disable compression for binary data (like Zerodha)
+            }
+            
+            self.depth_20_ws = await websockets.client.connect(ws_url, **websocket_options)
             logger.info("🔗 20-level depth WebSocket connection established")
             
         except Exception as e:
@@ -2366,7 +2475,64 @@ class DhanWebSocket:
                 except Exception as e:
                     logger.error(f"Error stopping 20-level depth event loop: {e}")
             
+            # Wait for the thread to actually terminate
+            if hasattr(self, 'depth_20_thread') and self.depth_20_thread and self.depth_20_thread.is_alive():
+                try:
+                    # Give the thread a moment to terminate gracefully
+                    import threading
+                    import time
+                    
+                    # Wait up to 3 seconds for thread to terminate
+                    start_time = time.time()
+                    while self.depth_20_thread.is_alive() and (time.time() - start_time) < 3.0:
+                        time.sleep(0.1)
+                    
+                    if self.depth_20_thread.is_alive():
+                        logger.warning("20-level depth thread did not terminate within 3 seconds")
+                    else:
+                        logger.info("20-level depth thread terminated successfully")
+                        self.depth_20_thread = None
+                        
+                except Exception as e:
+                    logger.error(f"Error waiting for 20-level depth thread termination: {e}")
+            
             logger.info("20-level depth connection cleanup completed")
+    
+    def cleanup_20_level_depth_resources(self):
+        """
+        Public method to clean up all 20-level depth resources.
+        Can be called from the adapter to ensure proper cleanup.
+        """
+        try:
+            logger.info("Cleaning up all 20-level depth resources")
+            
+            # Clear all tracking data
+            with self.lock:
+                self.depth_20_instruments.clear()
+                self.depth_20_data.clear()
+                logger.info("Cleared 20-level depth tracking data")
+            
+            # Stop the connection if running
+            self.depth_20_running = False
+            self.depth_20_connected = False
+            
+            # If we have a running loop, schedule cleanup
+            if self.depth_20_loop and not self.depth_20_loop.is_closed():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._close_depth_20_connection(),
+                        self.depth_20_loop
+                    )
+                    # Wait for cleanup to complete
+                    future.result(timeout=5.0)
+                    logger.info("20-level depth connection closed via cleanup")
+                except Exception as e:
+                    logger.error(f"Error during 20-level depth cleanup: {e}")
+            
+            logger.info("20-level depth resources cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up 20-level depth resources: {e}")
     
     def _handle_depth_20_bid(self, message, token=None):
         """Handle 20-level bid data (message type 41)"""

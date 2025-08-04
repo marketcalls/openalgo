@@ -169,11 +169,24 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             if self.ws_client:
                 self.logger.info("Stopping WebSocket client and waiting for both endpoints to disconnect...")
-                self.ws_client.stop()
+                
+                # First, clean up 20-level depth resources explicitly
+                if hasattr(self.ws_client, 'cleanup_20_level_depth_resources'):
+                    try:
+                        self.ws_client.cleanup_20_level_depth_resources()
+                    except Exception as e:
+                        self.logger.error(f"Error during 20-level depth cleanup: {e}")
+                
+                # Stop the WebSocket client with timeout protection
+                try:
+                    self.ws_client.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping WebSocket client: {e}")
+                    # Continue with cleanup even if stop fails
                 
                 # Wait for BOTH WebSocket endpoints to be fully disconnected before ZMQ cleanup
                 import time
-                max_wait = 15.0  # Increased timeout for 20-level depth cleanup
+                max_wait = 10.0  # Reasonable timeout for all platforms
                 start_time = time.time()
                 
                 while time.time() - start_time < max_wait:
@@ -230,6 +243,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Now both endpoints are confirmed disconnected - safe to cleanup ZMQ
             self.logger.info(" Cleaning up ZMQ resources after confirming both endpoints are disconnected")
+            
             self.cleanup_zmq()
             
             self.logger.info(f" Successfully disconnected from {self.broker_name} WebSocket server")
@@ -240,6 +254,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Force cleanup even on error to prevent resource leaks
             try:
                 self.logger.warning(" Performing emergency ZMQ cleanup due to disconnect error")
+                
                 self.cleanup_zmq()
             except Exception as cleanup_error:
                 self.logger.error(f" Error during emergency ZMQ cleanup: {cleanup_error}")
@@ -493,6 +508,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # The mapping will be cleaned up by the message handler when it sees
                     # the subscription is gone
                     del self.subscribed_symbols[symbol]
+                
+                # Check if this was the last subscription and clean up 20-level depth if needed
+                if not self.subscribed_symbols and hasattr(self.ws_client, 'cleanup_20_level_depth_resources'):
+                    self.logger.info("Last subscription removed, cleaning up 20-level depth resources")
+                    self.ws_client.cleanup_20_level_depth_resources()
             
             self.logger.info(f"Unsubscribed from {exchange}:{symbol}")
             return {"status": "success", "message": f"Unsubscribed from {exchange}:{symbol}"}
