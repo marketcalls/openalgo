@@ -206,9 +206,10 @@
 </div>
 
 <script>
-    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED - Starting execution...');
+    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
     console.log('🌐 Current URL:', window.location.href);
     console.log('📝 Script timestamp:', new Date().toISOString());
+    console.log('🔄 CACHE BUSTER:', Math.random());
     
     // Global variables
     let socket = null;
@@ -254,7 +255,7 @@
 
     // Initialize WebSocket connection to the proxy server
     function connectWebSocket() {
-        logEvent('🔧 connectWebSocket() function called', 'info');
+        logEvent('🔧 connectWebSocket() function called v2.0 - BYPASS MODE', 'info');
         
         if (socket && socket.readyState === WebSocket.OPEN) {
             logEvent('Already connected to WebSocket', 'info');
