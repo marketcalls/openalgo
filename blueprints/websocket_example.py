@@ -169,11 +169,20 @@ def api_get_websocket_config():
         return jsonify({'status': 'error', 'message': 'Session not found - please refresh page'}), 401
     
     import os
+    from flask import request
+    
     websocket_url = os.getenv('WEBSOCKET_URL', 'ws://localhost:8765')
+    
+    # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
+    if request.is_secure and websocket_url.startswith('ws://'):
+        websocket_url = websocket_url.replace('ws://', 'wss://')
+        logger.info(f"Upgraded WebSocket URL to secure: {websocket_url}")
     
     return jsonify({
         'status': 'success',
-        'websocket_url': websocket_url
+        'websocket_url': websocket_url,
+        'is_secure': request.is_secure,
+        'original_url': os.getenv('WEBSOCKET_URL', 'ws://localhost:8765')
     }), 200
 
 # Socket.IO events for real-time updates

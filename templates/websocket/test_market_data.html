@@ -206,6 +206,10 @@
 </div>
 
 <script>
+    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED - Starting execution...');
+    console.log('🌐 Current URL:', window.location.href);
+    console.log('📝 Script timestamp:', new Date().toISOString());
+    
     // Global variables
     let socket = null;
     let subscriptions = new Set();
@@ -250,18 +254,25 @@
 
     // Initialize WebSocket connection to the proxy server
     function connectWebSocket() {
+        logEvent('🔧 connectWebSocket() function called', 'info');
+        
         if (socket && socket.readyState === WebSocket.OPEN) {
             logEvent('Already connected to WebSocket', 'info');
             return;
         }
 
-        logEvent('Attempting to connect to WebSocket server...', 'info');
+        logEvent('⚡ Attempting to connect to WebSocket server...', 'info');
 
         try {
             // Get API key from the API first
+            logEvent('📞 Calling /api/websocket/status...', 'info');
             fetchWithCSRF('/api/websocket/status')
-                .then(response => response.json())
+                .then(response => {
+                    logEvent(`📄 Status response status: ${response.status}`, 'info');
+                    return response.json();
+                })
                 .then(data => {
+                    logEvent(`📋 Status response data: ${JSON.stringify(data)}`, 'info');
                     if (data.status === 'error') {
                         if (data.message.includes('No API key found')) {
                             logEvent(`❌ ${data.message}`, 'error');
@@ -273,19 +284,28 @@
                     }
                     
                     // Get WebSocket URL from config
+                    logEvent('🔧 Fetching WebSocket config...', 'info');
                     fetchWithCSRF('/api/websocket/config')
-                        .then(response => response.json())
+                        .then(response => {
+                            logEvent(`🔧 Config response status: ${response.status}`, 'info');
+                            return response.json();
+                        })
                         .then(configData => {
+                            logEvent(`🔧 Config data: ${JSON.stringify(configData)}`, 'info');
                             if (configData.status === 'success') {
                                 const wsUrl = configData.websocket_url;
+                                logEvent(`WebSocket Config - URL: ${wsUrl}, Secure: ${configData.is_secure}, Original: ${configData.original_url}`, 'info');
+                                logEvent(`Current page protocol: ${window.location.protocol}`, 'info');
                                 logEvent(`Connecting to WebSocket server at ${wsUrl}...`, 'info');
+                                
+                                // Create WebSocket connection with proper headers for authentication
                                 socket = new WebSocket(wsUrl);
 
                                 socket.onopen = () => {
-                        document.getElementById('websocket-status').textContent = 'Connected';
-                        document.getElementById('websocket-status').className = 'font-semibold text-success';
-                        document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
-                        logEvent('Connected to WebSocket server', 'success');
+                                    document.getElementById('websocket-status').textContent = 'Connected';
+                                    document.getElementById('websocket-status').className = 'font-semibold text-success';
+                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
+                                    logEvent('Connected to WebSocket server', 'success');
                         
                         // Reset reconnection counter on successful connection
                         reconnectAttempts = 0;
@@ -311,15 +331,15 @@
                             });
                     };
 
-                    socket.onclose = (event) => {
-                        document.getElementById('websocket-status').textContent = 'Disconnected';
-                        document.getElementById('websocket-status').className = 'font-semibold text-error';
-                        document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
-                        
-                        if (event.wasClean) {
-                            logEvent('WebSocket connection closed cleanly', 'info');
-                        } else {
-                            logEvent('WebSocket connection lost unexpectedly', 'error');
+                                socket.onclose = (event) => {
+                                    document.getElementById('websocket-status').textContent = 'Disconnected';
+                                    document.getElementById('websocket-status').className = 'font-semibold text-error';
+                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
+                                    
+                                    if (event.wasClean) {
+                                        logEvent('WebSocket connection closed cleanly', 'info');
+                                    } else {
+                                        logEvent(`WebSocket connection lost unexpectedly. Code: ${event.code}, Reason: ${event.reason}`, 'error');
                             
                             // Attempt to reconnect
                             if (reconnectAttempts < maxReconnectAttempts) {
@@ -339,9 +359,11 @@
                         }
                     };
 
-                    socket.onerror = (error) => {
-                        logEvent(`WebSocket error: ${error}`, 'error');
-                    };
+                                socket.onerror = (error) => {
+                                    logEvent(`WebSocket error occurred: ${error}`, 'error');
+                                    logEvent(`WebSocket readyState: ${socket ? socket.readyState : 'undefined'}`, 'info');
+                                    logEvent(`Attempted URL: ${wsUrl}`, 'info');
+                                };
 
                                 socket.onmessage = (event) => {
                                     try {
@@ -875,7 +897,14 @@
 
     // Log events
     function logEvent(message, type = 'info') {
+        console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
+        
         const logElement = document.getElementById('event-log');
+        if (!logElement) {
+            console.warn('Log element not found!');
+            return;
+        }
+        
         const timestamp = new Date().toLocaleTimeString('en-IN');
         
         const colorClass = {
@@ -896,6 +925,15 @@
         if (logElement.children.length > 100) {
             logElement.removeChild(logElement.firstChild);
         }
+    }
+
+    // Test the logEvent function immediately
+    console.log('🧪 Testing logEvent function...');
+    try {
+        logEvent('🧪 Script loaded and logEvent function is working', 'success');
+        console.log('✅ logEvent function test passed');
+    } catch (error) {
+        console.error('❌ logEvent function test failed:', error);
     }
 
     // Clear log
@@ -1267,7 +1305,9 @@
     
     // Auto-connect on page load
     document.addEventListener('DOMContentLoaded', () => {
-        logEvent('Page loaded - initializing WebSocket test interface...', 'info');
+        logEvent('🚀 Page loaded - initializing WebSocket test interface...', 'info');
+        logEvent('🌐 Current page URL: ' + window.location.href, 'info');
+        logEvent('🔒 Page protocol: ' + window.location.protocol, 'info');
         
         // Initialize symbol search
         initializeSymbolSearch();
@@ -1276,10 +1316,15 @@
         loadSubscriptions();
         loadActiveSymbols();
         
+        logEvent('📡 Checking WebSocket server status via REST API...', 'info');
         // Check WebSocket server status via REST API first
         fetchWithCSRF('/api/websocket/status')
-            .then(response => response.json())
+            .then(response => {
+                logEvent(`📡 Initial status check response: ${response.status}`, 'info');
+                return response.json();
+            })
             .then(data => {
+                logEvent(`📡 Initial status data: ${JSON.stringify(data)}`, 'info');
                 if (data.status === 'error') {
                     if (data.message.includes('No API key found')) {
                         logEvent(`❌ ${data.message}`, 'error');
@@ -1291,10 +1336,10 @@
                 }
                 
                 if (data.connected) {
-                    logEvent(`WebSocket server is available via ${data.broker || 'unknown broker'}`, 'success');
+                    logEvent(`✅ WebSocket server is available via ${data.broker || 'unknown broker'}`, 'success');
                     // Auto-connect to WebSocket client
                     setTimeout(() => {
-                        logEvent('Auto-connecting to WebSocket...', 'info');
+                        logEvent('🔄 Auto-connecting to WebSocket in 1 second...', 'info');
                         connectWebSocket();
                     }, 1000);
                 } else {
@@ -1304,8 +1349,8 @@
             })
             .catch(error => {
                 console.error('Error checking WebSocket status:', error);
-                logEvent('Failed to check WebSocket status - network error', 'error');
-                logEvent('You can still try to connect manually using the Connect WebSocket button', 'info');
+                logEvent(`❌ Failed to check WebSocket status - network error: ${error}`, 'error');
+                logEvent('🔧 You can still try to connect manually using the Connect WebSocket button', 'info');
             });
     });
 </script>
