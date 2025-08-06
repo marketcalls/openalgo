@@ -8,6 +8,8 @@ import struct
 import threading
 import time
 import logging
+import asyncio
+import platform
 from typing import Dict, Any, Optional, List, Callable
 from urllib.parse import urlencode
 
@@ -102,9 +104,33 @@ class DhanWebSocket:
             self.logger.warning("Already connected or connecting")
             return
         
+        # Handle asyncio event loop conflict on Linux/macOS 
+        self._handle_asyncio_compatibility()
+        
         self.running = True
         self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
         self.ws_thread.start()
+    
+    def _handle_asyncio_compatibility(self):
+        """Handle asyncio event loop conflicts on Linux/macOS systems"""
+        try:
+            # Check if we're on a platform that might have asyncio conflicts
+            if platform.system() in ['Linux', 'Darwin']:  # Darwin is macOS
+                try:
+                    # Try to get the current event loop
+                    loop = asyncio.get_running_loop()
+                    if loop and not loop.is_closed():
+                        self.logger.info("Detected existing asyncio event loop, using thread isolation for Dhan WebSocket")
+                        # We'll run in a completely separate thread context
+                        # which is already what we're doing, so no additional action needed
+                except RuntimeError:
+                    # No running loop, which is fine
+                    pass
+            else:
+                self.logger.debug("Running on Windows, no asyncio compatibility adjustments needed")
+        except Exception as e:
+            self.logger.warning(f"Error checking asyncio compatibility: {e}")
+            # Continue anyway, the thread isolation should handle most cases
     
     def _run_websocket(self):
         """Run the WebSocket connection in a separate thread"""
