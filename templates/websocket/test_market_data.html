@@ -1329,10 +1329,16 @@
                     if (data.message.includes('No API key found')) {
                         logEvent(`❌ ${data.message}`, 'error');
                         logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                        return;
                     } else {
-                        logEvent(`WebSocket Error: ${data.message}`, 'error');
+                        logEvent(`⚠️  Server-side WebSocket status check failed: ${data.message}`, 'error');
+                        logEvent('🔄 Attempting direct browser WebSocket connection anyway...', 'info');
+                        // Try direct connection even if server-side check failed
+                        setTimeout(() => {
+                            connectWebSocket();
+                        }, 1000);
+                        return;
                     }
-                    return;
                 }
                 
                 if (data.connected) {
@@ -1343,8 +1349,12 @@
                         connectWebSocket();
                     }, 1000);
                 } else {
-                    logEvent('WebSocket server not connected - you may need to configure your broker first', 'info');
-                    logEvent('You can still try to connect manually using the Connect WebSocket button', 'info');
+                    logEvent('⚠️  Server reports WebSocket not connected - trying direct connection anyway', 'info');
+                    // Try direct connection even if server reports not connected
+                    setTimeout(() => {
+                        logEvent('🔄 Attempting direct browser WebSocket connection...', 'info');
+                        connectWebSocket();
+                    }, 1000);
                 }
             })
             .catch(error => {
