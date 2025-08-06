@@ -22,6 +22,32 @@
     .status-connected { background-color: rgb(34, 197, 94); }
     .status-disconnected { background-color: rgb(239, 68, 68); }
     .status-connecting { background-color: rgb(251, 191, 36); animation: pulse 2s infinite; }
+    
+    .loading-indicator {
+        display: none;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        z-index: 10;
+    }
+    
+    #symbol-search-results {
+        max-height: 400px;
+        overflow-y: auto;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    
+    #symbol-search-results .menu-item:last-child {
+        border-bottom: none;
+    }
+    
+    #active-symbols .badge {
+        transition: all 0.2s ease;
+    }
+    
+    #active-symbols .badge:hover {
+        transform: scale(1.05);
+    }
 </style>
 {% endblock %}
 
@@ -31,7 +57,7 @@
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
             <h1 class="card-title text-3xl">WebSocket Market Data Test</h1>
-            <p class="text-base-content/70">Real-time testing for RELIANCE and TCS market data streams</p>
+            <p class="text-base-content/70">Real-time testing for multiple symbols with dynamic symbol management</p>
         </div>
     </div>
 
@@ -53,6 +79,70 @@
         </div>
     </div>
 
+    <!-- Symbol Management Panel -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Symbol Management</h2>
+            
+            <!-- Add Symbol Section -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Add Symbol</span>
+                    </label>
+                    <div class="relative">
+                        <input type="text" 
+                               id="symbol-search" 
+                               class="input input-bordered w-full" 
+                               placeholder="Search for symbol..."
+                               autocomplete="off">
+                        <div class="loading-indicator hidden absolute right-3 top-3">
+                            <span class="loading loading-spinner loading-sm"></span>
+                        </div>
+                        <div id="symbol-search-results" class="menu bg-base-200 w-full rounded-box absolute z-50 mt-1 hidden shadow-lg"></div>
+                    </div>
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Exchange</span>
+                    </label>
+                    <select id="exchange-filter" class="select select-bordered w-full">
+                        <option value="">All Exchanges</option>
+                        <option value="NSE">NSE</option>
+                        <option value="NFO">NFO</option>
+                        <option value="BSE">BSE</option>
+                        <option value="BFO">BFO</option>
+                        <option value="CDS">CDS</option>
+                        <option value="MCX">MCX</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Active Symbols Display -->
+            <div class="mb-4">
+                <h3 class="font-semibold mb-2">Active Symbols (<span id="active-symbol-count">2</span>)</h3>
+                <div id="active-symbols" class="flex flex-wrap gap-2">
+                    <div class="badge badge-primary gap-2 p-3" data-symbol="RELIANCE" data-exchange="NSE">
+                        NSE:RELIANCE
+                        <button onclick="removeSymbol('RELIANCE', 'NSE')" class="btn btn-ghost btn-xs">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="badge badge-secondary gap-2 p-3" data-symbol="TCS" data-exchange="NSE">
+                        NSE:TCS
+                        <button onclick="removeSymbol('TCS', 'NSE')" class="btn btn-ghost btn-xs">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Control Panel -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
@@ -95,234 +185,8 @@
     </div>
 
     <!-- Market Data Display -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- RELIANCE -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="card-title text-xl">NSE:RELIANCE</h3>
-                    <div class="text-xs space-y-2">
-                        <div>
-                            <span class="text-base-content/70">Subscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="subscribe('RELIANCE', 'NSE', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
-                                <button onclick="subscribe('RELIANCE', 'NSE', 'Quote')" class="btn btn-success btn-xs">Quote</button>
-                                <button onclick="subscribe('RELIANCE', 'NSE', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
-                            </div>
-                        </div>
-                        <div>
-                            <span class="text-base-content/70">Unsubscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'LTP')" class="btn btn-error btn-xs">LTP</button>
-                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'Quote')" class="btn btn-error btn-xs">Quote</button>
-                                <button onclick="unsubscribe('RELIANCE', 'NSE', 'Depth')" class="btn btn-error btn-xs">Depth</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- LTP Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
-                        <div class="grid grid-cols-1 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Price:</span>
-                                <div id="reliance-ltp" class="data-value text-2xl font-bold">-</div>
-                            </div>
-                        </div>
-                        <div class="mt-2">
-                            <span class="text-xs text-base-content/50">Last Update:</span>
-                            <span id="reliance-ltp-time" class="data-value text-xs">-</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Quote Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Open:</span>
-                                <div id="reliance-open" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">High:</span>
-                                <div id="reliance-high" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Low:</span>
-                                <div id="reliance-low" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Close:</span>
-                                <div id="reliance-close" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Volume:</span>
-                                <div id="reliance-volume" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Avg Price:</span>
-                                <div id="reliance-average-price" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Buy Qty:</span>
-                                <div id="reliance-total-buy-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Sell Qty:</span>
-                                <div id="reliance-total-sell-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
-                                <div id="reliance-upper-circuit" class="data-value text-success">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
-                                <div id="reliance-lower-circuit" class="data-value text-error">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Depth Section -->
-                <div class="card bg-base-200">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
-                                <div id="reliance-buy-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
-                            <div>
-                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
-                                <div id="reliance-sell-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- TCS -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="card-title text-xl">NSE:TCS</h3>
-                    <div class="text-xs space-y-2">
-                        <div>
-                            <span class="text-base-content/70">Subscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="subscribe('TCS', 'NSE', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
-                                <button onclick="subscribe('TCS', 'NSE', 'Quote')" class="btn btn-success btn-xs">Quote</button>
-                                <button onclick="subscribe('TCS', 'NSE', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
-                            </div>
-                        </div>
-                        <div>
-                            <span class="text-base-content/70">Unsubscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="unsubscribe('TCS', 'NSE', 'LTP')" class="btn btn-error btn-xs">LTP</button>
-                                <button onclick="unsubscribe('TCS', 'NSE', 'Quote')" class="btn btn-error btn-xs">Quote</button>
-                                <button onclick="unsubscribe('TCS', 'NSE', 'Depth')" class="btn btn-error btn-xs">Depth</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- LTP Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
-                        <div class="grid grid-cols-1 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Price:</span>
-                                <div id="tcs-ltp" class="data-value text-2xl font-bold">-</div>
-                            </div>
-                        </div>
-                        <div class="mt-2">
-                            <span class="text-xs text-base-content/50">Last Update:</span>
-                            <span id="tcs-ltp-time" class="data-value text-xs">-</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Quote Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Open:</span>
-                                <div id="tcs-open" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">High:</span>
-                                <div id="tcs-high" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Low:</span>
-                                <div id="tcs-low" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Close:</span>
-                                <div id="tcs-close" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Volume:</span>
-                                <div id="tcs-volume" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Avg Price:</span>
-                                <div id="tcs-average-price" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Buy Qty:</span>
-                                <div id="tcs-total-buy-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Sell Qty:</span>
-                                <div id="tcs-total-sell-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
-                                <div id="tcs-upper-circuit" class="data-value text-success">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
-                                <div id="tcs-lower-circuit" class="data-value text-error">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Depth Section -->
-                <div class="card bg-base-200">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
-                                <div id="tcs-buy-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
-                            <div>
-                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
-                                <div id="tcs-sell-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <div id="market-data-container" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Symbols will be dynamically generated here -->
     </div>
 
     <!-- Event Log -->
@@ -349,6 +213,40 @@
     let reconnectAttempts = 0;
     let maxReconnectAttempts = 5;
     let reconnectDelay = 1000;
+    let activeSymbols = new Set();
+    let debounceTimeout;
+    
+    // Initialize with default symbols
+    activeSymbols.add('NSE:RELIANCE');
+    activeSymbols.add('NSE:TCS');
+
+    // Utility function to get CSRF token
+    function getCSRFToken() {
+        const metaToken = document.querySelector('meta[name=csrf-token]');
+        if (metaToken) {
+            return metaToken.getAttribute('content');
+        }
+        
+        const cookieValue = document.cookie
+            .split('; ')
+            .find(row => row.startsWith('csrf_token='))
+            ?.split('=')[1];
+        return cookieValue || '';
+    }
+    
+    // Utility function to make CSRF-protected requests
+    async function fetchWithCSRF(url, options = {}) {
+        const csrfToken = getCSRFToken();
+        const headers = {
+            'X-CSRFToken': csrfToken,
+            ...options.headers
+        };
+        
+        return fetch(url, {
+            ...options,
+            headers: headers
+        });
+    }
 
     // Initialize WebSocket connection to the proxy server
     function connectWebSocket() {
@@ -590,35 +488,48 @@
         logEvent(`❌ Unsubscribing from ${exchange}:${symbol} (${mode})`, 'info');
     }
 
-    // Subscribe to all data for both symbols
+    // Subscribe to all data for all active symbols
     function subscribeAll() {
-        subscribe('RELIANCE', 'NSE', 'LTP');
-        subscribe('RELIANCE', 'NSE', 'Quote');
-        subscribe('RELIANCE', 'NSE', 'Depth');
-        
-        setTimeout(() => {
-            subscribe('TCS', 'NSE', 'LTP');
-            subscribe('TCS', 'NSE', 'Quote');
-            subscribe('TCS', 'NSE', 'Depth');
-        }, 500);
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => {
+                subscribe(symbol, exchange, 'LTP');
+                subscribe(symbol, exchange, 'Quote');
+                subscribe(symbol, exchange, 'Depth');
+            }, delay);
+            delay += 500;
+        });
     }
 
-    // Subscribe to LTP for both symbols
+    // Subscribe to LTP for all active symbols
     function subscribeAllLTP() {
-        subscribe('RELIANCE', 'NSE', 'LTP');
-        setTimeout(() => subscribe('TCS', 'NSE', 'LTP'), 200);
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'LTP'), delay);
+            delay += 200;
+        });
     }
 
-    // Subscribe to Quote for both symbols
+    // Subscribe to Quote for all active symbols
     function subscribeAllQuote() {
-        subscribe('RELIANCE', 'NSE', 'Quote');
-        setTimeout(() => subscribe('TCS', 'NSE', 'Quote'), 200);
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'Quote'), delay);
+            delay += 200;
+        });
     }
 
-    // Subscribe to Depth for both symbols
+    // Subscribe to Depth for all active symbols
     function subscribeAllDepth() {
-        subscribe('RELIANCE', 'NSE', 'Depth');
-        setTimeout(() => subscribe('TCS', 'NSE', 'Depth'), 200);
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'Depth'), delay);
+            delay += 200;
+        });
     }
 
     // Test sequential subscription/unsubscription
@@ -640,8 +551,10 @@
         // Phase 3: Unsubscribe LTP, Subscribe Depth
         setTimeout(() => {
             logEvent('Phase 3: Switching LTP to Depth', 'info');
-            unsubscribe('RELIANCE', 'NSE', 'LTP');
-            unsubscribe('TCS', 'NSE', 'LTP');
+            activeSymbols.forEach(symbolKey => {
+                const [exchange, symbol] = symbolKey.split(':');
+                unsubscribe(symbol, exchange, 'LTP');
+            });
             setTimeout(() => subscribeAllDepth(), 500);
         }, 5000);
         
@@ -682,14 +595,15 @@
             originalCallback(data);
         };
         
-        // Rapid subscribe/unsubscribe
-        const symbols = ['RELIANCE', 'TCS'];
+        // Rapid subscribe/unsubscribe with all active symbols
         const modes = ['LTP', 'Quote', 'Depth'];
+        const activeSymbolsArray = Array.from(activeSymbols);
         
-        symbols.forEach((symbol, i) => {
+        activeSymbolsArray.forEach((symbolKey, i) => {
+            const [exchange, symbol] = symbolKey.split(':');
             modes.forEach((mode, j) => {
                 setTimeout(() => {
-                    subscribe(symbol, 'NSE', mode);
+                    subscribe(symbol, exchange, mode);
                     subscribeCount++;
                 }, (i * 3 + j) * 200);
             });
@@ -700,6 +614,7 @@
             const duration = (Date.now() - startTime) / 1000;
             logEvent(`📈 Performance Results:`, 'success');
             logEvent(`  - Duration: ${duration}s`, 'info');
+            logEvent(`  - Active symbols: ${activeSymbols.size}`, 'info');
             logEvent(`  - Subscriptions: ${subscribeCount}`, 'info');
             logEvent(`  - Updates received: ${updateCount}`, 'info');
             logEvent(`  - Updates/second: ${(updateCount/duration).toFixed(2)}`, 'info');
@@ -979,43 +894,375 @@
 
     // Clear all data
     function clearData() {
-        ['reliance', 'tcs'].forEach(symbol => {
-            // LTP section
-            document.getElementById(`${symbol}-ltp`).textContent = '-';
-            document.getElementById(`${symbol}-ltp-time`).textContent = '-';
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            const symbolId = symbol.toLowerCase();
             
-            // Quote section - OHLC
-            ['open', 'high', 'low', 'close'].forEach(field => {
-                document.getElementById(`${symbol}-${field}`).textContent = '-';
-            });
+            // Clear LTP data
+            const ltpElement = document.getElementById(`${symbolId}-ltp`);
+            const ltpTimeElement = document.getElementById(`${symbolId}-ltp-time`);
+            if (ltpElement) ltpElement.textContent = '-';
+            if (ltpTimeElement) ltpTimeElement.textContent = '-';
             
-            // Quote section - additional fields
-            ['volume', 'average-price', 'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
-                const element = document.getElementById(`${symbol}-${field}`);
+            // Clear quote data
+            ['open', 'high', 'low', 'close', 'volume', 'average-price', 
+             'total-buy-quantity', 'total-sell-quantity', 'upper-circuit', 'lower-circuit'].forEach(field => {
+                const element = document.getElementById(`${symbolId}-${field}`);
                 if (element) element.textContent = '-';
             });
             
-            // Circuit limits
-            ['upper-circuit', 'lower-circuit'].forEach(field => {
-                const element = document.getElementById(`${symbol}-${field}`);
-                if (element) element.textContent = '-';
-            });
-            
-            // Depth section
-            document.getElementById(`${symbol}-buy-depth`).innerHTML = '<div class="text-base-content/50">No data</div>';
-            document.getElementById(`${symbol}-sell-depth`).innerHTML = '<div class="text-base-content/50">No data</div>';
+            // Clear depth data
+            const buyDepthElement = document.getElementById(`${symbolId}-buy-depth`);
+            const sellDepthElement = document.getElementById(`${symbolId}-sell-depth`);
+            if (buyDepthElement) buyDepthElement.innerHTML = '<div class="text-base-content/50">No data</div>';
+            if (sellDepthElement) sellDepthElement.innerHTML = '<div class="text-base-content/50">No data</div>';
         });
         
         lastPrices = {};
         logEvent('Cleared all market data', 'info');
     }
 
+    // Symbol search functionality
+    function initializeSymbolSearch() {
+        const symbolSearch = document.getElementById('symbol-search');
+        const exchangeFilter = document.getElementById('exchange-filter');
+        const searchResults = document.getElementById('symbol-search-results');
+        const loadingIndicator = document.querySelector('.loading-indicator');
+        
+        if (!symbolSearch) return;
+        
+        // Search input handler
+        symbolSearch.addEventListener('input', function(e) {
+            clearTimeout(debounceTimeout);
+            const query = e.target.value.trim();
+            const exchange = exchangeFilter ? exchangeFilter.value : '';
+            
+            if (query.length < 2) {
+                searchResults.classList.add('hidden');
+                return;
+            }
+            
+            debounceTimeout = setTimeout(() => {
+                fetchSymbolSearchResults(query, exchange);
+            }, 300);
+        });
+        
+        // Exchange filter change handler
+        if (exchangeFilter) {
+            exchangeFilter.addEventListener('change', function(e) {
+                const query = symbolSearch.value.trim();
+                if (query.length >= 2) {
+                    fetchSymbolSearchResults(query, e.target.value);
+                }
+            });
+        }
+        
+        // Click outside handler
+        document.addEventListener('click', function(e) {
+            if (!symbolSearch.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.classList.add('hidden');
+            }
+        });
+    }
+    
+    // Fetch symbol search results
+    async function fetchSymbolSearchResults(query, exchange) {
+        const searchResults = document.getElementById('symbol-search-results');
+        const loadingIndicator = document.querySelector('.loading-indicator');
+        
+        if (!searchResults || !loadingIndicator) return;
+        
+        try {
+            loadingIndicator.classList.remove('hidden');
+            const response = await fetchWithCSRF(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange || '')}`);
+            const data = await response.json();
+            
+            searchResults.innerHTML = '';
+            
+            if (data.results && data.results.length > 0) {
+                data.results.forEach(result => {
+                    const div = document.createElement('div');
+                    div.className = 'menu-item p-3 hover:bg-base-300 cursor-pointer border-b border-base-300';
+                    div.innerHTML = `
+                        <div class="flex items-center justify-between">
+                            <span class="font-medium">${result.symbol}</span>
+                            <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
+                        </div>
+                        <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
+                        <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
+                    `;
+                    div.addEventListener('click', () => {
+                        addSymbol(result.symbol, result.exchange);
+                        searchResults.classList.add('hidden');
+                        document.getElementById('symbol-search').value = '';
+                    });
+                    searchResults.appendChild(div);
+                });
+                searchResults.classList.remove('hidden');
+            } else {
+                searchResults.innerHTML = '<div class="p-3 text-base-content/60">No results found</div>';
+                searchResults.classList.remove('hidden');
+            }
+        } catch (error) {
+            console.error('Error fetching search results:', error);
+            logEvent('Error fetching search results', 'error');
+        } finally {
+            loadingIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Add symbol to active symbols
+    function addSymbol(symbol, exchange) {
+        const symbolKey = `${exchange}:${symbol}`;
+        
+        if (activeSymbols.has(symbolKey)) {
+            logEvent(`Symbol ${symbolKey} is already active`, 'info');
+            return;
+        }
+        
+        activeSymbols.add(symbolKey);
+        updateActiveSymbolsDisplay();
+        generateSymbolCard(symbol, exchange);
+        logEvent(`Added symbol: ${symbolKey}`, 'success');
+        
+        // Save to localStorage
+        localStorage.setItem('websocket_active_symbols', JSON.stringify(Array.from(activeSymbols)));
+    }
+    
+    // Remove symbol from active symbols
+    function removeSymbol(symbol, exchange) {
+        const symbolKey = `${exchange}:${symbol}`;
+        
+        if (!activeSymbols.has(symbolKey)) {
+            return;
+        }
+        
+        // Unsubscribe from all modes for this symbol
+        ['LTP', 'Quote', 'Depth'].forEach(mode => {
+            const subKey = `${exchange}:${symbol}:${mode}`;
+            if (subscriptions.has(subKey)) {
+                unsubscribe(symbol, exchange, mode);
+            }
+        });
+        
+        activeSymbols.delete(symbolKey);
+        updateActiveSymbolsDisplay();
+        
+        // Remove the card
+        const symbolCard = document.querySelector(`[data-symbol-card="${symbolKey}"]`);
+        if (symbolCard) {
+            symbolCard.remove();
+        }
+        
+        logEvent(`Removed symbol: ${symbolKey}`, 'success');
+        
+        // Save to localStorage
+        localStorage.setItem('websocket_active_symbols', JSON.stringify(Array.from(activeSymbols)));
+    }
+    
+    // Update active symbols display
+    function updateActiveSymbolsDisplay() {
+        const activeSymbolsContainer = document.getElementById('active-symbols');
+        const activeSymbolCount = document.getElementById('active-symbol-count');
+        
+        if (!activeSymbolsContainer || !activeSymbolCount) return;
+        
+        activeSymbolCount.textContent = activeSymbols.size;
+        
+        activeSymbolsContainer.innerHTML = '';
+        
+        Array.from(activeSymbols).forEach((symbolKey, index) => {
+            const [exchange, symbol] = symbolKey.split(':');
+            const badge = document.createElement('div');
+            const badgeColors = ['badge-primary', 'badge-secondary', 'badge-accent', 'badge-info', 'badge-success', 'badge-warning'];
+            const colorClass = badgeColors[index % badgeColors.length];
+            
+            badge.className = `badge ${colorClass} gap-2 p-3`;
+            badge.setAttribute('data-symbol', symbol);
+            badge.setAttribute('data-exchange', exchange);
+            badge.innerHTML = `
+                ${symbolKey}
+                <button onclick="removeSymbol('${symbol}', '${exchange}')" class="btn btn-ghost btn-xs">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            `;
+            activeSymbolsContainer.appendChild(badge);
+        });
+    }
+    
+    // Generate market data card for a symbol
+    function generateSymbolCard(symbol, exchange) {
+        const container = document.getElementById('market-data-container');
+        if (!container) return;
+        
+        const symbolKey = `${exchange}:${symbol}`;
+        const symbolId = symbol.toLowerCase();
+        
+        const card = document.createElement('div');
+        card.className = 'card bg-base-100 shadow-xl';
+        card.setAttribute('data-symbol-card', symbolKey);
+        
+        card.innerHTML = `
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="card-title text-xl">${symbolKey}</h3>
+                    <div class="text-xs space-y-2">
+                        <div>
+                            <span class="text-base-content/70">Subscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-success btn-xs">Quote</button>
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-base-content/70">Unsubscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-error btn-xs">LTP</button>
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-error btn-xs">Quote</button>
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-error btn-xs">Depth</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LTP Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Price:</span>
+                                <div id="${symbolId}-ltp" class="data-value text-2xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="text-xs text-base-content/50">Last Update:</span>
+                            <span id="${symbolId}-ltp-time" class="data-value text-xs">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quote Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Open:</span>
+                                <div id="${symbolId}-open" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">High:</span>
+                                <div id="${symbolId}-high" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Low:</span>
+                                <div id="${symbolId}-low" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Close:</span>
+                                <div id="${symbolId}-close" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Volume:</span>
+                                <div id="${symbolId}-volume" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Avg Price:</span>
+                                <div id="${symbolId}-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Buy Qty:</span>
+                                <div id="${symbolId}-total-buy-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Sell Qty:</span>
+                                <div id="${symbolId}-total-sell-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
+                                <div id="${symbolId}-upper-circuit" class="data-value text-success">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
+                                <div id="${symbolId}-lower-circuit" class="data-value text-error">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Depth Section -->
+                <div class="card bg-base-200">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
+                                <div id="${symbolId}-buy-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
+                                <div id="${symbolId}-sell-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(card);
+    }
+    
+    // Load active symbols from localStorage
+    function loadActiveSymbols() {
+        try {
+            const saved = localStorage.getItem('websocket_active_symbols');
+            if (saved) {
+                const savedSymbols = JSON.parse(saved);
+                activeSymbols.clear();
+                savedSymbols.forEach(symbolKey => {
+                    activeSymbols.add(symbolKey);
+                    const [exchange, symbol] = symbolKey.split(':');
+                    generateSymbolCard(symbol, exchange);
+                });
+                updateActiveSymbolsDisplay();
+                logEvent(`Loaded ${savedSymbols.length} saved symbols from previous session`, 'info');
+            } else {
+                // Generate default cards
+                activeSymbols.forEach(symbolKey => {
+                    const [exchange, symbol] = symbolKey.split(':');
+                    generateSymbolCard(symbol, exchange);
+                });
+                updateActiveSymbolsDisplay();
+            }
+        } catch (error) {
+            logEvent('Error loading saved symbols', 'error');
+            // Generate default cards on error
+            activeSymbols.forEach(symbolKey => {
+                const [exchange, symbol] = symbolKey.split(':');
+                generateSymbolCard(symbol, exchange);
+            });
+            updateActiveSymbolsDisplay();
+        }
+    }
+    
     // Auto-connect on page load
     document.addEventListener('DOMContentLoaded', () => {
-        logEvent('Page loaded - checking WebSocket status...', 'info');
+        logEvent('Page loaded - initializing WebSocket test interface...', 'info');
         
-        // Load saved subscriptions first
+        // Initialize symbol search
+        initializeSymbolSearch();
+        
+        // Load saved data
         loadSubscriptions();
+        loadActiveSymbols();
         
         // Check WebSocket server status via REST API first
         fetchWithCSRF('/api/websocket/status')
