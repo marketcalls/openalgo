@@ -161,6 +161,21 @@ def api_get_websocket_apikey():
     
     return jsonify({'status': 'success', 'api_key': api_key}), 200
 
+@websocket_bp.route('/api/websocket/config', methods=['GET'])
+def api_get_websocket_config():
+    """Get WebSocket configuration including URL"""
+    username = get_username_from_session()
+    if not username:
+        return jsonify({'status': 'error', 'message': 'Session not found - please refresh page'}), 401
+    
+    import os
+    websocket_url = os.getenv('WEBSOCKET_URL', 'ws://localhost:8765')
+    
+    return jsonify({
+        'status': 'success',
+        'websocket_url': websocket_url
+    }), 200
+
 # Socket.IO events for real-time updates
 @socketio.on('connect', namespace='/market')
 def handle_connect(auth):

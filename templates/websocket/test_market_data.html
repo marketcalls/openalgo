@@ -272,11 +272,16 @@
                         return;
                     }
                     
-                    // Now connect to the WebSocket server
-                    const wsUrl = 'ws://localhost:8765';
-                    socket = new WebSocket(wsUrl);
+                    // Get WebSocket URL from config
+                    fetchWithCSRF('/api/websocket/config')
+                        .then(response => response.json())
+                        .then(configData => {
+                            if (configData.status === 'success') {
+                                const wsUrl = configData.websocket_url;
+                                logEvent(`Connecting to WebSocket server at ${wsUrl}...`, 'info');
+                                socket = new WebSocket(wsUrl);
 
-                    socket.onopen = () => {
+                                socket.onopen = () => {
                         document.getElementById('websocket-status').textContent = 'Connected';
                         document.getElementById('websocket-status').className = 'font-semibold text-success';
                         document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
@@ -338,14 +343,21 @@
                         logEvent(`WebSocket error: ${error}`, 'error');
                     };
 
-                    socket.onmessage = (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-                            handleWebSocketMessage(data);
-                        } catch (e) {
-                            logEvent(`Error parsing WebSocket message: ${e}`, 'error');
-                        }
-                    };
+                                socket.onmessage = (event) => {
+                                    try {
+                                        const data = JSON.parse(event.data);
+                                        handleWebSocketMessage(data);
+                                    } catch (e) {
+                                        logEvent(`Error parsing WebSocket message: ${e}`, 'error');
+                                    }
+                                };
+                            } else {
+                                logEvent('Failed to get WebSocket configuration', 'error');
+                            }
+                        })
+                        .catch(error => {
+                            logEvent(`Error getting WebSocket configuration: ${error}`, 'error');
+                        });
                 })
                 .catch(error => {
                     logEvent(`Error checking WebSocket status: ${error}`, 'error');
