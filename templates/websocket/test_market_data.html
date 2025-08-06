@@ -264,125 +264,102 @@
         logEvent('⚡ Attempting to connect to WebSocket server...', 'info');
 
         try {
-            // Get API key from the API first
-            logEvent('📞 Calling /api/websocket/status...', 'info');
-            fetchWithCSRF('/api/websocket/status')
+            // Skip status check and go directly to WebSocket config and connection
+            logEvent('🔧 Fetching WebSocket config directly...', 'info');
+            fetchWithCSRF('/api/websocket/config')
                 .then(response => {
-                    logEvent(`📄 Status response status: ${response.status}`, 'info');
+                    logEvent(`🔧 Config response status: ${response.status}`, 'info');
                     return response.json();
                 })
-                .then(data => {
-                    logEvent(`📋 Status response data: ${JSON.stringify(data)}`, 'info');
-                    if (data.status === 'error') {
-                        if (data.message.includes('No API key found')) {
-                            logEvent(`❌ ${data.message}`, 'error');
-                            logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
-                        } else {
-                            logEvent(`WebSocket Error: ${data.message}`, 'error');
-                        }
-                        return;
-                    }
-                    
-                    // Get WebSocket URL from config
-                    logEvent('🔧 Fetching WebSocket config...', 'info');
-                    fetchWithCSRF('/api/websocket/config')
-                        .then(response => {
-                            logEvent(`🔧 Config response status: ${response.status}`, 'info');
-                            return response.json();
-                        })
-                        .then(configData => {
-                            logEvent(`🔧 Config data: ${JSON.stringify(configData)}`, 'info');
-                            if (configData.status === 'success') {
-                                const wsUrl = configData.websocket_url;
-                                logEvent(`WebSocket Config - URL: ${wsUrl}, Secure: ${configData.is_secure}, Original: ${configData.original_url}`, 'info');
-                                logEvent(`Current page protocol: ${window.location.protocol}`, 'info');
-                                logEvent(`Connecting to WebSocket server at ${wsUrl}...`, 'info');
-                                
-                                // Create WebSocket connection with proper headers for authentication
-                                socket = new WebSocket(wsUrl);
-
-                                socket.onopen = () => {
-                                    document.getElementById('websocket-status').textContent = 'Connected';
-                                    document.getElementById('websocket-status').className = 'font-semibold text-success';
-                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
-                                    logEvent('Connected to WebSocket server', 'success');
+                .then(configData => {
+                    logEvent(`🔧 Config data: ${JSON.stringify(configData)}`, 'info');
+                    if (configData.status === 'success') {
+                        const wsUrl = configData.websocket_url;
+                        logEvent(`WebSocket Config - URL: ${wsUrl}, Secure: ${configData.is_secure}, Original: ${configData.original_url}`, 'info');
+                        logEvent(`Current page protocol: ${window.location.protocol}`, 'info');
+                        logEvent(`🔌 Connecting to WebSocket server at ${wsUrl}...`, 'info');
                         
-                        // Reset reconnection counter on successful connection
-                        reconnectAttempts = 0;
-                        
-                        // Get API key and authenticate
-                        fetchWithCSRF('/api/websocket/apikey')
-                            .then(response => response.json())
-                            .then(data => {
-                                if (data.status === 'success' && data.api_key) {
-                                    const authMessage = {
-                                        action: 'authenticate',
-                                        api_key: data.api_key
-                                    };
-                                    socket.send(JSON.stringify(authMessage));
-                                    logEvent('Sent authentication request with API key', 'info');
-                                } else {
-                                    logEvent(`Failed to get API key: ${data.message}`, 'error');
-                                    logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
-                                }
-                            })
-                            .catch(error => {
-                                logEvent(`Error getting API key: ${error}`, 'error');
-                            });
-                    };
+                        // Create WebSocket connection
+                        socket = new WebSocket(wsUrl);
 
-                                socket.onclose = (event) => {
-                                    document.getElementById('websocket-status').textContent = 'Disconnected';
-                                    document.getElementById('websocket-status').className = 'font-semibold text-error';
-                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
-                                    
-                                    if (event.wasClean) {
-                                        logEvent('WebSocket connection closed cleanly', 'info');
-                                    } else {
-                                        logEvent(`WebSocket connection lost unexpectedly. Code: ${event.code}, Reason: ${event.reason}`, 'error');
+                        socket.onopen = () => {
+                            document.getElementById('websocket-status').textContent = 'Connected';
+                            document.getElementById('websocket-status').className = 'font-semibold text-success';
+                            document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
+                            logEvent('Connected to WebSocket server', 'success');
                             
-                            // Attempt to reconnect
-                            if (reconnectAttempts < maxReconnectAttempts) {
-                                reconnectAttempts++;
-                                logEvent(`Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`, 'info');
-                                
-                                document.getElementById('websocket-status').textContent = 'Reconnecting...';
-                                document.getElementById('websocket-status').className = 'font-semibold text-warning';
-                                document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connecting';
-                                
-                                setTimeout(() => {
-                                    connectWebSocket();
-                                }, reconnectDelay);
-                            } else {
-                                logEvent('Max reconnection attempts reached. Please refresh the page or click Connect WebSocket.', 'error');
-                            }
-                        }
-                    };
-
-                                socket.onerror = (error) => {
-                                    logEvent(`WebSocket error occurred: ${error}`, 'error');
-                                    logEvent(`WebSocket readyState: ${socket ? socket.readyState : 'undefined'}`, 'info');
-                                    logEvent(`Attempted URL: ${wsUrl}`, 'info');
-                                };
-
-                                socket.onmessage = (event) => {
-                                    try {
-                                        const data = JSON.parse(event.data);
-                                        handleWebSocketMessage(data);
-                                    } catch (e) {
-                                        logEvent(`Error parsing WebSocket message: ${e}`, 'error');
+                            // Reset reconnection counter on successful connection
+                            reconnectAttempts = 0;
+                            
+                            // Get API key and authenticate
+                            fetchWithCSRF('/api/websocket/apikey')
+                                .then(response => response.json())
+                                .then(data => {
+                                    if (data.status === 'success' && data.api_key) {
+                                        const authMessage = {
+                                            action: 'authenticate',
+                                            api_key: data.api_key
+                                        };
+                                        socket.send(JSON.stringify(authMessage));
+                                        logEvent('Sent authentication request with API key', 'info');
+                                    } else {
+                                        logEvent(`Failed to get API key: ${data.message}`, 'error');
+                                        logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
                                     }
-                                };
+                                })
+                                .catch(error => {
+                                    logEvent(`Error getting API key: ${error}`, 'error');
+                                });
+                        };
+
+                        socket.onclose = (event) => {
+                            document.getElementById('websocket-status').textContent = 'Disconnected';
+                            document.getElementById('websocket-status').className = 'font-semibold text-error';
+                            document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
+                            
+                            if (event.wasClean) {
+                                logEvent('WebSocket connection closed cleanly', 'info');
                             } else {
-                                logEvent('Failed to get WebSocket configuration', 'error');
+                                logEvent(`WebSocket connection lost unexpectedly. Code: ${event.code}, Reason: ${event.reason}`, 'error');
+                                
+                                // Attempt to reconnect
+                                if (reconnectAttempts < maxReconnectAttempts) {
+                                    reconnectAttempts++;
+                                    logEvent(`Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`, 'info');
+                                    
+                                    document.getElementById('websocket-status').textContent = 'Reconnecting...';
+                                    document.getElementById('websocket-status').className = 'font-semibold text-warning';
+                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connecting';
+                                    
+                                    setTimeout(() => {
+                                        connectWebSocket();
+                                    }, reconnectDelay);
+                                } else {
+                                    logEvent('Max reconnection attempts reached. Please refresh the page or click Connect WebSocket.', 'error');
+                                }
                             }
-                        })
-                        .catch(error => {
-                            logEvent(`Error getting WebSocket configuration: ${error}`, 'error');
-                        });
+                        };
+
+                        socket.onerror = (error) => {
+                            logEvent(`WebSocket error occurred: ${error}`, 'error');
+                            logEvent(`WebSocket readyState: ${socket ? socket.readyState : 'undefined'}`, 'info');
+                            logEvent(`Attempted URL: ${wsUrl}`, 'info');
+                        };
+
+                        socket.onmessage = (event) => {
+                            try {
+                                const data = JSON.parse(event.data);
+                                handleWebSocketMessage(data);
+                            } catch (e) {
+                                logEvent(`Error parsing WebSocket message: ${e}`, 'error');
+                            }
+                        };
+                    } else {
+                        logEvent('Failed to get WebSocket configuration', 'error');
+                    }
                 })
                 .catch(error => {
-                    logEvent(`Error checking WebSocket status: ${error}`, 'error');
+                    logEvent(`Error getting WebSocket configuration: ${error}`, 'error');
                 });
 
         } catch (error) {
