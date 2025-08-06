@@ -1,1159 +1,732 @@
 """
-Fixed Dhan WebSocket adapter for OpenAlgo.
-Implements the broker-specific WebSocket adapter for Dhan with proper mode mapping.
+Dhan WebSocket Adapter for OpenAlgo
+Manages both 5-level and 20-level depth connections
 """
-import logging
-import os
 import threading
+import json
+import logging
 import time
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, Any, Optional, List
+from collections import defaultdict
+from datetime import datetime, time as dt_time
 
-# Add the project root to Python path if not already there
+from database.auth_db import get_auth_token
+from database.token_db import get_token
+
 import sys
 import os
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
-# Now import using relative paths from the project root
+# Add parent directory to path to allow imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
-from database.token_db import get_token
-from database.auth_db import get_auth_token
-
-# Import the WebSocket client
+from websocket_proxy.mapping import SymbolMapper
+from .dhan_mapping import DhanExchangeMapper, DhanCapabilityRegistry
 from .dhan_websocket import DhanWebSocket
-from .dhan_mapping import get_dhan_exchange, get_openalgo_exchange
+
 
 class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """
-    Dhan-specific implementation of the WebSocket adapter.
-    Implements OpenAlgo WebSocket proxy interface with proper mode mapping.
-    """
-    
-    # No fallback token mappings - using database lookups only
+    """Dhan-specific implementation of the WebSocket adapter"""
     
     def __init__(self):
-        """Initialize the WebSocket adapter"""
         super().__init__()
-        # Set a default logger name, will be updated in initialize()
-        self.logger = logging.getLogger("websocket_adapter")
-        self.ws_client = None
+        self.logger = logging.getLogger("dhan_websocket")
         self.user_id = None
-        # broker_name will be set in initialize()
-        self.running = False
-        self.connected = False
-        self.lock = threading.RLock()  # Changed to RLock for reentrant locking
-        self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
-        self.token_to_symbol = {}  # {token: (symbol, exchange)}
-        # Flag to track intentional disconnection to prevent automatic reconnection
-        self.intentional_disconnect = False
+        self.broker_name = "dhan"
         
-        # Authentication
-        self.client_id = None
-        self.access_token = None
+        # Separate WebSocket clients for different depth levels
+        self.ws_client_5depth = None
+        self.ws_client_20depth = None
+        
+        # Track subscriptions by depth level
+        self.subscriptions_5depth = {}
+        self.subscriptions_20depth = {}
+        
+        # Track 20-depth data accumulation
+        self.depth_20_accumulator = {}
+        
+        # Fallback tracking for 20-depth subscriptions
+        self.depth_20_fallbacks = {}  # Track which subscriptions have fallen back to 5-depth
+        self.depth_20_timeouts = {}   # Track timeout for 20-depth subscriptions
+        self.depth_20_data_received = {}  # Track when 20-depth data was last received
+        
+        # Fallback monitoring thread (will be started in initialize)
+        self.fallback_monitor_thread = None
         
         # Connection management
+        self.running = False
+        self.lock = threading.Lock()
+        self.reconnect_delay = 5
+        self.max_reconnect_delay = 60
         self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 10  # Increased max attempts
-        self.reconnect_delay = 5  # Start with 5s delay
-        self.max_reconnect_delay = 300  # Max 5 minutes between attempts
-        self.reconnecting = False  # Flag to prevent multiple concurrent reconnections
-        
-        # Extended mode mapping to handle all possible OpenAlgo modes
-        self.mode_map = {
-            # Standard OpenAlgo modes
-            1: DhanWebSocket.MODE_LTP,    # LTP -> "ltp"
-            2: DhanWebSocket.MODE_QUOTE,  # Quote -> "marketdata"  
-            3: DhanWebSocket.MODE_FULL # Map mode 8 to FULL
-        }
-        
-    def initialize(self, broker_name: str, user_id: str, **kwargs):
+        self.max_reconnect_attempts = 10
+    
+    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
-        Initialize the adapter with user credentials and settings.
+        Initialize connection with Dhan WebSocket API
         
         Args:
-            broker_name (str): Broker identifier (e.g., 'dhan')
-            user_id (str): User identifier
-            **kwargs: Additional arguments (optional)
+            broker_name: Name of the broker (always 'dhan' in this case)
+            user_id: Client ID/user ID
+            auth_data: If provided, use these credentials instead of fetching from DB
         """
-        self.broker_name = broker_name.lower()  # Store broker name for later use
-        # Update logger name based on broker name
-        self.logger = logging.getLogger(f"{self.broker_name}_websocket_adapter")
-        self.logger.info(f"Initializing {self.broker_name} WebSocket adapter")
         self.user_id = user_id
+        self.broker_name = broker_name
         
-        # Load authentication tokens
-        try:
-            # Use BROKER_API_KEY as client_id
-            self.client_id = os.getenv("BROKER_API_KEY")
-            self.logger.info(f"Retrieved API KEY: {self.client_id[:5]}... (length: {len(self.client_id) if self.client_id else 0})")
-            if not self.client_id:
-                error_msg = f"No BROKER_API_KEY available for {self.broker_name} authentication"
-                self.logger.error(error_msg)
-                return {"status": "error", "message": error_msg}
-                
-            # Use BROKER_API_SECRET as access_token
-            self.access_token = os.getenv("BROKER_API_SECRET")
-            self.logger.info(f"Retrieved API SECRET: {self.access_token[:5]}... (length: {len(self.access_token) if self.access_token else 0})")
-            if not self.access_token:
-                error_msg = f"No BROKER_API_SECRET available for {self.broker_name} authentication"
-                self.logger.error(error_msg)
-                return {"status": "error", "message": error_msg}
-                
-            self.logger.info(f"{self.broker_name} WebSocket adapter initialized")
-            return {"status": "success", "message": f"{self.broker_name} WebSocket adapter initialized"}
-            
-        except Exception as e:
-            self.logger.error(f"Error initializing {self.broker_name} adapter: {e}")
-            return {"status": "error", "message": f"Error initializing {self.broker_name} adapter: {e}"}
+        # For Dhan, use credentials from .env file
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        # Get Dhan credentials from environment
+        client_id = os.getenv('BROKER_API_KEY')  # This is the Dhan client ID
+        auth_token = os.getenv('BROKER_API_SECRET')  # This is the Dhan access token
+        
+        if not client_id or not auth_token:
+            # Fall back to database if env vars not set
+            if not auth_data:
+                auth_token = get_auth_token(user_id)
+                client_id = user_id
+                if not auth_token:
+                    self.logger.error(f"No authentication token found for user {user_id}")
+                    raise ValueError(f"No authentication token found for user {user_id}")
+            else:
+                auth_token = auth_data.get('auth_token')
+                client_id = auth_data.get('client_id', user_id)
+                if not auth_token:
+                    self.logger.error("Missing required authentication data")
+                    raise ValueError("Missing required authentication data")
+        
+        self.logger.info(f"Using Dhan credentials - Client ID: {client_id}")
+        
+        # Store the client_id for later use
+        self.client_id = client_id
+        
+        # Initialize 5-depth WebSocket client
+        self.ws_client_5depth = DhanWebSocket(
+            client_id=client_id,  # Use the actual Dhan client ID
+            access_token=auth_token,
+            is_20_depth=False
+        )
+        
+        # Initialize 20-depth WebSocket client
+        self.ws_client_20depth = DhanWebSocket(
+            client_id=client_id,  # Use the actual Dhan client ID
+            access_token=auth_token,
+            is_20_depth=True
+        )
+        
+        # Set callbacks for 5-depth client
+        self.ws_client_5depth.on_open = self._on_open_5depth
+        self.ws_client_5depth.on_data = self._on_data_5depth
+        self.ws_client_5depth.on_error = self._on_error_5depth
+        self.ws_client_5depth.on_close = self._on_close_5depth
+        
+        # Set callbacks for 20-depth client
+        self.ws_client_20depth.on_open = self._on_open_20depth
+        self.ws_client_20depth.on_data = self._on_data_20depth
+        self.ws_client_20depth.on_error = self._on_error_20depth
+        self.ws_client_20depth.on_close = self._on_close_20depth
+        
+        self.running = True
+        
+        # Start fallback monitoring thread - temporarily disabled for debugging
+        # self.start_fallback_monitor()
     
-    def connect(self):
-        """
-        Connect to the Dhan WebSocket server.
+    def connect(self) -> None:
+        """Establish connections to Dhan WebSocket endpoints"""
+        if not self.ws_client_5depth or not self.ws_client_20depth:
+            self.logger.error("WebSocket clients not initialized. Call initialize() first.")
+            return
         
-        Returns:
-            dict: Connection status
-        """
-        self.logger.info(f"Connecting to {self.broker_name} WebSocket server")
+        # Connect to 5-depth endpoint
+        self.logger.info("Connecting to Dhan 5-depth WebSocket...")
+        self.ws_client_5depth.connect()
         
-        # Reset intentional disconnect flag when connecting
-        self.intentional_disconnect = False
-        
-        try:
-            # Initialize WebSocket client if not already done
-            if not self.ws_client:
-                self.ws_client = DhanWebSocket(
-                    client_id=self.client_id,
-                    access_token=self.access_token,
-                    version='v2',  # Use v2 by default
-                    on_connect=self._on_connect,
-                    on_disconnect=self._on_disconnect,
-                    on_error=self._on_error,
-                    on_ticks=self._on_ticks
-                )
-            
-            # Start WebSocket connection
-            self.ws_client.start()
-            
-            # Wait for connection
-            connected = self.ws_client.wait_for_connection(timeout=10.0)
-            if not connected:
-                self.logger.error(f"Failed to connect to {self.broker_name} WebSocket server")
-                return {"status": "error", "message": f"Failed to connect to {self.broker_name} WebSocket server"}
-                
-            self.connected = True
-            self.running = True
-            self.logger.info(f"Connected to {self.broker_name} WebSocket server")
-            
-            # Resubscribe to symbols if reconnection
-            self._resubscribe()
-            
-            return {"status": "success", "message": f"Connected to {self.broker_name} WebSocket server"}
-            
-        except Exception as e:
-            self.logger.error(f"Error connecting to {self.broker_name} WebSocket: {e}")
-            return {"status": "error", "message": f"Error connecting to {self.broker_name} WebSocket: {e}"}
+        # Connect to 20-depth endpoint
+        self.logger.info("Connecting to Dhan 20-depth WebSocket...")
+        self.ws_client_20depth.connect()
     
-    def disconnect(self):
-        """
-        Disconnect from the Dhan WebSocket server.
+    def disconnect(self) -> None:
+        """Disconnect from Dhan WebSocket endpoints"""
+        self.running = False
         
-        Returns:
-            dict: Disconnection status
-        """
-        self.logger.info(f"Disconnecting from {self.broker_name} WebSocket server")
+        if self.ws_client_5depth:
+            self.ws_client_5depth.disconnect()
         
-        # Mark this as an intentional disconnect to prevent automatic reconnection
-        self.intentional_disconnect = True
+        if self.ws_client_20depth:
+            self.ws_client_20depth.disconnect()
         
-        try:
-            if self.ws_client:
-                self.logger.info("Stopping WebSocket client and waiting for both endpoints to disconnect...")
-                
-                # First, clean up 20-level depth resources explicitly
-                if hasattr(self.ws_client, 'cleanup_20_level_depth_resources'):
-                    try:
-                        self.ws_client.cleanup_20_level_depth_resources()
-                    except Exception as e:
-                        self.logger.error(f"Error during 20-level depth cleanup: {e}")
-                
-                # Stop the WebSocket client with timeout protection
-                try:
-                    self.ws_client.stop()
-                except Exception as e:
-                    self.logger.error(f"Error stopping WebSocket client: {e}")
-                    # Continue with cleanup even if stop fails
-                
-                # Wait for BOTH WebSocket endpoints to be fully disconnected before ZMQ cleanup
-                import time
-                max_wait = 10.0  # Reasonable timeout for all platforms
-                start_time = time.time()
-                
-                while time.time() - start_time < max_wait:
-                    # Check if main WebSocket connection is disconnected
-                    main_disconnected = (not hasattr(self.ws_client, 'connected') or 
-                                       not self.ws_client.connected or
-                                       not hasattr(self.ws_client, 'ws') or
-                                       self.ws_client.ws is None)
-                    
-                    # Check if 20-level depth WebSocket connection is disconnected  
-                    depth_20_disconnected = (not hasattr(self.ws_client, 'depth_20_connected') or
-                                            not self.ws_client.depth_20_connected or
-                                            not hasattr(self.ws_client, 'depth_20_ws') or
-                                            self.ws_client.depth_20_ws is None)
-                    
-                    # Check if threads are terminated
-                    main_thread_stopped = (not hasattr(self.ws_client, 'thread') or 
-                                         self.ws_client.thread is None or
-                                         not self.ws_client.thread.is_alive())
-                    
-                    depth_20_thread_stopped = (not hasattr(self.ws_client, 'depth_20_thread') or
-                                             self.ws_client.depth_20_thread is None or
-                                             not self.ws_client.depth_20_thread.is_alive())
-                    
-                    # Check if depth_20_instruments is empty (all subscriptions unsubscribed)
-                    depth_20_cleared = (not hasattr(self.ws_client, 'depth_20_instruments') or
-                                       not self.ws_client.depth_20_instruments)
-                
-                    if main_disconnected and depth_20_disconnected and main_thread_stopped and depth_20_thread_stopped:
-                        self.logger.info(" Both WebSocket endpoints fully disconnected - safe to cleanup ZMQ")
-                        break
-                    elif main_disconnected and depth_20_cleared and main_thread_stopped:
-                        self.logger.info(" Main WebSocket disconnected and no 20-level depth subscriptions - safe to cleanup ZMQ")
-                        break
-                        
-                    # Log current status
-                    if not main_disconnected:
-                        self.logger.debug(" Waiting for main WebSocket (5-level) to disconnect...")
-                    if not depth_20_disconnected:
-                        self.logger.debug(" Waiting for 20-level depth WebSocket to disconnect...")
-                    if not main_thread_stopped:
-                        self.logger.debug(" Waiting for main WebSocket thread to stop...")
-                    if not depth_20_thread_stopped:
-                        self.logger.debug(" Waiting for 20-level depth thread to stop...")
-                        
-                    time.sleep(0.2)
-                else:
-                    self.logger.warning(" Timeout waiting for WebSocket endpoints to disconnect - forcing ZMQ cleanup")
-                
-                self.ws_client = None
-                
-            self.connected = False
-            self.running = False
-            
-            # Now both endpoints are confirmed disconnected - safe to cleanup ZMQ
-            self.logger.info(" Cleaning up ZMQ resources after confirming both endpoints are disconnected")
-            
-            self.cleanup_zmq()
-            
-            self.logger.info(f" Successfully disconnected from {self.broker_name} WebSocket server")
-            return {"status": "success", "message": f"Disconnected from {self.broker_name} WebSocket server"}
-            
-        except Exception as e:
-            self.logger.error(f" Error disconnecting from {self.broker_name} WebSocket: {e}")
-            # Force cleanup even on error to prevent resource leaks
-            try:
-                self.logger.warning(" Performing emergency ZMQ cleanup due to disconnect error")
-                
-                self.cleanup_zmq()
-            except Exception as cleanup_error:
-                self.logger.error(f" Error during emergency ZMQ cleanup: {cleanup_error}")
-            return {"status": "error", "message": f"Error disconnecting from {self.broker_name} WebSocket: {e}"}
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
+        
+        # Stop fallback monitor
+        self.stop_fallback_monitor()
     
-    def resolve_token(self, symbol: str, exchange: str, token: int = None):
-        """
-        Resolve the correct token for a symbol using database lookup:
-        1. Use the provided token if valid (not None and not 1)
-        2. Look up in the database
-        3. Use placeholder token as a last resort
-        
-        Args:
-            symbol (str): Symbol name
-            exchange (str): Exchange name
-            token (int, optional): Token provided by caller
-            
-        Returns:
-            int: Resolved token or placeholder (1) if not found
-        """
-        # Use the provided token if valid
-        if token is not None and token != 1:
-            try:
-                # Convert token to int if it's a string
-                resolved_token = int(str(token))
-                if resolved_token != 1:
-                    self.logger.info(f"Using provided token {resolved_token} for {exchange}:{symbol}")
-                    return resolved_token
-            except (ValueError, TypeError):
-                self.logger.warning(f"Invalid token format provided for {exchange}:{symbol}: {token}")
-            
-        # Try to look up in database
-        try:
-            db_token = get_token(symbol, exchange)
-            if db_token is not None:
-                try:
-                    # Convert database token to int if it's a string
-                    resolved_token = int(str(db_token))
-                    if resolved_token != 1:
-                        self.logger.info(f"Using database token {resolved_token} for {exchange}:{symbol}")
-                        return resolved_token
-                except (ValueError, TypeError):
-                    self.logger.warning(f"Invalid token format from database for {exchange}:{symbol}: {db_token}")
-        except Exception as e:
-            self.logger.warning(f"Database lookup failed for {exchange}:{symbol}: {e}")
-        
-        # Use placeholder token (1) as last resort
-        self.logger.warning(f"No valid token found for {exchange}:{symbol}, using placeholder 1")
-        return 1
-                
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
-        Subscribe to market data for a symbol.
+        Subscribe to market data with Dhan-specific implementation
         
         Args:
-            symbol (str): Symbol identifier (e.g., 'RELIANCE')
-            exchange (str): Exchange (e.g., 'NSE', 'BSE', 'NFO')
-            mode (int): Mode - 1:LTP, 2:QUOTE, 3:DEPTH, 4-8:DEPTH
-            depth_level (int): Depth levels for market depth data
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
+            mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
+            depth_level: Market depth level (5 or 20)
             
         Returns:
-            dict: Subscription status
-            
-        Note:
-            This method signature was standardized to match Angel/Zerodha adapters.
-            The previous signature was: 
-                subscribe(symbol, exchange, token=None, mode=1)
-            which caused parameter mismatch when called from the WebSocket proxy.
-            The proxy was passing mode=3 as token and depth_level=5 as mode,
-            resulting in mode=5 being received for DEPTH subscriptions.
+            Dict: Response with status and error message if applicable
         """
-        # Convert exchange code to Dhan format
-        dhan_exchange = get_dhan_exchange(exchange)
-        self.logger.info(f"Processing subscription for {exchange}:{symbol} with mode={mode}, depth_level={depth_level}")
+        # Validate mode
+        if mode not in [1, 2, 3]:
+            return self._create_error_response("INVALID_MODE", 
+                                              f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
         
-        try:
-            # IMPORTANT: Token was previously a parameter, now handled internally
-            token = None  # Will be resolved using the resolve_token method
-            
-            # Resolve the token using our multi-step resolution method
-            actual_token = self.resolve_token(symbol, exchange, token)
-                
-            if not self.connected or not self.ws_client:
-                self.logger.warning(f"Cannot subscribe - not connected to {self.broker_name} WebSocket")
-                return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
-                
-            # Debug info - print mode type and value
-            self.logger.info(f"DEBUG: Mode value received: {mode}, Type: {type(mode)}")
-            
-            # CRITICAL: Force convert mode to integer for comparison
-            try:
-                mode = int(mode)
-                self.logger.info(f"DEBUG: Mode converted to int: {mode}")
-            except (ValueError, TypeError):
-                self.logger.warning(f"DEBUG: Could not convert mode {mode} to int, using as is")
-            
-            # Map OpenAlgo mode to Dhan mode with explicit handling of all possible modes
-            if mode == 1:
-                # Standard LTP mode
-                dhan_mode = DhanWebSocket.MODE_LTP
-                self.logger.info(f"Mapped OpenAlgo mode {mode} (LTP) to Dhan mode '{dhan_mode}'")
-            elif mode == 2:
-                # Standard QUOTE mode
-                dhan_mode = DhanWebSocket.MODE_QUOTE
-                self.logger.info(f"Mapped OpenAlgo mode {mode} (QUOTE) to Dhan mode '{dhan_mode}'")
-            elif mode == 3:
-                # Standard DEPTH mode
-                dhan_mode = DhanWebSocket.MODE_FULL
-                self.logger.info(f"Mapped OpenAlgo mode {mode} (DEPTH) to Dhan mode '{dhan_mode}'")
-            else:
-                # All other modes (4-8) map to FULL/DEPTH
-                dhan_mode = DhanWebSocket.MODE_FULL
-                self.logger.info(f"Mapped OpenAlgo mode {mode} (DEPTH/FULL) to Dhan mode '{dhan_mode}'")
-            
-            # Add symbol to subscription tracking
+        # Map symbol to token
+        self.logger.info(f"Looking up token for {symbol}.{exchange}")
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            self.logger.error(f"Token lookup failed for {symbol}.{exchange}")
+            return self._create_error_response("SYMBOL_NOT_FOUND", 
+                                              f"Symbol {symbol} not found for exchange {exchange}")
+        
+        token = token_info['token']
+        brexchange = token_info['brexchange']
+        self.logger.info(f"Token found: {token}, brexchange: {brexchange}")
+        
+        # Get Dhan exchange code
+        dhan_exchange = DhanExchangeMapper.get_dhan_exchange(exchange)
+        self.logger.info(f"Dhan exchange mapping: {exchange} -> {dhan_exchange}")
+        if not dhan_exchange:
+            return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
+                                              f"Exchange {exchange} not supported")
+        
+        # Check depth level support and auto-upgrade for NSE/NFO
+        is_fallback = False
+        actual_depth = depth_level
+        
+        if mode == 3:  # Depth mode
+            # Auto-upgrade to 20-level depth for NSE and NFO if not explicitly specified
+            # Will automatically fallback to 5-level if 20-level doesn't provide data
+            if exchange in ['NSE', 'NFO'] and depth_level == 5:
+                actual_depth = 20
+                self.logger.info(f"Auto-upgrading {exchange} depth from {depth_level} to {actual_depth} levels (with auto-fallback to 5 after 30 seconds)")
+            elif not DhanCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
+                actual_depth = DhanCapabilityRegistry.get_fallback_depth_level(exchange, depth_level)
+                is_fallback = True
+                self.logger.info(
+                    f"Depth level {depth_level} not supported for {exchange}, "
+                    f"using {actual_depth} instead"
+                )
+        
+        # Prepare instrument info
+        instrument = {
+            'ExchangeSegment': dhan_exchange,
+            'SecurityId': token
+        }
+        
+        # Map mode to Dhan subscription type
+        dhan_mode_map = {
+            1: 'TICKER',  # LTP
+            2: 'QUOTE',   # Quote
+            3: 'FULL' if actual_depth == 5 else '20_DEPTH'  # Depth
+        }
+        dhan_mode = dhan_mode_map.get(mode)
+        
+        # Generate correlation ID
+        correlation_id = f"{symbol}_{exchange}_{mode}_{actual_depth}"
+        
+        self.logger.info(f"Subscribing to {symbol}.{exchange} in mode {mode} (requested depth {depth_level} -> actual depth {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
+        self.logger.info(f"Will use {'20-depth' if actual_depth == 20 and mode == 3 else '5-depth'} connection")
+        
+        # Subscribe based on depth level
+        if actual_depth == 20 and mode == 3:
+            # Use 20-depth connection
             with self.lock:
-                self.subscribed_symbols[symbol] = {
-                    "exchange": exchange,  # Store original OpenAlgo exchange
-                    "dhan_exchange": dhan_exchange,  # Store Dhan exchange
-                    "token": actual_token,
-                    "mode": mode,
-                    "depth_level": depth_level  # Store depth_level for future reference
+                # Check subscription limit
+                if len(self.subscriptions_20depth) >= DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_20_DEPTH:
+                    return self._create_error_response("SUBSCRIPTION_LIMIT", 
+                                                      f"Maximum {DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_20_DEPTH} subscriptions allowed for 20-depth")
+                
+                self.subscriptions_20depth[correlation_id] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'dhan_exchange': dhan_exchange,
+                    'token': token,
+                    'mode': mode,
+                    'depth_level': actual_depth,
+                    'instrument': instrument
                 }
-                # Store token mapping with both string and int keys for robustness
-                self.token_to_symbol[str(actual_token)] = (symbol, exchange)
-                self.token_to_symbol[int(actual_token)] = (symbol, exchange)
                 
-                self.logger.info(f" Stored token mapping: {actual_token} -> ({symbol}, {exchange})")
-                self.logger.info(f" Current token_to_symbol: {self.token_to_symbol}")
+                # Set timeout for 20-depth fallback (30 seconds)
+                self.depth_20_timeouts[correlation_id] = time.time() + 30
+                # Reset data received timestamp
+                self.depth_20_data_received[correlation_id] = time.time()
             
-            # Map OpenAlgo exchange to Dhan exchange code
-            exchange_code = 1  # Default to NSE_EQ
-            if exchange == "NSE":
-                exchange_code = 1  # NSE_EQ
-            elif exchange == "BSE":
-                exchange_code = 4  # BSE_EQ
-            elif exchange == "NFO":
-                exchange_code = 2  # NSE_FNO
-            elif exchange == "BFO":
-                exchange_code = 8  # BSE_FNO  
-            elif exchange == "MCX":
-                exchange_code = 5  # MCX_COMM
-            elif exchange == "CDS" or exchange == "NSE_CDS":
-                exchange_code = 3  # NSE_CURRENCY
-            elif exchange == "BSE_CDS":
-                exchange_code = 7  # BSE_CURRENCY
-            # Special handling for index instruments
-            elif exchange == "INDICES" or exchange == "NSE_INDICES" or exchange == "NSE_INDEX":
-                exchange_code = 0  # IDX_I
-            elif exchange == "BSE_INDICES" or exchange == "BSE_INDEX":
-                exchange_code = 0  # IDX_I (Dhan treats all indices as IDX_I)
+            # Subscribe if connected
+            if self.ws_client_20depth and self.ws_client_20depth.connected:
+                try:
+                    self.ws_client_20depth.subscribe([instrument], '20_DEPTH')
+                except Exception as e:
+                    self.logger.error(f"Error subscribing to 20-depth for {symbol}.{exchange}: {e}")
+                    return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        else:
+            # Use 5-depth connection
+            with self.lock:
+                # Check subscription limit
+                if len(self.subscriptions_5depth) >= DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_5_DEPTH:
+                    return self._create_error_response("SUBSCRIPTION_LIMIT", 
+                                                      f"Maximum {DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_5_DEPTH} subscriptions allowed")
                 
-            self.logger.info(f"Exchange {exchange} mapped to Dhan exchange code {exchange_code}")
-                
-            # Subscribe to token with Dhan WebSocket, passing exchange code
-            self.logger.info(f" Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}")
+                self.subscriptions_5depth[correlation_id] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'dhan_exchange': dhan_exchange,
+                    'token': token,
+                    'mode': mode,
+                    'depth_level': actual_depth,
+                    'instrument': instrument
+                }
             
-            # Check if WebSocket client is properly initialized and connected
-            if not self.ws_client:
-                self.logger.error(" WebSocket client is None!")
-                return {"status": "error", "message": "WebSocket client not initialized"}
-                
-            # Check connection status
-            is_connected = self.ws_client.is_connected()
-            self.logger.info(f"WebSocket connection status: {is_connected}")
-            
-            if not is_connected:
-                self.logger.warning(" WebSocket client may not be connected, but attempting subscription anyway")
-                # Don't fail here - let the subscription attempt proceed
-            
-            # Perform subscription
-            success = self.ws_client.subscribe_tokens([actual_token], dhan_mode, exchange_codes={actual_token: exchange_code})
-            
-            if success:
-                self.logger.info(f" Successfully subscribed to {exchange}:{symbol}")
-            else:
-                self.logger.error(f" Failed to subscribe to {exchange}:{symbol}")
-                return {"status": "error", "message": f"Failed to subscribe to {exchange}:{symbol}"}
-            
-            return {"status": "success", "message": f"Subscribed to {exchange}:{symbol}"}
-            
-        except Exception as e:
-            self.logger.error(f"Error subscribing to {symbol}: {e}")
-            return {"status": "error", "message": f"Error subscribing to {symbol}: {e}"}
+            # Subscribe if connected
+            if self.ws_client_5depth and self.ws_client_5depth.connected:
+                try:
+                    self.ws_client_5depth.subscribe([instrument], dhan_mode)
+                except Exception as e:
+                    self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                    return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        
+        # Store in base class subscriptions for reconnection
+        with self.lock:
+            self.subscriptions[correlation_id] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'depth_level': actual_depth,
+                'is_20_depth': (actual_depth == 20 and mode == 3)
+            }
+        
+        return self._create_success_response(
+            'Subscription requested' if not is_fallback else f"Using depth level {actual_depth} instead of requested {depth_level}",
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode,
+            requested_depth=depth_level,
+            actual_depth=actual_depth,
+            is_fallback=is_fallback
+        )
     
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = None) -> Dict[str, Any]:
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """
-        Unsubscribe from market data for a symbol.
+        Unsubscribe from market data
         
         Args:
-            symbol (str): Symbol identifier
-            exchange (str): Exchange identifier
-            mode (int, optional): The mode to unsubscribe from. If None, will unsubscribe from all modes.
+            symbol: Trading symbol
+            exchange: Exchange code
+            mode: Subscription mode
             
         Returns:
-            dict: Unsubscription status
-            
-        Note:
-            This method signature was standardized to match Angel/Zerodha adapters.
-            The previous signature was: 
-                unsubscribe(symbol, exchange, token=None)
-            The token parameter is now handled internally using the subscription tracking mechanism.
+            Dict: Response with status
         """
-        self.logger.info(f"Processing unsubscribe for {exchange}:{symbol} with mode={mode}")
+        # Map symbol to token
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return self._create_error_response("SYMBOL_NOT_FOUND", 
+                                              f"Symbol {symbol} not found for exchange {exchange}")
         
-        try:
-            # First, check if we already have this symbol in our subscription tracking
-            # as that token would be most accurate for unsubscription
-            stored_token = None
-            stored_depth_level = 5  # Default to 5-level depth
-            with self.lock:
-                if symbol in self.subscribed_symbols:
-                    stored_data = self.subscribed_symbols[symbol]
-                    if stored_data["exchange"] == exchange:  # Make sure we match exchange too
-                        stored_token = stored_data["token"]
-                        # Get stored depth_level if available
-                        if "depth_level" in stored_data:
-                            stored_depth_level = stored_data["depth_level"]
-                        
-            # If we found the stored token, use that. Otherwise resolve it.
-            # IMPORTANT: token parameter was previously a method parameter, now handled internally
-            actual_token = stored_token if stored_token is not None else self.resolve_token(symbol, exchange, None)
-            
-            # Handle case where we still couldn't resolve a token
-            if actual_token is None:
-                self.logger.warning(f"Could not resolve token for {exchange}:{symbol}")
-                return {"status": "error", "message": f"Could not resolve token for {exchange}:{symbol}"}
-                
-            if not self.connected or not self.ws_client:
-                self.logger.warning(f"Cannot unsubscribe - not connected to {self.broker_name} WebSocket")
-                return {"status": "error", "message": f"Not connected to {self.broker_name} WebSocket"}
-                
-            self.logger.info(f"Unsubscribing from token {actual_token} ({exchange}:{symbol}) with depth_level={stored_depth_level}")
-            
-            # Special handling for 20-level depth - ensure cleanup happens
-            is_20_level = stored_depth_level == 20
-            if is_20_level:
-                self.logger.info(f"Detected 20-level depth unsubscription for {exchange}:{symbol}, performing extra cleanup")
-                # For 20-level depth, make sure to force cleanup
-                if hasattr(self.ws_client, '_unsubscribe_20_level_depth'):
-                    success = self.ws_client._unsubscribe_20_level_depth(actual_token)
-                    self.logger.info(f"20-level depth specific cleanup result: {success}")
-            
-            # Always call the regular unsubscribe method as well
-            self.ws_client.unsubscribe(actual_token)
-            
-            # Remove from subscription tracking but keep token mapping for in-flight messages
-            with self.lock:
-                if symbol in self.subscribed_symbols:
-                    # Keep token mapping for a short while to handle in-flight messages
-                    # The mapping will be cleaned up by the message handler when it sees
-                    # the subscription is gone
-                    del self.subscribed_symbols[symbol]
-                
-                # Check if this was the last subscription and clean up 20-level depth if needed
-                if not self.subscribed_symbols and hasattr(self.ws_client, 'cleanup_20_level_depth_resources'):
-                    self.logger.info("Last subscription removed, cleaning up 20-level depth resources")
-                    self.ws_client.cleanup_20_level_depth_resources()
-            
-            self.logger.info(f"Unsubscribed from {exchange}:{symbol}")
-            return {"status": "success", "message": f"Unsubscribed from {exchange}:{symbol}"}
-            
-        except Exception as e:
-            self.logger.error(f"Error unsubscribing from {symbol}: {e}")
-            return {"status": "error", "message": f"Error unsubscribing from {symbol}: {e}"}
-    
-    def _resubscribe(self):
-        """
-        Re-subscribe to all previously subscribed symbols after reconnection.
-        """
-        if not self.connected or not self.ws_client:
-            return
-            
-        self.logger.info("Resubscribing to previously subscribed symbols")
+        token = token_info['token']
         
+        # Get Dhan exchange code
+        dhan_exchange = DhanExchangeMapper.get_dhan_exchange(exchange)
+        if not dhan_exchange:
+            return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
+                                              f"Exchange {exchange} not supported")
+        
+        # Prepare instrument info
+        instrument = {
+            'ExchangeSegment': dhan_exchange,
+            'SecurityId': token
+        }
+        
+        # Remove from all possible subscriptions
+        removed = False
         with self.lock:
-            # Group tokens by mode for bulk subscription
-            mode_tokens = {}
-            
-            for symbol, data in self.subscribed_symbols.items():
-                token = data["token"]
-                mode = data["mode"]
+            # Check 5-depth subscriptions
+            for depth in [5, 20]:
+                correlation_id = f"{symbol}_{exchange}_{mode}_{depth}"
                 
-                dhan_mode = self.mode_map.get(mode, DhanWebSocket.MODE_FULL)
+                if correlation_id in self.subscriptions_5depth:
+                    del self.subscriptions_5depth[correlation_id]
+                    if self.ws_client_5depth:
+                        self.ws_client_5depth.unsubscribe([instrument])
+                    removed = True
                 
-                if dhan_mode not in mode_tokens:
-                    mode_tokens[dhan_mode] = []
-                    
-                mode_tokens[dhan_mode].append(token)
-            
-            # Subscribe mode by mode
-            for mode, tokens in mode_tokens.items():
-                if tokens:
-                    self.ws_client.subscribe_tokens(tokens, mode)
-                    self.logger.info(f"Resubscribed {len(tokens)} symbols in mode '{mode}'")
+                if correlation_id in self.subscriptions_20depth:
+                    del self.subscriptions_20depth[correlation_id]
+                    # Clean up fallback tracking
+                    if correlation_id in self.depth_20_timeouts:
+                        del self.depth_20_timeouts[correlation_id]
+                    if correlation_id in self.depth_20_data_received:
+                        del self.depth_20_data_received[correlation_id]
+                    if correlation_id in self.depth_20_fallbacks:
+                        del self.depth_20_fallbacks[correlation_id]
+                    if self.ws_client_20depth:
+                        self.ws_client_20depth.unsubscribe([instrument])
+                    removed = True
+                
+                if correlation_id in self.subscriptions:
+                    del self.subscriptions[correlation_id]
         
-        self.logger.info("Resubscription complete")
+        if removed:
+            return self._create_success_response(
+                f"Unsubscribed from {symbol}.{exchange}",
+                symbol=symbol,
+                exchange=exchange,
+                mode=mode
+            )
+        else:
+            return self._create_error_response("NOT_SUBSCRIBED", 
+                                              f"Not subscribed to {symbol}.{exchange}")
     
-    def _on_connect(self):
-        """
-        Callback handler for WebSocket connection event.
-        """
-        self.logger.info(" WebSocket connected callback triggered")
+    # Callbacks for 5-depth connection
+    def _on_open_5depth(self, ws):
+        """Handle 5-depth connection open"""
+        self.logger.info("Connected to Dhan 5-depth WebSocket")
         self.connected = True
         
-    def _on_disconnect(self):
-        """
-        Callback handler for WebSocket disconnection event.
-        Attempts to reconnect if needed, but only if the disconnect was not intentional.
-        """
-        self.logger.warning(" WebSocket disconnected callback triggered")
+        # Resubscribe to existing subscriptions
+        with self.lock:
+            instruments_by_mode = defaultdict(list)
+            
+            for sub in self.subscriptions_5depth.values():
+                mode = sub['mode']
+                dhan_mode = {1: 'TICKER', 2: 'QUOTE', 3: 'FULL'}[mode]
+                instruments_by_mode[dhan_mode].append(sub['instrument'])
+            
+            # Subscribe in batches by mode
+            for dhan_mode, instruments in instruments_by_mode.items():
+                try:
+                    self.ws_client_5depth.subscribe(instruments, dhan_mode)
+                    self.logger.info(f"Resubscribed to {len(instruments)} instruments in {dhan_mode} mode")
+                except Exception as e:
+                    self.logger.error(f"Error resubscribing: {e}")
+    
+    def _on_error_5depth(self, ws, error):
+        """Handle 5-depth connection error"""
+        self.logger.error(f"Dhan 5-depth WebSocket error: {error}")
+    
+    def _on_close_5depth(self, ws):
+        """Handle 5-depth connection close"""
+        self.logger.info("Dhan 5-depth WebSocket connection closed")
         self.connected = False
-        
-        # Attempt to reconnect if we're still running AND this wasn't an intentional disconnect
-        if self.running and not self.intentional_disconnect:
-            self.logger.info("Disconnection was unexpected - attempting to reconnect...")
-            # Start reconnection in a separate thread to avoid blocking
-            reconnect_thread = threading.Thread(
-                target=self._try_reconnect,
-                name=f"{self.broker_name}_reconnect_thread",
-                daemon=True
-            )
-            reconnect_thread.start()
-        elif self.intentional_disconnect:
-            self.logger.info("Disconnection was intentional - not attempting to reconnect")
-            
-    def _on_error(self, error):
-        """
-        Callback handler for WebSocket error event.
-        
-        Args:
-            error: Error object or message from WebSocket
-        """
-        self.logger.error(f"🚨 WebSocket error callback triggered: {error}")
-        
-        # Attempt to reconnect on error if still running
-        if self.running and self.ws_client:
-            if not self.ws_client.is_connected():
-                self._try_reconnect()
     
-    def _on_ticks(self, ticks: List[Dict[str, Any]]):
-        """
-        Callback handler for tick data from WebSocket.
-        Processes and publishes tick data to ZeroMQ.
-        
-        Args:
-            ticks (List[Dict]): List of tick data dictionaries
-        """
+    def _on_data_5depth(self, ws, data):
+        """Handle data from 5-depth connection"""
         try:
-            if not ticks:
-                self.logger.warning("No ticks received in _on_ticks callback")
-                return
-                
-            self.logger.info(f"🎯 Received {len(ticks)} ticks from Dhan WebSocket")
+            # Find matching subscription by token and exchange segment
+            security_id = data.get('security_id')
+            exchange_segment = data.get('exchange_segment')
+            data_type = data.get('type')
             
-            # Debug: Log raw tick data
-            for i, tick in enumerate(ticks):
-                self.logger.info(f"Raw tick {i+1}: {tick}")
-            
-            # Process each tick
-            for tick in ticks:
-                token = tick.get("instrument_token") or tick.get("token")
-                if not token:
-                    self.logger.warning(f"Tick missing token: {tick}")
-                    continue
+            # Find the subscription that matches this token
+            # First try exact match (token + exchange segment)
+            subscription = None
+            with self.lock:
+                for sub in self.subscriptions_5depth.values():
+                    expected_segment = DhanExchangeMapper.get_segment_from_exchange(sub['exchange'])
                     
-                # Find symbol from token and handle cleanup
+                    if (sub['token'] == security_id and expected_segment == exchange_segment):
+                        subscription = sub
+                        self.logger.info(f"Exact match found: {sub['symbol']}.{sub['exchange']}")
+                        break
+                
+                # If no exact match, try token-only match (for flexibility)
+                if not subscription:
+                    for sub in self.subscriptions_5depth.values():
+                        if sub['token'] == security_id:
+                            subscription = sub
+                            expected_segment = DhanExchangeMapper.get_segment_from_exchange(sub['exchange'])
+                            self.logger.info(f"Token-only match found: {sub['symbol']}.{sub['exchange']} (expected segment {expected_segment}, got {exchange_segment})")
+                            break
+            
+            if not subscription:
+                self.logger.warning(f"Received data for unsubscribed token: {security_id}, segment: {exchange_segment}")
+                return
+            
+            # Get symbol and exchange from subscription
+            symbol = subscription['symbol']
+            exchange = subscription['exchange']
+            
+            # Normalize and publish data
+            market_data = self._normalize_5depth_data(data, symbol, exchange)
+            if market_data:
+                # Determine topic based on data type
+                mode_map = {
+                    'ticker': 'LTP',
+                    'quote': 'QUOTE',
+                    'full': 'DEPTH',
+                    'oi': 'OI',
+                    'prev_close': 'PREV_CLOSE'
+                }
+                
+                mode_str = mode_map.get(data_type, 'UNKNOWN')
+                topic = f"{exchange}_{symbol}_{mode_str}"
+                
+                self.publish_market_data(topic, market_data)
+                
+        except Exception as e:
+            self.logger.error(f"Error processing 5-depth data: {e}", exc_info=True)
+    
+    # Callbacks for 20-depth connection
+    def _on_open_20depth(self, ws):
+        """Handle 20-depth connection open"""
+        self.logger.info("Connected to Dhan 20-depth WebSocket")
+        
+        # Resubscribe to existing subscriptions
+        with self.lock:
+            instruments = [sub['instrument'] for sub in self.subscriptions_20depth.values()]
+            
+            if instruments:
+                try:
+                    self.ws_client_20depth.subscribe(instruments, '20_DEPTH')
+                    self.logger.info(f"Resubscribed to {len(instruments)} instruments for 20-depth")
+                except Exception as e:
+                    self.logger.error(f"Error resubscribing to 20-depth: {e}")
+    
+    def _on_error_20depth(self, ws, error):
+        """Handle 20-depth connection error"""
+        self.logger.error(f"Dhan 20-depth WebSocket error: {error}")
+    
+    def _on_close_20depth(self, ws):
+        """Handle 20-depth connection close"""
+        self.logger.info("Dhan 20-depth WebSocket connection closed")
+    
+    def _on_data_20depth(self, ws, data):
+        """Handle data from 20-depth connection"""
+        try:
+            # 20-depth data comes in two parts: bid and ask
+            # We need to accumulate both before publishing
+            security_id = data.get('security_id')
+            side = data.get('side')
+            
+            if data.get('type') != 'depth_20':
+                return
+            
+            # Store in accumulator
+            if security_id not in self.depth_20_accumulator:
+                self.depth_20_accumulator[security_id] = {}
+            
+            self.depth_20_accumulator[security_id][side] = data.get('levels', [])
+            
+            # Check if we have both sides
+            if 'buy' in self.depth_20_accumulator[security_id] and 'sell' in self.depth_20_accumulator[security_id]:
+                # Find matching subscription by token and exchange segment
+                exchange_segment = data.get('exchange_segment')
+                
+                # Find the subscription that matches this token and exchange segment
+                subscription = None
                 with self.lock:
-                    # Debug: Show current token mappings
-                    self.logger.info(f"Looking up token {token} (type: {type(token).__name__})")
-                    self.logger.info(f"Current token_to_symbol mappings: {self.token_to_symbol}")
-                    self.logger.info(f"Current subscribed_symbols: {list(self.subscribed_symbols.keys())}")
-                    
-                    # Try direct lookup with both string and int formats for robustness
-                    symbol_exchange = self.token_to_symbol.get(str(token)) or self.token_to_symbol.get(int(token))
-                    
-                    if not symbol_exchange:
-                        # Enhanced debug info for token mapping
-                        token_keys = list(self.token_to_symbol.keys())
-                        token_types = [(k, type(k).__name__) for k in token_keys]
-                        self.logger.warning(f"❌ TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found")
-                        self.logger.warning(f"Available tokens: {token_types}")
-                        
-                        # Try more aggressive lookup methods
-                        for k, v in self.token_to_symbol.items():
-                            try:
-                                if int(k) == int(token):
-                                    self.logger.info(f"✅ Found match using int conversion: {k} -> {v}")
-                                    symbol_exchange = v
-                                    break
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        if not symbol_exchange:
-                            self.logger.error(f"❌ CRITICAL: No symbol found for token {token}, skipping tick")
-                            continue  # Still no match, skip this tick
-                    
-                    # Check if this symbol is still subscribed
-                    symbol, exchange = symbol_exchange
-                    if symbol not in self.subscribed_symbols:
-                        # Symbol is no longer subscribed, clean up token mapping
-                        self.logger.info(f"Cleaning up token mapping for unsubscribed symbol {symbol}")
-                        try:
-                            del self.token_to_symbol[str(token)]
-                        except KeyError:
-                            pass
-                        try:
-                            del self.token_to_symbol[int(token)]
-                        except KeyError:
-                            pass
-                        continue  # Skip processing this tick
-                        
-                symbol, exchange = symbol_exchange
+                    for sub in self.subscriptions_20depth.values():
+                        if (sub['token'] == security_id and 
+                            DhanExchangeMapper.get_segment_from_exchange(sub['exchange']) == exchange_segment):
+                            subscription = sub
+                            break
                 
-                # Add symbol and exchange to tick data
-                tick["symbol"] = symbol
+                if not subscription:
+                    self.logger.warning(f"Received 20-depth data for unsubscribed token: {security_id}, segment: {exchange_segment}")
+                    # Clear accumulator
+                    del self.depth_20_accumulator[security_id]
+                    return
                 
-                # Store Dhan's exchange code
-                dhan_exchange = tick.get("exchange")
+                # Get symbol and exchange from subscription
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
                 
-                # Get original subscription exchange for topic generation
-                subscription_exchange = exchange
+                # Create combined depth data
+                market_data = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': 3,  # Depth mode
+                    'timestamp': int(time.time() * 1000),
+                    'depth': {
+                        'buy': self.depth_20_accumulator[security_id]['buy'],
+                        'sell': self.depth_20_accumulator[security_id]['sell']
+                    },
+                    'depth_level': 20
+                }
                 
-                # Convert to OpenAlgo format for data field
-                data_exchange = self._map_data_exchange(subscription_exchange)
+                # Publish with standard DEPTH topic (mode 3)
+                topic = f"{exchange}_{symbol}_DEPTH"
+                self.publish_market_data(topic, market_data)
                 
-                # Set the data exchange field in the tick
-                tick["exchange"] = data_exchange
+                # Clear accumulator
+                del self.depth_20_accumulator[security_id]
                 
-                self.logger.info(f"Processing tick for {symbol}: price={tick.get('last_price')}, token={token}, exchange={subscription_exchange}")
-                
-                # Get mode from subscribed_symbols tracking
-                subscription = self.subscribed_symbols.get(symbol, {})
-                mode = subscription.get('mode', 1)  # Default to LTP mode
-                
-                # Map numeric mode to string format
-                mode_str = {
-                    1: 'LTP',
-                    2: 'QUOTE',
-                    3: 'DEPTH'
-                }.get(mode, 'LTP')
-                
-                # Normalize tick format to OpenAlgo standard
-                normalized_tick = self._normalize_tick(tick)
-                
-                # Set mode based on packet type
-                packet_type = tick.get('packet_type', '')
-                if packet_type == 'market_update' or packet_type == 'quote':
-                    mode_str = 'QUOTE'
-                elif 'depth' in normalized_tick and isinstance(normalized_tick.get('depth', {}), dict):
-                    mode_str = 'DEPTH'
-                self.logger.debug(f"Packet type {packet_type} mapped to mode {mode_str}")
-                
-                # Add mode to normalized tick for proper handling
-                normalized_tick['mode'] = mode_str
-                
-                # Generate topics using both formats for maximum compatibility
-                # Format 1: With broker name (for WebSocket server with broker filtering)
-                broker_topic = self._generate_topic(symbol, subscription_exchange, mode_str)
-                
-                # Format 2: Without broker name (for polling compatibility)
-                legacy_topic = f"{subscription_exchange}_{symbol}_{mode_str}"
-                
-                # Debug log to verify correct topic and data structure
-                self.logger.info(f"Publishing to topic: {broker_topic}")
-                self.logger.info(f"Publishing to legacy topic: {legacy_topic}")
-                self.logger.info(f"Data structure: {normalized_tick}")
-                self.logger.info(f"Subscription exchange: {subscription_exchange} -> Topic: {broker_topic}, Data exchange: {data_exchange}")
-                
-                # Publish to both topic formats for maximum compatibility
-                # Topic with broker name for filtering in WebSocket server
-                self.publish_market_data(broker_topic, normalized_tick)
-                # Legacy topic format for polling compatibility
-                self.publish_market_data(legacy_topic, normalized_tick)
-                
-                # Debug log for troubleshooting polling data issues
-                if mode_str.lower() == 'ltp':
-                    self.logger.debug(f"LTP Data should be available for polling: {subscription_exchange}:{symbol}")
+                # Update data received timestamp for fallback monitoring
+                correlation_id = f"{symbol}_{exchange}_3_20"
+                if correlation_id in self.depth_20_timeouts:
+                    self.depth_20_data_received[correlation_id] = time.time()
                 
         except Exception as e:
-            self.logger.error(f"Error processing ticks: {e}")
+            self.logger.error(f"Error processing 20-depth data: {e}", exc_info=True)
     
-    def _generate_topic(self, symbol: str, exchange: str, mode_str: str) -> str:
-        """
-        Generate topic for market data publishing.
-        Uses the newer format including broker name for maximum client compatibility.
+    def _normalize_5depth_data(self, data: Dict[str, Any], symbol: str, exchange: str) -> Dict[str, Any]:
+        """Normalize 5-depth data to common format"""
+        data_type = data.get('type')
         
-        Args:
-            symbol: The trading symbol
-            exchange: The exchange code in OpenAlgo format
-            mode_str: The subscription mode (LTP, QUOTE, DEPTH)
-            
-        Returns:
-            str: Properly formatted topic string
-        """
-        # Use new format with broker name: BROKER_EXCHANGE_SYMBOL_MODE
-        return f"{self.broker_name}_{exchange}_{symbol}_{mode_str}"
-    
-    def _map_data_exchange(self, subscription_exchange: str) -> str:
-        """
-        Map subscription exchange to data exchange for client compatibility.
+        base_data = {
+            'symbol': symbol,
+            'exchange': exchange,
+            'timestamp': int(time.time() * 1000)
+        }
         
-        Args:
-            subscription_exchange: Original subscription exchange
-            
-        Returns:
-            str: Data exchange code for consistent mapping
-        """
-        # Map NSE_INDEX/BSE_INDEX to NSE/BSE for data compatibility
-        if subscription_exchange == "NSE_INDEX":
-            return "NSE"
-        elif subscription_exchange == "BSE_INDEX":
-            return "BSE"
-        return subscription_exchange
-    
-    def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize Dhan tick data to OpenAlgo format.
-        
-        This method handles OHLC data that may come in different formats:
-        - Nested under 'ohlc' dictionary
-        - Directly in the tick root
-        - With different field names (e.g., 'traded_volume' vs 'volume')
-        
-        Args:
-            tick (Dict): Dhan tick data
-            
-        Returns:
-            Dict: Normalized tick data with consistent field names and formats
-        """
-        try:
-            # Debug log for troubleshooting
-            self.logger.debug(f"Raw tick data: {tick}")
-            
-            # Ensure exchange is in OpenAlgo format
-            exchange = tick.get("exchange")
-            if exchange:
-                openalgo_exchange = get_openalgo_exchange(exchange)
-            else:
-                openalgo_exchange = exchange
-            
-            # Safely get numeric values with validation
-            def safe_float(value, default=0.0):
-                try:
-                    if value is None:
-                        return default
-                    fval = float(value)
-                    # Validate the float is a reasonable price
-                    if abs(fval) > 1e10:  # Arbitrarily large number
-                        self.logger.warning(f"Suspicious price value: {fval}")
-                        return default
-                    return fval
-                except (ValueError, TypeError):
-                    return default
-            
-            # Get the last price with validation
-            last_price = safe_float(tick.get("last_price"), 0.0)
-            
-            # Get timestamp - Dhan uses 'last_trade_time' for quote data
-            timestamp = tick.get("timestamp") or tick.get("last_trade_time")
-            
-            # Create base normalized tick
-            normalized = {
-                "symbol": tick.get("symbol"),
-                "exchange": openalgo_exchange,
-                "token": tick.get("token") or tick.get("instrument_token"),
-                "ltt": timestamp,
-                "timestamp": timestamp,
-                "ltp": round(last_price, 2),  # Use 'ltp' key for compatibility with get_ltp()
-                "volume": int(tick.get("volume", 0)),  # Direct volume field
-                "oi": int(tick.get("open_interest", 0))
-            }
-            
-            # Extract OHLC data - check both nested 'ohlc' and root level
-            ohlc = tick.get("ohlc", {})
-            if not ohlc and any(k in tick for k in ["open", "high", "low", "close"]):
-                ohlc = tick  # Use root level if ohlc dict is empty but fields exist at root
-            
-            # Safely extract and round OHLC values
-            normalized.update({
-                "open": round(safe_float(ohlc.get("open", 0)), 2),
-                "high": round(safe_float(ohlc.get("high", 0)), 2),
-                "low": round(safe_float(ohlc.get("low", 0)), 2),
-                "close": round(safe_float(ohlc.get("close", 0)), 2)
+        if data_type == 'ticker':
+            base_data.update({
+                'mode': 1,
+                'ltp': data.get('ltp', 0),
+                'ltt': data.get('ltt', 0)
             })
-            
-            # Add market depth if available
-            if "depth" in tick:
-                try:
-                    depth_data = tick["depth"]
-                    buy_orders = depth_data.get("buy", [])
-                    sell_orders = depth_data.get("sell", [])
-                    
-                    # Debug log for depth data processing
-                    self.logger.info(f"Processing depth data for {normalized.get('symbol')}: buy_levels={len(buy_orders)}, sell_levels={len(sell_orders)}")
-                    
-                    # Format depth data with validation
-                    def format_levels(levels, side):
-                        formatted = []
-                        for i, level in enumerate(levels[:20]):  # Support up to 20 levels for 20-level depth
-                            try:
-                                price = safe_float(level.get("price"))
-                                quantity = int(level.get("quantity", 0))
-                                orders = int(level.get("orders", 1))
-                                
-                                # Only add valid levels (price > 0 and quantity > 0)
-                                if price > 0 and quantity > 0:
-                                    formatted.append({
-                                        "price": round(price, 2),
-                                        "quantity": quantity,
-                                        "orders": orders,
-                                        "level": i + 1
-                                    })
-                                    self.logger.debug(f"Added {side} level {i+1}: price={price}, qty={quantity}, orders={orders}")
-                            except Exception as e:
-                                self.logger.warning(f"Error formatting {side} level {i}: {e}")
-                        
-                        self.logger.info(f"Formatted {len(formatted)} valid {side} levels")
-                        return formatted
-                    
-                    buy_levels = format_levels(buy_orders, "buy")
-                    sell_levels = format_levels(sell_orders, "sell")
-                    
-                    # Only add depth if we have valid levels
-                    if buy_levels or sell_levels:
-                        normalized["depth"] = {
-                            "buy": buy_levels,
-                            "sell": sell_levels
-                        }
-                        
-                        # Calculate total buy/sell quantities
-                        normalized["total_buy_quantity"] = sum(level.get("quantity", 0) for level in buy_orders)
-                        normalized["total_sell_quantity"] = sum(level.get("quantity", 0) for level in sell_orders)
-                        
-                        # Set best bid/ask
-                        if buy_levels:
-                            normalized["bid"] = buy_levels[0]["price"]
-                            normalized["bid_qty"] = buy_levels[0]["quantity"]
-                        if sell_levels:
-                            normalized["ask"] = sell_levels[0]["price"]
-                            normalized["ask_qty"] = sell_levels[0]["quantity"]
-                        
-                        self.logger.info(f"✅ Depth data added to normalized tick for {normalized.get('symbol')}: {len(buy_levels)} buy, {len(sell_levels)} sell levels")
-                    else:
-                        self.logger.warning(f"❌ No valid depth levels found for {normalized.get('symbol')}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error processing depth data for {normalized.get('symbol')}: {e}")
-                    # Continue without depth data if there's an error
-            else:
-                self.logger.debug(f"No depth data in tick for {normalized.get('symbol')}")
-            
-            self.logger.debug(f"Normalized tick: {normalized}")
-            return normalized
-            
-        except Exception as e:
-            self.logger.error(f"Error normalizing tick data: {e}\nOriginal tick: {tick}", exc_info=True)
-            # Return minimal valid data with error flag
-            return {
-                "symbol": tick.get("symbol", "UNKNOWN"),
-                "exchange": tick.get("exchange", "UNKNOWN"),
-                "token": tick.get("token") or tick.get("instrument_token", 0),
-                "error": str(e),
-                "ltp": 0.0,
-                "open": 0.0,
-                "high": 0.0,
-                "low": 0.0,
-                "close": 0.0,
-                "volume": 0
-            }
+        
+        elif data_type == 'quote':
+            base_data.update({
+                'mode': 2,
+                'ltp': data.get('ltp', 0),
+                'ltt': data.get('ltt', 0),
+                'volume': data.get('volume', 0),
+                'open': data.get('open', 0),
+                'high': data.get('high', 0),
+                'low': data.get('low', 0),
+                'close': data.get('close', 0),
+                'last_quantity': data.get('ltq', 0),
+                'average_price': data.get('atp', 0),
+                'total_buy_quantity': data.get('total_buy_quantity', 0),
+                'total_sell_quantity': data.get('total_sell_quantity', 0)
+            })
+        
+        elif data_type == 'full':
+            base_data.update({
+                'mode': 3,
+                'ltp': data.get('ltp', 0),
+                'ltt': data.get('ltt', 0),
+                'volume': data.get('volume', 0),
+                'open': data.get('open', 0),
+                'high': data.get('high', 0),
+                'low': data.get('low', 0),
+                'close': data.get('close', 0),
+                'oi': data.get('oi', 0),
+                'oi_high': data.get('oi_high', 0),
+                'oi_low': data.get('oi_low', 0),
+                'depth': data.get('depth', {'buy': [], 'sell': []}),
+                'depth_level': 5
+            })
+        
+        elif data_type == 'oi':
+            base_data.update({
+                'oi': data.get('oi', 0)
+            })
+        
+        elif data_type == 'prev_close':
+            base_data.update({
+                'prev_close': data.get('prev_close', 0),
+                'prev_oi': data.get('prev_oi', 0)
+            })
+        
+        return base_data
     
-    def _try_reconnect(self):
-        """
-        Try to reconnect to WebSocket server with exponential backoff.
-        This method runs in a separate thread to avoid blocking the main thread.
-        """
-        with self.lock:  # Ensure thread safety
-            if not self.running:
-                self.logger.info("Not attempting reconnect as adapter is shutting down")
-                return
-                
-            if self.reconnect_attempts >= self.max_reconnect_attempts:
-                self.logger.error("Maximum reconnection attempts reached")
-                self.disconnect()  # Give up and disconnect completely
-                return
-                
-            # Calculate delay with exponential backoff
-            delay = self.reconnect_delay * (2 ** self.reconnect_attempts)
-            self.reconnect_attempts += 1
-            
-            self.logger.info(f"Attempting to reconnect in {delay} seconds (attempt {self.reconnect_attempts})")
-            
-            # Wait before reconnecting
-            time.sleep(delay)
-            
-            if not self.running:
-                self.logger.info("Aborting reconnect as adapter is shutting down")
-                return
-                
+    def start_fallback_monitor(self):
+        """Start the fallback monitoring thread"""
+        # Only start if running is True and thread is not already active
+        if getattr(self, 'running', False) and (self.fallback_monitor_thread is None or not self.fallback_monitor_thread.is_alive()):
+            self.fallback_monitor_thread = threading.Thread(target=self._fallback_monitor_loop, daemon=True)
+            self.fallback_monitor_thread.start()
+            self.logger.info("Started fallback monitor thread")
+    
+    def stop_fallback_monitor(self):
+        """Stop the fallback monitoring thread"""
+        self.running = False
+        if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
+            self.fallback_monitor_thread.join(timeout=2)
+            self.logger.info("Stopped fallback monitor thread")
+    
+    def _fallback_monitor_loop(self):
+        """Monitor 20-depth subscriptions and fallback to 5-depth if no data received"""
+        while getattr(self, 'running', False):
             try:
-                # Clean up existing connection
-                if self.ws_client:
-                    try:
-                        self.ws_client.stop()
-                    except Exception as e:
-                        self.logger.error(f"Error stopping WebSocket client during reconnect: {e}")
-                    finally:
-                        self.ws_client = None
+                current_time = time.time()
+                fallback_candidates = []
                 
-                # Attempt to reconnect
-                self.logger.info("Attempting to establish new WebSocket connection...")
-                connection_result = self.connect()
-                
-                # Reset reconnect attempts if successful
-                if connection_result.get("status") == "success":
-                    self.logger.info("Successfully reconnected to WebSocket server")
-                    self.reconnect_attempts = 0  # Reset counter on successful reconnect
-                else:
-                    self.logger.error(f"Failed to reconnect: {connection_result.get('message', 'Unknown error')}")
-                    # Schedule next reattempt if still running
-                    if self.running:
-                        self._on_disconnect()
-                        
-            except Exception as e:
-                self.logger.error(f"Error during reconnection attempt: {e}")
-                # Schedule next reattempt if still running
-                if self.running:
-                    self._on_disconnect()
-    
-    def is_connected(self):
-        """
-        Check if adapter is connected to WebSocket.
-        
-        Returns:
-            bool: True if connected, False otherwise.
-        """
-        if not self.ws_client:
-            return False
-            
-        return self.ws_client.is_connected() and self.connected
-    
-    def validate_tick_parsing(self, ticker_symbols=None, timeout=30):
-        """
-        Validate that tick parsing is working correctly for different modes.
-        
-        This method subscribes to the provided symbols in different modes,
-        then logs the first few ticks received for each mode to validate parsing.
-        
-        Args:
-            ticker_symbols: List of symbols to test with (e.g. ['NSE:RELIANCE', 'NSE:INFY'])
-                           If None, uses a default set of common symbols
-            timeout: Time in seconds to wait for ticks
-            
-        Returns:
-            Dict with validation results
-        """
-        try:
-            self.logger.info("Starting tick parsing validation...")
-            
-            # Use some default symbols if none provided
-            if not ticker_symbols:
-                ticker_symbols = [
-                    'NSE:RELIANCE', 'NSE:INFY', 'NSE:TCS', 
-                    'NSE:SBIN', 'NSE:HDFCBANK'
-                ]
-            
-            results = {
-                'subscription_success': False,
-                'modes_received': set(),
-                'ticks_received': 0,
-                'errors': []
-            }
-            
-            # Create a collector for validation
-            received_ticks = []
-            
-            def validation_callback(tick):
-                received_ticks.append(tick)
-                mode = tick.get('mode', 'unknown')
-                results['modes_received'].add(mode)
-                results['ticks_received'] += 1
-                self.logger.info(f"Validation tick received: mode={mode}, token={tick.get('token')}, ltp={tick.get('last_price')}")
-            
-            # Backup original callbacks
-            original_callbacks = {}
-            for mode in [1, 2, 3, 4, 5]:  # OpenAlgo modes
-                if mode in self.callbacks:
-                    original_callbacks[mode] = self.callbacks[mode].copy()
-                else:
-                    original_callbacks[mode] = []
-                # Set validation callback
-                self.callbacks[mode] = [validation_callback]
-            
-            try:
-                # Try subscribing in different modes
-                self.logger.info(f"Subscribing to {ticker_symbols} for validation...")
-                
-                # Test each mode separately
-                for mode in [1, 2, 3, 4]:  # Test ltp, quote, depth, full
-                    try:
-                        self.logger.info(f"Testing mode: {mode}")
-                        # Subscribe to symbols in this mode
-                        for symbol in ticker_symbols:
-                            self.subscribe(symbol, mode=mode)
-                        
-                        # Wait for some ticks
-                        start_time = time.time()
-                        while time.time() - start_time < timeout/4:  # Divide timeout by modes
-                            if results['ticks_received'] > 0:
-                                self.logger.info(f"Received {results['ticks_received']} ticks for mode {mode}")
-                                break
-                            time.sleep(0.1)
-                        
-                        # Unsubscribe after test
-                        for symbol in ticker_symbols:
-                            self.unsubscribe(symbol, mode=mode)
+                with self.lock:
+                    # Check for timed-out 20-depth subscriptions
+                    for correlation_id, timeout_time in list(self.depth_20_timeouts.items()):
+                        if current_time > timeout_time and correlation_id not in self.depth_20_fallbacks:
+                            # Check if we've received any data since the subscription
+                            last_data_time = self.depth_20_data_received.get(correlation_id, 0)
+                            time_since_data = current_time - last_data_time
                             
-                        time.sleep(1)  # Give time for unsubscribe to complete
-                        
-                    except Exception as e:
-                        error_msg = f"Error testing mode {mode}: {str(e)}"
-                        results['errors'].append(error_msg)
-                        self.logger.error(error_msg)
+                            if time_since_data > 30:  # 30 seconds without data
+                                fallback_candidates.append(correlation_id)
                 
-                results['subscription_success'] = True
+                # Process fallbacks outside the lock to avoid deadlocks
+                for correlation_id in fallback_candidates:
+                    self._perform_fallback_to_5depth(correlation_id)
                 
-            finally:
-                # Restore original callbacks
-                for mode, callbacks in original_callbacks.items():
-                    if mode in self.callbacks:
-                        self.callbacks[mode] = callbacks
-                    
-                # Try to unsubscribe from everything just in case
+                # Sleep for 5 seconds before next check
+                time.sleep(5)
+                
+            except Exception as e:
+                self.logger.error(f"Error in fallback monitor loop: {e}", exc_info=True)
+                time.sleep(5)
+    
+    def _perform_fallback_to_5depth(self, correlation_id):
+        """Perform automatic fallback from 20-depth to 5-depth"""
+        try:
+            with self.lock:
+                # Check if this subscription still exists and hasn't already fallen back
+                if correlation_id not in self.subscriptions_20depth or correlation_id in self.depth_20_fallbacks:
+                    return
+                
+                subscription = self.subscriptions_20depth[correlation_id]
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                
+                self.logger.warning(f"20-depth timeout for {symbol}.{exchange}, falling back to 5-depth")
+                
+                # Mark as fallen back
+                self.depth_20_fallbacks[correlation_id] = time.time()
+                
+                # Remove from 20-depth subscriptions and timeouts
+                del self.subscriptions_20depth[correlation_id]
+                if correlation_id in self.depth_20_timeouts:
+                    del self.depth_20_timeouts[correlation_id]
+                if correlation_id in self.depth_20_data_received:
+                    del self.depth_20_data_received[correlation_id]
+                
+                # Create new 5-depth subscription
+                correlation_id_5depth = f"{symbol}_{exchange}_3_5"
+                
+                self.subscriptions_5depth[correlation_id_5depth] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'dhan_exchange': subscription['dhan_exchange'],
+                    'token': subscription['token'],
+                    'mode': subscription['mode'],
+                    'depth_level': 5,  # Fallback to 5-depth
+                    'instrument': subscription['instrument']
+                }
+                
+                # Update base subscriptions
+                if correlation_id in self.subscriptions:
+                    self.subscriptions[correlation_id_5depth] = self.subscriptions[correlation_id].copy()
+                    self.subscriptions[correlation_id_5depth]['depth_level'] = 5
+                    self.subscriptions[correlation_id_5depth]['is_20_depth'] = False
+                    del self.subscriptions[correlation_id]
+            
+            # Subscribe to 5-depth if connected
+            if self.ws_client_5depth and self.ws_client_5depth.connected:
                 try:
-                    for mode in [1, 2, 3, 4, 5]:
-                        for symbol in ticker_symbols:
-                            self.unsubscribe(symbol, mode=mode)
+                    self.ws_client_5depth.subscribe([subscription['instrument']], 'FULL')
+                    self.logger.info(f"Successfully subscribed to 5-depth for {symbol}.{exchange}")
                 except Exception as e:
-                    self.logger.error(f"Error during cleanup: {e}")
-            
-            # Summarize results
-            self.logger.info(f"Tick validation complete. Received {results['ticks_received']} ticks")
-            self.logger.info(f"Modes received: {results['modes_received']}")
-            
-            # Include sample ticks in result
-            if received_ticks:
-                # Group by mode
-                sample_ticks = {}
-                for tick in received_ticks[:10]:  # Get first 10 ticks max
-                    mode = tick.get('mode', 'unknown')
-                    if mode not in sample_ticks:
-                        sample_ticks[mode] = []
-                    sample_ticks[mode].append(tick)
-                
-                results['sample_ticks'] = sample_ticks
-            
-            return results
+                    self.logger.error(f"Error subscribing to 5-depth for fallback {symbol}.{exchange}: {e}")
             
         except Exception as e:
-            self.logger.error(f"Error in validate_tick_parsing: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    def _generate_topic(self, symbol: str, exchange: str, mode_str: str) -> str:
-        """
-        Generate topic for market data publishing.
-        Uses original exchange format for maximum client compatibility.
-        
-        Args:
-            symbol: Symbol name
-            exchange: Exchange code
-            mode_str: Mode string (LTP, QUOTE, DEPTH)
-            
-        Returns:
-            Properly formatted ZeroMQ topic string
-        """
-        # Format topic string as EXCHANGE_SYMBOL_MODE (all uppercase)
-        return f"{exchange}_{symbol}_{mode_str}".upper()
-
-    def _map_data_exchange(self, exchange: str) -> str:
-        """
-        Map exchange code to appropriate data exchange for client compatibility.
-        
-        Args:
-            exchange: Original exchange code
-            
-        Returns:
-            Mapped exchange for data field
-        """
-        # Ensure index exchanges are properly formatted
-        if exchange in ['NSE_INDEX', 'BSE_INDEX', 'IDX_I']:
-            if 'NSE' in exchange:
-                return 'NSE_INDEX'  # Standardize NSE index
-            elif 'BSE' in exchange:
-                return 'BSE_INDEX'  # Standardize BSE index
-        return exchange  # Return original for non-index exchanges
-    
-    def __del__(self):
-        """Destructor to ensure proper cleanup."""
-        try:
-            self.disconnect()
-        except:
-            pass
+            self.logger.error(f"Error performing fallback for {correlation_id}: {e}", exc_info=True)
