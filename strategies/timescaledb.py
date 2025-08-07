@@ -30,6 +30,7 @@ from tabulate import tabulate
 from colorama import Fore, Back, Style, init
 from textwrap import wrap
 from collections import defaultdict
+import shutil
 
 # Initialize colorama
 init(autoreset=True)
@@ -1069,6 +1070,48 @@ if __name__ == "__main__":
             for filename in os.listdir(output_dir):
                 if filename.endswith(".csv"):
                     os.remove(os.path.join(output_dir, filename))
+            
+            # Copy source files for traceability
+            try:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                source_files = [
+                    ('backtest_engine.py', os.path.join(current_dir, 'backtest_engine.py')),
+                    ('timescaledb.py', os.path.join(current_dir, 'timescaledb.py'))
+                ]
+                
+                logger.info(f"📁 Copying source files to {output_dir} for traceability...")
+                
+                for filename, source_path in source_files:
+                    if os.path.exists(source_path):
+                        # Include timestamp in filename for versioning
+                        base_name = filename.replace('.py', '')
+                        dest_filename = f"source_{base_name}_{timestamp}.py"
+                        dest_path = os.path.join(output_dir, dest_filename)
+                        
+                        shutil.copy2(source_path, dest_path)
+                        logger.info(f"✅ Copied {filename} → {dest_filename}")
+                    else:
+                        logger.warning(f"⚠️ Source file not found: {source_path}")
+                
+                # Also create a backtest info file with run details
+                info_file = os.path.join(output_dir, f"backtest_info_{timestamp}.txt")
+                with open(info_file, 'w') as f:
+                    f.write(f"Backtest Run Information\n")
+                    f.write(f"========================\n")
+                    f.write(f"Run Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"From Date: {args.from_date}\n")
+                    f.write(f"To Date: {args.to_date}\n")
+                    f.write(f"Output Directory: {output_dir}\n")
+                    f.write(f"Symbol Count: {len(pd.read_csv('symbol_list_backtest.csv'))}\n")
+                    f.write(f"Source Files: backtest_engine_{timestamp}.py, timescaledb_{timestamp}.py\n")
+                
+                logger.info(f"📝 Created backtest info file: backtest_info_{timestamp}.txt")
+                        
+            except Exception as e:
+                logger.error(f"❌ Error copying source files: {e}")
+                # Don't fail the backtest if file copying fails
             
             # Import symbol list from CSV file
             symbol_list = pd.read_csv('symbol_list_backtest.csv')

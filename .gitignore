@@ -29,6 +29,8 @@ checkpoints.json
 *.csv
 !symbols.csv
 *.png
+*.txt
+*.py
 
 # Environments 
 .env 
