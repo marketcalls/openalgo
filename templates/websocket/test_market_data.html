@@ -741,20 +741,6 @@
                 setTimeout(() => sellQtyElement.classList.remove('flash'), 500);
             }
 
-            // Circuit limits
-            const upperCircuitElement = document.getElementById(`${symbol}-upper-circuit`);
-            if (upperCircuitElement && marketData.upper_circuit !== undefined) {
-                upperCircuitElement.textContent = formatPrice(marketData.upper_circuit);
-                upperCircuitElement.classList.add('flash');
-                setTimeout(() => upperCircuitElement.classList.remove('flash'), 500);
-            }
-
-            const lowerCircuitElement = document.getElementById(`${symbol}-lower-circuit`);
-            if (lowerCircuitElement && marketData.lower_circuit !== undefined) {
-                lowerCircuitElement.textContent = formatPrice(marketData.lower_circuit);
-                lowerCircuitElement.classList.add('flash');
-                setTimeout(() => lowerCircuitElement.classList.remove('flash'), 500);
-            }
 
             // Update LTP from quote data as well
             if (marketData.ltp !== undefined) {
@@ -889,7 +875,7 @@
             'info': 'text-info',
             'success': 'text-success',
             'error': 'text-error',
-            'data': 'text-base-content/70'
+            'data': 'text-warning'
         }[type] || 'text-base-content/70';
 
         const logEntry = document.createElement('pre');
@@ -934,7 +920,7 @@
             
             // Clear quote data
             ['open', 'high', 'low', 'close', 'volume', 'average-price', 
-             'total-buy-quantity', 'total-sell-quantity', 'upper-circuit', 'lower-circuit'].forEach(field => {
+             'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
                 const element = document.getElementById(`${symbolId}-${field}`);
                 if (element) element.textContent = '-';
             });
@@ -1209,14 +1195,6 @@
                             <div>
                                 <span class="text-xs text-base-content/50">Sell Qty:</span>
                                 <div id="${symbolId}-total-sell-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Upper Circuit:</span>
-                                <div id="${symbolId}-upper-circuit" class="data-value text-success">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Lower Circuit:</span>
-                                <div id="${symbolId}-lower-circuit" class="data-value text-error">-</div>
                             </div>
                         </div>
                     </div>
