@@ -1128,6 +1128,8 @@ if __name__ == "__main__":
 
             # Add "NIFTY" "1h" in the symbol_interval_pairs
             symbol_interval_pairs.append(("NIFTY", "1h")) 
+            symbol_interval_pairs.append(("NIFTY", "15m")) 
+            
 
             # UNCOMMENT THIS BLOCK FOR FETCHING HISTORICAL DATA FOR ALL INTERVALS
             # with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced to prevent server overload
@@ -1713,6 +1715,7 @@ if __name__ == "__main__":
                 port=db_config['port'],
                 dbname=db_config['dbname']
             )    
+            
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = []                
                 for symbol in symbol_list:

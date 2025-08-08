@@ -56,21 +56,28 @@ class BacktestEngine:
     def fetch_lookback_data_2(self, start_day, end_day, interval):
         
         #self.logger.info(f"Fetching lookback data from {lookback_start} to {end_day}")
+        if interval == "nifty_15m":
+            interval = "15m"
+
         query = f"""
             SELECT * FROM ohlc_{interval}
             WHERE symbol = %s AND time >= %s AND time < %s
             ORDER BY time ASC
         """
-        if interval != '1h':
-            df = pd.read_sql(query, self.conn, params=(self.symbol, start_day, end_day + timedelta(days=1)))
-        else:
+        if interval == '1h':
             df = pd.read_sql(query, self.conn, params=('NIFTY', start_day, end_day + timedelta(days=1)))
+        elif interval == 'nifty_15m':
+            df = pd.read_sql(query, self.conn, params=('NIFTY', start_day, end_day + timedelta(days=1)))
+        else:            
+            df = pd.read_sql(query, self.conn, params=(self.symbol, start_day, end_day + timedelta(days=1)))
 
         if df.empty:
-            if interval != '1h':
-                self.logger.warning(f"No data found for {self.symbol} {interval} between {start_day} and {end_day}")
-            else:
+            if interval == '1h':
                 self.logger.warning(f"No data found for NIFTY {interval} between {start_day} and {end_day}")
+            elif interval == 'nifty_15m':
+                self.logger.warning(f"No data found for NIFTY {interval} between {start_day} and {end_day}")
+            else:
+                self.logger.warning(f"No data found for {self.symbol} {interval} between {start_day} and {end_day}")
 
         return df
     
@@ -125,63 +132,63 @@ class BacktestEngine:
         rmi = 100 * (avg_gain / (avg_gain + avg_loss))
         return rmi
     
-    def classify_trend(self, row):
+    def classify_trend(self, row, interval):
         # Primary Conditions (1H)
-        ema_bullish = row['close'] > row['nifty_1hr_ema_50'] > row['nifty_1hr_ema_200']
-        ema_bearish = row['close'] < row['nifty_1hr_ema_50'] < row['nifty_1hr_ema_200']
-        hma_bullish = row['close'] > row['nifty_1hr_hma_50'] > row['nifty_1hr_hma_200']
-        hma_bearish = row['close'] < row['nifty_1hr_hma_50'] < row['nifty_1hr_hma_200']
-        rmi_strong = row['nifty_1hr_RMI'] > 60  # RMI > 60 = strong trend
-        adx_strong = row['nifty_1hr_adx'] > 20
-        di_bullish = row['nifty_1hr_+DI'] > row['nifty_1hr_-DI']
-        di_bearish = row['nifty_1hr_-DI'] > row['nifty_1hr_+DI']
-        macd_bullish = row['nifty_1hr_MACD'] > row['nifty_1hr_MACD_Signal']
-        macd_bearish = row['nifty_1hr_MACD'] < row['nifty_1hr_MACD_Signal']
+        ema_bullish = row['close'] > row[f'nifty_{interval}_ema_50'] > row[f'nifty_{interval}_ema_200']
+        ema_bearish = row['close'] < row[f'nifty_{interval}_ema_50'] < row[f'nifty_{interval}_ema_200']
+        #hma_bullish = row['close'] > row[f'nifty_{interval}_hma_50'] > row[f'nifty_{interval}_hma_200']
+        #hma_bearish = row['close'] < row[f'nifty_{interval}_hma_50'] < row[f'nifty_{interval}_hma_200']
+        rmi_strong = row[f'nifty_{interval}_RMI'] > 60  # RMI > 60 = strong trend
+        adx_strong = row[f'nifty_{interval}_adx'] > 20
+        di_bullish = row[f'nifty_{interval}_+DI'] > row[f'nifty_{interval}_-DI']
+        di_bearish = row[f'nifty_{interval}_-DI'] > row[f'nifty_{interval}_+DI']
+        macd_bullish = row[f'nifty_{interval}_MACD'] > row[f'nifty_{interval}_MACD_Signal']
+        macd_bearish = row[f'nifty_{interval}_MACD'] < row[f'nifty_{interval}_MACD_Signal']
         #volume_ok = row['Volume_Spike']
         
         # Trend Logic
-        if ema_bullish and adx_strong and di_bullish and macd_bullish and rmi_strong:
+        if ema_bullish and adx_strong and di_bullish and macd_bullish:
             return 1
-        elif ema_bearish and adx_strong and di_bearish and macd_bearish and rmi_strong:
+        elif ema_bearish and adx_strong and di_bearish and macd_bearish:
             return -1
         else:
             return 0
         
     
-    def classify_trend_2(self, row):
+    def classify_trend_2(self, row, interval):
         # Strong Uptrend
-        if (row['close'] > row['nifty_1hr_ema_50'] > row['nifty_1hr_ema_200']) and \
-        (row['nifty_1hr_MACD'] > row['nifty_1hr_MACD_Signal']) and \
-        (row['nifty_1hr_adx'] > 25) and (row['nifty_1hr_+DI'] > row['nifty_1hr_-DI']):
+        if (row['close'] > row[f'nifty_{interval}_ema_50'] > row[f'nifty_{interval}_ema_200']) and \
+        (row[f'nifty_{interval}_MACD'] > row[f'nifty_{interval}_MACD_Signal']) and \
+        (row[f'nifty_{interval}_adx'] > 25) and (row[f'nifty_{interval}_+DI'] > row[f'nifty_{interval}_-DI']):
             return 2
         
         # Strong Downtrend
-        elif (row['close'] < row['nifty_1hr_ema_50'] < row['nifty_1hr_ema_200']) and \
-            (row['nifty_1hr_MACD'] < row['nifty_1hr_MACD_Signal']) and \
-            (row['nifty_1hr_adx'] > 25) and (row['nifty_1hr_-DI'] > row['nifty_1hr_+DI']):
+        elif (row['close'] < row[f'nifty_{interval}_ema_50'] < row[f'nifty_{interval}_ema_200']) and \
+            (row[f'nifty_{interval}_MACD'] < row[f'nifty_{interval}_MACD_Signal']) and \
+            (row[f'nifty_{interval}_adx'] > 25) and (row[f'nifty_{interval}_-DI'] > row[f'nifty_{interval}_+DI']):
             return -2
         
         # Up-Sideways
-        elif (row['close'] > row['nifty_1hr_ema_50']) and \
-            (row['nifty_1hr_adx'] < 25) and \
-            (abs(row['nifty_1hr_MACD'] - row['nifty_1hr_MACD_Signal']) < 1.0):  # MACD hovering near signal
+        elif (row['close'] > row[f'nifty_{interval}_ema_50']) and \
+            (row[f'nifty_{interval}_adx'] < 25) and \
+            (abs(row[f'nifty_{interval}_MACD'] - row[f'nifty_{interval}_MACD_Signal']) < 1.0):  # MACD hovering near signal
             return 1
         
         # Down-Sideways
-        elif (row['close'] < row['nifty_1hr_ema_50']) and \
-            (row['nifty_1hr_adx'] < 25) and \
-            (abs(row['nifty_1hr_MACD'] - row['nifty_1hr_MACD_Signal']) < 1.0):
+        elif (row['close'] < row[f'nifty_{interval}_ema_50']) and \
+            (row[f'nifty_{interval}_adx'] < 25) and \
+            (abs(row[f'nifty_{interval}_MACD'] - row[f'nifty_{interval}_MACD_Signal']) < 1.0):
             return -1
         
         # Neutral Sideways
         else:
             return 0
         
-    def classify_trend_3(self, row):
-        rsi_1h = row['nifty_1hr_RSI']
-        adx_1h = row['nifty_1hr_adx']
-        rvol_1h = row['nifty_1hr_RVOL']
-        hh, hl, ll, lh = row['nifty_1hr_HH'], row['nifty_1hr_HL'], row['nifty_1hr_LL'], row['nifty_1hr_LH']
+    def classify_trend_3(self, row, interval):
+        rsi_1h = row[f'nifty_{interval}_RSI']
+        adx_1h = row[f'nifty_{interval}_adx']
+        rvol_1h = row[f'nifty_{interval}_RVOL']
+        hh, hl, ll, lh = row[f'nifty_{interval}_HH'], row[f'nifty_{interval}_HL'], row[f'nifty_{interval}_LL'], row[f'nifty_{interval}_LH']
 
         rsi_d = row['rsi_14']
         adx_d = row['adx_14']
@@ -221,21 +228,23 @@ class BacktestEngine:
         df_1m = df_all_dict['1m'].copy()
         df_daily = df_all_dict['d'].copy()
         df_nifty_1h = df_all_dict['1h'].copy()
+        df_nifty_15m = df_all_dict['nifty_15m'].copy()
         
         # === ENSURE TIME COLUMNS ARE DATETIME ===
-        for df in [df_15m, df_5m, df_1m, df_daily, df_nifty_1h]:
+        for df in [df_15m, df_5m, df_1m, df_daily, df_nifty_1h, df_nifty_15m]:
             if not df.empty:
                 df['time'] = pd.to_datetime(df['time'])
         
         # === EARLY RETURN IF CRITICAL DATA IS MISSING ===
-        if df_15m.empty or df_5m.empty or df_1m.empty or df_daily.empty or df_nifty_1h.empty:
+        if df_15m.empty or df_5m.empty or df_1m.empty or df_daily.empty or df_nifty_1h.empty or df_nifty_15m.empty:
             self.logger.warning(f"Missing critical data for {self.symbol} - skipping indicator calculations")
             return {
                 '15m': df_15m,
                 '5m': df_5m,
                 '1m': df_1m,
                 'd': df_daily,
-                '1h': df_nifty_1h
+                '1h': df_nifty_1h,
+                'nifty_15m': df_nifty_15m
             }
         
         # === DAILY INDICATORS (ATR & Volume) ===
@@ -261,6 +270,7 @@ class BacktestEngine:
         df_5m['date'] = pd.to_datetime(df_5m['time'].dt.date)
         df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
         df_nifty_1h['date'] = pd.to_datetime(df_nifty_1h['time'].dt.date)
+        df_nifty_15m['date'] = pd.to_datetime(df_nifty_15m['time'].dt.date)
         
         # Merge ATR from daily data
         df_15m = df_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14']], on='date', how='left')
@@ -295,7 +305,7 @@ class BacktestEngine:
         
         #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_ema_50'] > (df_nifty_1h['nifty_1hr_ema_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_ema_50'] < (df_nifty_1h['nifty_1hr_ema_200'] * 0.99), -1, 0))
         #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_hma_50'] > (df_nifty_1h['nifty_1hr_hma_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_hma_50'] < (df_nifty_1h['nifty_1hr_hma_200'] * 0.99), -1, 0))
-        df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(self.classify_trend, axis=1)
+        df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(self.classify_trend, args=('1hr',), axis=1)
         #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_2(row), axis=1)
         #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_3(row), axis=1)
 
@@ -305,6 +315,35 @@ class BacktestEngine:
         df_nifty_1h['nifty_trend'] = df_nifty_1h['nifty_trend'].shift(1)
         df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
         df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
+
+        # === NIFTY 15m INDICATORS (Nifty 50EMA) ===
+        df_nifty_15m = df_nifty_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14', 'rsi_14', 'adx_14']], on='date', how='left')    
+
+        df_nifty_15m['nifty_15m_ema_50'] = df_nifty_15m['close'].ewm(span=50, adjust=False).mean()
+        df_nifty_15m['nifty_15m_ema_200'] = df_nifty_15m['close'].ewm(span=200, adjust=False).mean()
+        df_nifty_15m['nifty_15m_adx'] = talib.ADX(df_nifty_15m['high'], df_nifty_15m['low'], df_nifty_15m['close'], timeperiod=125)
+        df_nifty_15m['nifty_15m_+DI'] = talib.PLUS_DI(df_nifty_15m['high'], df_nifty_15m['low'], df_nifty_15m['close'], timeperiod=125)
+        df_nifty_15m['nifty_15m_-DI'] = talib.MINUS_DI(df_nifty_15m['high'], df_nifty_15m['low'], df_nifty_15m['close'], timeperiod=125)
+        df_nifty_15m['nifty_15m_MACD'], df_nifty_15m['nifty_15m_MACD_Signal'], _ = talib.MACD(df_nifty_15m['close'], fastperiod=20, slowperiod=50, signalperiod=10)
+        df_nifty_15m['nifty_15m_Volume_MA20'] = talib.MA(df_nifty_15m['volume'], timeperiod=20)
+        df_nifty_15m['nifty_15m_Volume_Spike'] = df_nifty_15m['volume'] > 1.5 * df_nifty_15m['nifty_15m_Volume_MA20']
+        df_nifty_15m['nifty_15m_RSI'] = talib.RSI(df_nifty_15m['close'], timeperiod=14)
+        df_nifty_15m['nifty_15m_volume_sma_20'] = df_nifty_15m['volume'].rolling(window=20).mean()
+        df_nifty_15m['nifty_15m_RVOL'] = df_nifty_15m['volume'] / df_nifty_15m['nifty_15m_volume_sma_20']
+
+        df_nifty_15m['nifty_15m_RMI'] = self.relative_momentum_index(df_nifty_15m['close'])
+        
+        df_nifty_15m['nifty_trend_15m'] = df_nifty_15m.apply(self.classify_trend, args=('15m',), axis=1)
+        #df_nifty_15m['nifty_trend'] = df_nifty_15m.apply(lambda row: self.classify_trend_2(row), axis=1)
+        #df_nifty_15m['nifty_trend'] = df_nifty_15m.apply(lambda row: self.classify_trend_3(row), axis=1)
+
+        # Merge trend into the 5min and 15min df
+        # Keep only the first record each day
+        df_nifty_15m = df_nifty_15m.groupby('date').last().reset_index()
+        df_nifty_15m['nifty_trend_15m'] = df_nifty_15m['nifty_trend_15m'].shift(1)
+        df_15m = df_15m.merge(df_nifty_15m[['date', 'nifty_trend_15m']], on='date', how='left')
+        df_5m = df_5m.merge(df_nifty_15m[['date', 'nifty_trend_15m']], on='date', how='left')
+
 
         # === 5MIN INDICATORS (EMAs) ===
         df_5m['ema_50'] = df_5m['close'].ewm(span=50, adjust=False).mean()
@@ -528,11 +567,11 @@ class BacktestEngine:
             (df_15m['time'].dt.time < time(8, 15)) & 
             (df_15m['cum_sp_bullish'] >= 1) & 
             (df_15m['sp_bullish_range_pct'] > 0.8) & 
+            (df_15m['sp_bullish_range_pct'] < 1.3) & 
             (df_15m['zl_macd_signal'] == -1) & 
             (df_15m['volume_range_pct_10'] > 1) &
-            (df_15m['atr_10'] / df_15m['close_10'] < 0.04)# &
-            #(df_15m['nifty_trend'] != -1)
-            #(df_15m['nifty_trend'] > 0)
+            (df_15m['atr_10'] / df_15m['close_10'] < 0.04) &
+            (df_15m['nifty_trend_15m'] >= 0)
         )
         df_15m['strategy_8'] = False
         first_true_idx_8 = df_15m[df_15m['s_8']].groupby('date').head(1).index
@@ -542,14 +581,12 @@ class BacktestEngine:
             (df_15m['time'].dt.time >= time(4, 0)) & 
             (df_15m['time'].dt.time < time(8, 15)) & 
             (df_15m['cum_sp_bearish'] >= 1) & 
-            (df_15m['sp_bearish_range_pct'] > 0.8) & 
+            (df_15m['sp_bearish_range_pct'] > 1) & 
             (df_15m['zl_macd_signal'] == 1) &
-            #(df_15m['volume_range_pct_10'] > 0) &
-            #(df_15m['volume_range_pct_10'] < 0.4) &
-            (df_15m['volume_range_pct_10'] > 0.2) &
-            (df_15m['volume_range_pct_10'] < 0.5) &
-            (df_15m['atr_10'] / df_15m['close_10'] < 0.04)  #&
-            #(df_15m['nifty_trend'] <= 0)
+            (df_15m['volume_range_pct_10'] > 0) &
+            (df_15m['volume_range_pct_10'] < 0.4) &
+            (df_15m['atr_10'] / df_15m['close_10'] < 0.04) &
+            (df_15m['nifty_trend_15m'] <= 0)
         )
         df_15m['strategy_12'] = False
         first_true_idx_12 = df_15m[df_15m['s_12']].groupby('date').head(1).index
@@ -568,10 +605,8 @@ class BacktestEngine:
             (df_5m['is_range_bearish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
             (df_5m['volume_range_pct_10'] < 0.7) & 
-            (df_5m['atr_10'] / df_5m['close_10'] > 0.04) #&
-            #(df_5m['predicted_today_low'] <= df_5m['close'] * 0.985) &
-            #(df_5m['nifty_trend'] != 1)
-            #(df_5m['nifty_trend'] <= 1)
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.04) &            
+            (df_5m['nifty_trend_15m'] != 1)
         )
         df_5m['strategy_10'] = False
         first_true_idx_10 = df_5m[df_5m['s_10']].groupby('date').head(1).index
@@ -588,11 +623,8 @@ class BacktestEngine:
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0) & 
             (df_5m['volume_range_pct_10'] < 0.3) &
-            (df_5m['atr_10'] / df_5m['close_10'] > 0.04) #&
-            #(df_5m['predicted_today_high'] >= df_5m['close'] * 1.015) &
-            #(df_5m['nifty_trend'] == 1)
-            #(df_5m['nifty_trend'] >= -1)
-
+            (df_5m['atr_10'] / df_5m['close_10'] > 0.04) &
+            (df_5m['nifty_trend_15m'] != -1)
         )
         df_5m['strategy_11'] = False
         first_true_idx_11 = df_5m[df_5m['s_11']].groupby('date').head(1).index
@@ -609,9 +641,8 @@ class BacktestEngine:
             (df_5m['is_range_bullish']) & 
             (df_5m['volume_range_pct_10'] > 0.3) & 
             (df_5m['volume_range_pct_10'] < 0.6) &
-            (df_5m['atr_10'] / df_5m['close_10'] < 0.04)# &
-            #(df_5m['nifty_trend'] == -1)
-            #(df_5m['nifty_trend'] < 0)
+            (df_5m['atr_10'] / df_5m['close_10'] < 0.04) &
+            (df_5m['nifty_trend_15m'] != 1)
         )
         df_5m['strategy_9'] = False
         first_true_idx_9 = df_5m[df_5m['s_9']].groupby('date').head(1).index
@@ -689,7 +720,8 @@ class BacktestEngine:
         '5m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '5m'),
         '1m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '1m'),
         'd': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd'),
-        '1h': self.fetch_lookback_data_2(self.start_date - timedelta(days=45), self.end_date, '1h')
+        '1h': self.fetch_lookback_data_2(self.start_date - timedelta(days=45), self.end_date, '1h'),
+        'nifty_15m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'nifty_15m'),
         }
 
         # === STEP 2: Calculate all indicators once ===
