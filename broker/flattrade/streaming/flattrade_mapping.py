@@ -1,70 +1,73 @@
 """
-Mapping utilities and capability registry for Flattrade broker WebSocket integration
+Flattrade-specific mapping utilities for the WebSocket adapter
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Set, Optional
 
 class FlattradeExchangeMapper:
-    """Map OpenAlgo exchange codes to Flattrade format and vice versa"""
-    OA_TO_FLATTRD: Dict[str, str] = {
+    """Maps between OpenAlgo exchange names and Flattrade exchange codes"""
+    
+    # OpenAlgo to Flattrade exchange mapping
+    EXCHANGE_MAP = {
         'NSE': 'NSE',
         'BSE': 'BSE',
         'NFO': 'NFO',
-        'CDS': 'CDS',
+        'BFO': 'BFO',
         'MCX': 'MCX',
-        'NSE_INDEX': 'NSE',  # Indices mapped to base exchange
-        'BSE_INDEX': 'BSE',
+        'CDS': 'CDS',
+        'NSE_INDEX': 'NSE',  # Indices use base exchange
+        'BSE_INDEX': 'BSE'
     }
-
-    FLATTRD_TO_OA: Dict[str, str] = {v: k for k, v in OA_TO_FLATTRD.items()}
-
+    
+    # Reverse mapping
+    FLATTRADE_TO_OPENALGO = {v: k for k, v in EXCHANGE_MAP.items()}
+    
     @classmethod
-    def to_flattrade_exchange(cls, oa_exchange: str) -> str:
-        return cls.OA_TO_FLATTRD.get(oa_exchange.upper(), oa_exchange.upper())
-
+    def to_flattrade_exchange(cls, oa_exchange: str) -> Optional[str]:
+        """Convert OpenAlgo exchange to Flattrade exchange format"""
+        return cls.EXCHANGE_MAP.get(oa_exchange.upper())
+    
     @classmethod
-    def to_oa_exchange(cls, flattrd_exchange: str) -> str:
-        return cls.FLATTRD_TO_OA.get(flattrd_exchange.upper(), flattrd_exchange.upper())
+    def to_oa_exchange(cls, flattrade_exchange: str) -> Optional[str]:
+        """Convert Flattrade exchange to OpenAlgo exchange format"""
+        return cls.FLATTRADE_TO_OPENALGO.get(flattrade_exchange.upper())
+
 
 class FlattradeCapabilityRegistry:
-    """Registry of Flattrade WebSocket capabilities"""
-    MODES = {
-        1: {  # LTP/Touchline
-            "name": "LTP",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap"],
-            "description": "Last traded price and basic quote"
-        },
-        2: {  # Quote (same as LTP for Flattrade)
-            "name": "QUOTE",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap"],
-            "description": "Quote (same as LTP for Flattrade)"
-        },
-        3: {  # Depth
-            "name": "DEPTH",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap", "tbq", "tsq", "bq1", "bp1", "sq1", "sp1", "bq2", "bp2", "sq2", "sp2", "bq3", "bp3", "sq3", "sp3", "bq4", "bp4", "sq4", "sp4", "bq5", "bp5", "sq5", "sp5"],
-            "description": "Market depth (5 levels)"
-        }
-    }
-    SUPPORTED_MODES = [1, 2, 3]
-    SUPPORTED_DEPTH_LEVELS = [5]
-    SUPPORTED_EXCHANGES = list(FlattradeExchangeMapper.OA_TO_FLATTRD.keys())
-
-    @classmethod
-    def get_capabilities(cls) -> Dict[str, Any]:
-        return {
-            "modes": cls.SUPPORTED_MODES,
-            "mode_details": cls.MODES,
-            "max_depth_level": 5,
-            "exchanges": cls.SUPPORTED_EXCHANGES
-        }
-
+    """Registry for Flattrade-specific capabilities and limits"""
+    
+    # Supported subscription modes
+    SUPPORTED_MODES = {1, 2, 3}  # LTP, Quote, Depth
+    
+    # Depth level support (Flattrade only supports 5-level depth)
+    SUPPORTED_DEPTH_LEVELS = {5}
+    
+    # Maximum subscriptions per connection
+    MAX_SUBSCRIPTIONS = 5000  # Conservative limit
+    
+    # Maximum instruments per request
+    MAX_INSTRUMENTS_PER_REQUEST = 50
+    
     @classmethod
     def is_mode_supported(cls, mode: int) -> bool:
+        """Check if a subscription mode is supported"""
         return mode in cls.SUPPORTED_MODES
-
+    
     @classmethod
     def is_depth_level_supported(cls, depth_level: int) -> bool:
+        """Check if a depth level is supported"""
         return depth_level in cls.SUPPORTED_DEPTH_LEVELS
-
+    
     @classmethod
     def get_fallback_depth_level(cls, requested_depth: int) -> int:
+        """Get the fallback depth level (always 5 for Flattrade)"""
         return 5
+    
+    @classmethod
+    def get_capabilities(cls) -> Dict[str, any]:
+        """Get all capabilities"""
+        return {
+            'supported_modes': list(cls.SUPPORTED_MODES),
+            'supported_depth_levels': list(cls.SUPPORTED_DEPTH_LEVELS),
+            'max_subscriptions': cls.MAX_SUBSCRIPTIONS,
+            'max_instruments_per_request': cls.MAX_INSTRUMENTS_PER_REQUEST
+        }
