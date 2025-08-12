@@ -156,14 +156,24 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(f"Fyers brsymbol: {brsymbol}")
         
         # For Fyers, check if we have a fytoken or use symbol format
-        # Fyers uses fytoken format like "NSE:TCS-EQ" or direct tokens
+        # Different exchanges might need different formats
         fyers_symbol = None
         
         # Check if we got the broker symbol from database
         if brsymbol:
-            # Use the broker symbol (brsymbol) which is in correct Fyers format like "NSE:FACT-EQ"
-            fyers_symbol = brsymbol
-            self.logger.info(f"Using brsymbol: {fyers_symbol}")
+            # For NSE CASH equities only, brsymbol works fine
+            if exchange == 'NSE' and '-EQ' in brsymbol:
+                fyers_symbol = brsymbol
+                self.logger.info(f"Using NSE equity brsymbol: {fyers_symbol}")
+            # For F&O (NFO), BSE, MCX, Indices - use token instead of brsymbol
+            elif exchange in ['BSE', 'MCX', 'NFO'] or 'INDEX' in brsymbol.upper() or 'FUT' in brsymbol.upper():
+                # Try using the token as subscription identifier
+                fyers_symbol = token
+                self.logger.warning(f"Using TOKEN for {exchange}: {fyers_symbol} (instead of brsymbol: {brsymbol})")
+            else:
+                # Default to brsymbol for other cases
+                fyers_symbol = brsymbol
+                self.logger.info(f"Using brsymbol: {fyers_symbol}")
         elif 'fytoken' in token_info:
             fyers_symbol = token_info['fytoken']
             self.logger.info(f"Using fytoken: {fyers_symbol}")
@@ -210,6 +220,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'mode': mode,
                 'depth_level': depth_level,
                 'fyers_symbol': fyers_symbol,
+                'brsymbol': brsymbol,  # Store brsymbol for matching
                 'data_type': data_type
             }
         
@@ -378,22 +389,55 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         # Extract symbol from the message
         fyers_symbol = data.get('symbol', data.get('s'))
+        
+        # If no symbol in data, try to match by token or other means
         if not fyers_symbol:
-            self.logger.warning("No symbol in message")
+            # Try to find subscription by token
+            token = data.get('token')
+            if token:
+                self.logger.info(f"No symbol in message, trying to match by token: {token}")
+                
+                # Look through subscriptions to find matching token
+                with self.lock:
+                    for sub in self.subscriptions.values():
+                        if sub['token'] == token:
+                            fyers_symbol = sub['fyers_symbol']
+                            self.logger.info(f"Matched token {token} to subscription: {fyers_symbol}")
+                            break
+        
+        if not fyers_symbol:
+            self.logger.warning(f"No symbol in message and no token match. Data keys: {list(data.keys())}")
             return
         
         # Find the subscription that matches this symbol
         subscription = None
         with self.lock:
-            for sub in self.subscriptions.values():
+            self.logger.info(f"Looking for subscription matching symbol: {fyers_symbol}")
+            for correlation_id, sub in self.subscriptions.items():
+                self.logger.info(f"Checking subscription {correlation_id}: fyers_symbol={sub['fyers_symbol']}, brsymbol={sub.get('brsymbol')}")
+                # Direct match by fyers_symbol
                 if sub['fyers_symbol'] == fyers_symbol:
                     subscription = sub
+                    self.logger.info(f"Direct match found: {correlation_id}")
+                    break
+                # If we used token subscription, also try matching by brsymbol
+                elif sub['fyers_symbol'].isdigit() and sub.get('brsymbol') == fyers_symbol:
+                    subscription = sub
+                    self.logger.info(f"Matched token subscription {sub['fyers_symbol']} to incoming symbol {fyers_symbol}")
                     break
         
         if not subscription:
             # Log more details about unmatched symbols
             self.logger.warning(f"Received data for unsubscribed symbol: {fyers_symbol}")
-            self.logger.debug(f"Active subscriptions: {[s['fyers_symbol'] for s in self.subscriptions.values()]}")
+            with self.lock:
+                active_subs = []
+                for s in self.subscriptions.values():
+                    if s['fyers_symbol'].isdigit():
+                        # Token subscription - show both token and brsymbol
+                        active_subs.append(f"{s['fyers_symbol']} (token for {s.get('brsymbol', 'unknown')})")
+                    else:
+                        active_subs.append(s['fyers_symbol'])
+                self.logger.debug(f"Active subscriptions: {active_subs}")
             return
         
         # Create topic for ZeroMQ
@@ -477,61 +521,79 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # Handle protobuf parsed data
+        # Handle protobuf parsed data from new FyersProtoParser
         if message.get('data_type') == 'market_data':
-            # This is parsed protobuf data
+            # This is parsed protobuf data using proper schema
             result = {}
             
-            # Use probable LTP if available
-            if 'probable_ltp' in message:
-                result['ltp'] = message['probable_ltp']
-                
-            # Add current timestamp if no trade time available
-            result['ltt'] = int(time.time())
+            # Extract price data
+            ltp = message.get('ltp', message.get('probable_ltp', 0))
+            if not ltp and 'prices' in message:
+                # Use first reasonable price if available
+                prices = message['prices']
+                if prices:
+                    ltp = prices[0]['value']
+            
+            result['ltp'] = ltp
+            result['ltt'] = message.get('ltt', int(time.time()))
+            
+            # Extract other quote data if available
+            result.update({
+                'volume': message.get('volume', 0),
+                'open': message.get('open', 0),
+                'high': message.get('high', 0),
+                'low': message.get('low', 0),
+                'close': message.get('close', 0),
+                'ltq': message.get('ltq', 0),
+                'oi': message.get('oi', 0)
+            })
             
             if mode == 1:  # LTP mode
                 return {
-                    'ltp': result.get('ltp', 0),
-                    'ltt': result.get('ltt')
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt']
                 }
             elif mode == 2:  # Quote mode
                 return {
-                    'ltp': result.get('ltp', 0),
-                    'ltt': result.get('ltt'),
-                    'volume': 0,  # Not available in basic protobuf parsing yet
-                    'open': 0,
-                    'high': 0,
-                    'low': 0,
-                    'close': 0,
-                    'last_quantity': 0,
-                    'average_price': 0,
-                    'total_buy_quantity': 0,
-                    'total_sell_quantity': 0,
-                    'change': 0,
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt'],
+                    'volume': result['volume'],
+                    'open': result['open'],
+                    'high': result['high'],
+                    'low': result['low'],
+                    'close': result['close'],
+                    'last_quantity': result['ltq'],
+                    'average_price': 0,  # Not in basic schema yet
+                    'total_buy_quantity': message.get('total_buy_quantity', 0),
+                    'total_sell_quantity': message.get('total_sell_quantity', 0),
+                    'change': 0,  # Calculate if needed
                     'change_percent': 0.0,
                     '_raw_data': {
-                        'potential_prices': message.get('potential_prices', []),
+                        'token': message.get('token'),
+                        'symbol': message.get('symbol'),
                         'raw_length': message.get('raw_length', 0)
                     }
                 }
             elif mode == 3:  # Depth mode
+                depth_data = message.get('depth', {'buy': [], 'sell': []})
                 return {
-                    'ltp': result.get('ltp', 0),
-                    'ltt': result.get('ltt'),
-                    'volume': 0,
-                    'open': 0,
-                    'high': 0,
-                    'low': 0,
-                    'close': 0,
-                    'oi': 0,
-                    'upper_circuit': 0,
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt'],
+                    'volume': result['volume'],
+                    'open': result['open'],
+                    'high': result['high'],
+                    'low': result['low'],
+                    'close': result['close'],
+                    'oi': result['oi'],
+                    'upper_circuit': 0,  # Not in schema yet
                     'lower_circuit': 0,
                     'depth': {
-                        'buy': self._create_empty_depth(),
-                        'sell': self._create_empty_depth()
+                        'buy': self._convert_depth_levels(depth_data['buy']),
+                        'sell': self._convert_depth_levels(depth_data['sell'])
                     },
                     '_raw_data': {
-                        'potential_prices': message.get('potential_prices', []),
+                        'token': message.get('token'),
+                        'symbol': message.get('symbol'),
                         'raw_length': message.get('raw_length', 0)
                     }
                 }
@@ -647,6 +709,33 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for _ in range(5)
         ]
     
+    def _convert_depth_levels(self, depth_levels) -> List[Dict[str, Any]]:
+        """
+        Convert depth levels from protobuf parser format to standard format
+        
+        Args:
+            depth_levels: List of depth levels from protobuf parser
+            
+        Returns:
+            List: Standardized depth levels
+        """
+        if not depth_levels:
+            return self._create_empty_depth()
+            
+        converted = []
+        for level in depth_levels:
+            converted.append({
+                'price': level.get('price', 0.0),
+                'quantity': level.get('quantity', 0),
+                'orders': level.get('orders', 0)
+            })
+            
+        # Ensure we have at least 5 levels
+        while len(converted) < 5:
+            converted.append({'price': 0.0, 'quantity': 0, 'orders': 0})
+            
+        return converted[:5]  # Return only first 5 levels
+    
     def _get_fyers_broker_symbol(self, symbol: str, exchange: str) -> Optional[str]:
         """
         Get Fyers-specific broker symbol (brsymbol) from database
@@ -671,3 +760,4 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error getting Fyers broker symbol: {e}")
             return None
+

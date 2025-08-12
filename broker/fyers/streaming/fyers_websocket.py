@@ -12,6 +12,7 @@ import ssl
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from urllib.parse import urlencode
+from .fyers_proto_parser import FyersProtoParser
 
 class FyersWebSocketClient:
     """
@@ -54,6 +55,9 @@ class FyersWebSocketClient:
         
         # Parse symbol data
         self.symbol_data = {}
+        
+        # Initialize protobuf parser
+        self.proto_parser = FyersProtoParser()
         
     def set_callbacks(self, 
                      on_open: Optional[Callable] = None,
@@ -164,13 +168,58 @@ class FyersWebSocketClient:
         
         # Use the OFFICIAL Fyers TBT WebSocket protocol format
         # Based on https://github.com/FyersDev/fyers-api-sample-code/tree/sample_v3/v3/python/websocket
+        
+        # Log exchange type for debugging
+        exchange_types = set()
+        for symbol in symbols:
+            if ':' in symbol:
+                exchange = symbol.split(':')[0]
+                exchange_types.add(exchange)
+        
+        self.logger.info(f"Subscribing to exchanges: {exchange_types}")
+        
+        # Fyers supports: "quote", "depth", "ohlcv" modes
+        mode = "depth" if data_type == "DepthUpdate" else "quote"
+        
+        # Check if this might be an index symbol (by token pattern or INDEX keyword)
+        is_index = any('-INDEX' in str(s).upper() for s in symbols)
+        index_tokens = [s for s in symbols if str(s).startswith('10100000002')]  # Index tokens often start with this pattern
+        
+        if is_index or index_tokens:
+            # Try "ohlcv" mode for indices
+            mode = "ohlcv" if data_type == "SymbolUpdate" else mode
+            self.logger.warning(f"Detected INDEX symbol, using mode '{mode}' instead of 'quote'")
+            
+            if index_tokens:
+                self.logger.warning(f"Index tokens detected: {index_tokens}")
+        
+        # Log mode being used
+        if 'MCX' in exchange_types or 'BSE' in exchange_types:
+            self.logger.warning(f"Subscribing to MCX/BSE with mode '{mode}'")
+        
+        # Try different channels for different asset types
+        channel_num = "1"  # Default channel
+        
+        if is_index or index_tokens:
+            # Indices might use a different channel
+            channel_num = "3"
+            self.logger.warning(f"Using channel {channel_num} for INDEX symbols")
+        elif 'MCX' in exchange_types:
+            # Try channel 2 for MCX
+            channel_num = "2"
+            self.logger.warning(f"Using channel {channel_num} for MCX")
+        elif 'BSE' in exchange_types:
+            # BSE might need different channel too
+            channel_num = "4"
+            self.logger.warning(f"Using channel {channel_num} for BSE")
+        
         message = {
             "type": 1,  # Type 1 for subscription
             "data": {
                 "subs": 1,  # 1 for subscribe, -1 for unsubscribe
                 "symbols": symbols,  # List of symbols like ["NSE:TCS-EQ"]
-                "mode": "depth" if data_type == "DepthUpdate" else "quote",  # "depth" or "quote"
-                "channel": "1"  # Channel number as string
+                "mode": mode,  # "ltp", "quote", or "depth"
+                "channel": channel_num  # Channel number as string
             }
         }
         
@@ -178,15 +227,30 @@ class FyersWebSocketClient:
             try:
                 message_str = json.dumps(message)
                 self.logger.info(f"Sending subscription message: {message_str}")
+                
+                # Also log what we're actually trying to subscribe to
+                for symbol in symbols:
+                    exchange = symbol.split(':')[0] if ':' in symbol else 'Unknown'
+                    self.logger.warning(f"Subscribing to {exchange} symbol: {symbol}")
+                    
+                    # Check if we should try token-based subscription instead
+                    if exchange in ['BSE', 'MCX'] or '-INDEX' in symbol.upper():
+                        self.logger.warning(f"Non-NSE-equity symbol detected: {symbol}")
+                        self.logger.warning(f"Consider using fytoken instead of symbol format")
+                
                 self.ws.send(message_str)
+                
+                # Wait a moment for subscription to be processed
+                import time
+                time.sleep(0.1)
                 
                 # After subscribing, activate the channel to start receiving data
                 # According to Fyers TBT docs, need to resume the channel
                 channel_message = {
                     "type": 2,  # Type 2 for channel operations
                     "data": {
-                        "resumeChannels": ["1"],  # Resume channel 1
-                        "pauseChannels": []       # No channels to pause
+                        "resumeChannels": [channel_num],  # Resume the channel
+                        "pauseChannels": []                # No channels to pause
                     }
                 }
                 
@@ -194,7 +258,25 @@ class FyersWebSocketClient:
                 self.logger.info(f"Activating channel: {channel_str}")
                 self.ws.send(channel_str)
                 
-                self.logger.info(f"Subscribed to {len(symbols)} symbols for {data_type} and activated channel")
+                self.logger.info(f"Subscribed to {len(symbols)} symbols for {data_type} and activated channel {channel_num}")
+                
+                # Send another ping to ensure connection is active
+                self.ws.send("ping")
+                
+                # For debugging token-based subscriptions (anything not NSE cash equity)
+                token_based = [s for s in symbols if not (s.startswith('NSE:') and '-EQ' in s)]
+                if token_based:
+                    self.logger.warning(f"Token-based subscription complete: {token_based}")
+                    self.logger.warning(f"These symbols are using TOKEN-based subscription")
+                    self.logger.warning(f"If no data received, the token format might be incorrect")
+                    
+                    # Suggest alternative
+                    for symbol in token_based:
+                        if symbol.isdigit():
+                            self.logger.info(f"Token {symbol} - this should work if token is correct")
+                        else:
+                            self.logger.warning(f"Symbol {symbol} - might need token format instead")
+                
                 return True
             except Exception as e:
                 self.logger.error(f"Subscription error: {e}")
@@ -288,13 +370,18 @@ class FyersWebSocketClient:
             # Log differently based on message type
             if isinstance(message, str):
                 # JSON messages - log fully
-                self.logger.info(f"Received JSON message from Fyers: {message}")
                 data = json.loads(message)
-                # Check if it's a subscription response
-                if 'subscription' in message.lower() or 'error' in message.lower():
-                    self.logger.warning(f"Important Fyers response: {data}")
+                
+                # Check for important messages
+                if any(keyword in str(message).lower() for keyword in ['error', 'fail', 'reject', 'invalid', 'subscription', 'denied', 'unauthorized']):
+                    self.logger.error(f"IMPORTANT Fyers response: {message}")
+                    # Also check if this is related to indices/BSE/MCX
+                    if any(term in str(message).lower() for term in ['index', 'bse', 'mcx', 'token', 'symbol']):
+                        self.logger.error(f"This error might be related to indices/BSE/MCX subscription!")
+                elif message.strip() in ['pong', 'ping']:
+                    self.logger.debug(f"Ping/Pong: {message}")
                 else:
-                    self.logger.debug(f"Parsed JSON data: {data}")
+                    self.logger.info(f"Received JSON from Fyers: {message}")
             elif isinstance(message, (bytes, bytearray)):
                 # Binary messages - log size and parse
                 data = self._parse_binary_data(message)
@@ -334,18 +421,21 @@ class FyersWebSocketClient:
             return json.loads(decoded)
         except:
             # Handle binary market data (protobuf format)
-            # Fyers uses protobuf for TBT data
-            return self._parse_protobuf_data(data)
-    
-    def _parse_protobuf_data(self, data):
-        """
-        Parse Fyers protobuf data using manual binary parsing
-        
-        Args:
-            data: Binary protobuf data
+            # Use hybrid approach: new parser for symbol/token, old parser for prices
+            parsed_data = self.proto_parser.parse_market_data(data)
             
-        Returns:
-            Dict: Parsed market data
+            # If we got symbol/token from new parser but no LTP, use old price extraction
+            if parsed_data.get('symbol') and parsed_data.get('token') and not parsed_data.get('probable_ltp'):
+                old_parsed = self._parse_protobuf_data_old(data)
+                if old_parsed.get('probable_ltp'):
+                    parsed_data['probable_ltp'] = old_parsed['probable_ltp']
+                    self.logger.info(f"Using old parser LTP: {parsed_data['probable_ltp']}")
+                    
+            return parsed_data
+    
+    def _parse_protobuf_data_old(self, data):
+        """
+        Old working protobuf parser - used for price extraction only
         """
         try:
             import struct
@@ -354,47 +444,13 @@ class FyersWebSocketClient:
             parsed_data['data_type'] = 'market_data'
             parsed_data['raw_length'] = len(data)
             
-            # Try to decode readable strings from the data
-            try:
-                data_str = data.decode('utf-8', errors='ignore')
-                
-                # Extract symbol information using regex
-                import re
-                # Look for various patterns in the data
-                symbol_patterns = [
-                    r'NSE:[A-Z0-9]+-EQ',  # NSE equity format
-                    r'BSE:[A-Z0-9]+-EQ',  # BSE equity format
-                    r'NFO:[A-Z0-9]+',     # F&O format
-                    r'MCX:[A-Z0-9]+FUT',  # MCX futures format
-                    r'MCX:[A-Z0-9]+',     # MCX general format
-                ]
-                
-                for pattern in symbol_patterns:
-                    match = re.search(pattern, data_str)
-                    if match:
-                        parsed_data['symbol'] = match.group()
-                        break
-                
-                # Extract token (usually 12-15 digits)
-                token_match = re.search(r'\b\d{12,15}\b', data_str)
-                if token_match:
-                    parsed_data['token'] = token_match.group()
-                    
-            except Exception as decode_error:
-                self.logger.debug(f"Could not decode as UTF-8: {decode_error}")
-            
             # Parse protobuf varint encoded values for prices
-            # Fyers TBT data includes market depth with price levels
             try:
-                # Look for price patterns in the data
-                # Prices in Indian markets are typically in the range 1-50000
                 potential_prices = []
                 
                 # Scan through the data looking for encoded price values
-                # Looking specifically for patterns like \x08\xXX where XX is a varint price
                 i = 0
                 while i < len(data) - 2:
-                    # Look for field tags with varint values (wire type 0)
                     if i < len(data) - 1:
                         tag = data[i]
                         field_num = tag >> 3
@@ -405,7 +461,7 @@ class FyersWebSocketClient:
                             # Try to read the varint value
                             value, bytes_read = self._decode_varint(data[i+1:])
                             if value and bytes_read > 0:
-                                # Check if this could be a price in paise (Indian currency: 100 paise = 1 rupee)
+                                # Check if this could be a price in paise
                                 if 10000 <= value <= 10000000:  # 100 to 100000 rupees
                                     price = value / 100.0
                                     potential_prices.append({
@@ -415,40 +471,12 @@ class FyersWebSocketClient:
                                         'field': field_num
                                     })
                             i += 1 + (bytes_read if bytes_read else 0)
-                        
-                        # Also check for length-delimited fields containing prices
-                        elif wire_type == 2 and i + 1 < len(data):
-                            # Read length
-                            length, bytes_read = self._decode_varint(data[i+1:])
-                            if length and bytes_read:
-                                start = i + 1 + bytes_read
-                                end = start + length
-                                if end <= len(data) and length == 4:
-                                    # Could be a 4-byte price
-                                    try:
-                                        price_bytes = data[start:end]
-                                        # Try as little-endian integer
-                                        int_val = struct.unpack('<I', price_bytes)[0]
-                                        if 10000 <= int_val <= 10000000:
-                                            price = int_val / 100.0
-                                            potential_prices.append({
-                                                'offset': start,
-                                                'value': round(price, 2),
-                                                'format': 'fixed32/100',
-                                                'field': field_num
-                                            })
-                                    except:
-                                        pass
-                                i = end
-                            else:
-                                i += 1
                         else:
                             i += 1
                     else:
                         i += 1
                 
                 # Also scan for common price patterns in the data
-                # Look for sequences that match \x08\xXX\xYY\xZZ where the value makes sense as a price
                 for offset in range(0, min(len(data) - 4, 500)):
                     if data[offset] == 0x08:  # Field number 1 with wire type 0 (varint)
                         # Try to decode the following bytes as a varint
@@ -472,56 +500,66 @@ class FyersWebSocketClient:
                     potential_prices = list(unique_prices.values())
                     potential_prices.sort(key=lambda x: x['value'])
                     
-                    parsed_data['potential_prices'] = potential_prices[:10]  # Keep top 10 unique prices
+                    parsed_data['potential_prices'] = potential_prices[:10]
                     
-                    # Find the most likely LTP
-                    # Usually the LTP is one of the first few price fields in the message
-                    # For market depth data, prices typically appear in order
+                    # Log all potential prices for debugging
+                    price_list = [f"{p['value']} (field {p.get('field', '?')}, {p['format']})" for p in potential_prices[:10]]
+                    self.logger.info(f"All potential prices: {price_list}")
                     
-                    # Strategy: Look for prices in a reasonable range for the symbol
-                    # For NSE stocks, typically between 10 and 50000
-                    reasonable_prices = [p for p in potential_prices if 10 <= p['value'] <= 50000]
+                    # More intelligent LTP selection based on frequency and field position
+                    # Group prices by similarity (within 1% of each other)
+                    price_groups = []
+                    for price in potential_prices:
+                        added_to_group = False
+                        for group in price_groups:
+                            if any(abs(price['value'] - p['value']) / max(price['value'], p['value']) < 0.01 for p in group):
+                                group.append(price)
+                                added_to_group = True
+                                break
+                        if not added_to_group:
+                            price_groups.append([price])
                     
-                    if reasonable_prices:
-                        # For TCS and similar large-cap stocks, prices are typically > 1000
-                        high_value_prices = [p for p in reasonable_prices if p['value'] >= 1000]
+                    # Sort groups by size (frequency) and average value
+                    price_groups.sort(key=lambda g: (len(g), -min(p['value'] for p in g)), reverse=True)
+                    
+                    if price_groups:
+                        # Use the price from the largest group (most frequent)
+                        best_group = price_groups[0]
+                        # Within the group, prefer prices from earlier fields (lower field numbers)
+                        best_group.sort(key=lambda p: (p.get('field', 999), p['offset']))
                         
-                        if high_value_prices:
-                            # The first high-value price is likely the LTP
-                            # Check if we have multiple similar prices (within 2% of each other)
-                            first_price = high_value_prices[0]['value']
-                            similar_prices = [p for p in high_value_prices 
-                                            if abs(p['value'] - first_price) / first_price < 0.02]
-                            
-                            if similar_prices:
-                                # Use the most common price or the first one
-                                parsed_data['probable_ltp'] = similar_prices[0]['value']
-                            else:
-                                parsed_data['probable_ltp'] = high_value_prices[0]['value']
+                        selected_price = best_group[0]['value']
+                        
+                        # Sanity check: reject prices that seem too high/low for Indian stocks
+                        # SBIN: 800-820, INFY: 1400-1500, TCS: 3000-3500
+                        if 50 <= selected_price <= 5000:  # Reasonable range for most Indian stocks
+                            parsed_data['probable_ltp'] = selected_price
+                            self.logger.info(f"Selected LTP {selected_price} from group of {len(best_group)} similar prices")
                         else:
-                            # For lower-priced stocks, use the median price
-                            parsed_data['probable_ltp'] = reasonable_prices[len(reasonable_prices)//2]['value']
+                            # Try the second group if first seems unreasonable
+                            if len(price_groups) > 1:
+                                second_group = price_groups[1]
+                                second_price = second_group[0]['value']
+                                if 50 <= second_price <= 5000:
+                                    parsed_data['probable_ltp'] = second_price
+                                    self.logger.info(f"Selected backup LTP {second_price} (first choice {selected_price} rejected)")
+                                else:
+                                    parsed_data['probable_ltp'] = 0
+                                    self.logger.warning(f"No reasonable LTP found (tried {selected_price}, {second_price})")
+                            else:
+                                parsed_data['probable_ltp'] = 0
+                                self.logger.warning(f"LTP {selected_price} rejected as unreasonable")
                     else:
-                        # Fallback to first price if no reasonable prices found
-                        parsed_data['probable_ltp'] = potential_prices[0]['value'] if potential_prices else 0
+                        parsed_data['probable_ltp'] = 0
                         
             except Exception as binary_parse_error:
-                self.logger.debug(f"Binary parsing error: {binary_parse_error}")
-            
-            # Add some metadata for debugging
-            if len(data) > 0:
-                parsed_data['first_bytes'] = data[:20].hex()
-                parsed_data['last_bytes'] = data[-20:].hex()
-            
-            self.logger.info(f"Parsed protobuf data: symbol={parsed_data.get('symbol', 'unknown')}, "
-                           f"token={parsed_data.get('token', 'unknown')}, "
-                           f"probable_ltp={parsed_data.get('probable_ltp', 'unknown')}")
+                self.logger.debug(f"Old binary parsing error: {binary_parse_error}")
             
             return parsed_data
             
         except Exception as e:
-            self.logger.error(f"Error parsing protobuf data: {e}")
-            return {"raw_data": data.hex()[:200] if data else "empty", "error": str(e)}
+            self.logger.error(f"Error in old protobuf parser: {e}")
+            return {"probable_ltp": 0}
     
     def _decode_varint(self, data):
         """
