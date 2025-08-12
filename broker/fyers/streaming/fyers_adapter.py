@@ -155,50 +155,36 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(f"Token info for {symbol}.{exchange}: {token_info}")
         self.logger.info(f"Fyers brsymbol: {brsymbol}")
         
-        # For Fyers, check if we have a fytoken or use symbol format
-        # Different exchanges might need different formats
+        # Determine subscription format based on exchange
+        # NSE cash equities: Use symbol format (NSE:SBIN-EQ)
+        # BSE, MCX, NFO, Indices: Use token format
         fyers_symbol = None
+        use_token = False
         
-        # Check if we got the broker symbol from database
-        if brsymbol:
-            # For NSE CASH equities only, brsymbol works fine
-            if exchange == 'NSE' and '-EQ' in brsymbol:
-                fyers_symbol = brsymbol
-                self.logger.info(f"Using NSE equity brsymbol: {fyers_symbol}")
-            # For F&O (NFO), BSE, MCX, Indices - use token instead of brsymbol
-            elif exchange in ['BSE', 'MCX', 'NFO'] or 'INDEX' in brsymbol.upper() or 'FUT' in brsymbol.upper():
-                # Try using the token as subscription identifier
-                fyers_symbol = token
-                self.logger.warning(f"Using TOKEN for {exchange}: {fyers_symbol} (instead of brsymbol: {brsymbol})")
-            else:
-                # Default to brsymbol for other cases
-                fyers_symbol = brsymbol
-                self.logger.info(f"Using brsymbol: {fyers_symbol}")
-        elif 'fytoken' in token_info:
-            fyers_symbol = token_info['fytoken']
-            self.logger.info(f"Using fytoken: {fyers_symbol}")
-        elif 'symbol' in token_info and token_info['symbol']:
-            # Use the symbol from the token info if available
-            fyers_symbol = token_info['symbol']
-            self.logger.info(f"Using database symbol: {fyers_symbol}")
+        # Check exchange type to determine subscription format
+        if exchange == 'NSE' and brsymbol and '-EQ' in brsymbol:
+            # NSE cash equities - use symbol format
+            fyers_symbol = brsymbol
+            self.logger.info(f"Using NSE equity symbol: {fyers_symbol}")
+        elif exchange in ['BSE', 'MCX', 'NFO', 'CDS']:
+            # These exchanges require token-based subscription
+            fyers_symbol = token
+            use_token = True
+            self.logger.info(f"Using TOKEN for {exchange}: {fyers_symbol}")
+        elif exchange == 'NSE_INDEX' or (brsymbol and 'INDEX' in brsymbol.upper()):
+            # Indices also need token-based subscription
+            fyers_symbol = token
+            use_token = True
+            self.logger.info(f"Using TOKEN for INDEX: {fyers_symbol}")
+        elif brsymbol:
+            # Use broker symbol if available
+            fyers_symbol = brsymbol
+            self.logger.info(f"Using brsymbol: {fyers_symbol}")
         else:
-            # Fallback: Create Fyers symbol format
-            # Based on your input: Fyers expects "TCS-EQ", not "NSE:TCS-EQ"
-            
-            # Determine segment suffix based on exchange type
-            segment_suffix = ""
-            if exchange in ['NSE', 'BSE']:
-                segment_suffix = "-EQ"  # Equity segment
-            elif exchange == 'NFO':
-                # For F&O, need to check if it's index/stock future/option
-                segment_suffix = ""  
-            elif exchange == 'MCX':
-                segment_suffix = ""  # No suffix for commodities
-            elif exchange == 'CDS':
-                segment_suffix = ""  # No suffix for currency
-                
-            # Create Fyers symbol - just symbol with suffix, no exchange prefix
-            fyers_symbol = f"{symbol}{segment_suffix}"
+            # Fallback to token
+            fyers_symbol = token
+            use_token = True
+            self.logger.warning(f"Fallback to TOKEN: {fyers_symbol}")
             
         self.logger.info(f"Final Fyers symbol: {symbol}.{exchange} -> {fyers_symbol}")
         
@@ -224,18 +210,20 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'data_type': data_type
             }
         
-        # Subscribe if connected
-        if self.ws_client and self.ws_client.is_connected():
+        # Subscribe if connected (following Angel adapter pattern)
+        self.logger.info(f"Subscription check: self.connected={getattr(self, 'connected', False)}, ws_client_exists={self.ws_client is not None}")
+        if self.connected and self.ws_client:
             try:
-                success = self.ws_client.subscribe([fyers_symbol], data_type)
-                if not success:
-                    return self._create_error_response("SUBSCRIPTION_ERROR", 
-                                                      "Failed to subscribe to symbol")
+                # Pass the mode to websocket client for proper Fyers mode selection
+                self.ws_client.subscribe([fyers_symbol], data_type, mode=mode)
+                self.logger.info(f"Subscription sent for {fyers_symbol}")
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
         else:
-            self.logger.info(f"Queuing subscription for {symbol}.{exchange}")
+            self.logger.info(f"WebSocket not connected. Queuing subscription for {symbol}.{exchange}")
+            # Still return success even if queued (following Angel pattern)
+            # The subscription will be processed when connection is established
         
         # Return success
         return self._create_success_response(
@@ -387,43 +375,89 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Args:
             data: Symbol update data from Fyers
         """
-        # Extract symbol from the message
+        # Extract symbol or token from the message
+        # Handle both direct fields and official parser structure
         fyers_symbol = data.get('symbol', data.get('s'))
+        token = data.get('token', data.get('fyToken'))
         
-        # If no symbol in data, try to match by token or other means
+        # For official parser output, also check symbol_key
         if not fyers_symbol:
-            # Try to find subscription by token
-            token = data.get('token')
-            if token:
-                self.logger.info(f"No symbol in message, trying to match by token: {token}")
-                
-                # Look through subscriptions to find matching token
+            fyers_symbol = data.get('symbol_key')
+        
+        # Log the data we're processing for debugging
+        ltp_value = data.get('ltp', data.get('probable_ltp', 0))
+        self.logger.info(f"Processing market data: symbol={fyers_symbol}, token={token}, ltp={ltp_value}")
+        
+        # Special handling for numeric-only data (common in LTP mode)
+        if not fyers_symbol and not token:
+            # Check if we have a simple numeric value that could be a price
+            numeric_keys = [k for k, v in data.items() if isinstance(v, (int, float)) and k.isdigit()]
+            if numeric_keys and (data.get('probable_ltp') or data.get('ltp')):
+                # This might be LTP data with just a price, try to match to active subscriptions
+                self.logger.debug(f"Potential LTP data without symbol: {data}")
+                # Use the first active subscription as fallback
                 with self.lock:
-                    for sub in self.subscriptions.values():
-                        if sub['token'] == token:
-                            fyers_symbol = sub['fyers_symbol']
-                            self.logger.info(f"Matched token {token} to subscription: {fyers_symbol}")
-                            break
+                    if self.subscriptions:
+                        first_sub = next(iter(self.subscriptions.values()))
+                        fyers_symbol = first_sub['fyers_symbol']
+                        token = first_sub['token']
+                        self.logger.info(f"Matched LTP data to active subscription: {first_sub['symbol']}.{first_sub['exchange']}")
         
-        if not fyers_symbol:
-            self.logger.warning(f"No symbol in message and no token match. Data keys: {list(data.keys())}")
+        # If we have a token but no symbol, try to match by token
+        if not fyers_symbol and token:
+            self.logger.debug(f"Matching by token: {token}")
+            
+            # Look through subscriptions to find matching token
+            with self.lock:
+                for sub in self.subscriptions.values():
+                    # Check if subscription token matches or fyers_symbol is the token
+                    if sub['token'] == str(token) or sub['fyers_symbol'] == str(token):
+                        fyers_symbol = sub['fyers_symbol']
+                        self.logger.debug(f"Matched token {token} to subscription")
+                        break
+        
+        if not fyers_symbol and not token:
+            # Log and skip data without proper symbol/token identification
+            if data.get('probable_ltp') or data.get('ltp'):
+                self.logger.warning(f"Protobuf parser failed to extract symbol/token from market data: {data}")
+            else:
+                self.logger.debug(f"No symbol/token and no price data. Keys: {list(data.keys())}")
             return
+        
+        # If still no fyers_symbol but we have token, use token as fyers_symbol
+        if not fyers_symbol and token:
+            fyers_symbol = str(token)
+            self.logger.debug(f"Using token as fyers_symbol: {fyers_symbol}")
+        
+        # Special handling for numeric symbols (likely tokens in LTP mode)
+        if fyers_symbol and fyers_symbol.isdigit():
+            # Try to match by token in subscriptions
+            with self.lock:
+                for sub in self.subscriptions.values():
+                    if sub['token'] == fyers_symbol:
+                        # Use the original symbol for topic generation
+                        original_symbol = sub['symbol']
+                        self.logger.info(f"Matched token {fyers_symbol} to subscription {original_symbol}.{sub['exchange']}")
+                        # Continue processing with original symbol for topic
+                        symbol = original_symbol
+                        exchange = sub['exchange']
+                        break
         
         # Find the subscription that matches this symbol
         subscription = None
         with self.lock:
-            self.logger.info(f"Looking for subscription matching symbol: {fyers_symbol}")
             for correlation_id, sub in self.subscriptions.items():
-                self.logger.info(f"Checking subscription {correlation_id}: fyers_symbol={sub['fyers_symbol']}, brsymbol={sub.get('brsymbol')}")
                 # Direct match by fyers_symbol
                 if sub['fyers_symbol'] == fyers_symbol:
                     subscription = sub
-                    self.logger.info(f"Direct match found: {correlation_id}")
                     break
-                # If we used token subscription, also try matching by brsymbol
+                # Match by token
+                elif sub['token'] == fyers_symbol:
+                    subscription = sub
+                    break
+                # If incoming symbol is brsymbol and subscription uses token
                 elif sub['fyers_symbol'].isdigit() and sub.get('brsymbol') == fyers_symbol:
                     subscription = sub
-                    self.logger.info(f"Matched token subscription {sub['fyers_symbol']} to incoming symbol {fyers_symbol}")
                     break
         
         if not subscription:
@@ -458,6 +492,9 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'mode': mode,
             'timestamp': int(time.time() * 1000)  # Current timestamp in ms
         })
+        
+        # Log the normalized data for debugging
+        self.logger.info(f"Publishing to ZeroMQ - Topic: {topic}, LTP: {market_data.get('ltp', 0)}")
         
         # Publish to ZeroMQ
         self.publish_market_data(topic, market_data)
@@ -521,9 +558,142 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # Handle protobuf parsed data from new FyersProtoParser
+        # Handle Fyers JSON symbol feed format (sf)
+        if message.get('type') == 'sf':
+            # This is Fyers JSON symbol feed data
+            ltp = message.get('ltp', 0)
+            
+            if mode == 1:  # LTP mode
+                return {
+                    'ltp': float(ltp) if ltp else 0.0,
+                    'ltt': message.get('last_traded_time', int(time.time()))
+                }
+            elif mode == 2:  # Quote mode
+                return {
+                    'ltp': float(ltp) if ltp else 0.0,
+                    'ltt': message.get('last_traded_time', int(time.time())),
+                    'volume': message.get('vol_traded_today', 0),
+                    'open': message.get('open_price', 0),
+                    'high': message.get('high_price', 0),
+                    'low': message.get('low_price', 0),
+                    'close': message.get('prev_close_price', 0),
+                    'last_quantity': message.get('last_traded_qty', 0),
+                    'average_price': message.get('avg_trade_price', 0),
+                    'total_buy_quantity': message.get('tot_buy_qty', 0),
+                    'total_sell_quantity': message.get('tot_sell_qty', 0),
+                    'change': message.get('ch', 0),
+                    'change_percent': message.get('chp', 0),
+                    'bid_price': message.get('bid_price', 0),
+                    'ask_price': message.get('ask_price', 0),
+                    'bid_size': message.get('bid_size', 0),
+                    'ask_size': message.get('ask_size', 0)
+                }
+            elif mode == 3:  # Depth mode - need to handle depth data separately
+                base_data = {
+                    'ltp': float(ltp) if ltp else 0.0,
+                    'ltt': message.get('last_traded_time', int(time.time())),
+                    'volume': message.get('vol_traded_today', 0),
+                    'open': message.get('open_price', 0),
+                    'high': message.get('high_price', 0),
+                    'low': message.get('low_price', 0),
+                    'close': message.get('prev_close_price', 0),
+                    'oi': 0,  # Not in basic sf message
+                    'upper_circuit': 0,  # Not in basic sf message
+                    'lower_circuit': 0,
+                    'depth': {
+                        'buy': self._create_empty_depth(),
+                        'sell': self._create_empty_depth()
+                    }
+                }
+                return base_data
+        
+        # Handle protobuf parsed data from official FyersOfficialProtoParser
+        if message.get('data_type') == 'socket_message':
+            # This is parsed protobuf data using the official .proto schema
+            result = {}
+            
+            # Extract price data - official parser puts LTP in 'ltp' key
+            ltp = message.get('ltp', 0)
+            if not ltp:
+                # Fallback to older parser format
+                ltp = message.get('probable_ltp', 0)
+                if not ltp and 'prices' in message:
+                    # Use first reasonable price if available
+                    prices = message['prices']
+                    if prices:
+                        ltp = prices[0]['value']
+            
+            result['ltp'] = ltp
+            result['ltt'] = message.get('ltt', int(time.time()))
+            
+            # Extract other quote data if available
+            result.update({
+                'volume': message.get('volume', 0),
+                'open': message.get('open', 0),
+                'high': message.get('high', 0),
+                'low': message.get('low', 0),
+                'close': message.get('close', 0),
+                'ltq': message.get('ltq', 0),
+                'oi': message.get('oi', 0)
+            })
+            
+            if mode == 1:  # LTP mode
+                return {
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt']
+                }
+            elif mode == 2:  # Quote mode
+                return {
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt'],
+                    'volume': result['volume'],
+                    'open': result['open'],
+                    'high': result['high'],
+                    'low': result['low'],
+                    'close': result['close'],
+                    'last_quantity': result['ltq'],
+                    'average_price': 0,  # Not in basic schema yet
+                    'total_buy_quantity': message.get('total_buy_qty', 0),
+                    'total_sell_quantity': message.get('total_sell_qty', 0),
+                    'change': 0,  # Calculate if needed
+                    'change_percent': 0.0,
+                    'bid_price': message.get('bid', 0),
+                    'ask_price': message.get('ask', 0),
+                    '_raw_data': {
+                        'token': message.get('token'),
+                        'symbol': message.get('symbol'),
+                        'raw_length': message.get('raw_length', 0)
+                    }
+                }
+            elif mode == 3:  # Depth mode
+                depth_data = message.get('depth', {'buy': [], 'sell': []})
+                return {
+                    'ltp': result['ltp'],
+                    'ltt': result['ltt'],
+                    'volume': result['volume'],
+                    'open': result['open'],
+                    'high': result['high'],
+                    'low': result['low'],
+                    'close': result['close'],
+                    'oi': result['oi'],
+                    'upper_circuit': 0,  # Not in schema yet
+                    'lower_circuit': 0,
+                    'depth': {
+                        'buy': self._convert_depth_levels(depth_data['buy']),
+                        'sell': self._convert_depth_levels(depth_data['sell'])
+                    },
+                    '_raw_data': {
+                        'token': message.get('token'),
+                        'symbol': message.get('symbol'),
+                        'raw_length': message.get('raw_length', 0)
+                    }
+                }
+            else:
+                return result
+        
+        # Handle protobuf parsed data from legacy FyersProtoParser
         if message.get('data_type') == 'market_data':
-            # This is parsed protobuf data using proper schema
+            # This is parsed protobuf data using legacy parser (fallback)
             result = {}
             
             # Extract price data
@@ -602,25 +772,34 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
         # Handle standard JSON message format (if Fyers sends JSON)        
         if mode == 1:  # LTP mode
+            # Extract LTP from various possible fields
+            ltp = message.get('ltp', 0) or message.get('probable_ltp', 0)
+            if not ltp and 'cmd' in message:
+                ltp = message['cmd'].get('v', 0)
+            
             return {
-                'ltp': message.get('ltp', message.get('cmd', {}).get('v', 0)),
-                'ltt': message.get('tt', int(time.time()))  # Trade time
+                'ltp': float(ltp) if ltp else 0.0,
+                'ltt': message.get('tt', message.get('last_traded_time', int(time.time())))
             }
         elif mode == 2:  # Quote mode
             # Handle both direct fields and cmd structure
             cmd = message.get('cmd', {})
+            
+            # Extract LTP with fallbacks
+            ltp = message.get('ltp', 0) or message.get('probable_ltp', 0) or cmd.get('v', 0)
+            
             return {
-                'ltp': message.get('ltp', cmd.get('v', 0)),
-                'ltt': message.get('tt', cmd.get('t', int(time.time()))),
-                'volume': message.get('v', cmd.get('volume', 0)),
+                'ltp': float(ltp) if ltp else 0.0,
+                'ltt': message.get('tt', message.get('last_traded_time', cmd.get('t', int(time.time())))),
+                'volume': message.get('vol_traded_today', message.get('v', cmd.get('volume', 0))),
                 'open': message.get('open_price', cmd.get('o', 0)),
                 'high': message.get('high_price', cmd.get('h', 0)),
                 'low': message.get('low_price', cmd.get('l', 0)),
                 'close': message.get('prev_close_price', cmd.get('c', 0)),
-                'last_quantity': message.get('last_traded_qty', 0),
+                'last_quantity': message.get('last_traded_qty', cmd.get('ltq', 0)),
                 'average_price': message.get('avg_trade_price', 0),
-                'total_buy_quantity': message.get('bid_size', 0),
-                'total_sell_quantity': message.get('ask_size', 0),
+                'total_buy_quantity': message.get('tot_buy_qty', message.get('bid_size', 0)),
+                'total_sell_quantity': message.get('tot_sell_qty', message.get('ask_size', 0)),
                 'change': message.get('ch', cmd.get('ch', 0)),
                 'change_percent': message.get('chp', cmd.get('chp', 0))
             }

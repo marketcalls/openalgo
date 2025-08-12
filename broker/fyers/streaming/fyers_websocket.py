@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from urllib.parse import urlencode
 from .fyers_proto_parser import FyersProtoParser
+from .fyers_proto_official import FyersOfficialProtoParser
 
 class FyersWebSocketClient:
     """
@@ -47,6 +48,7 @@ class FyersWebSocketClient:
         self.connected = False
         self.subscriptions = {}  # Track active subscriptions
         self.callbacks = {}
+        self.active_subscriptions = set()  # Track active symbol names for matching
         self.lock = threading.Lock()
         self.running = False
         self.reconnect_attempts = 0
@@ -56,8 +58,9 @@ class FyersWebSocketClient:
         # Parse symbol data
         self.symbol_data = {}
         
-        # Initialize protobuf parser
-        self.proto_parser = FyersProtoParser()
+        # Initialize protobuf parsers
+        self.proto_parser = FyersProtoParser()  # Keep old one as fallback
+        self.official_parser = FyersOfficialProtoParser()  # New official parser
         
     def set_callbacks(self, 
                      on_open: Optional[Callable] = None,
@@ -147,13 +150,14 @@ class FyersWebSocketClient:
                 
         self.logger.info("Disconnected from Fyers WebSocket")
         
-    def subscribe(self, symbols: List[str], data_type: str = "SymbolUpdate"):
+    def subscribe(self, symbols: List[str], data_type: str = "SymbolUpdate", mode: int = None):
         """
         Subscribe to market data for symbols
         
         Args:
-            symbols: List of symbols in Fyers format (e.g., ['NSE:SBIN-EQ'])
+            symbols: List of symbols in Fyers format (e.g., ['NSE:SBIN-EQ'] or tokens)
             data_type: Type of data subscription ('SymbolUpdate' or 'DepthUpdate')
+            mode: OpenAlgo subscription mode (1=LTP, 2=Quote, 3=Depth)
         """
         if not self.connected:
             self.logger.warning("WebSocket not connected. Queuing subscription.")
@@ -166,9 +170,39 @@ class FyersWebSocketClient:
                     'subscribed_at': datetime.now()
                 }
         
-        # Use the OFFICIAL Fyers TBT WebSocket protocol format
-        # Based on https://github.com/FyersDev/fyers-api-sample-code/tree/sample_v3/v3/python/websocket
+        # Separate symbols and tokens
+        symbol_based = []
+        token_based = []
         
+        for symbol in symbols:
+            # Check if it's a token (all digits)
+            if symbol.isdigit():
+                token_based.append(symbol)
+            else:
+                symbol_based.append(symbol)
+        
+        # Subscribe separately for symbols and tokens
+        success_symbol = True
+        success_token = True
+        
+        if symbol_based:
+            success_symbol = self._subscribe_symbols(symbol_based, data_type, mode)
+        
+        if token_based:
+            success_token = self._subscribe_tokens(token_based, data_type, mode)
+            
+        # Return overall success status
+        return success_symbol and success_token
+            
+    def _subscribe_symbols(self, symbols: List[str], data_type: str, mode: int = None):
+        """
+        Subscribe using symbol format (for NSE cash equities)
+        
+        Args:
+            symbols: List of symbols
+            data_type: Data type
+            mode: OpenAlgo subscription mode (1=LTP, 2=Quote, 3=Depth)
+        """
         # Log exchange type for debugging
         exchange_types = set()
         for symbol in symbols:
@@ -176,49 +210,25 @@ class FyersWebSocketClient:
                 exchange = symbol.split(':')[0]
                 exchange_types.add(exchange)
         
-        self.logger.info(f"Subscribing to exchanges: {exchange_types}")
+        self.logger.info(f"Subscribing to symbols, exchanges: {exchange_types}")
         
-        # Fyers supports: "quote", "depth", "ohlcv" modes
-        mode = "depth" if data_type == "DepthUpdate" else "quote"
+        # Determine Fyers mode based on data type (according to official docs)
+        # Note: Fyers doesn't have a separate "ltp" mode in subscription
+        # LTP vs Quote is controlled by litemode in FyersDataSocket, not subscription mode
+        if data_type == "DepthUpdate":
+            fyers_mode = "depth"
+        else:  # SymbolUpdate for both LTP and Quote
+            fyers_mode = "quote"  # Standard mode for symbol updates
         
-        # Check if this might be an index symbol (by token pattern or INDEX keyword)
-        is_index = any('-INDEX' in str(s).upper() for s in symbols)
-        index_tokens = [s for s in symbols if str(s).startswith('10100000002')]  # Index tokens often start with this pattern
-        
-        if is_index or index_tokens:
-            # Try "ohlcv" mode for indices
-            mode = "ohlcv" if data_type == "SymbolUpdate" else mode
-            self.logger.warning(f"Detected INDEX symbol, using mode '{mode}' instead of 'quote'")
-            
-            if index_tokens:
-                self.logger.warning(f"Index tokens detected: {index_tokens}")
-        
-        # Log mode being used
-        if 'MCX' in exchange_types or 'BSE' in exchange_types:
-            self.logger.warning(f"Subscribing to MCX/BSE with mode '{mode}'")
-        
-        # Try different channels for different asset types
-        channel_num = "1"  # Default channel
-        
-        if is_index or index_tokens:
-            # Indices might use a different channel
-            channel_num = "3"
-            self.logger.warning(f"Using channel {channel_num} for INDEX symbols")
-        elif 'MCX' in exchange_types:
-            # Try channel 2 for MCX
-            channel_num = "2"
-            self.logger.warning(f"Using channel {channel_num} for MCX")
-        elif 'BSE' in exchange_types:
-            # BSE might need different channel too
-            channel_num = "4"
-            self.logger.warning(f"Using channel {channel_num} for BSE")
+        # Default channel for NSE cash equities
+        channel_num = "1"
         
         message = {
             "type": 1,  # Type 1 for subscription
             "data": {
                 "subs": 1,  # 1 for subscribe, -1 for unsubscribe
                 "symbols": symbols,  # List of symbols like ["NSE:TCS-EQ"]
-                "mode": mode,  # "ltp", "quote", or "depth"
+                "mode": fyers_mode,  # "ltp", "quote" or "depth"
                 "channel": channel_num  # Channel number as string
             }
         }
@@ -263,19 +273,10 @@ class FyersWebSocketClient:
                 # Send another ping to ensure connection is active
                 self.ws.send("ping")
                 
-                # For debugging token-based subscriptions (anything not NSE cash equity)
-                token_based = [s for s in symbols if not (s.startswith('NSE:') and '-EQ' in s)]
-                if token_based:
-                    self.logger.warning(f"Token-based subscription complete: {token_based}")
-                    self.logger.warning(f"These symbols are using TOKEN-based subscription")
-                    self.logger.warning(f"If no data received, the token format might be incorrect")
-                    
-                    # Suggest alternative
-                    for symbol in token_based:
-                        if symbol.isdigit():
-                            self.logger.info(f"Token {symbol} - this should work if token is correct")
-                        else:
-                            self.logger.warning(f"Symbol {symbol} - might need token format instead")
+                self.logger.info(f"Symbol-based subscription complete for {len(symbols)} symbols")
+                
+                # Give a small delay to ensure messages are processed
+                time.sleep(0.2)
                 
                 return True
             except Exception as e:
@@ -283,6 +284,91 @@ class FyersWebSocketClient:
                 return False
         else:
             self.logger.info(f"Queued subscription for {len(symbols)} symbols")
+            return True
+    
+    def _subscribe_tokens(self, tokens: List[str], data_type: str, mode: int = None):
+        """
+        Subscribe using token format (for BSE, MCX, NFO, indices)
+        
+        Args:
+            tokens: List of tokens
+            data_type: Data type
+            mode: OpenAlgo subscription mode (1=LTP, 2=Quote, 3=Depth)
+        """
+        self.logger.info(f"Subscribing using tokens: {tokens}")
+        
+        # Determine Fyers mode based on data type (according to official docs)
+        # Note: Fyers doesn't have a separate "ltp" mode in subscription
+        # LTP vs Quote is controlled by litemode in FyersDataSocket, not subscription mode
+        if data_type == "DepthUpdate":
+            fyers_mode = "depth"
+        else:  # SymbolUpdate for both LTP and Quote
+            fyers_mode = "quote"  # Standard mode for symbol updates
+        
+        # Determine channel based on token prefix
+        # Fyers token prefixes:
+        # 101... = NSE (10 digit prefix)
+        # 121... = BSE (12 digit prefix)  
+        # 113... = MCX (11 digit prefix)
+        # 107... = NFO (10 digit prefix)
+        
+        channel_num = "1"  # Default
+        
+        for token in tokens:
+            if token.startswith('121'):  # BSE
+                channel_num = "2"
+                self.logger.info(f"BSE token detected: {token}, using channel {channel_num}")
+            elif token.startswith('113'):  # MCX
+                channel_num = "2"
+                self.logger.info(f"MCX token detected: {token}, using channel {channel_num}")
+            elif token.startswith('10100000002'):  # Index
+                channel_num = "3"
+                mode = "ohlcv"  # Indices need ohlcv mode
+                self.logger.info(f"Index token detected: {token}, using channel {channel_num}, mode {mode}")
+        
+        message = {
+            "type": 1,  # Type 1 for subscription
+            "data": {
+                "subs": 1,  # 1 for subscribe, -1 for unsubscribe
+                "symbols": tokens,  # List of tokens
+                "mode": fyers_mode,  # "ltp", "quote" or "depth"
+                "channel": channel_num
+            }
+        }
+        
+        if self.connected and self.ws:
+            try:
+                message_str = json.dumps(message)
+                self.logger.info(f"Sending token subscription message: {message_str}")
+                self.ws.send(message_str)
+                
+                # Wait a moment for subscription to be processed
+                time.sleep(0.1)
+                
+                # Activate the channel
+                channel_message = {
+                    "type": 2,  # Type 2 for channel operations
+                    "data": {
+                        "resumeChannels": [channel_num],
+                        "pauseChannels": []
+                    }
+                }
+                
+                channel_str = json.dumps(channel_message)
+                self.logger.info(f"Activating channel: {channel_str}")
+                self.ws.send(channel_str)
+                
+                self.logger.info(f"Token-based subscription complete for {len(tokens)} tokens on channel {channel_num}")
+                
+                # Send ping to ensure connection is active
+                self.ws.send("ping")
+                
+                return True
+            except Exception as e:
+                self.logger.error(f"Token subscription error: {e}")
+                return False
+        else:
+            self.logger.info(f"Queued token subscription for {len(tokens)} tokens")
             return True
             
     def unsubscribe(self, symbols: List[str], data_type: str = "SymbolUpdate"):
@@ -300,12 +386,15 @@ class FyersWebSocketClient:
                     del self.subscriptions[symbol]
         
         # Create unsubscribe message using official Fyers TBT protocol
+        # Determine mode (for unsubscribe, use quote as default since we don't track individual modes)
+        fyers_mode = "depth" if data_type == "DepthUpdate" else "quote"
+        
         message = {
             "type": 1,  # Type 1 for subscription operations
             "data": {
                 "subs": -1,  # -1 for unsubscribe
                 "symbols": symbols,  # List of symbols to unsubscribe
-                "mode": "depth" if data_type == "DepthUpdate" else "quote",
+                "mode": fyers_mode,
                 "channel": "1"  # Channel number as string
             }
         }
@@ -367,43 +456,78 @@ class FyersWebSocketClient:
             message: Raw message from WebSocket
         """
         try:
-            # Log differently based on message type
+            data = None
+            
+            # Handle different message types
             if isinstance(message, str):
-                # JSON messages - log fully
-                data = json.loads(message)
-                
-                # Check for important messages
-                if any(keyword in str(message).lower() for keyword in ['error', 'fail', 'reject', 'invalid', 'subscription', 'denied', 'unauthorized']):
-                    self.logger.error(f"IMPORTANT Fyers response: {message}")
-                    # Also check if this is related to indices/BSE/MCX
-                    if any(term in str(message).lower() for term in ['index', 'bse', 'mcx', 'token', 'symbol']):
-                        self.logger.error(f"This error might be related to indices/BSE/MCX subscription!")
-                elif message.strip() in ['pong', 'ping']:
-                    self.logger.debug(f"Ping/Pong: {message}")
-                else:
-                    self.logger.info(f"Received JSON from Fyers: {message}")
+                # Try to parse as JSON first
+                try:
+                    data = json.loads(message)
+                    
+                    # Handle Fyers JSON market data messages
+                    if data.get('type') == 'sf':  # Symbol Feed - market data
+                        self.logger.info(f"Received symbol feed data: {data.get('symbol')}, LTP: {data.get('ltp')}")
+                        # This is market data, process it directly
+                        # Pass to callback if we have data
+                        if self.callbacks.get('on_message'):
+                            self.callbacks['on_message'](data)
+                        return
+                    elif data.get('type') in ['dp', 'if']:  # Depth or Index data
+                        self.logger.info(f"Received {data.get('type')} data: {data}")
+                        if self.callbacks.get('on_message'):
+                            self.callbacks['on_message'](data)
+                        return
+                    
+                    # Check for important messages
+                    if any(keyword in str(message).lower() for keyword in ['error', 'fail', 'reject', 'invalid', 'denied', 'unauthorized']):
+                        self.logger.error(f"Fyers error response: {message}")
+                    elif message.strip() in ['pong', 'ping']:
+                        self.logger.debug(f"Ping/Pong: {message}")
+                    else:
+                        self.logger.debug(f"Received JSON from Fyers: {message}")
+                except json.JSONDecodeError:
+                    # Not JSON, might be ping/pong or other text
+                    if message.strip() in ['pong', 'ping']:
+                        self.logger.debug(f"Ping/Pong: {message}")
+                        return
+                    else:
+                        self.logger.warning(f"Non-JSON string message: {message}")
+                        return
+                        
             elif isinstance(message, (bytes, bytearray)):
-                # Binary messages - log size and parse
+                # Binary messages - parse protobuf data
                 data = self._parse_binary_data(message)
                 
-                # Log parsed data with symbol info
-                if data.get('symbol'):
-                    self.logger.info(f"Received {len(message)} bytes for {data['symbol']}: LTP={data.get('probable_ltp', 'unknown')}")
-                    # Extra logging for MCX
-                    if 'MCX:' in data.get('symbol', ''):
-                        self.logger.warning(f"MCX data received: {data}")
+                # Enhanced logging for LTP mode debugging
+                symbol = data.get('symbol')
+                token = data.get('token')
+                ltp = data.get('ltp', data.get('probable_ltp', 0))
+                
+                if symbol or token or ltp:
+                    self.logger.info(f"Binary data: symbol={symbol}, token={token}, ltp={ltp}, keys={list(data.keys())[:10]}")
                 else:
-                    self.logger.debug(f"Received {len(message)} bytes, no symbol found")
+                    self.logger.debug(f"Received {len(message)} bytes binary data, no symbol/token/ltp found")
+                    # Log first few bytes for debugging
+                    if len(message) > 0:
+                        self.logger.debug(f"First 20 bytes (hex): {message[:20].hex()}")
             else:
                 self.logger.warning(f"Unexpected message type: {type(message)}")
                 return
             
-            # Pass to callback if registered
-            if self.callbacks.get('on_message'):
+            # Pass to callback if we have data
+            if data and self.callbacks.get('on_message'):
+                # Add subscription context to help with matching
+                if symbol and not data.get('subscription_symbol'):
+                    # Try to find matching subscription
+                    for sub_symbol in getattr(self, 'active_subscriptions', set()):
+                        if sub_symbol in [symbol, data.get('symbol'), data.get('token')]:
+                            data['subscription_symbol'] = sub_symbol
+                            break
+                
                 self.callbacks['on_message'](data)
                 
         except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
+            self.logger.error(f"Error processing message: {e}", exc_info=True)
             
     def _parse_binary_data(self, data):
         """
@@ -421,17 +545,9 @@ class FyersWebSocketClient:
             return json.loads(decoded)
         except:
             # Handle binary market data (protobuf format)
-            # Use hybrid approach: new parser for symbol/token, old parser for prices
-            parsed_data = self.proto_parser.parse_market_data(data)
-            
-            # If we got symbol/token from new parser but no LTP, use old price extraction
-            if parsed_data.get('symbol') and parsed_data.get('token') and not parsed_data.get('probable_ltp'):
-                old_parsed = self._parse_protobuf_data_old(data)
-                if old_parsed.get('probable_ltp'):
-                    parsed_data['probable_ltp'] = old_parsed['probable_ltp']
-                    self.logger.info(f"Using old parser LTP: {parsed_data['probable_ltp']}")
-                    
-            return parsed_data
+            # Use the official protobuf parser based on exact Fyers schema
+            self.logger.info("🎯 Using OFFICIAL protobuf parser based on .proto schema")
+            return self.official_parser.parse_socket_message(data)
     
     def _parse_protobuf_data_old(self, data):
         """
