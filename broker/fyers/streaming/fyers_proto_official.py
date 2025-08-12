@@ -181,7 +181,10 @@ class FyersOfficialProtoParser:
                     # Could parse this for additional price data
                     
                 elif field_num == 3 and wire_type == 2:  # DailyQuote  
-                    self.logger.info(f"Found DailyQuote")
+                    self.logger.info(f"Found DailyQuote - parsing OHLC data")
+                    daily_quote_data = self._parse_daily_quote_message(value)
+                    if daily_quote_data:
+                        result.update(daily_quote_data)
                     
                 elif field_num == 4 and wire_type == 2:  # OHLCV
                     self.logger.info(f"Found OHLCV")
@@ -548,3 +551,75 @@ class FyersOfficialProtoParser:
         except Exception as e:
             self.logger.debug(f"Varint decode error: {e}")
             return None, pos
+    
+    def _parse_daily_quote_message(self, data: bytes) -> Optional[Dict]:
+        """
+        Parse DailyQuote message to extract OHLC data
+        
+        DailyQuote {
+            Int64Value do = 1;    // Day Open
+            Int64Value dh = 2;    // Day High  
+            Int64Value dl = 3;    // Day Low
+            Int64Value dc = 4;    // Day Close
+            UInt64Value dhoi = 5; // Day OI Low
+            UInt64Value dloi = 6; // Day OI High
+        }
+        """
+        try:
+            pos = 0
+            result = {}
+            
+            while pos < len(data):
+                field_data, pos = self._parse_field(data, pos)
+                if not field_data:
+                    break
+                    
+                field_num = field_data['field_number']
+                value = field_data.get('value')
+                wire_type = field_data.get('wire_type')
+                
+                if field_num == 1 and wire_type == 2:  # Day Open (Int64Value)
+                    open_value = self._parse_int64_wrapper(value)
+                    if open_value is not None:
+                        result['open'] = open_value / 100.0  # Convert paise to rupees
+                        self.logger.info(f"Day Open: {result['open']}")
+                        
+                elif field_num == 2 and wire_type == 2:  # Day High (Int64Value)
+                    high_value = self._parse_int64_wrapper(value)
+                    if high_value is not None:
+                        result['high'] = high_value / 100.0
+                        self.logger.info(f"Day High: {result['high']}")
+                        
+                elif field_num == 3 and wire_type == 2:  # Day Low (Int64Value)
+                    low_value = self._parse_int64_wrapper(value)
+                    if low_value is not None:
+                        result['low'] = low_value / 100.0
+                        self.logger.info(f"Day Low: {result['low']}")
+                        
+                elif field_num == 4 and wire_type == 2:  # Day Close (Int64Value)
+                    close_value = self._parse_int64_wrapper(value)
+                    if close_value is not None:
+                        result['close'] = close_value / 100.0
+                        self.logger.info(f"Day Close: {result['close']}")
+                        
+                elif field_num == 5 and wire_type == 2:  # Day OI Low (UInt64Value)
+                    dhoi_value = self._parse_uint64_wrapper(value)
+                    if dhoi_value is not None:
+                        result['oi_day_low'] = dhoi_value
+                        
+                elif field_num == 6 and wire_type == 2:  # Day OI High (UInt64Value)
+                    dloi_value = self._parse_uint64_wrapper(value)
+                    if dloi_value is not None:
+                        result['oi_day_high'] = dloi_value
+                
+                if pos >= len(data):
+                    break
+            
+            if result:
+                self.logger.info(f"✅ DailyQuote OHLC extracted: O={result.get('open')}, H={result.get('high')}, L={result.get('low')}, C={result.get('close')}")
+            
+            return result if result else None
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing DailyQuote: {e}")
+            return None

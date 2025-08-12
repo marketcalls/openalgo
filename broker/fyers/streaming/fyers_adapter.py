@@ -479,17 +479,39 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         exchange = subscription['exchange']
         mode = subscription['mode']
         
-        mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+        # Important: Like Angel, check if we have actual mode from message
+        # This ensures data is published with the correct mode identifier
+        actual_msg_mode = mode  # Default to subscription mode
+        
+        # For Fyers protobuf data, determine actual mode based on what's available
+        if data.get('data_type') == 'socket_message':
+            # Check what data fields are present to determine actual mode
+            has_ohlc = any(key in data for key in ['open', 'high', 'low', 'close', 'volume'])
+            has_depth = 'depth' in data or any('bid' in key or 'ask' in key for key in data.keys())
+            
+            self.logger.info(f"Mode detection: has_ohlc={has_ohlc}, has_depth={has_depth}, subscription_mode={mode}")
+            self.logger.info(f"Available data keys: {list(data.keys())}")
+            
+            if has_depth and mode == 3:
+                actual_msg_mode = 3  # Depth mode
+            elif has_ohlc:
+                actual_msg_mode = 2  # Quote mode (has OHLC)
+            else:
+                actual_msg_mode = 1  # LTP mode (basic data)
+            
+            self.logger.info(f"Determined actual_msg_mode: {actual_msg_mode} (subscription was {mode})")
+        
+        mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[actual_msg_mode]
         topic = f"{exchange}_{symbol}_{mode_str}"
         
-        # Normalize the data
-        market_data = self._normalize_market_data(data, mode)
+        # Normalize the data based on actual message mode like Angel does
+        market_data = self._normalize_market_data(data, actual_msg_mode)
         
         # Add metadata
         market_data.update({
             'symbol': symbol,
             'exchange': exchange,
-            'mode': mode,
+            'mode': actual_msg_mode,  # Use actual message mode like Angel
             'timestamp': int(time.time() * 1000)  # Current timestamp in ms
         })
         

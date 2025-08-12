@@ -12,7 +12,6 @@ import ssl
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from urllib.parse import urlencode
-from .fyers_proto_parser import FyersProtoParser
 from .fyers_proto_official import FyersOfficialProtoParser
 
 class FyersWebSocketClient:
@@ -59,7 +58,7 @@ class FyersWebSocketClient:
         self.symbol_data = {}
         
         # Initialize protobuf parsers
-        self.proto_parser = FyersProtoParser()  # Keep old one as fallback
+        # Only use the official protobuf parser
         self.official_parser = FyersOfficialProtoParser()  # New official parser
         
     def set_callbacks(self, 
@@ -212,13 +211,17 @@ class FyersWebSocketClient:
         
         self.logger.info(f"Subscribing to symbols, exchanges: {exchange_types}")
         
-        # Determine Fyers mode based on data type (according to official docs)
-        # Note: Fyers doesn't have a separate "ltp" mode in subscription
-        # LTP vs Quote is controlled by litemode in FyersDataSocket, not subscription mode
+        # Determine Fyers mode based on data type and OpenAlgo mode
+        # From msg.proto: quote=1, depth=6, all=7
+        # User clarified: quote has LTP, full mode has OHLCV with LTP
         if data_type == "DepthUpdate":
-            fyers_mode = "depth"
-        else:  # SymbolUpdate for both LTP and Quote
-            fyers_mode = "quote"  # Standard mode for symbol updates
+            fyers_mode = "depth"  # Message Type 6
+        elif mode == 1:  # LTP mode - quote mode possesses LTP value
+            fyers_mode = "quote"  # Message Type 1 - quote with LTP
+        else:  # Quote mode (mode == 2) - full mode possesses OHLCV with LTP values
+            fyers_mode = "all"    # Message Type 7 - complete data with OHLCV
+        
+        self.logger.info(f"Using Fyers mode: {fyers_mode} for OpenAlgo mode: {mode}")
         
         # Default channel for NSE cash equities
         channel_num = "1"
@@ -297,13 +300,17 @@ class FyersWebSocketClient:
         """
         self.logger.info(f"Subscribing using tokens: {tokens}")
         
-        # Determine Fyers mode based on data type (according to official docs)
-        # Note: Fyers doesn't have a separate "ltp" mode in subscription
-        # LTP vs Quote is controlled by litemode in FyersDataSocket, not subscription mode
+        # Determine Fyers mode based on data type and OpenAlgo mode
+        # From msg.proto: quote=1, depth=6, all=7
+        # User clarified: quote has LTP, full mode has OHLCV with LTP
         if data_type == "DepthUpdate":
-            fyers_mode = "depth"
-        else:  # SymbolUpdate for both LTP and Quote
-            fyers_mode = "quote"  # Standard mode for symbol updates
+            fyers_mode = "depth"  # Message Type 6
+        elif mode == 1:  # LTP mode - quote mode possesses LTP value
+            fyers_mode = "quote"  # Message Type 1 - quote with LTP
+        else:  # Quote mode (mode == 2) - full mode possesses OHLCV with LTP values
+            fyers_mode = "all"    # Message Type 7 - complete data with OHLCV
+        
+        self.logger.info(f"Using Fyers mode: {fyers_mode} for OpenAlgo mode: {mode}")
         
         # Determine channel based on token prefix
         # Fyers token prefixes:
