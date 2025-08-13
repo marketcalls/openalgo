@@ -440,7 +440,18 @@ class BrokerData:
             # Convert timestamp from ISO 8601 string to Unix timestamp (seconds since epoch)
             # Upstox returns timestamps like '2024-12-09T15:29:00+05:30'
             try:
-                df['timestamp'] = pd.to_datetime(df['timestamp']).astype(int) // 10**9
+                # Convert to datetime first
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                
+                # For daily timeframe, normalize to date only (remove time component)
+                # This matches Angel's behavior for daily data
+                if interval == 'D':
+                    # Convert to date only (YYYY-MM-DD format) then back to datetime at midnight
+                    df['timestamp'] = df['timestamp'].dt.date
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                
+                # Convert to Unix timestamp (seconds since epoch)
+                df['timestamp'] = df['timestamp'].astype(int) // 10**9
                 logger.info(f"Successfully converted {len(df)} ISO 8601 timestamps to Unix timestamps")
             except Exception as e:
                 logger.error(f"Failed to convert timestamps: {e}")
@@ -449,7 +460,12 @@ class BrokerData:
                     try:
                         if isinstance(ts, str):
                             # ISO 8601 string format
-                            return int(pd.to_datetime(ts).timestamp())
+                            dt = pd.to_datetime(ts)
+                            # For daily, normalize to date only
+                            if interval == 'D':
+                                dt = dt.date()
+                                dt = pd.to_datetime(dt)
+                            return int(dt.timestamp())
                         else:
                             # Numeric format (milliseconds)
                             return int(float(ts) / 1000)
