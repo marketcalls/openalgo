@@ -1,3 +1,5 @@
+[![MSeeP.ai Security Assessment Badge](https://mseep.net/pr/marketcalls-openalgo-badge.png)](https://mseep.ai/app/marketcalls-openalgo)
+
 # OpenAlgo - Take Control of Your Algo Platform
 
 <div align="center">
