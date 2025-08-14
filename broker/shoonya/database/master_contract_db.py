@@ -55,11 +55,11 @@ def copy_from_dataframe(df):
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
-    # Retrieve existing tokens to filter them out from the insert
-    existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
+    # Retrieve existing token-exchange combinations to filter them out from the insert
+    existing_token_exchange = {(result.token, result.exchange) for result in db_session.query(SymToken.token, SymToken.exchange).all()}
 
-    # Filter out data_dict entries with tokens that already exist
-    filtered_data_dict = [row for row in data_dict if row['token'] not in existing_tokens]
+    # Filter out data_dict entries with token-exchange combinations that already exist
+    filtered_data_dict = [row for row in data_dict if (row['token'], row['exchange']) not in existing_token_exchange]
 
     # Insert in bulk the filtered records
     try:
@@ -102,16 +102,16 @@ def download_and_unzip_shoonya_data(output_path):
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
-                logger.info(f"Successfully downloaded {{key}} from {url}")
+                logger.info(f"Successfully downloaded {key} from {url}")
                 
                 # Use in-memory file to handle the downloaded zip file
                 z = zipfile.ZipFile(io.BytesIO(response.content))
                 z.extractall(output_path)
                 downloaded_files.append(f"{key}.txt")
             else:
-                logger.error(f"Failed to download {{key}} from {{url}}. Status code: {response.status_code}")
+                logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
         except Exception as e:
-            logger.error(f"Error downloading {{key}} from {{url}}: {e}")
+            logger.error(f"Error downloading {key} from {url}: {e}")
 
     return downloaded_files
 
@@ -197,10 +197,12 @@ def process_shoonya_nfo_data(output_path):
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
     df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
-    # Define a function to format the expiry date as DDMMMYY
+    # Define a function to format the expiry date as DD-MMM-YY
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            # Parse the input date and format it as DD-MMM-YY
+            date_obj = datetime.strptime(date_str, '%d-%b-%Y')
+            return date_obj.strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -213,12 +215,19 @@ def process_shoonya_nfo_data(output_path):
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
+        # Convert hyphenated date to compact format for symbol
+        expiry_date = row['expiry']
+        if expiry_date and isinstance(expiry_date, str):
+            compact_expiry = expiry_date.replace('-', '')
+        else:
+            compact_expiry = ''
+            
         if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+            return f"{row['name']}{compact_expiry}FUT"
         else:
             # Ensure strike prices are either integers or floats
             formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
+            return f"{row['name']}{compact_expiry}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -266,10 +275,10 @@ def process_shoonya_cds_data(output_path):
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
     df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
-    # Define a function to format the expiry date as DDMMMYY
+    # Define a function to format the expiry date as DD-MMM-YY
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -285,10 +294,17 @@ def process_shoonya_cds_data(output_path):
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+        # Convert hyphenated date to compact format for symbol
+        expiry_date = row['expiry']
+        if expiry_date and isinstance(expiry_date, str):
+            compact_expiry = expiry_date.replace('-', '')
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            compact_expiry = ''
+            
+        if row['instrumenttype'] == 'FUT':
+            return f"{row['name']}{compact_expiry}FUT"
+        else:
+            return f"{row['name']}{compact_expiry}{row['strike']}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -334,10 +350,10 @@ def process_shoonya_mcx_data(output_path):
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
     df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
-    # Define a function to format the expiry date as DDMMMYY
+    # Define a function to format the expiry date as DD-MMM-YY
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%Y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -353,10 +369,17 @@ def process_shoonya_mcx_data(output_path):
 
     # Format the symbol column based on the instrument type
     def format_symbol(row):
-        if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+        # Convert hyphenated date to compact format for symbol
+        expiry_date = row['expiry']
+        if expiry_date and isinstance(expiry_date, str):
+            compact_expiry = expiry_date.replace('-', '')
         else:
-            return f"{row['name']}{row['expiry']}{row['strike']}{row['instrumenttype']}"
+            compact_expiry = ''
+            
+        if row['instrumenttype'] == 'FUT':
+            return f"{row['name']}{compact_expiry}FUT"
+        else:
+            return f"{row['name']}{compact_expiry}{row['strike']}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -387,20 +410,16 @@ def process_shoonya_mcx_data(output_path):
 def process_shoonya_bse_data(output_path):
     """
     Processes the shoonya BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
+    Maps all instrument types to 'EQ' and manually adds missing BSE index symbols.
     """
     logger.info("Processing shoonya BSE Data")
     file_path = f'{output_path}/BSE_symbols.txt'
-
-    # Read the BSE symbols file
-    df = pd.read_csv(file_path)
 
     # Read the BSE symbols file, specifying the exact columns to use and ignoring extra columns
     df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Instrument', 'TickSize'])
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
-
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
@@ -412,7 +431,7 @@ def process_shoonya_bse_data(output_path):
     # Update the 'symbol' column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Set Exchange: 'BSE' for all rows
+    # Set Exchange: 'BSE' for all rows initially
     df['exchange'] = 'BSE'
     df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
@@ -420,8 +439,11 @@ def process_shoonya_bse_data(output_path):
     df['expiry'] = ''  # No expiry for these instruments
     df['strike'] = -1  # Default to -1 for strike price
 
-    # Ensure the instrument type is always 'EQ'
+    # Map all instrument types to 'EQ' for consistency
+    # Original instrument types in BSE include: F, B, A, E, G, T, Z, X, XT, M, MT, TS, W, etc.
     df['instrumenttype'] = 'EQ'
+    
+    logger.info(f"Mapped all BSE instrument types to 'EQ'. Original types found: {df['instrumenttype'].unique()}")
 
     # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
     df['lotsize'] = pd.to_numeric(df['lotsize'], errors='coerce').fillna(0).astype(int)  # Convert to int, default to 0
@@ -431,8 +453,46 @@ def process_shoonya_bse_data(output_path):
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
 
-    # Return the processed DataFrame
-    return df_filtered
+    # Manually add missing BSE index symbols
+    bse_index_data = [
+        {
+            'symbol': 'SENSEX',
+            'brsymbol': 'SENSEX',
+            'name': 'SENSEX',
+            'exchange': 'BSE_INDEX',
+            'brexchange': 'BSE_INDEX',
+            'token': '1',
+            'expiry': '',
+            'strike': -1,
+            'lotsize': 1,
+            'instrumenttype': 'INDEX',
+            'tick_size': 0.05
+        },
+        {
+            'symbol': 'BANKEX',
+            'brsymbol': 'BANKEX',
+            'name': 'BANKEX',
+            'exchange': 'BSE_INDEX',
+            'brexchange': 'BSE_INDEX',
+            'token': '12',
+            'expiry': '',
+            'strike': -1,
+            'lotsize': 1,
+            'instrumenttype': 'INDEX',
+            'tick_size': 0.05
+        }
+    ]
+
+    # Create DataFrame from the manual index data
+    bse_index_df = pd.DataFrame(bse_index_data)
+
+    # Concatenate the regular BSE data with the manual index data
+    df_combined = pd.concat([df_filtered, bse_index_df], ignore_index=True)
+
+    logger.info(f"Processed {len(df_filtered)} BSE equity symbols and added {len(bse_index_data)} BSE index symbols manually")
+
+    # Return the combined DataFrame
+    return df_combined
 
 def process_shoonya_bfo_data(output_path):
     """
@@ -441,21 +501,25 @@ def process_shoonya_bfo_data(output_path):
     """
     logger.info("Processing shoonya BFO Data")
     file_path = f'{output_path}/BFO_symbols.txt'
-
-    # Read the BFO symbols file, specifying the exact columns to use
-    df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'Strike', 'TickSize'])
-
+    
+    try:
+        # Read the BFO symbols file
+        df = pd.read_csv(file_path, usecols=['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Expiry', 'Instrument', 'OptionType', 'StrikePrice', 'TickSize'])
+    except Exception as e:
+        logger.warning(f"Error reading BFO file with specified columns: {e}")
+        # Read without specifying columns in case structure is different
+        df = pd.read_csv(file_path)
     # Rename columns to match your schema
-    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'strike', 'tick_size']
+    df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
     df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
 
-    # Define a function to format the expiry date as DDMMMYY
+    # Define a function to format the expiry date as DD-MMM-YY
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -500,12 +564,19 @@ def process_shoonya_bfo_data(output_path):
 
     # Format the symbol column based on the instrument type and correctly handle the strike price
     def format_symbol(row):
+        # Convert hyphenated date to compact format for symbol
+        expiry_date = row['expiry']
+        if expiry_date and isinstance(expiry_date, str):
+            compact_expiry = expiry_date.replace('-', '')
+        else:
+            compact_expiry = ''
+            
         if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+            return f"{row['name']}{compact_expiry}FUT"
         else:
             # Correctly format the strike price based on whether it's an integer or a float
             formatted_strike = f"{int(row['strike'])}" if isinstance(row['strike'], int) else f"{row['strike']:.2f}".rstrip('0').rstrip('.')
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
+            return f"{row['name']}{compact_expiry}{formatted_strike}{row['instrumenttype']}"
 
     # Apply the symbol format
     df['symbol'] = df.apply(format_symbol, axis=1)
@@ -542,7 +613,7 @@ def master_contract_download():
         download_and_unzip_shoonya_data(output_path)
         delete_symtoken_table()
         
-        # Placeholders for processing different exchanges
+        # Process exchange data
         token_df = process_shoonya_nse_data(output_path)
         copy_from_dataframe(token_df)
         token_df = process_shoonya_bse_data(output_path)
