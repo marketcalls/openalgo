@@ -1,21 +1,19 @@
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
 """
-Shoonya WebSocket adapter for OpenAlgo WebSocket proxy
+Shoonya WebSocket Adapter for OpenAlgo
+Handles market data streaming from Shoonya broker
 """
 import threading
-import sys
-import os
-from typing import Dict, Any, Optional
 import json
-import time
 import logging
+import time
+from typing import Dict, Any, Optional, List
+from enum import IntEnum
 
-from broker.shoonya.streaming.shoonya_websocket import ShoonyaWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+
+import sys
+import os
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -23,43 +21,276 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 from .shoonya_mapping import ShoonyaExchangeMapper, ShoonyaCapabilityRegistry
+from .shoonya_websocket import ShoonyaWebSocket
+
+
+# Configuration constants
+class Config:
+    MAX_RECONNECT_ATTEMPTS = 10
+    BASE_RECONNECT_DELAY = 5
+    MAX_RECONNECT_DELAY = 60
+    CACHE_COMPLETENESS_THRESHOLD = 0.3
+    WEBSOCKET_TIMEOUT = 30
+    
+    # Market data modes
+    MODE_LTP = 1
+    MODE_QUOTE = 2
+    MODE_DEPTH = 3
+    
+    # Message types
+    MSG_AUTH = 'ck'
+    MSG_TOUCHLINE_FULL = 'tf'
+    MSG_TOUCHLINE_PARTIAL = 'tk'
+    MSG_DEPTH_FULL = 'df'
+    MSG_DEPTH_PARTIAL = 'dk'
+
+
+class MarketDataCache:
+    """Manages market data caching with thread safety"""
+    
+    def __init__(self):
+        self._cache = {}
+        self._initialized_tokens = set()
+        self._lock = threading.Lock()
+        self.logger = logging.getLogger("market_cache")
+    
+    def get(self, token: str) -> Dict[str, Any]:
+        """Get cached data for a token"""
+        with self._lock:
+            return self._cache.get(token, {}).copy()
+    
+    def update(self, token: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update cache with new data and return merged result"""
+        with self._lock:
+            cached_data = self._cache.get(token, {})
+            merged_data = self._merge_data(cached_data, data, token)
+            self._cache[token] = merged_data
+            
+            if token not in self._initialized_tokens:
+                self._initialized_tokens.add(token)
+                self._log_cache_initialization(token, data)
+            
+            return merged_data.copy()
+    
+    def clear(self, token: str = None) -> None:
+        """Clear cache for specific token or all tokens"""
+        with self._lock:
+            if token:
+                self._cache.pop(token, None)
+                self._initialized_tokens.discard(token)
+                self.logger.info(f"Cleared cache for token {token}")
+            else:
+                cache_size = len(self._cache)
+                self._cache.clear()
+                self._initialized_tokens.clear()
+                self.logger.info(f"Cleared all cached market data ({cache_size} tokens)")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        with self._lock:
+            return {
+                'total_tokens': len(self._cache),
+                'initialized_tokens': len(self._initialized_tokens),
+                'tokens': list(self._cache.keys())
+            }
+    
+    def _merge_data(self, cached: Dict, new: Dict, token: str) -> Dict:
+        """Smart merge logic for market data"""
+        merged = cached.copy()
+        
+        # Define field categories
+        basic_fields = ['lp', 'o', 'h', 'l', 'c', 'v', 'ap', 'pc', 'ltq', 'ltt', 'tbq', 'tsq']
+        depth_prices = ['bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'sp1', 'sp2', 'sp3', 'sp4', 'sp5']
+        depth_quantities = ['bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5']
+        depth_orders = ['bo1', 'bo2', 'bo3', 'bo4', 'bo5', 'so1', 'so2', 'so3', 'so4', 'so5']
+        
+        for key, value in new.items():
+            if self._should_preserve_cached_value(key, value, cached):
+                continue
+            merged[key] = value
+        
+        # Preserve cached values for missing fields
+        self._preserve_missing_fields(merged, new, cached)
+        return merged
+    
+    def _should_preserve_cached_value(self, key: str, new_value: Any, cached: Dict) -> bool:
+        """Determine if cached value should be preserved over new value"""
+        # Preserve non-zero OHLC values when new value is zero
+        if key in ['o', 'h', 'l', 'c', 'ap'] and self._is_zero_value(new_value):
+            cached_value = cached.get(key)
+            return cached_value is not None and not self._is_zero_value(cached_value)
+        return False
+    
+    def _preserve_missing_fields(self, merged: Dict, new: Dict, cached: Dict) -> None:
+        """Preserve cached values for fields missing in new data"""
+        for key, value in cached.items():
+            if key not in new:
+                merged[key] = value
+    
+    def _is_zero_value(self, value: Any) -> bool:
+        """Check if value represents zero"""
+        return value in [None, '', '0', 0, '0.0', 0.0]
+    
+    def _log_cache_initialization(self, token: str, data: Dict) -> None:
+        """Log cache initialization details"""
+        basic_fields = ['lp', 'o', 'h', 'l', 'c', 'v', 'ap', 'pc', 'ltq', 'ltt', 'tbq', 'tsq']
+        present_fields = sum(1 for field in basic_fields if field in data)
+        completeness = present_fields / len(basic_fields)
+        
+        self.logger.info(f"Initializing cache for token {token} - "
+                        f"{present_fields}/{len(basic_fields)} fields present ({completeness:.1%})")
+
+
+class LTPNormalizer:
+    """Handles LTP mode data normalization"""
+    
+    @staticmethod
+    def normalize(data: Dict[str, Any], msg_type: str) -> Dict[str, Any]:
+        return {
+            'mode': Config.MODE_LTP,
+            'ltp': safe_float(data.get('lp')),
+            'shoonya_timestamp': safe_int(data.get('ltt'))
+        }
+
+
+class QuoteNormalizer:
+    """Handles Quote mode data normalization"""
+    
+    @staticmethod
+    def normalize(data: Dict[str, Any], msg_type: str) -> Dict[str, Any]:
+        return {
+            'mode': Config.MODE_QUOTE,
+            'ltp': safe_float(data.get('lp')),
+            'volume': safe_int(data.get('v')),
+            'open': safe_float(data.get('o')),
+            'high': safe_float(data.get('h')),
+            'low': safe_float(data.get('l')),
+            'close': safe_float(data.get('c')),
+            'average_price': safe_float(data.get('ap')),
+            'percent_change': safe_float(data.get('pc')),
+            'last_quantity': safe_int(data.get('ltq')),
+            'last_trade_time': data.get('ltt'),
+            'shoonya_timestamp': safe_int(data.get('ltt'))
+        }
+
+
+class DepthNormalizer:
+    """Handles Depth mode data normalization"""
+    
+    @staticmethod
+    def normalize(data: Dict[str, Any], msg_type: str) -> Dict[str, Any]:
+        result = {
+            'mode': Config.MODE_DEPTH,
+            'ltp': safe_float(data.get('lp')),
+            'volume': safe_int(data.get('v')),
+            'open': safe_float(data.get('o')),
+            'high': safe_float(data.get('h')),
+            'low': safe_float(data.get('l')),
+            'close': safe_float(data.get('c')),
+            'average_price': safe_float(data.get('ap')),
+            'percent_change': safe_float(data.get('pc')),
+            'last_quantity': safe_int(data.get('ltq')),
+            'last_trade_time': data.get('ltt'),
+            'total_buy_quantity': safe_int(data.get('tbq')),
+            'total_sell_quantity': safe_int(data.get('tsq')),
+            'shoonya_timestamp': safe_int(data.get('ltt'))
+        }
+        
+        # Add depth data
+        if msg_type in (Config.MSG_DEPTH_FULL, Config.MSG_DEPTH_PARTIAL):
+            result['depth'] = {
+                'buy': [
+                    {'price': safe_float(data.get('bp1')), 'quantity': safe_int(data.get('bq1')), 'orders': safe_int(data.get('bo1'))},
+                    {'price': safe_float(data.get('bp2')), 'quantity': safe_int(data.get('bq2')), 'orders': safe_int(data.get('bo2'))},
+                    {'price': safe_float(data.get('bp3')), 'quantity': safe_int(data.get('bq3')), 'orders': safe_int(data.get('bo3'))},
+                    {'price': safe_float(data.get('bp4')), 'quantity': safe_int(data.get('bq4')), 'orders': safe_int(data.get('bo4'))},
+                    {'price': safe_float(data.get('bp5')), 'quantity': safe_int(data.get('bq5')), 'orders': safe_int(data.get('bo5'))}
+                ],
+                'sell': [
+                    {'price': safe_float(data.get('sp1')), 'quantity': safe_int(data.get('sq1')), 'orders': safe_int(data.get('so1'))},
+                    {'price': safe_float(data.get('sp2')), 'quantity': safe_int(data.get('sq2')), 'orders': safe_int(data.get('so2'))},
+                    {'price': safe_float(data.get('sp3')), 'quantity': safe_int(data.get('sq3')), 'orders': safe_int(data.get('so3'))},
+                    {'price': safe_float(data.get('sp4')), 'quantity': safe_int(data.get('sq4')), 'orders': safe_int(data.get('so4'))},
+                    {'price': safe_float(data.get('sp5')), 'quantity': safe_int(data.get('sq5')), 'orders': safe_int(data.get('so5'))}
+                ]
+            }
+            result['depth_level'] = 5
+            
+            # Add circuit limits and additional data
+            result.update({
+                'upper_circuit': safe_float(data.get('uc')),
+                'lower_circuit': safe_float(data.get('lc')),
+                '52_week_high': safe_float(data.get('52h')),
+                '52_week_low': safe_float(data.get('52l')),
+                'total_traded_value': safe_int(data.get('toi'))
+            })
+        
+        return result
+
 
 class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Shoonya-specific implementation of the WebSocket adapter"""
+    """Shoonya WebSocket adapter with improved structure and error handling"""
+    
     def __init__(self):
         super().__init__()
-        self.logger = get_logger("shoonya_websocket_adapter")
-        self.ws_client = None
+        self.logger = logging.getLogger("shoonya_websocket")
+        self._setup_adapter()
+        self._setup_market_cache()
+        self._setup_connection_management()
+        self._setup_normalizers()
+    
+    def _setup_adapter(self):
+        """Initialize adapter-specific settings"""
         self.user_id = None
-        self.actid = None
-        self.susertoken = None
         self.broker_name = "shoonya"
+        self.ws_client = None
+        
+    def _setup_market_cache(self):
+        """Initialize market data caching system"""
+        self.market_cache = MarketDataCache()
+        self.subscriptions = {}
+        self.token_to_symbol = {}
+        self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
+    
+    def _setup_connection_management(self):
+        """Initialize connection management"""
         self.running = False
-        self.lock = threading.Lock()
-        self.subscriptions = {}  # {(symbol, exchange, mode): True}
-        self.token_symbol_map = {}  # {token: (symbol, exchange)}
-        self.depth_snapshots = {}  # {token: snapshot_data} - for depth mode snapshot management
-        self.quote_snapshots = {}  # {token: snapshot_data} - for quote mode snapshot management
-        self._reconnect_attempts = 0
-        self._max_reconnect_attempts = 5
-        self._reconnect_delay = 2  # seconds, will use exponential backoff
-        self._reconnect_lock = threading.Lock()  # Prevent concurrent reconnects
         self.connected = False
+        self.lock = threading.Lock()
+        self.reconnect_attempts = 0
+    
+    def _setup_normalizers(self):
+        """Initialize data normalizers"""
+        self.normalizers = {
+            Config.MODE_LTP: LTPNormalizer(),
+            Config.MODE_QUOTE: QuoteNormalizer(),
+            Config.MODE_DEPTH: DepthNormalizer()
+        }
 
-    def initialize(self, broker_name: str, user_id: str = None, auth_data: Optional[Dict[str, str]] = None) -> None:
+    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
+        """Initialize connection with Shoonya WebSocket API"""
+        self.user_id = user_id
         self.broker_name = broker_name
-        # Shoonya: user_id and actid are the same, fetched from env
-        api_key = os.getenv('BROKER_API_KEY')
-        self.user_id = api_key[:-2] if api_key else None
-        self.actid = self.user_id
-        # susertoken from DB for OpenAlgo username (not broker user)
-        self.logger.info(f"[DEBUG] Fetching susertoken for OpenAlgo username: {user_id}")
+        
+        # Get Shoonya credentials
+        api_key = os.getenv('BROKER_API_KEY', '')
+        if api_key:
+            self.actid = api_key[:-2] if len(api_key) > 2 else api_key
+        else:
+            self.actid = user_id
+        
+        # Get auth token from database
         self.susertoken = get_auth_token(user_id)
-        self.logger.info(f"[Shoonya Adapter] user_id: {self.user_id}, actid: {self.actid}, susertoken: {self.susertoken}")
+        
         if not self.actid or not self.susertoken:
-            raise ValueError("Missing Shoonya actid or susertoken for user")
+            self.logger.error(f"Missing Shoonya credentials for user {user_id}")
+            raise ValueError(f"Missing Shoonya credentials for user {user_id}")
+        
+        self.logger.info(f"Using Shoonya credentials - User ID: {self.actid}")
+        
+        # Initialize WebSocket client
         self.ws_client = ShoonyaWebSocket(
-            user_id=self.user_id,
+            user_id=self.actid,
             actid=self.actid,
             susertoken=self.susertoken,
             on_message=self._on_message,
@@ -67,661 +298,419 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             on_close=self._on_close,
             on_open=self._on_open
         )
+        
+        self.running = True
 
     def connect(self) -> None:
-        with self._reconnect_lock:
-            if not self.ws_client:
-                self.logger.error("WebSocket client not initialized. Call initialize() first.")
-                raise RuntimeError("WebSocket client not initialized. Call initialize() first.")
-
-            self.running = True  # Signal that we intend to be running
-            try:
-                self.connected = False
-                connected = self.ws_client.connect()
-                if not connected:
-                    self.running = False  # Connection failed, so we are not running
-                    self.logger.error("Failed to connect to Shoonya WebSocket server")
-                    raise ConnectionError("Failed to connect to Shoonya WebSocket server")
-
-                self.connected = True
-                self._reconnect_attempts = 0  # Reset on successful manual connection
-                self.logger.info("Connected to Shoonya WebSocket server")
-            except Exception as e:
-                self.running = False  # Connection failed, so we are not running
-                self.connected = False
-                self.logger.error(f"Exception during WebSocket connect: {e}")
-                raise
+        """Establish connection to Shoonya WebSocket endpoint"""
+        if not self.ws_client:
+            self.logger.error("WebSocket client not initialized. Call initialize() first.")
+            return
+        
+        self.logger.info("Connecting to Shoonya WebSocket...")
+        connected = self.ws_client.connect()
+        
+        if connected:
+            self.connected = True
+            self.reconnect_attempts = 0
+            self.logger.info("Connected to Shoonya WebSocket successfully")
+        else:
+            raise ConnectionError("Failed to connect to Shoonya WebSocket")
 
     def disconnect(self) -> None:
+        """Disconnect from Shoonya WebSocket endpoint"""
         self.running = False
-        with self._reconnect_lock:
-            # Disconnect the WebSocket client. The server should handle unsubscriptions on a clean disconnect.
-            if self.ws_client:
-                try:
-                    self.ws_client.stop()  # Use stop() for clean shutdown
-                    self.logger.info("Shoonya WebSocket client stopped.")
-                    self.ws_client = None # Ensure the client is garbage collected
-                except Exception as e:
-                    self.logger.error(f"Exception during WebSocket client stop: {e}")
-                    self.ws_client = None # Also nullify in case of an error
+        
+        if self.ws_client:
+            self.ws_client.stop()
+        
+        # Clean up market data cache
+        self.market_cache.clear()
+        
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
+        
+        self.connected = False
+        self.logger.info("Disconnected from Shoonya WebSocket")
 
-            # Clean up ZeroMQ resources
-            self.cleanup_zmq()
-
-            # Reset adapter state to be ready for re-initialization
-            self.connected = False
-            self.user_id = None
-            self.actid = None
-            self.susertoken = None
-            self.subscriptions = {}
-            self.token_symbol_map = {}
-            self.depth_snapshots = {}
-            self.quote_snapshots = {}
-            self._reconnect_attempts = 0
-
-            self.logger.info("Shoonya adapter disconnected, reset, and cleaned up.")
-
-    def __del__(self):
-        """Destructor to ensure cleanup on object deletion."""
-        if self.running:
-            self.disconnect()
-
-    def _build_scrip_key(self, subs):
-        """
-        Build the Shoonya subscription key string from a list of (symbol, exchange, mode) tuples.
-        Returns a string like 'NSE|2885#BSE|500325' or 'NSE|2885' for single.
-        """
-        scrips = []
-        for symbol, exchange, mode in subs:
-            token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+    def subscribe(self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE, depth_level: int = 5) -> Dict[str, Any]:
+        """Subscribe to market data with improved error handling"""
+        try:
+            # Validate inputs
+            if not self._validate_subscription_params(symbol, exchange, mode):
+                return self._create_error_response("INVALID_PARAMS", "Invalid subscription parameters")
+            
+            # Get token information
+            token_info = self._get_token_info(symbol, exchange)
             if not token_info:
-                self.logger.error(f"[SCRIP_KEY] No token found for {symbol}-{exchange}")
-                continue
-            token = token_info['token']
-            brexchange = token_info['brexchange']
-            scrips.append(f"{ShoonyaExchangeMapper.to_shoonya_exchange(brexchange)}|{token}")
-        self.logger.info(f"[SCRIP_KEY] Built scrips: {scrips}")
-        return '#'.join(scrips) if len(scrips) > 1 else (scrips[0] if scrips else '')
-
-    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
-        key = (symbol, exchange, mode)
-        try:
-            self.logger.info(f"[SUBSCRIBE] Requested: symbol={symbol}, exchange={exchange}, mode={mode}, depth_level={depth_level}")
-            with self.lock:
-                self.subscriptions[key] = True
-                active = [k for k, v in self.subscriptions.items() if v and k[2] == mode]
-            scrip_key = self._build_scrip_key(active)
-            self.logger.info(f"[SUBSCRIBE] Built scrip_key: {scrip_key} for active subscriptions: {active}")
-            if not scrip_key:
-                self.logger.error(f"No valid tokens for subscription: {symbol}-{exchange} mode {mode}")
-                return self._create_error_response(404, f"No valid tokens for subscription.")
-            # Track token to (symbol, exchange) mapping for canonical publishing
-            from websocket_proxy.mapping import SymbolMapper
-            for s, ex, m in active:
-                token_info = SymbolMapper.get_token_from_symbol(s, ex)
-                if token_info:
-                    self.logger.info(f"[SUBSCRIBE] Mapping token {token_info['token']} to ({s}, {ex})")
-                    self.token_symbol_map[token_info['token']] = (s, ex)
-            if mode in [1, 2]:
-                self.logger.info(f"[SUBSCRIBE] Calling ws_client.subscribe_touchline({scrip_key})")
-                self.ws_client.subscribe_touchline(scrip_key)
-            elif mode == 3:
-                self.logger.info(f"[SUBSCRIBE] Calling ws_client.subscribe_depth({scrip_key})")
-                self.ws_client.subscribe_depth(scrip_key)
-            else:
-                self.logger.error(f"Unsupported mode for subscribe: {mode}")
-                return self._create_error_response(400, f"Unsupported mode: {mode}")
-            self.logger.info(f"Subscribed {scrip_key} mode {mode}")
-            return self._create_success_response(f"Subscribed {scrip_key} mode {mode}")
+                return self._create_error_response("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found")
+            
+            # Create subscription
+            subscription = self._create_subscription(symbol, exchange, mode, depth_level, token_info)
+            correlation_id = f"{symbol}_{exchange}_{mode}"
+            
+            # Store subscription and update mappings
+            self._store_subscription(correlation_id, subscription)
+            
+            # Subscribe via WebSocket
+            if self.connected:
+                self._websocket_subscribe(subscription)
+            
+            return self._create_success_response(f'Subscribed to {symbol}.{exchange}', 
+                                               symbol=symbol, exchange=exchange, mode=mode)
+        
         except Exception as e:
-            self.logger.error(f"Exception during subscribe: {e}")
-            return self._create_error_response(500, f"Exception during subscribe: {e}")
+            self.logger.error(f"Subscription error for {symbol}.{exchange}: {e}")
+            return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
-        key = (symbol, exchange, mode)
-        try:
-            with self.lock:
-                if key in self.subscriptions:
-                    self.subscriptions[key] = False
-                active = [k for k, v in self.subscriptions.items() if v and k[2] == mode]
-            scrip_key = self._build_scrip_key(active)
-            unsub_key = self._build_scrip_key([key])
-            if not unsub_key:
-                self.logger.error(f"No valid tokens for unsubscription: {symbol}-{exchange} mode {mode}")
-                return self._create_error_response(404, f"No valid tokens for unsubscription.")
-            if mode in [1, 2]:
-                self.ws_client.unsubscribe_touchline(unsub_key)
-                if scrip_key:
-                    self.ws_client.subscribe_touchline(scrip_key)
-            elif mode == 3:
-                self.ws_client.unsubscribe_depth(unsub_key)
-                if scrip_key:
-                    self.ws_client.subscribe_depth(scrip_key)
-            else:
-                self.logger.error(f"Unsupported mode for unsubscribe: {mode}")
-                return self._create_error_response(400, f"Unsupported mode: {mode}")
-            self.logger.info(f"Unsubscribed {unsub_key} mode {mode}")
-            return self._create_success_response(f"Unsubscribed {unsub_key} mode {mode}")
-        except Exception as e:
-            self.logger.error(f"Exception during unsubscribe: {e}")
-            return self._create_error_response(500, f"Exception during unsubscribe: {e}")
-
-    def unsubscribe_all(self) -> None:
-        """Unsubscribes from all active subscriptions without disconnecting."""
-        self.logger.info("Unsubscribing from all active Shoonya subscriptions.")
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE) -> Dict[str, Any]:
+        """Unsubscribe from market data"""
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        
         with self.lock:
-            if not self.subscriptions:
-                self.logger.info("No active subscriptions to unsubscribe from.")
-                return
+            if correlation_id not in self.subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED", 
+                                                  f"Not subscribed to {symbol}.{exchange}")
+            
+            subscription = self.subscriptions[correlation_id]
+            self._websocket_unsubscribe(subscription)
+            self._remove_subscription(correlation_id, subscription)
+        
+        return self._create_success_response(
+            f"Unsubscribed from {symbol}.{exchange}",
+            symbol=symbol, exchange=exchange, mode=mode
+        )
 
-            touchline_subs = [k for k, v in self.subscriptions.items() if v and k[2] in [1, 2]]
-            depth_subs = [k for k, v in self.subscriptions.items() if v and k[2] == 3]
+    def _validate_subscription_params(self, symbol: str, exchange: str, mode: int) -> bool:
+        """Validate subscription parameters"""
+        return (symbol and exchange and 
+                mode in [Config.MODE_LTP, Config.MODE_QUOTE, Config.MODE_DEPTH])
 
-            if touchline_subs:
-                scrip_key = self._build_scrip_key(touchline_subs)
-                if scrip_key:
-                    self.logger.info(f"[UNSUBSCRIBE_ALL] Unsubscribing touchline for: {scrip_key}")
-                    self.ws_client.unsubscribe_touchline(scrip_key)
+    def _get_token_info(self, symbol: str, exchange: str) -> Optional[Dict]:
+        """Get token information for symbol and exchange"""
+        self.logger.info(f"Looking up token for {symbol}.{exchange}")
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if token_info:
+            self.logger.info(f"Token found: {token_info['token']}, brexchange: {token_info['brexchange']}")
+        return token_info
 
-            if depth_subs:
-                scrip_key = self._build_scrip_key(depth_subs)
-                if scrip_key:
-                    self.logger.info(f"[UNSUBSCRIBE_ALL] Unsubscribing depth for: {scrip_key}")
-                    self.ws_client.unsubscribe_depth(scrip_key)
+    def _create_subscription(self, symbol: str, exchange: str, mode: int, depth_level: int, token_info: Dict) -> Dict:
+        """Create subscription object"""
+        token = token_info['token']
+        brexchange = token_info['brexchange']
+        shoonya_exchange = ShoonyaExchangeMapper.to_shoonya_exchange(brexchange)
+        scrip = f"{shoonya_exchange}|{token}"
+        
+        return {
+            'symbol': symbol,
+            'exchange': exchange,
+            'mode': mode,
+            'depth_level': depth_level,
+            'token': token,
+            'scrip': scrip
+        }
 
-            # Clear all subscriptions state
-            self.subscriptions.clear()
-            self.token_symbol_map.clear()
-            self.depth_snapshots.clear()
-            self.quote_snapshots.clear()
-            self.logger.info("All Shoonya subscriptions have been cleared.")
-
-    def _resubscribe_all(self):
-        """Resubscribe to all active subscriptions after reconnect."""
+    def _store_subscription(self, correlation_id: str, subscription: Dict) -> None:
+        """Store subscription and update mappings"""
         with self.lock:
-            for (symbol, exchange, mode), active in self.subscriptions.items():
-                if not active:
-                    continue
-                token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-                if not token_info:
-                    self.logger.warning(f"Cannot resubscribe: token not found for {symbol}-{exchange}")
-                    continue
-                token = token_info['token']
-                brexchange = token_info['brexchange']
-                scrip = f"{ShoonyaExchangeMapper.to_shoonya_exchange(brexchange)}|{token}"
-                if mode in [1, 2]:
-                    self.ws_client.subscribe_touchline(scrip)
-                elif mode == 3:
-                    self.ws_client.subscribe_depth(scrip)
-                else:
-                    self.logger.warning(f"Unsupported mode {mode} for {symbol}-{exchange}")
+            self.subscriptions[correlation_id] = subscription
+            self.token_to_symbol[subscription['token']] = (subscription['symbol'], subscription['exchange'])
 
-    def _reconnect(self):
-        with self._reconnect_lock:
-            if not self.running:
-                self.logger.info("Not running, skipping reconnect.")
-                return
+    def _websocket_subscribe(self, subscription: Dict) -> None:
+        """Handle WebSocket subscription with reference counting"""
+        scrip = subscription['scrip']
+        mode = subscription['mode']
+        
+        # Initialize reference count for this scrip if not exists
+        if scrip not in self.ws_subscription_refs:
+            self.ws_subscription_refs[scrip] = {'touchline_count': 0, 'depth_count': 0}
+        
+        if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+            if self.ws_subscription_refs[scrip]['touchline_count'] == 0:
+                self.logger.info(f"First touchline subscription for {scrip}")
+                self.ws_client.subscribe_touchline(scrip)
+            self.ws_subscription_refs[scrip]['touchline_count'] += 1
+        elif mode == Config.MODE_DEPTH:
+            if self.ws_subscription_refs[scrip]['depth_count'] == 0:
+                self.logger.info(f"First depth subscription for {scrip}")
+                self.ws_client.subscribe_depth(scrip)
+            self.ws_subscription_refs[scrip]['depth_count'] += 1
 
-            if self._reconnect_attempts >= self._max_reconnect_attempts:
-                self.logger.error(f"Max reconnect attempts ({self._max_reconnect_attempts}) reached. Giving up.")
-                self.running = False  # Stop trying
-                return
+    def _websocket_unsubscribe(self, subscription: Dict) -> None:
+        """Handle WebSocket unsubscription with reference counting"""
+        scrip = subscription['scrip']
+        mode = subscription['mode']
+        
+        if scrip not in self.ws_subscription_refs:
+            return
+        
+        if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+            self.ws_subscription_refs[scrip]['touchline_count'] -= 1
+            if self.ws_subscription_refs[scrip]['touchline_count'] <= 0:
+                self.logger.info(f"Last touchline subscription for {scrip}")
+                self.ws_client.unsubscribe_touchline(scrip)
+                self.ws_subscription_refs[scrip]['touchline_count'] = 0
+        elif mode == Config.MODE_DEPTH:
+            self.ws_subscription_refs[scrip]['depth_count'] -= 1
+            if self.ws_subscription_refs[scrip]['depth_count'] <= 0:
+                self.logger.info(f"Last depth subscription for {scrip}")
+                self.ws_client.unsubscribe_depth(scrip)
+                self.ws_subscription_refs[scrip]['depth_count'] = 0
 
-            self._reconnect_attempts += 1
-            delay = self._reconnect_delay * (2 ** (self._reconnect_attempts - 1))
-            self.logger.warning(f"Attempting to reconnect in {delay} seconds (attempt {self._reconnect_attempts})...")
-            time.sleep(delay)
-
-            try:
-                # Re-create the client for a clean slate, as the old one might be in a bad state
-                self.logger.info("Re-creating WebSocket client for reconnect.")
-                self.ws_client = ShoonyaWebSocket(
-                    user_id=self.user_id,
-                    actid=self.actid,
-                    susertoken=self.susertoken,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open
-                )
-
-                # The connect method is now robust enough to be called here
-                connected = self.ws_client.connect()
-                if connected:
-                    self.connected = True
-                    self.logger.info("Reconnected successfully. Resubscribing...")
-                    # self._resubscribe_all() is called by _on_open
-                    self._reconnect_attempts = 0  # Reset after successful reconnect
-                else:
-                    self.connected = False
-                    self.logger.error("Reconnect failed. _on_close will trigger another attempt if running.")
-
-            except Exception as e:
-                self.connected = False
-                self.logger.error(f"Exception during reconnect: {e}. _on_close will trigger another attempt if running.")
+    def _remove_subscription(self, correlation_id: str, subscription: Dict) -> None:
+        """Remove subscription and clean up mappings"""
+        token = subscription['token']
+        scrip = subscription['scrip']
+        
+        # Remove subscription
+        del self.subscriptions[correlation_id]
+        
+        # Clean up reference count if both counts are 0
+        if scrip in self.ws_subscription_refs:
+            if (self.ws_subscription_refs[scrip]['touchline_count'] <= 0 and 
+                self.ws_subscription_refs[scrip]['depth_count'] <= 0):
+                del self.ws_subscription_refs[scrip]
+        
+        # Remove token mapping if no other subscriptions use it
+        if not any(sub['token'] == token for sub in self.subscriptions.values()):
+            self.token_to_symbol.pop(token, None)
+            self.market_cache.clear(token)
 
     def _on_open(self, ws):
-        self.logger.info("Shoonya WebSocket connection opened.")
-        try:
-            self._resubscribe_all()
-        except Exception as e:
-            self.logger.error(f"Exception during resubscribe on open: {e}")
-
-    def _on_close(self, ws, close_status_code, close_msg):
-        self.logger.warning(f"Adapter notified of WebSocket close: Code={close_status_code}, Msg='{close_msg}'")
-        self.connected = False
-        if self.running:
-            self.logger.info("Adapter is in 'running' state, attempting to reconnect.")
-            self._reconnect()
-        else:
-            self.logger.info("Adapter is not in 'running' state, will not reconnect.")
-
+        """Handle WebSocket connection open"""
+        self.logger.info("Connected to Shoonya WebSocket")
+        self.connected = True
+        self._resubscribe_all()
+    
     def _on_error(self, ws, error):
+        """Handle WebSocket connection error"""
         self.logger.error(f"Shoonya WebSocket error: {error}")
+        self._handle_websocket_error(error)
+    
+    def _on_close(self, ws, close_status_code, close_msg):
+        """Handle WebSocket connection close"""
+        self.logger.info(f"Shoonya WebSocket connection closed: {close_status_code} - {close_msg}")
+        self.connected = False
+        
         if self.running:
-            self._reconnect()
+            self._schedule_reconnection()
 
-    def _generate_topic(self, exchange: str, symbol: str, mode_str: str) -> str:
-        # Publish as {exchange}_{symbol}_{mode_str} to match OpenAlgo proxy expectation
-        return f"{exchange}_{symbol}_{mode_str}"
+    def _handle_websocket_error(self, error: Exception) -> None:
+        """Centralized error handling for WebSocket operations"""
+        self.logger.error(f"WebSocket error: {error}")
+        
+        if self.running:
+            self._schedule_reconnection()
 
-    def _normalize_market_data(self, data, t, mode=None) -> Dict[str, Any]:
-        import time
+    def _schedule_reconnection(self) -> None:
+        """Schedule reconnection with exponential backoff"""
+        if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
+            self.logger.error("Maximum reconnection attempts reached")
+            self.running = False
+            return
         
-        # Handle LTP - always convert to float, handle None/empty values
-        last_price = 0.0
-        if data.get('lp'):
-            try:
-                last_price = float(data.get('lp'))
-            except (ValueError, TypeError):
-                last_price = 0.0
+        delay = min(
+            Config.BASE_RECONNECT_DELAY * (2 ** self.reconnect_attempts),
+            Config.MAX_RECONNECT_DELAY
+        )
         
-        # Handle timestamp - Shoonya uses 'ltt' for last trade time
-        timestamp = data.get('ltt')
-        if timestamp:
-            try:
-                # Convert to milliseconds if it's in seconds
-                timestamp = int(timestamp) * 1000 if len(str(timestamp)) <= 10 else int(timestamp)
-            except (ValueError, TypeError):
-                timestamp = int(time.time() * 1000)
-        else:
-            timestamp = int(time.time() * 1000)
+        self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
+        threading.Timer(delay, self._attempt_reconnection).start()
+
+    def _attempt_reconnection(self) -> None:
+        """Attempt to reconnect to WebSocket"""
+        self.reconnect_attempts += 1
         
-        # Base result structure
-        result = {
-            'symbol': data.get('ts', ''),
-            'exchange': data.get('e', ''),
-            'token': data.get('tk', ''),
-            'last_price': last_price,
-            'ltp': last_price,  # Always include 'ltp' for client compatibility
-            'volume': self._safe_int(data.get('v', 0)),
-            'open': self._safe_float(data.get('o', 0)),
-            'high': self._safe_float(data.get('h', 0)),
-            'low': self._safe_float(data.get('l', 0)),
-            'close': self._safe_float(data.get('c', 0)),
-            'average_price': self._safe_float(data.get('ap', 0)),
-            'percent_change': self._safe_float(data.get('pc', 0)),
-            'mode': 'LTP' if t in ('tf', 'tk') and (mode == 1 or mode is None) else ('QUOTE' if t in ('tf', 'tk') and mode == 2 else 'DEPTH'),
-            'timestamp': timestamp,
-        }
-        
-        # Add additional fields for touchline/quote mode
-        if t in ('tf', 'tk'):
-            # Best bid/ask (level 1)
-            result['best_bid_price'] = self._safe_float(data.get('bp1', 0))
-            result['best_bid_qty'] = self._safe_int(data.get('bq1', 0))
-            result['best_ask_price'] = self._safe_float(data.get('sp1', 0))
-            result['best_ask_qty'] = self._safe_int(data.get('sq1', 0))
-            
-            # Open Interest (if available)
-            if data.get('oi'):
-                result['open_interest'] = self._safe_int(data.get('oi', 0))
-                result['prev_open_interest'] = self._safe_int(data.get('poi', 0))
-        
-        # Add depth data for depth mode
-        if t in ('df', 'dk'):
-            # Additional depth-specific fields
-            result['total_buy_qty'] = self._safe_int(data.get('tbq', 0))
-            result['total_sell_qty'] = self._safe_int(data.get('tsq', 0))
-            result['last_trade_qty'] = self._safe_int(data.get('ltq', 0))
-            result['upper_circuit'] = self._safe_float(data.get('uc', 0))
-            result['lower_circuit'] = self._safe_float(data.get('lc', 0))
-            result['52_week_high'] = self._safe_float(data.get('52h', 0))
-            result['52_week_low'] = self._safe_float(data.get('52l', 0))
-            
-            # Open Interest
-            if data.get('oi'):
-                result['open_interest'] = self._safe_int(data.get('oi', 0))
-                result['prev_open_interest'] = self._safe_int(data.get('poi', 0))
-                result['total_open_interest'] = self._safe_int(data.get('toi', 0))
-            
-            # Market depth (5 levels)
-            result['depth'] = {
-                'buy': [
-                    {
-                        'price': self._safe_float(data.get(f'bp{i}', 0)),
-                        'quantity': self._safe_int(data.get(f'bq{i}', 0)),
-                        'orders': self._safe_int(data.get(f'bo{i}', 0))
-                    }
-                    for i in range(1, 6)
-                ],
-                'sell': [
-                    {
-                        'price': self._safe_float(data.get(f'sp{i}', 0)),
-                        'quantity': self._safe_int(data.get(f'sq{i}', 0)),
-                        'orders': self._safe_int(data.get(f'so{i}', 0))
-                    }
-                    for i in range(1, 6)
-                ]
-            }
-        
-        return result
-    
-    def _safe_float(self, value):
-        """Safely convert value to float, return 0.0 if conversion fails"""
-        if value is None or value == '' or value == '-':
-            return 0.0
         try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
-    
-    def _safe_int(self, value):
-        """Safely convert value to int, return 0 if conversion fails"""
-        if value is None or value == '' or value == '-':
-            return 0
-        try:
-            return int(float(value))  # Convert through float first to handle decimal strings
-        except (ValueError, TypeError):
-            return 0
-
-    def _update_depth_snapshot(self, token: str, data: dict, is_acknowledgment: bool = False) -> dict:
-        """
-        Update depth snapshot for incremental updates.
-        For acknowledgment ('dk'), store complete snapshot.
-        For updates ('df'), merge only non-zero values.
-        If no snapshot exists and we get a 'df' update, treat it as acknowledgment.
-        """
-        if is_acknowledgment:
-            # Store complete snapshot from acknowledgment
-            self.depth_snapshots[token] = data.copy()
-            self.logger.info(f"[SNAPSHOT] Stored full snapshot for token {token}")
-            return data
-        
-        # Get existing snapshot or create empty one
-        snapshot = self.depth_snapshots.get(token, {})
-        
-        # If no existing snapshot and this is a depth update, treat first non-zero update as acknowledgment
-        if not snapshot and data.get('t') == 'df':
-            self.logger.info(f"[SNAPSHOT] No existing depth snapshot for token {token}, checking if 'df' update has meaningful data")
-            # Check if this update has meaningful data (non-zero prices/quantities)
-            has_meaningful_data = False
-            meaningful_fields = []
+            # Recreate WebSocket client
+            self.ws_client = ShoonyaWebSocket(
+                user_id=self.actid,
+                actid=self.actid,
+                susertoken=self.susertoken,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open
+            )
             
-            # Check price fields
-            for field in ['bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'sp1', 'sp2', 'sp3', 'sp4', 'sp5']:
-                if field in data and self._safe_float(data[field]) > 0:
-                    has_meaningful_data = True
-                    meaningful_fields.append(f"{field}={data[field]}")
-                    
-            # Check quantity fields
-            for field in ['bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5']:
-                if field in data and self._safe_int(data[field]) > 0:
-                    has_meaningful_data = True
-                    meaningful_fields.append(f"{field}={data[field]}")
-            
-            self.logger.info(f"[SNAPSHOT] Token {token} meaningful data check: {has_meaningful_data}, fields: {meaningful_fields[:10]}")
-            
-            if has_meaningful_data:
-                self.logger.warning(f"[SNAPSHOT] No existing snapshot for token {token}, treating first meaningful 'df' update as acknowledgment")
-                self.depth_snapshots[token] = data.copy()
-                return data
+            if self.ws_client.connect():
+                self.connected = True
+                self.reconnect_attempts = 0
+                self.logger.info("Reconnected successfully")
             else:
-                self.logger.warning(f"[SNAPSHOT] Token {token} 'df' update has no meaningful data, skipping snapshot creation")
-        
-        # Fields to merge from incremental updates (only if non-zero/non-empty)
-        merge_fields = [
-            'lp', 'pc', 'v', 'o', 'h', 'l', 'c', 'ap', 'ltt', 'ltq', 'tbq', 'tsq',
-            'bp1', 'bp2', 'bp3', 'bp4', 'bp5', 'bq1', 'bq2', 'bq3', 'bq4', 'bq5', 'bo1', 'bo2', 'bo3', 'bo4', 'bo5',
-            'sp1', 'sp2', 'sp3', 'sp4', 'sp5', 'sq1', 'sq2', 'sq3', 'sq4', 'sq5', 'so1', 'so2', 'so3', 'so4', 'so5',
-            'lc', 'uc', '52h', '52l', 'oi', 'poi', 'toi'
-        ]
-        
-        # Always update these fields (metadata that may be constant)
-        always_update = ['t', 'e', 'tk', 'ts', 'ti', 'ls', 'pp']
-        
-        # Update snapshot with always-update fields
-        for field in always_update:
-            if field in data:
-                snapshot[field] = data[field]
-        
-        # Merge non-zero values from incremental update
-        updated_fields = []
-        for field in merge_fields:
-            if field in data:
-                value = data[field]
-                # Check if value is non-zero/non-empty (but preserve actual 0 values for valid cases)
-                if value is not None and value != '' and value != '-':
-                    # Convert to appropriate type to check if it's truly zero
-                    if field in ['lp', 'pc', 'o', 'h', 'l', 'c', 'ap', 'bp1', 'bp2', 'bp3', 'bp4', 'bp5', 
-                                'sp1', 'sp2', 'sp3', 'sp4', 'sp5', 'lc', 'uc', '52h', '52l']:
-                        # Price fields - update if not 0.0
-                        float_val = self._safe_float(value)
-                        if float_val != 0.0:
-                            snapshot[field] = value
-                            updated_fields.append(field)
-                    elif field in ['v', 'ltq', 'tbq', 'tsq', 'bq1', 'bq2', 'bq3', 'bq4', 'bq5',
-                                  'sq1', 'sq2', 'sq3', 'sq4', 'sq5', 'bo1', 'bo2', 'bo3', 'bo4', 'bo5',
-                                  'so1', 'so2', 'so3', 'so4', 'so5', 'oi', 'poi', 'toi']:
-                        # Quantity/count fields - update if not 0
-                        int_val = self._safe_int(value)
-                        if int_val != 0:
-                            snapshot[field] = value
-                            updated_fields.append(field)
-                    else:
-                        # Other fields like 'ltt' - always update if present
-                        snapshot[field] = value
-                        updated_fields.append(field)
-        
-        # Update stored snapshot
-        self.depth_snapshots[token] = snapshot
-        
-        if updated_fields:
-            self.logger.info(f"[SNAPSHOT] Updated fields for token {token}: {updated_fields}")
-        else:
-            self.logger.debug(f"[SNAPSHOT] No fields updated for token {token} (all zero values)")
-        
-        return snapshot
+                self.logger.error("Reconnection failed")
+                
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
 
-    def _update_quote_snapshot(self, token: str, data: dict, is_acknowledgment: bool = False) -> dict:
-        """
-        Update quote snapshot for incremental updates.
-        For acknowledgment ('tk'), store complete snapshot.
-        For updates ('tf'), merge only non-zero values.
-        If no snapshot exists and we get a 'tf' update, treat it as acknowledgment.
-        """
-        if is_acknowledgment:
-            # Store complete snapshot from acknowledgment
-            self.quote_snapshots[token] = data.copy()
-            self.logger.info(f"[QUOTE_SNAPSHOT] Stored full snapshot for token {token}")
-            return data
-        
-        # Get existing snapshot or create empty one
-        snapshot = self.quote_snapshots.get(token, {})
-        
-        # If no existing snapshot and this is a quote update, treat first non-zero update as acknowledgment
-        if not snapshot and data.get('t') == 'tf':
-            # Check if this update has meaningful data (non-zero prices)
-            has_meaningful_data = False
-            for field in ['lp', 'o', 'h', 'l', 'c', 'bp1', 'sp1']:
-                if field in data and self._safe_float(data[field]) > 0:
-                    has_meaningful_data = True
-                    break
-            if not has_meaningful_data:
-                for field in ['v', 'bq1', 'sq1']:
-                    if field in data and self._safe_int(data[field]) > 0:
-                        has_meaningful_data = True
-                        break
+    def _resubscribe_all(self):
+        """Resubscribe to all active subscriptions after reconnect"""
+        with self.lock:
+            # Reset reference counts
+            self.ws_subscription_refs = {}
             
-            if has_meaningful_data:
-                self.logger.warning(f"[QUOTE_SNAPSHOT] No existing snapshot for token {token}, treating first meaningful 'tf' update as acknowledgment")
-                self.quote_snapshots[token] = data.copy()
-                return data
-        
-        # Fields to merge from incremental updates (only if non-zero/non-empty)
-        merge_fields = [
-            'lp', 'pc', 'v', 'o', 'h', 'l', 'c', 'ap', 'ltt', 'ltq',
-            'bp1', 'bq1', 'sp1', 'sq1', 'oi', 'poi', 'toi'
-        ]
-        
-        # Always update these fields (metadata that may be constant)
-        always_update = ['t', 'e', 'tk', 'ts', 'ti', 'ls', 'pp']
-        
-        # Update snapshot with always-update fields
-        for field in always_update:
-            if field in data:
-                snapshot[field] = data[field]
-        
-        # Merge non-zero values from incremental update
-        updated_fields = []
-        for field in merge_fields:
-            if field in data:
-                value = data[field]
-                # Check if value is non-zero/non-empty (but preserve actual 0 values for valid cases)
-                if value is not None and value != '' and value != '-':
-                    # Convert to appropriate type to check if it's truly zero
-                    if field in ['lp', 'pc', 'o', 'h', 'l', 'c', 'ap', 'bp1', 'sp1']:
-                        # Price fields - update if not 0.0
-                        float_val = self._safe_float(value)
-                        if float_val != 0.0:
-                            snapshot[field] = value
-                            updated_fields.append(field)
-                    elif field in ['v', 'ltq', 'bq1', 'sq1', 'oi', 'poi', 'toi']:
-                        # Quantity/count fields - update if not 0
-                        int_val = self._safe_int(value)
-                        if int_val != 0:
-                            snapshot[field] = value
-                            updated_fields.append(field)
-                    else:
-                        # Other fields like 'ltt' - always update if present
-                        snapshot[field] = value
-                        updated_fields.append(field)
-        
-        # Update stored snapshot
-        self.quote_snapshots[token] = snapshot
-        
-        if updated_fields:
-            self.logger.info(f"[QUOTE_SNAPSHOT] Updated fields for token {token}: {updated_fields}")
-        else:
-            self.logger.debug(f"[QUOTE_SNAPSHOT] No fields updated for token {token} (all zero values)")
-        
-        return snapshot
+            # Collect unique scrips for each subscription type
+            touchline_scrips = set()
+            depth_scrips = set()
+            
+            for subscription in self.subscriptions.values():
+                scrip = subscription['scrip']
+                mode = subscription['mode']
+                
+                # Initialize reference count
+                if scrip not in self.ws_subscription_refs:
+                    self.ws_subscription_refs[scrip] = {'touchline_count': 0, 'depth_count': 0}
+                
+                if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+                    touchline_scrips.add(scrip)
+                    self.ws_subscription_refs[scrip]['touchline_count'] += 1
+                elif mode == Config.MODE_DEPTH:
+                    depth_scrips.add(scrip)
+                    self.ws_subscription_refs[scrip]['depth_count'] += 1
+            
+            # Resubscribe in batches
+            if touchline_scrips:
+                scrip_list = '#'.join(touchline_scrips)
+                self.ws_client.subscribe_touchline(scrip_list)
+                self.logger.info(f"Resubscribed to {len(touchline_scrips)} touchline scrips")
+            
+            if depth_scrips:
+                scrip_list = '#'.join(depth_scrips)
+                self.ws_client.subscribe_depth(scrip_list)
+                self.logger.info(f"Resubscribed to {len(depth_scrips)} depth scrips")
 
     def _on_message(self, ws, message):
+        """Handle incoming market data messages"""
+        self.logger.debug(f"[RAW_MESSAGE] {message}")
+        
         try:
-            self.logger.debug(f"[ON_MESSAGE] Raw message: {message}")
             data = json.loads(message)
-            t = data.get('t')
-
-            if t == 'ck':
-                self.logger.info(f"Adapter received auth ack: {data}")
-                return  # Handled by the client, no further processing needed here
-
-            self.logger.debug(f"[ON_MESSAGE] Message type: {t}, data: {data}")
-            # Determine mode from active subscriptions based on message type
-            token = data.get('tk')
-            mode = None
+            msg_type = data.get('t')
             
-            # Find appropriate mode based on message type and active subscriptions
-            matching_modes = []
-            for (sym, exch, m), active in self.subscriptions.items():
-                token_info = SymbolMapper.get_token_from_symbol(sym, exch)
-                if token_info and token_info['token'] == token and active:
-                    matching_modes.append((m, sym, exch))
+            # Handle authentication acknowledgment
+            if msg_type == Config.MSG_AUTH:
+                self.logger.info(f"Authentication response: {data}")
+                return
             
-            self.logger.debug(f"[MODE_DETECTION] Token {token}, message type {t}, matching modes: {matching_modes}")
-            
-            # Select mode based on message type priority
-            if t in ('df', 'dk'):
-                # Depth messages - prioritize depth mode (3)
-                for m, sym, exch in matching_modes:
-                    if m == 3:
-                        mode = m
-                        break
-            elif t in ('tf', 'tk'):
-                # Quote/touchline messages - prioritize quote mode (2), then LTP (1)
-                for m, sym, exch in matching_modes:
-                    if m == 2:
-                        mode = m
-                        break
-                # If no quote mode found, use LTP mode
-                if mode is None:
-                    for m, sym, exch in matching_modes:
-                        if m == 1:
-                            mode = m
-                            break
-            
-            # Fallback to first matching mode if no priority match found
-            if mode is None and matching_modes:
-                mode = matching_modes[0][0]
-            
-            self.logger.info(f"[MODE_DETECTION] Token {token}, message type {t}, selected mode: {mode}")
-            if t in ('tf', 'tk', 'df', 'dk'):
-                # For LTP mode, only process if 'lp' field is present to avoid 0.0 values
-                if mode in [1, None] and 'lp' not in data:
-                    self.logger.warning(f"Skipping LTP update for token {data.get('tk')} because 'lp' field is missing: {data}")
-                    return
-
-                self.logger.debug(f"[ON_MESSAGE] Incoming data for {t}: {data}")
-                
-                # Handle snapshot management for both depth and quote modes
-                processed_data = data
-                token = data.get('tk')
-                
-                if t in ('df', 'dk') and mode == 3:
-                    # Depth mode snapshot management
-                    if token:
-                        is_acknowledgment = (t == 'dk')
-                        snapshot_exists = token in self.depth_snapshots
-                        self.logger.info(f"[SNAPSHOT] Processing {t} for token {token}, mode={mode}, snapshot_exists={snapshot_exists}")
-                        processed_data = self._update_depth_snapshot(token, data, is_acknowledgment)
-                        self.logger.info(f"[SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} depth snapshot for token {token}")
-                elif t in ('tf', 'tk') and mode in [1, 2]:
-                    # Quote/touchline mode snapshot management
-                    if token:
-                        is_acknowledgment = (t == 'tk')
-                        processed_data = self._update_quote_snapshot(token, data, is_acknowledgment)
-                        self.logger.info(f"[QUOTE_SNAPSHOT] Using {'acknowledgment' if is_acknowledgment else 'updated'} quote snapshot for token {token}")
-                
-                normalized = self._normalize_market_data(processed_data, t, mode)
-                self.logger.debug(f"[ON_MESSAGE] Normalized data: {normalized}")
-                token = normalized.get('token')
-                symbol, exchange = self.token_symbol_map.get(token, (normalized.get('symbol'), normalized.get('exchange')))
-                self.logger.debug(f"[ON_MESSAGE] Using canonical symbol/exchange for publish: {symbol}, {exchange} (token: {token})")
-                # Determine topic type
-                if t in ('tf', 'tk') and mode == 2:
-                    mode_str = 'QUOTE'
-                elif t in ('tf', 'tk'):
-                    mode_str = 'LTP'
-                else:
-                    mode_str = 'DEPTH'
-                topic = self._generate_topic(exchange, symbol, mode_str)
-                self.logger.debug(f"[ON_MESSAGE] Publishing topic: {topic} with symbol: {symbol}, exchange: {exchange}")
-                normalized['symbol'] = symbol
-                normalized['exchange'] = exchange
-                # --- ADDED DEBUG: Log if this is a DEPTH message ---
-                if mode_str == 'DEPTH':
-                    self.logger.info(f"[DEPTH DEBUG] Publishing DEPTH data for {symbol} {exchange}: {normalized}")
-                self.publish_market_data(topic, normalized)
+            # Process market data messages
+            if msg_type in (Config.MSG_TOUCHLINE_FULL, Config.MSG_TOUCHLINE_PARTIAL, 
+                           Config.MSG_DEPTH_FULL, Config.MSG_DEPTH_PARTIAL):
+                self._process_market_message(data)
             else:
-                self.logger.warning(f"Received unknown message type: {t} | message: {data}")
-        except json.JSONDecodeError:
-            self.logger.error(f"Failed to decode JSON from message: {message}")
-        except Exception:
-            self.logger.exception(f"Error processing message: {message}")
+                self.logger.debug(f"Unknown message type {msg_type}: {data}")
+                
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON decode error: {e}, message: {message}")
+        except Exception as e:
+            self.logger.error(f"Message processing error: {e}", exc_info=True)
 
-    def publish_market_data(self, topic, data):
-        self.logger.info(f"[ZMQ PUBLISH] Topic: {topic} | Data: {data}")
-        # Extra debug for ZMQ publish
-        self.logger.debug(f"[DEBUG] ZMQ publish call for topic: {topic}, data keys: {list(data.keys())}")
-        super().publish_market_data(topic, data)
+    def _process_market_message(self, data: Dict[str, Any]) -> None:
+        """Process market data messages with better error handling"""
+        try:
+            msg_type = data.get('t')
+            token = data.get('tk')
+            
+            if not self._is_valid_market_message(msg_type, token):
+                return
+            
+            symbol, exchange = self._get_symbol_info(token)
+            if not symbol:
+                return
+            
+            matching_subscriptions = self._find_matching_subscriptions(token)
+            
+            for subscription in matching_subscriptions:
+                if self._should_process_message(msg_type, subscription['mode']):
+                    self._process_subscription_message(data, subscription, symbol, exchange)
+                    
+        except Exception as e:
+            self.logger.error(f"Message processing error: {e}")
+
+    def _is_valid_market_message(self, msg_type: str, token: str) -> bool:
+        """Validate market message"""
+        return msg_type and token and token in self.token_to_symbol
+
+    def _get_symbol_info(self, token: str) -> tuple:
+        """Get symbol and exchange from token"""
+        return self.token_to_symbol.get(token, (None, None))
+
+    def _find_matching_subscriptions(self, token: str) -> List[Dict]:
+        """Find all subscriptions matching the token"""
+        with self.lock:
+            return [sub for sub in self.subscriptions.values() if sub['token'] == token]
+
+    def _should_process_message(self, msg_type: str, mode: int) -> bool:
+        """Determine if message should be processed for given mode"""
+        touchline_messages = {Config.MSG_TOUCHLINE_FULL, Config.MSG_TOUCHLINE_PARTIAL}
+        depth_messages = {Config.MSG_DEPTH_FULL, Config.MSG_DEPTH_PARTIAL}
+        
+        if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+            return msg_type in touchline_messages
+        elif mode == Config.MODE_DEPTH:
+            return msg_type in depth_messages
+        
+        return False
+
+    def _process_subscription_message(self, data: Dict, subscription: Dict, symbol: str, exchange: str) -> None:
+        """Process message for a specific subscription"""
+        mode = subscription['mode']
+        msg_type = data.get('t')
+        
+        # Normalize data
+        normalized_data = self._normalize_market_data(data, msg_type, mode)
+        normalized_data.update({
+            'symbol': symbol,
+            'exchange': exchange,
+            'timestamp': int(time.time() * 1000)
+        })
+        
+        # Create topic and publish
+        mode_str = {Config.MODE_LTP: 'LTP', Config.MODE_QUOTE: 'QUOTE', Config.MODE_DEPTH: 'DEPTH'}[mode]
+        topic = f"{exchange}_{symbol}_{mode_str}"
+        
+        self.logger.debug(f"[{mode_str}] Publishing data for {symbol}")
+        self.publish_market_data(topic, normalized_data)
+
+    def _normalize_market_data(self, data: Dict[str, Any], msg_type: str, mode: int) -> Dict[str, Any]:
+        """Normalize market data based on mode with improved structure"""
+        token = data.get('tk')
+        if token:
+            # Use cache to handle partial updates
+            data = self.market_cache.update(token, data)
+        
+        # Get mode-specific normalizer
+        normalizer = self.normalizers.get(mode)
+        if not normalizer:
+            self.logger.error(f"No normalizer found for mode {mode}")
+            return {}
+        
+        return normalizer.normalize(data, msg_type)
+
+    def get_market_data_cache_stats(self) -> Dict[str, Any]:
+        """Get market data cache statistics"""
+        return self.market_cache.get_stats()
+
+    def clear_market_data_cache(self, token: str = None) -> None:
+        """Clear market data cache"""
+        self.market_cache.clear(token)
+
+
+# Utility functions
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """Safely convert value to float with default"""
+    if value is None or value == '' or value == '-':
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    """Safely convert value to int with default"""
+    if value is None or value == '' or value == '-':
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
