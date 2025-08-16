@@ -1,70 +1,73 @@
 """
-Mapping utilities and capability registry for Shoonya broker WebSocket integration
+Shoonya-specific mapping utilities for the WebSocket adapter
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Set, Optional
 
 class ShoonyaExchangeMapper:
-    """Map OpenAlgo exchange codes to Shoonya format and vice versa"""
-    OA_TO_SHOONYA: Dict[str, str] = {
+    """Maps between OpenAlgo exchange names and Shoonya exchange codes"""
+    
+    # OpenAlgo to Shoonya exchange mapping
+    EXCHANGE_MAP = {
         'NSE': 'NSE',
         'BSE': 'BSE',
         'NFO': 'NFO',
-        'CDS': 'CDS',
+        'BFO': 'BFO',
         'MCX': 'MCX',
-        'NSE_INDEX': 'NSE',  # Indices mapped to base exchange
-        'BSE_INDEX': 'BSE',
+        'CDS': 'CDS',
+        'NSE_INDEX': 'NSE',  # Indices use base exchange
+        'BSE_INDEX': 'BSE'
     }
-
-    SHOONYA_TO_OA: Dict[str, str] = {v: k for k, v in OA_TO_SHOONYA.items()}
-
+    
+    # Reverse mapping
+    SHOONYA_TO_OPENALGO = {v: k for k, v in EXCHANGE_MAP.items()}
+    
     @classmethod
-    def to_shoonya_exchange(cls, oa_exchange: str) -> str:
-        return cls.OA_TO_SHOONYA.get(oa_exchange.upper(), oa_exchange.upper())
-
+    def to_shoonya_exchange(cls, oa_exchange: str) -> Optional[str]:
+        """Convert OpenAlgo exchange to Shoonya exchange format"""
+        return cls.EXCHANGE_MAP.get(oa_exchange.upper())
+    
     @classmethod
-    def to_oa_exchange(cls, shoonya_exchange: str) -> str:
-        return cls.SHOONYA_TO_OA.get(shoonya_exchange.upper(), shoonya_exchange.upper())
+    def to_oa_exchange(cls, shoonya_exchange: str) -> Optional[str]:
+        """Convert Shoonya exchange to OpenAlgo exchange format"""
+        return cls.SHOONYA_TO_OPENALGO.get(shoonya_exchange.upper())
+
 
 class ShoonyaCapabilityRegistry:
-    """Registry of Shoonya WebSocket capabilities"""
-    MODES = {
-        1: {  # LTP/Touchline
-            "name": "LTP",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap"],
-            "description": "Last traded price and basic quote"
-        },
-        2: {  # Quote (same as LTP for Shoonya)
-            "name": "QUOTE",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap"],
-            "description": "Quote (same as LTP for Shoonya)"
-        },
-        3: {  # Depth
-            "name": "DEPTH",
-            "fields": ["lp", "pc", "v", "o", "h", "l", "c", "ap", "tbq", "tsq", "bq1", "bp1", "sq1", "sp1", "bq2", "bp2", "sq2", "sp2", "bq3", "bp3", "sq3", "sp3", "bq4", "bp4", "sq4", "sp4", "bq5", "bp5", "sq5", "sp5"],
-            "description": "Market depth (5 levels)"
-        }
-    }
-    SUPPORTED_MODES = [1, 2, 3]
-    SUPPORTED_DEPTH_LEVELS = [5]
-    SUPPORTED_EXCHANGES = list(ShoonyaExchangeMapper.OA_TO_SHOONYA.keys())
-
-    @classmethod
-    def get_capabilities(cls) -> Dict[str, Any]:
-        return {
-            "modes": cls.SUPPORTED_MODES,
-            "mode_details": cls.MODES,
-            "max_depth_level": 5,
-            "exchanges": cls.SUPPORTED_EXCHANGES
-        }
-
+    """Registry for Shoonya-specific capabilities and limits"""
+    
+    # Supported subscription modes
+    SUPPORTED_MODES = {1, 2, 3}  # LTP, Quote, Depth
+    
+    # Depth level support (Shoonya only supports 5-level depth)
+    SUPPORTED_DEPTH_LEVELS = {5}
+    
+    # Maximum subscriptions per connection
+    MAX_SUBSCRIPTIONS = 5000  # Conservative limit
+    
+    # Maximum instruments per request
+    MAX_INSTRUMENTS_PER_REQUEST = 50
+    
     @classmethod
     def is_mode_supported(cls, mode: int) -> bool:
+        """Check if a subscription mode is supported"""
         return mode in cls.SUPPORTED_MODES
-
+    
     @classmethod
     def is_depth_level_supported(cls, depth_level: int) -> bool:
+        """Check if a depth level is supported"""
         return depth_level in cls.SUPPORTED_DEPTH_LEVELS
-
+    
     @classmethod
     def get_fallback_depth_level(cls, requested_depth: int) -> int:
+        """Get the fallback depth level (always 5 for Shoonya)"""
         return 5
+    
+    @classmethod
+    def get_capabilities(cls) -> Dict[str, any]:
+        """Get all capabilities"""
+        return {
+            'supported_modes': list(cls.SUPPORTED_MODES),
+            'supported_depth_levels': list(cls.SUPPORTED_DEPTH_LEVELS),
+            'max_subscriptions': cls.MAX_SUBSCRIPTIONS,
+            'max_instruments_per_request': cls.MAX_INSTRUMENTS_PER_REQUEST
+        }

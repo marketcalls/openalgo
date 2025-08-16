@@ -320,8 +320,8 @@ if __name__ == "__main__":
     
     # You can fetch exchange_token from instruments.csv file
     instruments_list = [
-        {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"},
-        {"exchange": "MCX", "symbol": "GOLD05JUN25FUT"}
+        {"exchange": "MCX", "symbol": "CRUDEOIL19AUG25FUT"},
+        {"exchange": "MCX", "symbol": "GOLD03OCT25FUT"}
     ]
     
     print("\n===== TESTING LTP SUBSCRIPTION =====")

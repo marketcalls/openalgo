@@ -1,35 +1,68 @@
-from utils.logging import get_logger
+"""
+Flattrade WebSocket Client Implementation
+Handles connection to Flattrade's market data streaming API
+"""
 import json
+import logging
 import threading
-import websocket
 import time
-import uuid
+import websocket
+from typing import Any, Callable, Dict, Optional
 
 
 class FlattradeWebSocket:
-    """Enhanced Flattrade WebSocket client with improved heartbeat management and reconnection debouncing"""
+    """Flattrade WebSocket client for real-time market data"""
     
+    # Connection constants
     WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
-    # Enhanced heartbeat configuration - less aggressive timing
-    HEARTBEAT_INTERVAL = 30  # Send heartbeat every 30 seconds
-    HEARTBEAT_TIMEOUT = 180   # Increase from 120 to 180 seconds for more tolerance
-    CONNECTION_CHECK_INTERVAL = 10  # Increase from 5 to 10 seconds
+    CONNECTION_TIMEOUT = 15
+    THREAD_JOIN_TIMEOUT = 5
     
-    def __init__(self, user_id, actid, susertoken, on_message=None, on_error=None, on_close=None, on_open=None):
-        # Create unique instance identifier
-        self.instance_id = str(uuid.uuid4())[:8]
-        self.logger = get_logger(f"flattrade_websocket_{self.instance_id}")
+    # Heartbeat constants
+    HEARTBEAT_INTERVAL = 30
+    HEARTBEAT_TIMEOUT = 120
+    PING_INTERVAL = 30
+    PING_TIMEOUT = 10
+    
+    # Message types
+    MSG_TYPE_CONNECT = "c"
+    MSG_TYPE_HEARTBEAT = "h"
+    MSG_TYPE_AUTH_ACK = "ck"
+    MSG_TYPE_TOUCHLINE_SUB = "t"
+    MSG_TYPE_TOUCHLINE_UNSUB = "u"
+    MSG_TYPE_DEPTH_SUB = "d"
+    MSG_TYPE_DEPTH_UNSUB = "ud"
+    
+    # Authentication response
+    AUTH_SUCCESS = "OK"
+    
+    def __init__(self, user_id: str, actid: str, susertoken: str,
+                 on_message: Optional[Callable] = None,
+                 on_error: Optional[Callable] = None,
+                 on_close: Optional[Callable] = None,
+                 on_open: Optional[Callable] = None):
+        """
+        Initialize Flattrade WebSocket client
         
+        Args:
+            user_id: User ID for authentication
+            actid: Account ID for authentication
+            susertoken: Session token for authentication
+            on_message: Callback for incoming messages
+            on_error: Callback for connection errors
+            on_close: Callback for connection close
+            on_open: Callback for connection open
+        """
+        # Authentication credentials
         self.user_id = user_id
         self.actid = actid
         self.susertoken = susertoken
         
         # Connection state
         self.ws = None
+        self.ws_thread = None
+        self.running = False
         self.connected = False
-        self._thread = None
-        self._stop_event = threading.Event()
-        self._heartbeat_thread = None
         
         # Callbacks
         self.on_message = on_message
@@ -37,253 +70,131 @@ class FlattradeWebSocket:
         self.on_close = on_close
         self.on_open = on_open
         
-        # Enhanced heartbeat tracking
-        self._last_heartbeat_sent = None
-        self._last_message_received = None  # Track ANY message, not just pongs
-        self._heartbeat_enabled = True
-        self._connection_dead = False
+        # Heartbeat management
+        self._heartbeat_thread = None
+        self._last_message_time = None
+        self._heartbeat_lock = threading.Lock()
         
-        # Connection metadata
-        self._connection_start_time = None
-        self._message_count = 0
-        
-        # Enhanced state management
-        self._reconnecting = False
-        self._force_reconnecting = False
-        
-        self.logger.debug(f"Initialized WebSocket instance: {self.instance_id}")
+        # Logging
+        self.logger = logging.getLogger("flattrade_websocket")
 
     def connect(self) -> bool:
-        """Enhanced connection with heartbeat support"""
+        """
+        Establish WebSocket connection with authentication
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        if self.running:
+            self.logger.warning("Already connected or connecting")
+            return True
+        
         try:
-            self.logger.debug(f"Instance {self.instance_id} attempting connection")
-            self._connection_start_time = time.time()
-            self._connection_dead = False
-            self._reconnecting = False
-            self._force_reconnecting = False
-            
-            self.ws = websocket.WebSocketApp(
-                self.WS_URL,
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close,
-                on_open=self._on_open,
-                on_ping=self._on_ping,
-                on_pong=self._on_pong
-            )
-            
-            self._stop_event.clear()
-            self._thread = threading.Thread(
-                target=self._run_with_heartbeat,
-                daemon=True, 
-                name=f"FlattradeWS-{self.instance_id}"
-            )
-            self._thread.start()
-            
-            # Wait for connection with timeout
-            connection_timeout = 15
-            start_time = time.time()
-            
-            while time.time() - start_time < connection_timeout:
-                if self.connected:
-                    connection_time = time.time() - self._connection_start_time
-                    self.logger.debug(f"Instance {self.instance_id} connected in {connection_time:.2f}s")
-                    return True
-                    
-                if not self._thread.is_alive():
-                    self.logger.error(f"Instance {self.instance_id} thread died during connection")
-                    return False
-                    
-                time.sleep(0.1)
-            
-            self.logger.error(f"Instance {self.instance_id} connection timeout after {connection_timeout}s")
-            self.stop()
-            return False
-            
+            self._initialize_connection()
+            return self._wait_for_connection()
         except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} connection error: {e}")
+            self.logger.error(f"Connection error: {e}")
             self.stop()
             return False
 
-    def _run_with_heartbeat(self):
-        """Run WebSocket with heartbeat monitoring"""
-        try:
-            # Start heartbeat thread
-            self._start_heartbeat()
-            
-            # Run WebSocket
-            self.ws.run_forever(
-                ping_interval=0,  # Disable default ping, we handle it ourselves
-                ping_timeout=10
-            )
-        except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} run_forever error: {e}")
-        finally:
-            self._stop_heartbeat()
-
-    def _start_heartbeat(self):
-        """Start heartbeat thread"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            return
-            
-        self._heartbeat_enabled = True
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_worker,
-            daemon=True,
-            name=f"Heartbeat-{self.instance_id}"
+    def _initialize_connection(self) -> None:
+        """Initialize WebSocket connection and start thread"""
+        self.running = True
+        
+        self.ws = websocket.WebSocketApp(
+            self.WS_URL,
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close
         )
-        self._heartbeat_thread.start()
-        self.logger.debug(f"Instance {self.instance_id} heartbeat started")
+        
+        self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+        self.ws_thread.start()
 
-    def _stop_heartbeat(self):
-        """Stop heartbeat thread promptly and cleanly."""
-        self._heartbeat_enabled = False
-        if self._heartbeat_thread:
-            if self._heartbeat_thread.is_alive() and threading.current_thread() != self._heartbeat_thread:
-                self._heartbeat_thread.join(timeout=2)
-        self.logger.debug(f"Instance {self.instance_id} heartbeat stopped")
-
-    def _heartbeat_worker(self):
-        """Enhanced heartbeat worker with better connection detection and fast shutdown response"""
-        while self._heartbeat_enabled and not self._stop_event.is_set():
-            try:
-                if self.connected and self.ws and not self._connection_dead:
-                    current_time = time.time()
-
-                    # Send heartbeat if interval has passed
-                    if (self._last_heartbeat_sent is None or 
-                        current_time - self._last_heartbeat_sent >= self.HEARTBEAT_INTERVAL):
-                        
-                        if self._send_heartbeat():
-                            self._last_heartbeat_sent = current_time
-
-                    # **IMPROVED: Check for ANY message activity, not just pongs**
-                    if self._last_message_received:
-                        time_since_last_message = current_time - self._last_message_received
-
-                        if time_since_last_message > self.HEARTBEAT_TIMEOUT:
-                            self.logger.error(
-                                f"Instance {self.instance_id} no messages received for {time_since_last_message:.1f}s - connection appears dead"
-                            )
-                            self._connection_dead = True
-                            # Force close the connection to trigger reconnection
-                            self._force_reconnect()
-                            break
-                        elif time_since_last_message > self.HEARTBEAT_TIMEOUT * 0.7:  # 70% of timeout
-                            self.logger.warning(
-                                f"Instance {self.instance_id} no messages for {time_since_last_message:.1f}s - connection may be unstable"
-                            )
-
-                # Sleep in small increments for responsiveness
-                total_sleep = 0
-                step = 0.25  # 250ms steps for fast shutdown response
-                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
-                    if not self._heartbeat_enabled or self._stop_event.is_set():
-                        break
-                    time.sleep(step)
-                    total_sleep += step
-
-            except Exception as e:
-                self.logger.error(f"Instance {self.instance_id} heartbeat error: {e}")
-                # Also sleep in small steps on error
-                total_sleep = 0
-                step = 0.25
-                while total_sleep < self.CONNECTION_CHECK_INTERVAL:
-                    if not self._heartbeat_enabled or self._stop_event.is_set():
-                        break
-                    time.sleep(step)
-                    total_sleep += step
-
-    def _send_heartbeat(self):
-        """Send heartbeat message with better error handling"""
-        try:
-            if self.ws and self.connected and not self._connection_dead:
-                # Send Flattrade-specific heartbeat format
-                heartbeat_msg = {"t": "h"}
-                self.ws.send(json.dumps(heartbeat_msg))
-                self.logger.debug(f"Instance {self.instance_id} sent heartbeat")
+    def _wait_for_connection(self) -> bool:
+        """
+        Wait for WebSocket connection to be established
+        
+        Returns:
+            bool: True if connected within timeout, False otherwise
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < self.CONNECTION_TIMEOUT:
+            if self.connected:
+                self.logger.info("WebSocket connected successfully")
                 return True
-        except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} failed to send heartbeat: {e}")
-            self._connection_dead = True
+            time.sleep(0.1)
+        
+        self.logger.error("Connection timeout")
+        self.stop()
         return False
 
-    def _force_reconnect(self):
-        """Force connection closure to trigger reconnection with state management"""
-        # Improved connection state management
-        if self._force_reconnecting:
-            self.logger.debug(f"Instance {self.instance_id} already force reconnecting, skipping")
-            return
-            
-        self._force_reconnecting = True
+    def _run_websocket(self) -> None:
+        """Run the WebSocket connection with proper error handling"""
         try:
-            self.logger.warning(f"Instance {self.instance_id} forcing reconnection due to dead connection")
-            self.connected = False
-            if self.ws:
-                self.ws.close()
+            self.ws.run_forever(
+                ping_interval=self.PING_INTERVAL,
+                ping_timeout=self.PING_TIMEOUT
+            )
         except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} error forcing reconnect: {e}")
+            self.logger.error(f"WebSocket run error: {e}")
         finally:
-            # Reset after a delay to prevent rapid force reconnects
-            def reset_force_flag():
-                time.sleep(5)  # 5-second cooldown
-                self._force_reconnecting = False
-            threading.Thread(target=reset_force_flag, daemon=True).start()
+            self._cleanup_connection_state()
 
-    def _on_ping(self, ws, message):
-        """Handle incoming ping"""
-        self._last_message_received = time.time()
-        self.logger.debug(f"Instance {self.instance_id} received ping")
-
-    def _on_pong(self, ws, message):
-        """Handle incoming pong"""
-        self._last_message_received = time.time()
-        self.logger.debug(f"Instance {self.instance_id} received pong")
-
-    def stop(self):
-        """Enhanced stop with heartbeat cleanup and robust thread termination."""
-        self.logger.debug(f"Stopping instance {self.instance_id} ...")
-        self._stop_event.set()
+    def _cleanup_connection_state(self) -> None:
+        """Clean up connection state"""
         self.connected = False
-        self._connection_dead = True
-
         self._stop_heartbeat()
 
+    def stop(self) -> None:
+        """Stop the WebSocket connection and cleanup resources"""
+        self.logger.info("Stopping WebSocket connection")
+        
+        self.running = False
+        self.connected = False
+        
+        self._close_websocket()
+        self._wait_for_thread_completion()
+        self._stop_heartbeat()
+
+    def _close_websocket(self) -> None:
+        """Close WebSocket connection"""
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
-                self.logger.warning(f"Error closing WebSocket for instance {self.instance_id}: {e}")
+                self.logger.error(f"Error closing WebSocket: {e}")
 
-        thread_stopped = True
-        if self._thread and self._thread.is_alive():
-            self.logger.debug(f"Waiting for WS thread termination for instance {self.instance_id} ...")
-            self._thread.join(timeout=5)
-            thread_stopped = not self._thread.is_alive()
-            if not thread_stopped:
-                self.logger.debug(f"WS thread not stopped in 5s, sleeping up to 3s more...")
-                self._thread.join(timeout=3)
-                thread_stopped = not self._thread.is_alive()
-        if not thread_stopped:
-            self.logger.error(f"WS thread for instance {self.instance_id} still not stopped after extra wait. Potential stuck thread.")
+    def _wait_for_thread_completion(self) -> None:
+        """Wait for WebSocket thread to complete"""
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if self.ws_thread.is_alive():
+                self.logger.warning("WebSocket thread did not terminate within timeout")
 
-        self.ws = None
-        self._thread = None
-        self._heartbeat_thread = None
-        self.logger.debug(f"Instance {self.instance_id} stopped.")
-
-    def _on_open(self, ws):
-        """Connection opened callback with heartbeat initialization"""
+    # WebSocket Event Handlers
+    def _on_open(self, ws) -> None:
+        """Handle WebSocket connection open event"""
         self.connected = True
-        self._last_message_received = time.time()  # Initialize message timestamp
-        self._connection_dead = False
-        self._reconnecting = False  # Reset reconnection state
-        self._force_reconnecting = False
+        self._update_last_message_time()
         
-        self.logger.debug(f"Instance {self.instance_id} WebSocket opened, sending auth")
+        self.logger.info("WebSocket connection opened, sending authentication")
         
+        if self._send_authentication():
+            self._start_heartbeat()
+            self._call_external_callback(self.on_open, ws)
+
+    def _send_authentication(self) -> bool:
+        """
+        Send authentication message to server
+        
+        Returns:
+            bool: True if authentication sent successfully, False otherwise
+        """
         auth_msg = {
-            "t": "c",
+            "t": self.MSG_TYPE_CONNECT,
             "uid": self.user_id,
             "actid": self.actid,
             "source": "API",
@@ -291,117 +202,313 @@ class FlattradeWebSocket:
         }
         
         try:
-            ws.send(json.dumps(auth_msg))
-            self.logger.debug(f"Instance {self.instance_id} auth message sent")
+            self.ws.send(json.dumps(auth_msg))
+            self.logger.info("Authentication message sent")
+            return True
         except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} failed to send auth: {e}")
+            self.logger.error(f"Failed to send authentication: {e}")
+            return False
+
+    def _on_message(self, ws, message: str) -> None:
+        """Handle incoming WebSocket messages"""
+        self._update_last_message_time()
+        
+        if self._handle_internal_message(message):
             return
         
-        # Call external callback
-        if self.on_open:
-            try:
-                self.on_open(ws)
-            except Exception as e:
-                self.logger.error(f"Instance {self.instance_id} on_open callback error: {e}")
+        self._call_external_callback(self.on_message, ws, message)
 
-    def _on_message(self, ws, message):
-        """Message received callback with heartbeat tracking"""
-        self._last_message_received = time.time()  # **KEY: Update on ANY message**
-        self._message_count += 1
+    def _handle_internal_message(self, message: str) -> bool:
+        """
+        Handle internal messages (auth, heartbeat)
         
+        Args:
+            message: Incoming message string
+            
+        Returns:
+            bool: True if message was handled internally, False otherwise
+        """
         try:
-            # Handle auth acknowledgment and heartbeat responses
             data = json.loads(message)
             msg_type = data.get('t')
             
-            if msg_type == 'ck':
-                if data.get('s') == 'OK':
-                    self.logger.debug(f"Instance {self.instance_id} authenticated successfully")
-                else:
-                    self.logger.error(f"Instance {self.instance_id} authentication failed: {data}")
-                    return
-            elif msg_type == 'h':
-                # Handle heartbeat response
-                self.logger.debug(f"Instance {self.instance_id} received heartbeat response")
-                return  # Don't pass heartbeat messages to the adapter
+            if msg_type == self.MSG_TYPE_AUTH_ACK:
+                return self._handle_auth_response(data)
+            elif msg_type == self.MSG_TYPE_HEARTBEAT:
+                self.logger.debug("Received heartbeat response")
+                return True
                 
         except (json.JSONDecodeError, KeyError):
-            pass  # Not a JSON message or doesn't have expected structure
+            # Not a JSON message or doesn't have expected structure
+            pass
         
-        # Call external callback
-        if self.on_message:
-            try:
-                self.on_message(ws, message)
-            except Exception as e:
-                self.logger.error(f"Instance {self.instance_id} on_message callback error: {e}")
+        return False
 
-    def _on_error(self, ws, error):
-        """Error callback"""
-        self.logger.error(f"Instance {self.instance_id} WebSocket error: {error}")
-        self._connection_dead = True
+    def _handle_auth_response(self, data: Dict[str, Any]) -> bool:
+        """
+        Handle authentication response
         
-        if self.on_error:
-            try:
-                self.on_error(ws, error)
-            except Exception as e:
-                self.logger.error(f"Instance {self.instance_id} on_error callback error: {e}")
+        Args:
+            data: Authentication response data
+            
+        Returns:
+            bool: True (message handled)
+        """
+        if data.get('s') == self.AUTH_SUCCESS:
+            self.logger.info("Authentication successful")
+        else:
+            self.logger.error(f"Authentication failed: {data}")
+        
+        return True
 
-    def _on_close(self, ws, close_status_code, close_msg):
-        """Connection closed callback with enhanced monitoring"""
+    def _on_error(self, ws, error) -> None:
+        """Handle WebSocket connection errors"""
+        self.logger.error(f"WebSocket error: {error}")
+        self._call_external_callback(self.on_error, ws, error)
+
+    def _on_close(self, ws, close_status_code: Optional[int], close_msg: Optional[str]) -> None:
+        """Handle WebSocket connection close event"""
         self.connected = False
-        # Enhanced monitoring as recommended
-        self.logger.warning(f"Instance {self.instance_id} WebSocket closed: {close_status_code} - {close_msg} - TRIGGERING RECONNECTION")
+        self.logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
         
-        if self.on_close:
+        self._stop_heartbeat()
+        self._call_external_callback(self.on_close, ws, close_status_code, close_msg)
+
+    def _call_external_callback(self, callback: Optional[Callable], *args) -> None:
+        """
+        Safely call external callback with error handling
+        
+        Args:
+            callback: Callback function to call
+            *args: Arguments to pass to callback
+        """
+        if callback:
             try:
-                self.on_close(ws, close_status_code, close_msg)
+                callback(*args)
             except Exception as e:
-                self.logger.error(f"Instance {self.instance_id} on_close callback error: {e}")
+                self.logger.error(f"Error in external callback: {e}")
 
-    # Keep existing subscription methods unchanged
-    def subscribe_touchline(self, scrip_list):
-        """Subscribe to touchline data"""
-        self._send_message({"t": "t", "k": scrip_list}, "touchline subscription")
+    # Heartbeat Management
+    def _update_last_message_time(self) -> None:
+        """Update the timestamp of the last received message"""
+        with self._heartbeat_lock:
+            self._last_message_time = time.time()
 
-    def unsubscribe_touchline(self, scrip_list):
-        """Unsubscribe from touchline data"""
-        self._send_message({"t": "u", "k": scrip_list}, "touchline unsubscription")
+    def _start_heartbeat(self) -> None:
+        """Start heartbeat monitoring thread"""
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+        self._heartbeat_thread.start()
+        self.logger.debug("Heartbeat thread started")
 
-    def subscribe_depth(self, scrip_list):
-        """Subscribe to depth data"""
-        self._send_message({"t": "d", "k": scrip_list}, "depth subscription")
+    def _stop_heartbeat(self) -> None:
+        """Stop heartbeat monitoring thread"""
+        # Thread will stop when self.running becomes False
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self.logger.debug("Waiting for heartbeat thread to stop")
 
-    def unsubscribe_depth(self, scrip_list):
-        """Unsubscribe from depth data"""
-        self._send_message({"t": "ud", "k": scrip_list}, "depth unsubscription")
+    def _heartbeat_worker(self) -> None:
+        """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
+        while self.running and self.connected:
+            try:
+                time.sleep(self.HEARTBEAT_INTERVAL)
+                
+                if self.running and self.connected:
+                    if not self._send_heartbeat():
+                        break
+                    
+                    if not self._check_connection_health():
+                        break
+                        
+            except Exception as e:
+                self.logger.error(f"Heartbeat worker error: {e}")
+                break
 
-    def _send_message(self, message_dict, operation_name):
-        """Send message with error handling"""
-        if not self.ws or not self.connected or self._connection_dead:
-            self.logger.warning(f"Instance {self.instance_id} cannot send {operation_name}: not connected")
+    def _send_heartbeat(self) -> bool:
+        """
+        Send heartbeat message to server
+        
+        Returns:
+            bool: True if heartbeat sent successfully, False otherwise
+        """
+        if not self.ws:
+            return False
+        
+        try:
+            heartbeat_msg = {"t": self.MSG_TYPE_HEARTBEAT}
+            self.ws.send(json.dumps(heartbeat_msg))
+            self.logger.debug("Sent heartbeat")
+            return True
+        except Exception as e:
+            self.logger.error(f"Heartbeat send error: {e}")
+            return False
+
+    def _check_connection_health(self) -> bool:
+        """
+        Check connection health based on last message timestamp
+        
+        Returns:
+            bool: True if connection is healthy, False if timed out
+        """
+        with self._heartbeat_lock:
+            if self._last_message_time:
+                time_since_message = time.time() - self._last_message_time
+                if time_since_message > self.HEARTBEAT_TIMEOUT:
+                    self.logger.error("Connection timeout - no messages received")
+                    self._close_websocket()
+                    return False
+        
+        return True
+
+    # Subscription Management
+    def subscribe_touchline(self, scrip_list: str) -> bool:
+        """
+        Subscribe to touchline data for complete quote information
+        
+        Args:
+            scrip_list: Comma or hash-separated list of scrips
+            
+        Returns:
+            bool: True if subscription sent successfully, False otherwise
+        """
+        return self._send_subscription_message(
+            self.MSG_TYPE_TOUCHLINE_SUB,
+            scrip_list,
+            "touchline subscription"
+        )
+
+    def unsubscribe_touchline(self, scrip_list: str) -> bool:
+        """
+        Unsubscribe from touchline data
+        
+        Args:
+            scrip_list: Comma or hash-separated list of scrips
+            
+        Returns:
+            bool: True if unsubscription sent successfully, False otherwise
+        """
+        return self._send_subscription_message(
+            self.MSG_TYPE_TOUCHLINE_UNSUB,
+            scrip_list,
+            "touchline unsubscription"
+        )
+
+    def subscribe_depth(self, scrip_list: str) -> bool:
+        """
+        Subscribe to market depth data
+        
+        Args:
+            scrip_list: Comma or hash-separated list of scrips
+            
+        Returns:
+            bool: True if subscription sent successfully, False otherwise
+        """
+        return self._send_subscription_message(
+            self.MSG_TYPE_DEPTH_SUB,
+            scrip_list,
+            "depth subscription"
+        )
+
+    def unsubscribe_depth(self, scrip_list: str) -> bool:
+        """
+        Unsubscribe from market depth data
+        
+        Args:
+            scrip_list: Comma or hash-separated list of scrips
+            
+        Returns:
+            bool: True if unsubscription sent successfully, False otherwise
+        """
+        return self._send_subscription_message(
+            self.MSG_TYPE_DEPTH_UNSUB,
+            scrip_list,
+            "depth unsubscription"
+        )
+
+    def _send_subscription_message(self, msg_type: str, scrip_list: str, operation_name: str) -> bool:
+        """
+        Send subscription/unsubscription message
+        
+        Args:
+            msg_type: Message type for the operation
+            scrip_list: List of scrips to subscribe/unsubscribe
+            operation_name: Human-readable operation name for logging
+            
+        Returns:
+            bool: True if message sent successfully, False otherwise
+        """
+        message_dict = {"t": msg_type, "k": scrip_list}
+        return self._send_message(message_dict, operation_name)
+
+    def _send_message(self, message_dict: Dict[str, Any], operation_name: str) -> bool:
+        """
+        Send message with comprehensive error handling and validation
+        
+        Args:
+            message_dict: Message data to send
+            operation_name: Human-readable operation name for logging
+            
+        Returns:
+            bool: True if message sent successfully, False otherwise
+        """
+        if not self._validate_connection_state(operation_name):
             return False
         
         try:
             message_json = json.dumps(message_dict)
             self.ws.send(message_json)
-            self.logger.debug(f"Instance {self.instance_id} sent {operation_name}: {message_dict}")
+            self.logger.debug(f"Sent {operation_name}: {message_dict}")
             return True
         except Exception as e:
-            self.logger.error(f"Instance {self.instance_id} failed to send {operation_name}: {e}")
-            self._connection_dead = True
+            self.logger.error(f"Failed to send {operation_name}: {e}")
             return False
-    
-    def get_connection_stats(self):
-        """Get connection statistics for monitoring"""
-        current_time = time.time()
+
+    def _validate_connection_state(self, operation_name: str) -> bool:
+        """
+        Validate that connection is ready for sending messages
+        
+        Args:
+            operation_name: Operation name for logging
+            
+        Returns:
+            bool: True if connection is ready, False otherwise
+        """
+        if not self.ws:
+            self.logger.warning(f"Cannot send {operation_name}: WebSocket not initialized")
+            return False
+        
+        if not self.connected:
+            self.logger.warning(f"Cannot send {operation_name}: not connected")
+            return False
+        
+        return True
+
+    # Utility Methods
+    def is_connected(self) -> bool:
+        """
+        Check if WebSocket is currently connected
+        
+        Returns:
+            bool: True if connected, False otherwise
+        """
+        return self.connected and self.running
+
+    def get_connection_info(self) -> Dict[str, Any]:
+        """
+        Get connection information for debugging
+        
+        Returns:
+            Dict: Connection state information
+        """
         return {
-            'instance_id': self.instance_id,
             'connected': self.connected,
-            'connection_dead': self._connection_dead,
-            'message_count': self._message_count,
-            'uptime': current_time - self._connection_start_time if self._connection_start_time else 0,
-            'last_message_age': current_time - self._last_message_received if self._last_message_received else None,
-            'thread_alive': self._thread.is_alive() if self._thread else False,
-            'reconnecting': self._reconnecting,
-            'force_reconnecting': self._force_reconnecting
+            'running': self.running,
+            'user_id': self.user_id,
+            'actid': self.actid,
+            'ws_url': self.WS_URL,
+            'last_message_time': self._last_message_time,
+            'heartbeat_thread_alive': self._heartbeat_thread.is_alive() if self._heartbeat_thread else False,
+            'ws_thread_alive': self.ws_thread.is_alive() if self.ws_thread else False
         }
