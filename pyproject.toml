@@ -128,7 +128,8 @@ dependencies = [
   "wsproto==1.2.0",
   "WTForms==3.1.2",
   "zipp==3.19.2",
-  "zmq==0.0.0"
+  "zmq==0.0.0",
+  "ta-lib>=0.6.5",
 ]
 
 [build-system]

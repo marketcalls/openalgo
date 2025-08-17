@@ -1,57 +1,9 @@
 # Load and check environment variables before anything else
-from utils.env_check import load_and_check_env_variables  # Import the environment check function
-load_and_check_env_variables()
-
-from flask import Flask, render_template, session
-from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
-from extensions import socketio  # Import SocketIO
-from limiter import limiter  # Import the Limiter instance
-from cors import cors        # Import the CORS instance
-from csp import apply_csp_middleware  # Import the CSP middleware
-from utils.version import get_version  # Import version management
-from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
-from utils.traffic_logger import init_traffic_logging  # Import traffic logging
-from utils.logging import get_logger, log_startup_banner  # Import centralized logging
-# Import WebSocket proxy server - using relative import to avoid @ symbol issues
-from websocket_proxy.app_integration import start_websocket_proxy
-
-from blueprints.auth import auth_bp
-from blueprints.dashboard import dashboard_bp
-from blueprints.orders import orders_bp
-from blueprints.search import search_bp
-from blueprints.apikey import api_key_bp
-from blueprints.log import log_bp
-from blueprints.tv_json import tv_json_bp
-from blueprints.brlogin import brlogin_bp
-from blueprints.core import core_bp
-from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
-from blueprints.settings import settings_bp  # Import the settings blueprint
-from blueprints.chartink import chartink_bp  # Import the chartink blueprint
-from blueprints.traffic import traffic_bp  # Import the traffic blueprint
-from blueprints.latency import latency_bp  # Import the latency blueprint
-from blueprints.strategy import strategy_bp  # Import the strategy blueprint
-from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
-from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
-
-from restx_api import api_v1_bp, api
-
-from database.auth_db import init_db as ensure_auth_tables_exists
-from database.user_db import init_db as ensure_user_tables_exists
-from database.symbol import init_db as ensure_master_contract_tables_exists
-from database.apilog_db import init_db as ensure_api_log_tables_exists
-from database.analyzer_db import init_db as ensure_analyzer_tables_exists
-from database.settings_db import init_db as ensure_settings_tables_exists
-from database.chartink_db import init_db as ensure_chartink_tables_exists
-from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
-from database.latency_db import init_latency_db as ensure_latency_tables_exists
-from database.strategy_db import init_db as ensure_strategy_tables_exists
-
-from utils.plugin_loader import load_broker_auth_functions
-
+import argparse
 import os
+from utils.env_check import load_and_check_env_variables  # Import the environment check function
+from utils.logging import get_logger, log_startup_banner  # Import centralized logging
 
-# Initialize logger
-logger = get_logger(__name__)
 
 def create_app():
     # Initialize Flask application
@@ -228,23 +180,78 @@ def setup_environment(app):
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         logger.info(f"ngrok URL: {public_url}")
 
-app = create_app()
-
-# Explicitly call the setup environment function
-setup_environment(app)
-
-# Integrate the WebSocket proxy server with the Flask app
-start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(description='OpenAlgo Flask Application.')
+    # Add a string argument with a default value
+    parser.add_argument('-b', '--broker', type=str, default=None, help='Specify the broker name to pick respective ".env_<broker name>" file. Else it will pick ".env".')
+    args = parser.parse_args()
+    # Load and check environment variables with the specified broker
+    broker = args.broker
+    env_file = f'.env_{args.broker}' if args.broker else '.env'
+    # Initialize logger
+    logger = get_logger( f'{__name__}_broker' if args.broker else __name__)     
+    # Load and check environment variables
+    load_and_check_env_variables(env_file=env_file)
+    
+    # import libs
+    from flask import Flask, render_template, session
+    from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
+    from extensions import socketio  # Import SocketIO
+    from limiter import limiter  # Import the Limiter instance
+    from cors import cors        # Import the CORS instance
+    from csp import apply_csp_middleware  # Import the CSP middleware
+    from utils.version import get_version  # Import version management
+    from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
+    from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+    # Import WebSocket proxy server - using relative import to avoid @ symbol issues
+    from websocket_proxy.app_integration import start_websocket_proxy
+
+    from blueprints.auth import auth_bp
+    from blueprints.dashboard import dashboard_bp
+    from blueprints.orders import orders_bp
+    from blueprints.search import search_bp
+    from blueprints.apikey import api_key_bp
+    from blueprints.log import log_bp
+    from blueprints.tv_json import tv_json_bp
+    from blueprints.brlogin import brlogin_bp
+    from blueprints.core import core_bp
+    from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
+    from blueprints.settings import settings_bp  # Import the settings blueprint
+    from blueprints.chartink import chartink_bp  # Import the chartink blueprint
+    from blueprints.traffic import traffic_bp  # Import the traffic blueprint
+    from blueprints.latency import latency_bp  # Import the latency blueprint
+    from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+    from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
+    from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
+
+    from restx_api import api_v1_bp, api
+
+    from database.auth_db import init_db as ensure_auth_tables_exists
+    from database.user_db import init_db as ensure_user_tables_exists
+    from database.symbol import init_db as ensure_master_contract_tables_exists
+    from database.apilog_db import init_db as ensure_api_log_tables_exists
+    from database.analyzer_db import init_db as ensure_analyzer_tables_exists
+    from database.settings_db import init_db as ensure_settings_tables_exists
+    from database.chartink_db import init_db as ensure_chartink_tables_exists
+    from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
+    from database.latency_db import init_latency_db as ensure_latency_tables_exists
+    from database.strategy_db import init_db as ensure_strategy_tables_exists
+
+    from utils.plugin_loader import load_broker_auth_functions
+    # Create the Flask app
+    app = create_app()
+    # Explicitly call the setup environment function
+    setup_environment(app)
+    # Integrate the WebSocket proxy server with the Flask app
+    start_websocket_proxy(app)
     # Get environment variables
     host_ip = os.getenv('FLASK_HOST_IP', '127.0.0.1')  # Default to '127.0.0.1' if not set
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
-
     # Log the OpenAlgo access URL with enhanced styling
     url = f"http://{host_ip}:{port}"
     log_startup_banner(logger, "OpenAlgo is running!", url)
-
     socketio.run(app, host=host_ip, port=port, debug=debug)
