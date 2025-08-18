@@ -1,0 +1,34 @@
+{
+    "strategy_name": "strangle",
+    "index": "NIFTY",
+    "exchange": "NFO",
+    "product_type": "MIS",
+    "quantity_in_lots": 1,
+    "mode": "LIVE",
+    "start_time": "09:30",
+    "end_time": "15:10",
+    "monitoring_interval_seconds": 60,
+    "expiry_type": "Weekly",
+    "strike_difference": {
+        "NIFTY": 200,
+        "BANKNIFTY": 500
+    },
+    "strike_interval": {
+        "NIFTY": 50,
+        "BANKNIFTY": 100
+    },
+    "lot_size": {
+        "NIFTY": 50,
+        "BANKNIFTY": 15
+    },
+    "adjustment": {
+        "enabled": true,
+        "max_adjustments": 5,
+        "threshold_ratio": 0.7,
+        "strike_search_radius": 20
+    },
+    "websocket": {
+        "poll_interval_fallback": 1,
+        "websocket_max_retries": 5
+    }
+}

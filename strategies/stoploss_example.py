@@ -5,18 +5,23 @@
 from openalgo import api
 import time
 from datetime import datetime
+from dotenv import load_dotenv
+import os
 
+
+# Load .env file variables into environment
+load_dotenv(override=True)
 # Setup OpenAlgo client
 client = api(
-    api_key="your-openalgo-api-key",  # Replace with your API key
+    api_key=os.getenv("APP_KEY"),  # Replace with your API key
     host="http://127.0.0.1:5000",  # Replace with your API host
     ws_url="ws://127.0.0.1:8765"  # Explicit WebSocket URL (can be different from REST API host)
 )
 
 # Strategy details
 STRATEGY_NAME = "LTP_Stoploss_Example"
-SYMBOL = "GOLDPETAL30JUN25FUT"
-EXCHANGE = "MCX"
+SYMBOL = "RELIANCE"
+EXCHANGE = "NSE"
 QUANTITY = 1
 PRODUCT = "MIS"
 ACTION = "BUY"

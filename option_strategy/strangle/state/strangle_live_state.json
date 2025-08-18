@@ -1,0 +1,15 @@
+{
+    "active_trade_id": "fb9269af-25c9-48dc-910e-f7e91673dfb4",
+    "active_legs": {
+        "CALL_SHORT": {
+            "symbol": "NIFTY21AUG2525150CE",
+            "strike": 25150
+        },
+        "PUT_SHORT": {
+            "symbol": "NIFTY21AUG2524750PE",
+            "strike": 24750
+        }
+    },
+    "adjustment_count": 0,
+    "mode": "LIVE"
+}
