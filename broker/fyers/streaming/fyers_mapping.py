@@ -1,121 +1,309 @@
-import logging
+"""
+Fyers Data Mapping
+Maps Fyers HSM data to OpenAlgo format for compatibility
+"""
 
-class FyersExchangeMapper:
-    """Maps OpenAlgo exchange codes to Fyers-specific exchange types"""
-    
-    # Exchange type mapping for Fyers broker
-    EXCHANGE_TYPES = {
-        'NSE': 'NSE',
-        'BSE': 'BSE', 
-        'NFO': 'NSE',  # NFO uses NSE in Fyers
-        'BFO': 'BSE',  # BFO uses BSE in Fyers
-        'MCX': 'MCX',
-        'CDS': 'NSE'   # Currency derivatives use NSE
-    }
-    
-    # Fyers uses specific segment codes
-    SEGMENT_CODES = {
-        'NSE': 10,  # Equity
-        'BSE': 10,  # Equity
-        'NFO': 11,  # F&O
-        'BFO': 11,  # F&O
-        'MCX': 20,  # Commodity
-        'CDS': 12   # Currency
-    }
-    
-    @staticmethod
-    def get_exchange_type(exchange):
-        """
-        Convert exchange code to Fyers-specific exchange type
-        
-        Args:
-            exchange (str): Exchange code (e.g., 'NSE', 'BSE')
-            
-        Returns:
-            str: Fyers-specific exchange type
-        """
-        return FyersExchangeMapper.EXCHANGE_TYPES.get(exchange, 'NSE')
-    
-    @staticmethod
-    def get_segment_code(exchange):
-        """
-        Get Fyers segment code for the exchange
-        
-        Args:
-            exchange (str): Exchange code
-            
-        Returns:
-            int: Segment code
-        """
-        return FyersExchangeMapper.SEGMENT_CODES.get(exchange, 10)
+import time
+from typing import Dict, Any, Optional
+from datetime import datetime
 
-
-class FyersCapabilityRegistry:
+class FyersDataMapper:
     """
-    Registry of Fyers broker's capabilities including supported exchanges, 
-    subscription modes, and market depth levels
+    Maps Fyers HSM WebSocket data to OpenAlgo format
     """
     
-    # Fyers broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
+    def __init__(self):
+        """Initialize the data mapper"""
+        pass
     
-    # Fyers subscription modes
-    # According to docs: SymbolsData, SymbolsUpdate, Depth
-    subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Depth
-    
-    # Fyers supports market depth for all exchanges
-    depth_support = {
-        'NSE': [5, 20],   # NSE supports 5 and 20 levels
-        'BSE': [5, 20],   # BSE supports 5 and 20 levels  
-        'NFO': [5, 20],   # NFO supports 5 and 20 levels
-        'BFO': [5, 20],   # BFO supports 5 and 20 levels
-        'MCX': [5, 20],   # MCX supports 5 and 20 levels
-        'CDS': [5, 20]    # CDS supports 5 and 20 levels
-    }
-    
-    @classmethod
-    def get_supported_depth_levels(cls, exchange):
+    def map_to_openalgo_ltp(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Get supported depth levels for an exchange
+        Map Fyers data to OpenAlgo LTP format
         
         Args:
-            exchange (str): Exchange code (e.g., 'NSE', 'BSE')
+            fyers_data: Raw data from Fyers HSM WebSocket
             
         Returns:
-            list: List of supported depth levels (e.g., [5, 20])
+            OpenAlgo LTP format dict or None if mapping fails
         """
-        return cls.depth_support.get(exchange, [5])
+        try:
+            if not fyers_data or "ltp" not in fyers_data:
+                return None
+            
+            # Get the symbol - prefer original_symbol if available
+            symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
+            
+            # Parse exchange and symbol from original_symbol (e.g., "BSE:TCS-A")
+            if ":" in symbol:
+                exchange, symbol_name = symbol.split(":", 1)
+            else:
+                exchange = fyers_data.get("exchange", "")
+                symbol_name = symbol
+            
+            # Apply multiplier and precision to LTP
+            ltp = fyers_data.get("ltp", 0)
+            multiplier = fyers_data.get("multiplier", 100)  # Default 100
+            precision = fyers_data.get("precision", 2)     # Default 2
+            
+            # Convert to actual price
+            if multiplier > 0:
+                ltp = ltp / multiplier
+            
+            # Round to precision
+            ltp = round(ltp, precision)
+            
+            # Map to OpenAlgo LTP format
+            openalgo_data = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "token": fyers_data.get("exchange_token", ""),
+                "ltp": ltp,
+                "timestamp": int(time.time()),
+                "data_type": "LTP"
+            }
+            
+            return openalgo_data
+            
+        except Exception as e:
+            print(f"Error mapping LTP data: {e}")
+            return None
     
-    @classmethod
-    def is_depth_level_supported(cls, exchange, depth_level):
+    def map_to_openalgo_quote(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Check if a depth level is supported for the given exchange
+        Map Fyers data to OpenAlgo Quote format
         
         Args:
-            exchange (str): Exchange code
-            depth_level (int): Requested depth level
+            fyers_data: Raw data from Fyers HSM WebSocket
             
         Returns:
-            bool: True if supported, False otherwise
+            OpenAlgo Quote format dict or None if mapping fails
         """
-        supported_depths = cls.get_supported_depth_levels(exchange)
-        return depth_level in supported_depths
+        try:
+            if not fyers_data:
+                return None
+            
+            # Get the symbol
+            symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
+            
+            # Parse exchange and symbol
+            if ":" in symbol:
+                exchange, symbol_name = symbol.split(":", 1)
+            else:
+                exchange = fyers_data.get("exchange", "")
+                symbol_name = symbol
+            
+            # Apply multiplier and precision
+            multiplier = fyers_data.get("multiplier", 100)
+            precision = fyers_data.get("precision", 2)
+            
+            def convert_price(value):
+                if value and multiplier > 0:
+                    return round(value / multiplier, precision)
+                return 0.0
+            
+            # Map to OpenAlgo Quote format
+            openalgo_data = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "token": fyers_data.get("exchange_token", ""),
+                "ltp": convert_price(fyers_data.get("ltp", 0)),
+                "open": convert_price(fyers_data.get("open_price", 0)),
+                "high": convert_price(fyers_data.get("high_price", 0)),
+                "low": convert_price(fyers_data.get("low_price", 0)),
+                "close": convert_price(fyers_data.get("prev_close_price", 0)),
+                "bid_price": convert_price(fyers_data.get("bid_price", 0)),
+                "ask_price": convert_price(fyers_data.get("ask_price", 0)),
+                "bid_size": fyers_data.get("bid_size", 0),
+                "ask_size": fyers_data.get("ask_size", 0),
+                "volume": fyers_data.get("vol_traded_today", 0),
+                "oi": fyers_data.get("OI", 0),
+                "upper_circuit": convert_price(fyers_data.get("upper_ckt", 0)),
+                "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
+                "last_traded_time": fyers_data.get("last_traded_time", 0),
+                "exchange_time": fyers_data.get("exch_feed_time", 0),
+                "timestamp": int(time.time()),
+                "data_type": "Quote"
+            }
+            
+            return openalgo_data
+            
+        except Exception as e:
+            print(f"Error mapping Quote data: {e}")
+            return None
     
-    @classmethod
-    def get_fallback_depth_level(cls, exchange, requested_depth):
+    def map_to_openalgo_depth(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Get the best available depth level as a fallback
+        Map Fyers depth data to OpenAlgo Depth format
         
         Args:
-            exchange (str): Exchange code
-            requested_depth (int): Requested depth level
+            fyers_data: Raw depth data from Fyers HSM WebSocket
             
         Returns:
-            int: Highest supported depth level that is ≤ requested depth
+            OpenAlgo Depth format dict or None if mapping fails
         """
-        supported_depths = cls.get_supported_depth_levels(exchange)
-        # Find the highest supported depth that's less than or equal to requested depth
-        fallbacks = [d for d in supported_depths if d <= requested_depth]
-        if fallbacks:
-            return max(fallbacks)
-        return 5  # Default to basic depth
+        try:
+            if not fyers_data or fyers_data.get("type") != "dp":
+                return None
+            
+            # Get the symbol
+            symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
+            
+            # Parse exchange and symbol
+            if ":" in symbol:
+                exchange, symbol_name = symbol.split(":", 1)
+            else:
+                exchange = fyers_data.get("exchange", "")
+                symbol_name = symbol
+            
+            # Apply multiplier and precision
+            multiplier = fyers_data.get("multiplier", 100)
+            precision = fyers_data.get("precision", 2)
+            
+            def convert_price(value):
+                if value and multiplier > 0:
+                    return round(value / multiplier, precision)
+                return 0.0
+            
+            # Build bid and ask arrays
+            bids = []
+            asks = []
+            
+            for i in range(1, 6):  # 5 levels
+                bid_price = convert_price(fyers_data.get(f"bid_price{i}", 0))
+                bid_size = fyers_data.get(f"bid_size{i}", 0)
+                bid_orders = fyers_data.get(f"bid_order{i}", 0)
+                
+                ask_price = convert_price(fyers_data.get(f"ask_price{i}", 0))
+                ask_size = fyers_data.get(f"ask_size{i}", 0)
+                ask_orders = fyers_data.get(f"ask_order{i}", 0)
+                
+                if bid_price > 0:
+                    bids.append({
+                        "price": bid_price,
+                        "size": bid_size,
+                        "orders": bid_orders
+                    })
+                
+                if ask_price > 0:
+                    asks.append({
+                        "price": ask_price,
+                        "size": ask_size,
+                        "orders": ask_orders
+                    })
+            
+            # Map to OpenAlgo Depth format
+            openalgo_data = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "token": fyers_data.get("exchange_token", ""),
+                "bids": bids,
+                "asks": asks,
+                "timestamp": int(time.time()),
+                "data_type": "Depth"
+            }
+            
+            return openalgo_data
+            
+        except Exception as e:
+            print(f"Error mapping Depth data: {e}")
+            return None
+    
+    def map_fyers_data(self, fyers_data: Dict[str, Any], requested_type: str = "Quote") -> Optional[Dict[str, Any]]:
+        """
+        Map Fyers data to appropriate OpenAlgo format based on requested type
+        
+        Args:
+            fyers_data: Raw data from Fyers HSM WebSocket
+            requested_type: Requested data type ("LTP", "Quote", or "Depth")
+            
+        Returns:
+            Mapped OpenAlgo data or None if mapping fails
+        """
+        if not fyers_data:
+            return None
+        
+        # Determine data type from Fyers data if not specified
+        fyers_type = fyers_data.get("type", "sf")
+        
+        if requested_type == "LTP" or (requested_type == "Quote" and "ltp" in fyers_data):
+            return self.map_to_openalgo_ltp(fyers_data)
+        elif requested_type == "Quote" and fyers_type in ["sf", "if"]:
+            return self.map_to_openalgo_quote(fyers_data)
+        elif requested_type == "Depth" and fyers_type == "dp":
+            return self.map_to_openalgo_depth(fyers_data)
+        elif fyers_type == "sf":
+            # Default to Quote for symbol feed
+            return self.map_to_openalgo_quote(fyers_data)
+        elif fyers_type == "if":
+            # Index data - treat as Quote
+            return self.map_to_openalgo_quote(fyers_data)
+        elif fyers_type == "dp":
+            # Depth data
+            return self.map_to_openalgo_depth(fyers_data)
+        
+        return None
+    
+    def extract_symbol_info(self, symbol: str) -> Dict[str, str]:
+        """
+        Extract exchange and symbol from OpenAlgo format
+        
+        Args:
+            symbol: Symbol in format "EXCHANGE:SYMBOL" or just "SYMBOL"
+            
+        Returns:
+            Dict with exchange and symbol keys
+        """
+        if ":" in symbol:
+            exchange, symbol_name = symbol.split(":", 1)
+        else:
+            # Default to NSE if no exchange specified
+            exchange = "NSE"
+            symbol_name = symbol
+        
+        return {
+            "exchange": exchange,
+            "symbol": symbol_name,
+            "full_symbol": f"{exchange}:{symbol_name}"
+        }
+    
+    def is_valid_data(self, data: Dict[str, Any]) -> bool:
+        """
+        Check if the data contains valid market data
+        
+        Args:
+            data: Market data dictionary
+            
+        Returns:
+            True if data is valid, False otherwise
+        """
+        if not data:
+            return False
+        
+        # Check for required fields
+        required_fields = ["symbol", "exchange"]
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return False
+        
+        # Check for at least one price field
+        price_fields = ["ltp", "open", "high", "low", "close", "bid_price", "ask_price"]
+        has_price = any(field in data and data[field] is not None for field in price_fields)
+        
+        return has_price
+    
+    def format_timestamp(self, timestamp: int) -> str:
+        """
+        Format timestamp to readable string
+        
+        Args:
+            timestamp: Unix timestamp
+            
+        Returns:
+            Formatted timestamp string
+        """
+        try:
+            if timestamp > 0:
+                return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+            return ""
+        except:
+            return ""
