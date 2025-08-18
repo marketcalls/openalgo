@@ -429,6 +429,9 @@ class FyersHSMWebSocket:
             # Send to callback
             if self.on_message_callback:
                 self.logger.info(f"Sending scrip data to callback: {scrip_data.get('symbol', 'Unknown')} LTP={scrip_data.get('ltp', 'N/A')}")
+                # Debug: Log all available fields in HSM data
+                self.logger.info(f"Complete HSM scrip_data fields: {list(scrip_data.keys())}")
+                self.logger.info(f"OHLC values: open={scrip_data.get('open_price', 'N/A')}, high={scrip_data.get('high_price', 'N/A')}, low={scrip_data.get('low_price', 'N/A')}, close={scrip_data.get('prev_close_price', 'N/A')}")
                 self.on_message_callback(scrip_data)
             else:
                 self.logger.warning(f"No callback set for scrip data: {scrip_data.get('symbol', 'Unknown')}")

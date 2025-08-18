@@ -183,15 +183,15 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 def data_callback(data):
                     """Handle market data and send via ZeroMQ"""
                     try:
-                        # Map Fyers data to OpenAlgo format
-                        mapped_data = self._map_fyers_to_openalgo(data, mode)
-                        if mapped_data:
+                        # Data is already properly mapped by FyersAdapter and FyersDataMapper
+                        # Just ensure we have the subscription info for proper topic generation
+                        if data:
                             # Override symbol and exchange with original OpenAlgo format for proper topic
-                            mapped_data['symbol'] = symbol  # Use original OpenAlgo symbol
-                            mapped_data['exchange'] = exchange  # Use original OpenAlgo exchange
-                            mapped_data['subscription_mode'] = mode
+                            data['symbol'] = symbol  # Use original OpenAlgo symbol
+                            data['exchange'] = exchange  # Use original OpenAlgo exchange
+                            data['subscription_mode'] = mode
                             # Send via ZeroMQ
-                            self._send_data(mapped_data)
+                            self._send_data(data)
                     except Exception as e:
                         self.logger.error(f"Error processing data callback: {e}")
                 
@@ -368,7 +368,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "data_type": "LTP"
                 })
             elif mode == 2:  # Quote  
-                # Convert all price fields from paise to rupees
+                # Convert all price fields from paise to rupees using correct field names
                 raw_ltp = fyers_data.get("ltp", 0)
                 raw_open = fyers_data.get("open_price", 0)
                 raw_high = fyers_data.get("high_price", 0)
@@ -377,19 +377,18 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raw_bid = fyers_data.get("bid_price", 0)
                 raw_ask = fyers_data.get("ask_price", 0)
                 
-                openalgo_data.update({
-                    "ltp": self._convert_price_to_rupees(raw_ltp, fyers_data),
-                    "open": self._convert_price_to_rupees(raw_open, fyers_data),
-                    "high": self._convert_price_to_rupees(raw_high, fyers_data),
-                    "low": self._convert_price_to_rupees(raw_low, fyers_data),
-                    "close": self._convert_price_to_rupees(raw_close, fyers_data),
-                    "bid_price": self._convert_price_to_rupees(raw_bid, fyers_data),
-                    "ask_price": self._convert_price_to_rupees(raw_ask, fyers_data),
-                    "bid_size": fyers_data.get("bid_size", 0),    # Size fields don't need conversion
-                    "ask_size": fyers_data.get("ask_size", 0),    # Size fields don't need conversion
-                    "volume": fyers_data.get("vol_traded_today", 0),  # Volume doesn't need conversion
-                    "data_type": "Quote"
-                })
+                # Data is already properly mapped by FyersDataMapper with OHLC fields
+                # Debug log to see if we have the proper data now
+                ltp = fyers_data.get("ltp", 0)
+                open_price = fyers_data.get("open", 0)  
+                high_price = fyers_data.get("high", 0)
+                low_price = fyers_data.get("low", 0) 
+                close_price = fyers_data.get("close", 0)
+                
+                self.logger.info(f"Mapped Quote data: ltp={ltp}, open={open_price}, high={high_price}, low={low_price}, close={close_price}")
+                
+                # Return the already mapped data (no additional processing needed)
+                return fyers_data
             elif mode == 3:  # Depth
                 openalgo_data.update({
                     "bids": fyers_data.get("bids", []),

@@ -92,14 +92,26 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
             
-            # Apply multiplier and precision
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
+            # Use the same price conversion logic as LTP
+            # Check if this is an index based on symbol or type
+            is_index = (
+                "-INDEX" in symbol or 
+                "-INDEX" in symbol.upper() or
+                "INDEX" in symbol.upper() or
+                fyers_data.get("type") == "if"  # Index feed type in HSM
+            )
             
             def convert_price(value):
-                if value and multiplier > 0:
-                    return round(value / multiplier, precision)
-                return 0.0
+                if not value:
+                    return 0.0
+                    
+                if is_index:
+                    # Indices: Keep raw values, just round to 2 decimal places
+                    return round(float(value), 2)
+                else:
+                    # Stocks, Futures, Options: Convert paise to rupees (divide by 100)
+                    # For NSE, NFO, MCX, BSE, BFO instruments
+                    return round(float(value) / 100.0, 2)
             
             # Map to OpenAlgo Quote format
             openalgo_data = {
@@ -225,9 +237,9 @@ class FyersDataMapper:
         # Determine data type from Fyers data if not specified
         fyers_type = fyers_data.get("type", "sf")
         
-        if requested_type == "LTP" or (requested_type == "Quote" and "ltp" in fyers_data):
+        if requested_type == "LTP":
             return self.map_to_openalgo_ltp(fyers_data)
-        elif requested_type == "Quote" and fyers_type in ["sf", "if"]:
+        elif requested_type == "Quote":
             return self.map_to_openalgo_quote(fyers_data)
         elif requested_type == "Depth" and fyers_type == "dp":
             return self.map_to_openalgo_depth(fyers_data)
