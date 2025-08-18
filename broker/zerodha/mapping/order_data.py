@@ -207,14 +207,23 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    for holdings in holdings_data:
+    for holdings in holdings_data:  
+        # Handle zero average price case
+        average_price = float(holdings.get('average_price') or 0.0)
+        if average_price == 0:
+            logger.debug(f"Encountering zero average price for symbol: {holdings.get('tradingsymbol', 'Unknown')}")
+            pnlpercent = 0.0
+        else:
+            pnlpercent = round((holdings.get('last_price', 0) - average_price) / average_price * 100, 2)
+        
         transformed_position = {
             "symbol": holdings.get('tradingsymbol', ''),
             "exchange": holdings.get('exchange', ''),
             "quantity": holdings.get('quantity', 0),
             "product": holdings.get('product', ''),
+            "average_price": average_price,
             "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
+            "pnlpercent": pnlpercent  # Rounded to two decimals
         
         }
         transformed_data.append(transformed_position)
