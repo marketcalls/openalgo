@@ -105,7 +105,7 @@ def get_order_book(auth):
                         price_num = 0.0
 
                     if status == "COMPLETE" and price_num == 0 and avg_price is not None:
-                        order["price"] = avg_price
+                        order["price"] = float(avg_price)
                 except Exception:
                     # Skip any malformed order entries
                     continue
