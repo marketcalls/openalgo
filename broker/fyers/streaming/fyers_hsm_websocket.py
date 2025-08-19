@@ -501,12 +501,48 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.DEPTH_FIELDS):
                     depth_data[self.DEPTH_FIELDS[index]] = value
             
+            # Skip 2 bytes (similar to scrip snapshot)
+            offset += 2
+            
+            if offset + 3 > len(data):
+                return offset
+                
+            # Get multiplier and precision (depth data also has these)
+            multiplier = struct.unpack(">H", data[offset:offset + 2])[0]
+            depth_data["multiplier"] = multiplier
+            offset += 2
+            
+            precision = struct.unpack("B", data[offset:offset + 1])[0]
+            depth_data["precision"] = precision
+            offset += 1
+            
+            # Parse exchange, token, symbol strings (same as scrip)
+            string_fields = ["exchange", "exchange_token", "symbol"]
+            for field in string_fields:
+                if offset + 1 > len(data):
+                    break
+                    
+                string_len = struct.unpack("B", data[offset:offset + 1])[0]
+                offset += 1
+                
+                if offset + string_len > len(data):
+                    break
+                    
+                string_data = data[offset:offset + string_len].decode("utf-8", errors='ignore')
+                depth_data[field] = string_data
+                offset += string_len
+            
             # Add original symbol mapping
             if topic_name in self.symbol_mappings:
                 depth_data["original_symbol"] = self.symbol_mappings[topic_name]
             
             # Store data
             self.depth_data[topic_id] = depth_data
+            
+            # Log depth data for debugging
+            self.logger.info(f"Parsed depth data: {depth_data.get('symbol', 'Unknown')}")
+            self.logger.info(f"Depth fields: bid_price1={depth_data.get('bid_price1', 'N/A')}, ask_price1={depth_data.get('ask_price1', 'N/A')}")
+            self.logger.info(f"Multiplier={multiplier}, Precision={precision}")
             
             # Send to callback
             if self.on_message_callback:

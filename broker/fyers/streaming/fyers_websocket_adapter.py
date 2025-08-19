@@ -391,8 +391,8 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return fyers_data
             elif mode == 3:  # Depth
                 openalgo_data.update({
-                    "bids": fyers_data.get("bids", []),
-                    "asks": fyers_data.get("asks", []),
+                    "ltp": fyers_data.get("ltp", 0),
+                    "depth": fyers_data.get("depth", {"buy": [], "sell": []}),
                     "data_type": "Depth"
                 })
             
@@ -425,9 +425,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Use the base adapter's publish_market_data method like Angel does
                 self.publish_market_data(topic, data)
                 
-                # Debug log for all data (not just BSE/MCX)
-                ltp = data.get('ltp', 'N/A')
-                self.logger.info(f"Published {exchange} data: {symbol} = {ltp} (topic: {topic})")
+                # Debug log for all data types
+                if subscription_mode == 3:  # Depth data
+                    depth = data.get('depth', {})
+                    buy_levels = depth.get('buy', [])
+                    sell_levels = depth.get('sell', [])
+                    bid1 = buy_levels[0]['price'] if buy_levels else 'N/A'
+                    ask1 = sell_levels[0]['price'] if sell_levels else 'N/A'
+                    self.logger.info(f"Published {exchange} depth: {symbol} - Bid={bid1}, Ask={ask1} (topic: {topic})")
+                else:  # LTP or Quote data
+                    ltp = data.get('ltp', 'N/A')
+                    self.logger.info(f"Published {exchange} data: {symbol} = {ltp} (topic: {topic})")
                 
         except Exception as e:
             self.logger.error(f"Error sending data via ZeroMQ: {e}")

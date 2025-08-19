@@ -249,15 +249,23 @@ class FyersAdapter:
             fyers_type = fyers_data.get("type", "sf")
             update_type = fyers_data.get("update_type", "snapshot")
             
-            # Find the appropriate callback based on data type
+            # Find the appropriate callback based on data type and subscription intent
             callback = None
             openalgo_data_type = "Quote"  # Default
             
+            # Check if we have a depth subscription callback for indices
+            depth_callback = self.subscription_callbacks.get("DepthUpdate")
+            symbol_callback = self.subscription_callbacks.get("SymbolUpdate")
+            
             if fyers_type == "dp":
-                callback = self.subscription_callbacks.get("DepthUpdate")
+                callback = depth_callback
+                openalgo_data_type = "Depth"
+            elif fyers_type == "if" and depth_callback:
+                # Index data but depth subscription exists - create synthetic depth
+                callback = depth_callback
                 openalgo_data_type = "Depth"
             else:
-                callback = self.subscription_callbacks.get("SymbolUpdate")
+                callback = symbol_callback
                 openalgo_data_type = "Quote"
             
             if not callback:
@@ -272,10 +280,18 @@ class FyersAdapter:
             mapped_data["update_type"] = update_type
             mapped_data["timestamp"] = int(time.time())
             
-            # Debug logging for BSE/MCX data
+            # Debug logging for BSE/MCX/NSE_INDEX data
             symbol = mapped_data.get("symbol", "")
-            if any(ex in symbol for ex in ["BSE:", "MCX:", "BFO:"]):
-                self.logger.info(f"🎉 {symbol} data: LTP={mapped_data.get('ltp', 0)}, Type={openalgo_data_type}")
+            if any(ex in symbol for ex in ["BSE:", "MCX:", "BFO:", "NSE_INDEX:"]):
+                if openalgo_data_type == "Depth":
+                    depth = mapped_data.get('depth', {})
+                    buy_levels = depth.get('buy', [])
+                    sell_levels = depth.get('sell', [])
+                    bid1 = buy_levels[0]['price'] if buy_levels else 'N/A'
+                    ask1 = sell_levels[0]['price'] if sell_levels else 'N/A'
+                    self.logger.info(f"🎉 {symbol} depth: Bid={bid1}, Ask={ask1}, Type={openalgo_data_type}")
+                else:
+                    self.logger.info(f"🎉 {symbol} data: LTP={mapped_data.get('ltp', 0)}, Type={openalgo_data_type}")
             
             # Send to callback
             callback(mapped_data)

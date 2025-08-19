@@ -212,9 +212,11 @@ class FyersTokenConverter:
                     invalid_symbols.extend(brsymbols)
             
             # If API conversion failed for all symbols, fall back to manual conversion
-            if not hsm_tokens and brsymbols:
+            # But exclude symbols that were already processed and marked invalid (like depth+index)
+            remaining_symbols = [sym for sym in brsymbols if sym not in invalid_symbols]
+            if not hsm_tokens and remaining_symbols:
                 self.logger.warning("API conversion failed for all symbols, using manual conversion as fallback")
-                fallback_tokens, fallback_mappings, fallback_invalid = self._manual_conversion(brsymbols, data_type)
+                fallback_tokens, fallback_mappings, fallback_invalid = self._manual_conversion(remaining_symbols, data_type)
                 hsm_tokens.extend(fallback_tokens)
                 token_mappings.update(fallback_mappings)
                 invalid_symbols.extend(fallback_invalid)
@@ -254,15 +256,19 @@ class FyersTokenConverter:
             # Check if it's an index
             is_index = symbol.endswith("-INDEX")
             
-            if is_index and data_type != "DepthUpdate":
-                # Index feed
+            if is_index:
+                # For indices, always use index feed (if) regardless of data_type
+                # Depth requests for indices will be converted to quote data and then synthetic depth
                 if symbol in self.INDEX_MAPPINGS:
                     token_name = self.INDEX_MAPPINGS[symbol]
                 else:
                     # Extract index name from symbol
                     token_name = symbol.split(":")[1].replace("-INDEX", "")
                 hsm_token = f"if|{segment}|{token_name}"
-            elif data_type == "DepthUpdate" and not is_index:
+                
+                if data_type == "DepthUpdate":
+                    self.logger.info(f"Index depth subscription: {symbol} -> using index feed for synthetic depth")
+            elif data_type == "DepthUpdate":
                 # Depth feed
                 token_suffix = fytoken[10:]  # Extract token suffix
                 hsm_token = f"dp|{segment}|{token_suffix}"
@@ -314,11 +320,15 @@ class FyersTokenConverter:
                 prefix = "sf"  # Default to symbol feed
                 
                 if symbol.endswith("-INDEX"):
+                    # For indices, always use index feed (if) regardless of data_type
                     prefix = "if"
                     if symbol in self.INDEX_MAPPINGS:
                         token = self.INDEX_MAPPINGS[symbol]
                     else:
                         token = symbol_name.replace("-INDEX", "")
+                    
+                    if data_type == "DepthUpdate":
+                        self.logger.info(f"Manual index depth subscription: {symbol} -> using index feed for synthetic depth")
                 elif data_type == "DepthUpdate":
                     prefix = "dp"
                     # For brsymbols, use symbol name as token
