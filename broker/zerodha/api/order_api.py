@@ -84,7 +84,34 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         raise
 
 def get_order_book(auth):
-    return get_api_response("/orders",auth)
+    orderbook = get_api_response("/orders",auth)
+    # Backfill price with average_price for COMPLETE orders where price is 0
+    # This is an issue with MIS / Intraday orders... we don't get price from Zerodha
+    # most likely due to partial fills etc...
+    try:
+        if isinstance(orderbook, dict):
+            for order in orderbook.get("data", []) or []:
+                try:
+                    status = order.get("status")
+                    price = order.get("price", 0)
+                    avg_price = order.get("average_price")
+
+                    # Safely coerce price to float for comparison
+                    if isinstance(price, (int, float)):
+                        price_num = float(price)
+                    elif isinstance(price, str):
+                        price_num = float(price.strip() or 0)
+                    else:
+                        price_num = 0.0
+
+                    if status == "COMPLETE" and price_num == 0 and avg_price is not None:
+                        order["price"] = avg_price
+                except Exception:
+                    # Skip any malformed order entries
+                    continue
+    except Exception:
+        logger.exception("Error processing orderbook to backfill price from average_price")
+    return orderbook
 
 def get_trade_book(auth):
     return get_api_response("/trades",auth)
@@ -417,4 +444,3 @@ def cancel_all_orders_api(data,auth):
             failed_cancellations.append(orderid)
     
     return canceled_orders, failed_cancellations
-
