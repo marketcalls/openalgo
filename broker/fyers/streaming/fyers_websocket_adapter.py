@@ -421,6 +421,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 # Format: EXCHANGE_SYMBOL_MODE (following Angel adapter pattern)
                 topic = f"{exchange}_{symbol}_{mode_str}"
+                self.logger.info(f"Publishing data for symbol: {symbol}, exchange: {exchange}, topic: {topic}")
                 
                 # Use the base adapter's publish_market_data method like Angel does
                 self.publish_market_data(topic, data)

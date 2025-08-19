@@ -352,6 +352,7 @@ class FyersHSMWebSocket:
             
             # Store mapping
             self.subscriptions[topic_id] = topic_name
+            self.logger.info(f"Mapped topic_id {topic_id} -> {topic_name}")
             
             # Parse based on topic type
             if topic_name.startswith("sf|"):
@@ -422,6 +423,9 @@ class FyersHSMWebSocket:
             # Add original symbol mapping
             if topic_name in self.symbol_mappings:
                 scrip_data["original_symbol"] = self.symbol_mappings[topic_name]
+                self.logger.info(f"Symbol mapping: {topic_name} -> {self.symbol_mappings[topic_name]}")
+            else:
+                self.logger.warning(f"No symbol mapping found for topic_name: {topic_name}")
             
             # Store data
             self.scrips_data[topic_id] = scrip_data
@@ -619,6 +623,27 @@ class FyersHSMWebSocket:
                                 if self.on_message_callback:
                                     update_data = self.index_data[topic_id].copy()
                                     update_data["update_type"] = "live"
+                                    self.on_message_callback(update_data)
+                
+                elif topic_name.startswith("dp|") and topic_id in self.depth_data:
+                    # Update depth data
+                    for index in range(field_count):
+                        if offset + 4 > len(data):
+                            break
+                            
+                        value = struct.unpack(">i", data[offset:offset + 4])[0]
+                        offset += 4
+                        
+                        if value != -2147483648 and index < len(self.DEPTH_FIELDS):
+                            old_value = self.depth_data[topic_id].get(self.DEPTH_FIELDS[index])
+                            if old_value != value:
+                                self.depth_data[topic_id][self.DEPTH_FIELDS[index]] = value
+                                
+                                # Send update to callback
+                                if self.on_message_callback:
+                                    update_data = self.depth_data[topic_id].copy()
+                                    update_data["update_type"] = "live"
+                                    self.logger.info(f"Sending live depth update: {update_data.get('symbol', 'Unknown')}")
                                     self.on_message_callback(update_data)
             else:
                 # Skip unknown data

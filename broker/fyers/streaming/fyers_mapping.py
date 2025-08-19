@@ -36,9 +36,14 @@ class FyersDataMapper:
             # Parse exchange and symbol from original_symbol (e.g., "BSE:TCS-A")
             if ":" in symbol:
                 exchange, symbol_name = symbol.split(":", 1)
+                # Clean symbol name for consistent display (remove suffixes like -EQ, -A, etc.)
+                if "-" in symbol_name:
+                    symbol_name = symbol_name.split("-")[0]
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
+            
+            print(f"LTP Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Apply multiplier and precision to LTP
             ltp = fyers_data.get("ltp", 0)
@@ -59,7 +64,7 @@ class FyersDataMapper:
             
             # Map to OpenAlgo LTP format
             openalgo_data = {
-                "symbol": symbol,
+                "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
                 "ltp": ltp,
@@ -93,9 +98,14 @@ class FyersDataMapper:
             # Parse exchange and symbol
             if ":" in symbol:
                 exchange, symbol_name = symbol.split(":", 1)
+                # Clean symbol name for consistent display (remove suffixes like -EQ, -A, etc.)
+                if "-" in symbol_name:
+                    symbol_name = symbol_name.split("-")[0]
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
+            
+            print(f"Quote Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Get multiplier and precision from data
             multiplier = fyers_data.get("multiplier", 100)
@@ -122,7 +132,7 @@ class FyersDataMapper:
             
             # Map to OpenAlgo Quote format
             openalgo_data = {
-                "symbol": symbol,
+                "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
                 "ltp": convert_price(fyers_data.get("ltp", 0)),
@@ -140,6 +150,9 @@ class FyersDataMapper:
                 "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
                 "last_traded_time": fyers_data.get("last_traded_time", 0),
                 "exchange_time": fyers_data.get("exch_feed_time", 0),
+                "average_price": convert_price(fyers_data.get("avg_trade_price", 0)),
+                "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
+                "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
                 "timestamp": int(time.time()),
                 "data_type": "Quote"
             }
@@ -170,9 +183,14 @@ class FyersDataMapper:
             # Parse exchange and symbol
             if ":" in symbol:
                 exchange, symbol_name = symbol.split(":", 1)
+                # Clean symbol name for consistent display (remove suffixes like -EQ, -A, etc.)
+                if "-" in symbol_name:
+                    symbol_name = symbol_name.split("-")[0]
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
+            
+            print(f"Depth Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Apply multiplier and precision
             multiplier = fyers_data.get("multiplier", 100)
@@ -230,7 +248,7 @@ class FyersDataMapper:
             
             # Map to OpenAlgo Depth format (matching other brokers)
             openalgo_data = {
-                "symbol": symbol,
+                "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
                 "ltp": ltp,
@@ -269,9 +287,14 @@ class FyersDataMapper:
             # Parse exchange and symbol
             if ":" in symbol:
                 exchange, symbol_name = symbol.split(":", 1)
+                # Clean symbol name for consistent display (remove suffixes like -EQ, -A, etc.)
+                if "-" in symbol_name:
+                    symbol_name = symbol_name.split("-")[0]
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
+            
+            print(f"Index Depth Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Get LTP from index data and apply proper conversion
             raw_ltp = fyers_data.get("ltp", 0)
@@ -317,7 +340,7 @@ class FyersDataMapper:
             
             # Map to OpenAlgo Depth format
             openalgo_data = {
-                "symbol": symbol,
+                "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
                 "ltp": ltp,
