@@ -95,8 +95,15 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def connect(self):
         """Establish connection to the Fyers HSM WebSocket"""
         try:
+            # Reinitialize adapter if it was disconnected
             if not self.fyers_adapter:
-                raise ValueError("Fyers adapter not initialized")
+                self.logger.info("Reinitializing Fyers adapter...")
+                self.fyers_adapter = FyersAdapter(self.access_token, self.user_id)
+            
+            # Reinitialize ZMQ if needed
+            if not self.socket:
+                self.logger.info("Reinitializing ZeroMQ socket...")
+                self.setup_zmq()
             
             self.logger.info("Connecting to Fyers HSM WebSocket...")
             
@@ -109,11 +116,12 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = True
             
             self.logger.info("Successfully connected to Fyers HSM WebSocket")
+            return {"status": "success", "message": "Connected to Fyers WebSocket"}
             
         except Exception as e:
             self.logger.error(f"Connection failed: {e}")
             self.connected = False
-            raise
+            return {"status": "error", "message": str(e)}
     
     def disconnect(self):
         """Disconnect from the Fyers WebSocket and cleanup all resources"""
@@ -124,10 +132,18 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = False
             self.connected = False
             
-            # Clear all active subscriptions
+            # Clear all active subscriptions and callbacks
             with self.lock:
                 subscription_count = len(self.subscriptions)
                 self.subscriptions.clear()
+                
+                # Clear active callbacks
+                if hasattr(self, 'active_callbacks'):
+                    callback_count = len(self.active_callbacks)
+                    self.active_callbacks.clear()
+                    if callback_count > 0:
+                        self.logger.info(f"Cleared {callback_count} active callbacks")
+                
                 if subscription_count > 0:
                     self.logger.info(f"Cleared {subscription_count} active subscriptions")
             
@@ -168,32 +184,60 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             depth_level: Depth level for order book (not used in Fyers)
         """
         try:
+            # Auto-reconnect if disconnected
             if not self.connected or not self.fyers_adapter:
-                self.logger.error("Not connected to Fyers WebSocket")
-                return {
-                    "status": "error",
-                    "message": "Not connected to Fyers WebSocket"
-                }
+                self.logger.info("Not connected to Fyers - attempting to reconnect...")
+                connect_result = self.connect()
+                if not connect_result or connect_result.get("status") != "success":
+                    self.logger.error("Failed to reconnect to Fyers WebSocket")
+                    return {
+                        "status": "error",
+                        "message": "Failed to reconnect to Fyers WebSocket"
+                    }
+                self.logger.info("Successfully reconnected to Fyers WebSocket")
             
             with self.lock:
                 # Convert to OpenAlgo format
                 symbol_info = [{"exchange": exchange, "symbol": symbol}]
                 
-                # Define callback based on mode
+                # Create a unique callback for this specific subscription
+                # Capture the original subscription details
+                original_symbol = symbol
+                original_exchange = exchange
+                original_mode = mode
+                subscription_key = f"{exchange}:{symbol}:{mode}"
+                
+                # Store callback reference for cleanup
+                if not hasattr(self, 'active_callbacks'):
+                    self.active_callbacks = {}
+                
                 def data_callback(data):
                     """Handle market data and send via ZeroMQ"""
                     try:
+                        # Check if this subscription is still active
+                        if subscription_key not in self.subscriptions:
+                            # Subscription has been removed, don't process data
+                            # Also remove from active callbacks
+                            if subscription_key in self.active_callbacks:
+                                del self.active_callbacks[subscription_key]
+                            return
+                            
                         # Data is already properly mapped by FyersAdapter and FyersDataMapper
                         # Just ensure we have the subscription info for proper topic generation
                         if data:
-                            # Override symbol and exchange with original OpenAlgo format for proper topic
-                            data['symbol'] = symbol  # Use original OpenAlgo symbol
-                            data['exchange'] = exchange  # Use original OpenAlgo exchange
-                            data['subscription_mode'] = mode
-                            # Send via ZeroMQ
+                            # Override with the original subscription details to ensure correct topic
+                            # This fixes the mismatch between NFO subscription and NSE data
+                            data['symbol'] = original_symbol
+                            data['exchange'] = original_exchange
+                            data['subscription_mode'] = original_mode
+                            
+                            # Send via ZeroMQ with the original subscription details
                             self._send_data(data)
                     except Exception as e:
                         self.logger.error(f"Error processing data callback: {e}")
+                
+                # Store the callback
+                self.active_callbacks[subscription_key] = data_callback
                 
                 # Subscribe based on mode
                 if mode == 1:  # LTP
@@ -260,16 +304,43 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     subscription_info = self.subscriptions.pop(key)
                     
                     self.logger.info(f"Removed subscription for {exchange}:{symbol} (mode: {mode})")
-                    self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription")
+                    self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription - data will stop publishing but HSM will continue receiving in background")
                     
-                    # If no more subscriptions, suggest disconnect/reconnect
+                    # Remove the callback reference if it exists
+                    if hasattr(self, 'active_callbacks') and key in self.active_callbacks:
+                        del self.active_callbacks[key]
+                    
+                    # If no more subscriptions, disconnect completely to stop background data
+                    # This is needed for Fyers HSM which doesn't support selective unsubscription
                     if len(self.subscriptions) == 0:
-                        self.logger.info("No active subscriptions remaining - consider disconnect for complete cleanup")
+                        self.logger.info("No active subscriptions remaining - disconnecting from Fyers to stop all background data")
+                        
+                        # Disconnect from Fyers completely
+                        try:
+                            if self.fyers_adapter:
+                                self.fyers_adapter.disconnect()
+                                self.fyers_adapter = None
+                            self.connected = False
+                            
+                            # Clear all callbacks
+                            if hasattr(self, 'active_callbacks'):
+                                self.active_callbacks.clear()
+                            
+                            self.logger.info("Disconnected from Fyers HSM WebSocket - all background data stopped")
+                            
+                            return {
+                                "status": "success",
+                                "message": f"Unsubscribed from {exchange}:{symbol} and disconnected (no active subscriptions)",
+                                "disconnected": True,
+                                "active_subscriptions": 0
+                            }
+                        except Exception as e:
+                            self.logger.error(f"Error disconnecting from Fyers: {e}")
                     
                     return {
                         "status": "success",
                         "message": f"Unsubscribed from {exchange}:{symbol}",
-                        "note": "HSM protocol limitation: selective unsubscription not supported"
+                        "active_subscriptions": len(self.subscriptions)
                     }
                 else:
                     self.logger.warning(f"No active subscription found for {exchange}:{symbol}:{mode}")
