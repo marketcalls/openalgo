@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 
 # Get API key from openalgo portal
-api_key = 'your-openalgo-api-key'
+api_key = '8009e08498f085ff1a3e7da718c5f4b585eaf9c2b7ce0c72740ab2b5d283d36c'
 
 # Set the strategy details and trading parameters
 strategy = "Supertrend Python"
@@ -81,7 +81,7 @@ def supertrend_strategy():
         try:
             # Dynamic date range: 7 days back to today
             end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
             # Fetch 1-minute historical data using OpenAlgo
             df = client.history(
@@ -163,7 +163,7 @@ def supertrend_strategy():
             continue
 
         # Wait before the next cycle
-        time.sleep(15)
+        time.sleep(5)
 
 if __name__ == "__main__":
     print("Starting Supertrend Strategy...")

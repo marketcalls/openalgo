@@ -14,6 +14,9 @@ import os
 import random
 from dateutil import parser  # For flexible ISO date parsing
 import traceback
+import argparse
+from openalgo import api
+import pandas as pd
 
 from dotenv import load_dotenv
 
@@ -184,7 +187,22 @@ class TimescaleDBManager:
             """,
             """
             SELECT create_hypertable('ohlc_15m', 'time', if_not_exists => TRUE)
+            """,
             """
+            CREATE TABLE IF NOT EXISTS ohlc_D (
+                time TIMESTAMPTZ NOT NULL,
+                symbol VARCHAR(20) NOT NULL,                
+                open DECIMAL(18, 2),
+                high DECIMAL(18, 2),
+                low DECIMAL(18, 2),
+                close DECIMAL(18, 2),
+                volume BIGINT,
+                PRIMARY KEY (time, symbol)
+            )
+            """,
+            """
+            SELECT create_hypertable('ohlc_D', 'time', if_not_exists => TRUE)
+            """ 
         ]
         
         try:
@@ -281,20 +299,6 @@ class MarketDataProcessor:
         self.db_conn = self.db_manager.initialize_database()
         self.logger = logging.getLogger(f"MarketDataProcessor")
         
-        # Initialize Redpanda consumer
-        # self.consumer = KafkaConsumer(
-        #     'tick_data',
-        #     bootstrap_servers='localhost:9092',
-        #     group_id='tick-processors-v5',
-        #     auto_offset_reset='earliest',
-        #     enable_auto_commit=False,
-        #     max_poll_interval_ms=300000,
-        #     session_timeout_ms=10000,
-        #     heartbeat_interval_ms=3000
-        #     #key_deserializer=lambda k: k.decode('utf-8') if k else None,
-        #     #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
-        # )
-
         self.consumer = KafkaConsumer(
             'tick_data',
             bootstrap_servers='localhost:9092',
@@ -322,8 +326,131 @@ class MarketDataProcessor:
             '5m': {},
             '15m': {}
         }
+
+    def clean_database(self):
+        """Clear all records from all tables in the database"""
+        try:
+            self.logger.info("Cleaning database tables...")
+            tables = ['ticks', 'ohlc_1m', 'ohlc_5m', 'ohlc_15m', 'ohlc_D']  # Add all your table names here
+            
+            with self.db_conn.cursor() as cursor:
+                # Disable triggers temporarily to avoid hypertable constraints
+                cursor.execute("SET session_replication_role = 'replica';")
+                
+                for table in tables:
+                    try:
+                        cursor.execute(f"TRUNCATE TABLE {table} CASCADE;")
+                        self.logger.info(f"Cleared table: {table}")
+                    except Exception as e:
+                        self.logger.error(f"Error clearing table {table}: {e}")
+                        self.db_conn.rollback()
+                        continue
+                
+                # Re-enable triggers
+                cursor.execute("SET session_replication_role = 'origin';")
+                self.db_conn.commit()
+                
+            self.logger.info("Database cleaning completed successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Database cleaning failed: {e}")
+            self.db_conn.rollback()
+            return False
+
+
+    def insert_historical_data(self, df, symbol, interval):
+        """
+        Insert historical data into the appropriate database table
         
-        # Rest of your initialization...
+        Args:
+            df (pd.DataFrame): DataFrame containing historical data
+            symbol (str): Stock symbol (e.g., 'RELIANCE')
+            interval (str): Time interval ('1m', '5m', '15m', '1d')
+        """
+        try:
+            if df.empty:
+                self.logger.warning(f"No data to insert for {symbol} {interval}")
+                return False
+
+            # Reset index to make timestamp a column
+            df = df.reset_index()
+            
+            # Rename columns to match database schema
+            df = df.rename(columns={
+                'timestamp': 'time',
+                'open': 'open',
+                'high': 'high',
+                'low': 'low',
+                'close': 'close',
+                'volume': 'volume'
+            })
+            
+            # Handle timezone conversion differently for intraday vs daily data
+            df['time'] = pd.to_datetime(df['time'])
+            if interval == 'D':
+                # Set to market open time (09:15:00 IST) for each date
+                df['time'] = df['time'].dt.tz_localize(None)  # Remove any timezone
+                df['time'] = df['time'] + pd.Timedelta(hours=9, minutes=15)
+                df['time'] = df['time'].dt.tz_localize('Asia/Kolkata')
+            else:
+                if df['time'].dt.tz is None:
+                    df['time'] = df['time'].dt.tz_localize('Asia/Kolkata')
+                else:
+                    df['time'] = df['time'].dt.tz_convert('Asia/Kolkata')
+            
+            # Convert to UTC for database storage
+            df['time'] = df['time'].dt.tz_convert('UTC')
+
+            # Add symbol column
+            df['symbol'] = symbol
+            
+            # Select and order the columns we need (excluding 'oi' which we don't store)
+            required_columns = ['time', 'symbol', 'open', 'high', 'low', 'close', 'volume']
+            df = df[required_columns]
+            
+            # Convert numeric columns to appropriate types
+            numeric_cols = ['open', 'high', 'low', 'close']
+            df[numeric_cols] = df[numeric_cols].astype(float)
+            df['volume'] = df['volume'].astype(int)
+            
+            # Determine the target table based on interval
+            table_name = f'ohlc_{interval.lower()}'
+            
+            # Convert DataFrame to list of tuples
+            records = [tuple(x) for x in df.to_numpy()]
+            
+            # Debug: print first record to verify format
+            self.logger.debug(f"First record sample: {records[0] if records else 'No records'}")
+            
+            with self.db_conn.cursor() as cursor:
+                # Use execute_batch for efficient bulk insertion
+                execute_batch(cursor, f"""
+                    INSERT INTO {table_name} 
+                    (time, symbol, open, high, low, close, volume)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (time, symbol) DO UPDATE SET
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low,
+                        close = EXCLUDED.close,
+                        volume = EXCLUDED.volume
+                """, records)
+                
+                self.db_conn.commit()
+                self.logger.info(f"Successfully inserted {len(df)} records for {symbol} ({interval}) into {table_name}")
+                return True
+                
+        except KeyError as e:
+            self.logger.error(f"Missing required column in data for {symbol} {interval}: {e}")
+            self.logger.error(f"Available columns: {df.columns.tolist()}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error inserting historical data for {symbol} {interval}: {e}")
+            self.logger.error(traceback.format_exc())
+            self.db_conn.rollback()
+            return False
+        
 
     def reset_aggregation_buffers(self):
         """Initialize/reset aggregation buffers"""
@@ -367,21 +494,6 @@ class MarketDataProcessor:
                     self.logger.info("No messages received during timeout period ----------->")
                     continue
                 
-                #if not hasattr(raw_msg, 'error'):
-                #    self.logger.info("gargerger----------------------->")
-
-                # Handle Kafka protocol messages
-                #if raw_msg is None or not hasattr(raw_msg, 'error'):
-                #    self.logger.info("Received None or non-Kafka message")
-                #    continue
-
-                # if raw_msg.error():
-                #     self.logger.info("Received None or non-Kafka message\n\n\n\n\n\n")
-                #     self._handle_kafka_error(raw_msg.error())
-                #     continue
-                
-                self.logger.info("I'm here---------------------------------->")
-
                 for topic_partition, messages in raw_msg.items():    
                     for message in messages:
                         try:
@@ -397,10 +509,6 @@ class MarketDataProcessor:
                         except Exception as e:
                             self.logger.error(f"Error processing message: {e}")
                     
-                # Periodically commit offsets
-                #if random.random() < 0.01:  # ~1% of messages
-                #    self.consumer.commit()
-
         except KeyboardInterrupt:
             self.logger.info("Kafka Consumer Shutting down...")
         finally:
@@ -444,7 +552,6 @@ class MarketDataProcessor:
                 timestamp /= 1000
                 
             dt = datetime.fromtimestamp(timestamp / 1000, tz=pytz.UTC)
-            #ist_dt = dt.astimezone(pytz.timezone('Asia/Kolkata'))
             
             # Validate date range
             if dt.year < 2020 or dt.year > 2030:
@@ -461,7 +568,7 @@ class MarketDataProcessor:
                 'volume': int(value['volume'])
             }
 
-            self.logger.info(f"Record---------> {record}")
+            #self.logger.info(f"Record---------> {record}")
             
             # Store in TimescaleDB
             self.store_tick(record)
@@ -480,7 +587,6 @@ class MarketDataProcessor:
     def store_tick(self, record):
         """Store raw tick in database"""
         try:
-            self.logger.info("Storing tick in database-------->")
             with self.db_conn.cursor() as cursor:
                 cursor.execute("""
                     INSERT INTO ticks (time, symbol, open, high, low, close, volume)
@@ -498,7 +604,6 @@ class MarketDataProcessor:
             self.db_conn.rollback()
 
     def buffer_tick(self, record):
-        self.logger.info("Storing buffer in database-------->")
         """Add tick to aggregation buffers"""
         with self.aggregation_lock:
             for timeframe in ['1m', '5m', '15m']:
@@ -534,7 +639,6 @@ class MarketDataProcessor:
 
     def check_aggregation(self, current_time):
         """Check if aggregation should occur for any timeframe"""
-        self.logger.info("Check aggregation-------->")
         timeframes = ['1m', '5m', '15m']
         
         for timeframe in timeframes:
@@ -558,7 +662,6 @@ class MarketDataProcessor:
         return dt - discard
 
     def aggregate_data(self, timeframe, agg_time):
-        self.logger.info("Inside aggregate data-------->")
         with self.aggregation_lock:
             symbol_buckets = self.tick_buffer[timeframe]
             if not symbol_buckets:
@@ -637,9 +740,104 @@ class MarketDataProcessor:
         logger.info("Clean shutdown complete")
 
 if __name__ == "__main__":
+
+    client = api(
+        api_key="8009e08498f085ff1a3e7da718c5f4b585eaf9c2b7ce0c72740ab2b5d283d36c",  # Replace with your API key
+        host="http://127.0.0.1:5000"
+    )
+
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='Market Data Processor')
+    parser.add_argument('--mode', type=str, choices=['live', 'backtest'], required=True,
+                       help='Run mode: "live" for live processing, "backtest" for backtesting')
+    
+    parser.add_argument('--from_date', type=str,
+                       help='Start date for backtest (DD-MM-YYYY format)')
+    parser.add_argument('--to_date', type=str,
+                       help='End date for backtest (DD-MM-YYYY format)')
+    args = parser.parse_args()
+
+    # Validate arguments
+    if args.mode == 'backtest':
+        if not args.from_date or not args.to_date:
+            parser.error("--from_date and --to_date are required in backtest mode")
+        
+        try:
+            from_date = datetime.strptime(args.from_date, '%d-%m-%Y').date()
+            to_date = datetime.strptime(args.to_date, '%d-%m-%Y').date()
+            
+            if from_date > to_date:
+                parser.error("--from_date cannot be after --to_date")
+                
+        except ValueError as e:
+            parser.error(f"Invalid date format. Please use DD-MM-YYYY. Error: {e}")
+
+    # Initialize the processor
     processor = MarketDataProcessor()
     try:
-        processor.process_messages()
+        if args.mode == 'live':
+            # Clean the database at the start of the intraday trading session(9:00 AM IST)
+            if datetime.now().hour == 9 and datetime.now().minute == 0:
+                processor.clean_database()        
+
+            # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
+            # Dynamic date range: 7 days back to today
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+
+            # Import symbol list from CSV file
+            symbol_list = pd.read_csv('symbol_list.csv')
+            symbol_list = symbol_list['Symbol'].tolist()
+
+            # Fetch historical data for each symbol
+            for symbol in symbol_list:
+                for interval in ["1m", "5m", "15m", "D"]:
+                    df = client.history(
+                        symbol=symbol,
+                        exchange='NSE',
+                        interval=interval,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    #print(df.head())
+                    # Insert historical data into the database
+                    processor.insert_historical_data(df, symbol, interval)
+
+            # Process the real-time data
+            processor.process_messages()
+            
+        elif args.mode == 'backtest':
+            logger.info(f"Running in backtest mode from {args.from_date} to {args.to_date}")
+            # Clean the database
+            processor.clean_database()
+
+            # Load historical data for the specified date range
+            # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
+            # Dynamic date range: 7 days back to today
+            end_date = to_date.strftime("%Y-%m-%d")
+            start_date = from_date.strftime("%Y-%m-%d")
+
+            # Import symbol list from CSV file
+            symbol_list = pd.read_csv('symbol_list_backtest.csv')
+            symbol_list = symbol_list['Symbol'].tolist()
+
+            # Fetch historical data for each symbol
+            for symbol in symbol_list:
+                for interval in ["1m", "5m", "15m", "D"]:
+                    df = client.history(
+                        symbol=symbol,
+                        exchange='NSE',
+                        interval=interval,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    
+                    #print(df.head())
+                    # Insert historical data into the database
+                    processor.insert_historical_data(df, symbol, interval)
+
+            # Process data in simulation mode
+
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         processor.shutdown()
