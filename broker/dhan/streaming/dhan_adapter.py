@@ -202,16 +202,16 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
                                               f"Exchange {exchange} not supported")
         
-        # Check depth level support and auto-upgrade for NSE/NFO
+        # Check depth level support - use 5-level for all segments
         is_fallback = False
         actual_depth = depth_level
         
         if mode == 3:  # Depth mode
-            # Auto-upgrade to 20-level depth for NSE and NFO if not explicitly specified
-            # Will automatically fallback to 5-level if 20-level doesn't provide data
-            if exchange in ['NSE', 'NFO'] and depth_level == 5:
-                actual_depth = 20
-                self.logger.info(f"Auto-upgrading {exchange} depth from {depth_level} to {actual_depth} levels (with auto-fallback to 5 after 30 seconds)")
+            # Force 5-level depth for all exchanges (keeping 20-level code intact but not using it)
+            if depth_level == 20:
+                actual_depth = 5
+                is_fallback = True
+                self.logger.info(f"Using 5-level depth for {exchange} instead of requested 20-level depth")
             elif not DhanCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 actual_depth = DhanCapabilityRegistry.get_fallback_depth_level(exchange, depth_level)
                 is_fallback = True
