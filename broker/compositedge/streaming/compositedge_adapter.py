@@ -252,10 +252,8 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.socket.close(linger=0)  # Don't linger on close
                 self.logger.info("ZeroMQ socket closed")
                 
-            # Terminate the context
-            if hasattr(self, 'context') and self.context:
-                self.context.term()
-                self.logger.info("ZeroMQ context terminated")
+            # DO NOT terminate shared context - other instances may still need it
+            # Context will be cleaned up when the process exits
                 
             self.logger.info("Compositedge WebSocket cleanup completed successfully")
         except Exception as e:

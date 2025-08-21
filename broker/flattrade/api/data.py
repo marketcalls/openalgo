@@ -58,11 +58,14 @@ class BrokerData:
         self.timeframe_map = {
             # Minutes
             '1m': '1',    # 1 minute
+            '3m': '3',    # 3 minutes
             '5m': '5',    # 5 minutes
+            '10m': '10',  # 10 minutes
             '15m': '15',  # 15 minutes
             '30m': '30',  # 30 minutes
             # Hours
             '1h': '60',   # 1 hour (60 minutes)
+            '2h': '120',  # 2 hours (120 minutes)
             # Daily
             'D': 'D'      # Daily data
         }
@@ -74,7 +77,7 @@ class BrokerData:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Simplified quote data with required fields
+            dict: Simplified quote data with required fields including OI
         """
         try:
             # Convert symbol to broker format and get token
@@ -97,7 +100,7 @@ class BrokerData:
             if response.get('stat') != 'Ok':
                 raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data as dict (not list)
+            # Return simplified quote data as dict (not list) - NOW INCLUDING OI
             return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)), 
@@ -106,11 +109,13 @@ class BrokerData:
                 'low': float(response.get('l', 0)),
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                'volume': int(float(response.get('v', 0)))
+                'volume': int(float(response.get('v', 0))),
+                'oi': int(response.get('oi', 0))  # 🔥 ADDED OPEN INTEREST
             }
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
+
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """

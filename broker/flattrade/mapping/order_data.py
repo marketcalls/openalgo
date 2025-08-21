@@ -14,17 +14,13 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
+    # Check if 'data' is None
     if order_data is None or (isinstance(order_data, dict) and (order_data['stat'] == "Not_Ok")):
         # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
         logger.warning("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data
-        
-
 
     if order_data:
         for order in order_data:
@@ -40,7 +36,7 @@ def map_order_data(order_data):
                 order['tsym'] = symbol_from_db
                 if (order['exch'] == 'NSE' or order['exch'] == 'BSE') and order['prd'] == 'C':
                     order['prd'] = 'CNC'
-                               
+                            
                 elif order['prd'] == 'I':
                     order['prd'] = 'MIS'
                 
@@ -55,6 +51,20 @@ def map_order_data(order_data):
                     order['prctyp']="SL-M"
                 elif(order['prctyp']=="SL-LMT"):
                     order['prctyp']="SL"
+                
+                # 🔥 NEW: Use avgprc if instname and avgprc are present (highest priority)
+                if order.get('instname') and order.get('avgprc'):
+                    avgprc = order.get('avgprc', 0)
+                    if avgprc and float(avgprc) > 0:
+                        order['prc'] = avgprc
+                        logger.debug(f"Updated price from avgprc for order with instname: {order.get('norenordno', '')} - Price: {avgprc}")
+                
+                # 🔥 EXISTING: Price logic for MARKET and SL-M orders (fallback)
+                elif order['prctyp'] in ["MARKET", "SL-M"] and float(order.get('prc', 0)) == 0.0:
+                    rprc = order.get('rprc', 0)
+                    if rprc and float(rprc) > 0:
+                        order['prc'] = rprc
+                        logger.debug(f"Updated price from rprc for {order['prctyp']} order: {order.get('norenordno', '')}")
                 
             else:
                 logger.warning(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
@@ -107,6 +117,14 @@ def calculate_order_statistics(order_data):
 
 def transform_order_data(orders):
     
+    # Handle None or empty orders
+    if orders is None:
+        logger.warning("No order data available - orders is None")
+        return []
+    
+    if not orders:
+        logger.info("No orders found - empty list")
+        return []
 
     transformed_orders = []
     

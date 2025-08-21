@@ -6,7 +6,7 @@ import os
 from services.place_order_service import place_order
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+ORDER_RATE_LIMIT = os.getenv("ORDER_RATE_LIMIT", "10 per second")
 api = Namespace('place_order', description='Place Order API')
 
 # Initialize logger
@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 @api.route('/', strict_slashes=False)
 class PlaceOrder(Resource):
-    @limiter.limit(API_RATE_LIMIT)
+    @limiter.limit(ORDER_RATE_LIMIT)
     def post(self):
         """Place an order with the broker"""
         try:

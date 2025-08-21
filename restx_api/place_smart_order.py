@@ -10,7 +10,7 @@ from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+SMART_ORDER_RATE_LIMIT = os.getenv("SMART_ORDER_RATE_LIMIT", "2 per second")
 SMART_ORDER_DELAY = os.getenv("SMART_ORDER_DELAY", "0.5")
 api = Namespace('place_smart_order', description='Place Smart Order API')
 
@@ -22,7 +22,7 @@ smart_order_schema = SmartOrderSchema()
 
 @api.route('/', strict_slashes=False)
 class SmartOrder(Resource):
-    @limiter.limit(API_RATE_LIMIT)
+    @limiter.limit(SMART_ORDER_RATE_LIMIT)
     def post(self):
         """Place a smart order"""
         try:

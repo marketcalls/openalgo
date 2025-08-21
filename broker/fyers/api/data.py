@@ -210,13 +210,23 @@ class BrokerData:
                     # URL encode the symbol to handle special characters
                     encoded_symbol = urllib.parse.quote(br_symbol)
                     
+                    # Determine if OI flag should be enabled based on exchange
+                    # OI is only available for derivatives (NFO, BFO, MCX, CDS)
+                    derivative_exchanges = ['NFO', 'BFO', 'MCX', 'CDS']
+                    enable_oi = exchange in derivative_exchanges
+                    
                     # Construct endpoint with query parameters
                     endpoint = (f"/data/history?"
                               f"symbol={encoded_symbol}&"
                               f"resolution={resolution}&"
                               f"date_format=1&"  # Keep epoch format
                                f"range_from={chunk_start}&"
-                               f"range_to={chunk_end}")
+                               f"range_to={chunk_end}&"
+                               f"cont_flag=1")   # For continuous data
+                    
+                    # Add OI flag only for derivatives
+                    if enable_oi:
+                        endpoint += "&oi_flag=1"
                     
                     logger.debug(f"Making request to endpoint: {endpoint}")
                     response = get_api_response(endpoint, self.auth_token)
@@ -243,8 +253,16 @@ class BrokerData:
                     # Get candles from response
                     candles = response.get('candles', [])
                     if candles:
-                        # Convert list of lists to DataFrame with epoch timestamp
-                        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        # Handle dynamic column count based on whether OI is enabled
+                        if enable_oi and len(candles[0]) == 7:
+                            # Derivatives with OI: [timestamp, open, high, low, close, volume, oi]
+                            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+                        else:
+                            # Equity without OI: [timestamp, open, high, low, close, volume]
+                            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                            # Add zero OI column for consistency
+                            df['oi'] = 0
+                        
                         dfs.append(df)
                         logger.debug(f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}")
                     else:

@@ -54,6 +54,11 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             2: ZerodhaWebSocket.MODE_QUOTE,  # Quote
             3: ZerodhaWebSocket.MODE_FULL    # Full/Depth
         }
+        
+        # Batch subscription management
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms delay to collect more subscriptions in a batch
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Initialize the adapter with broker credentials"""
@@ -139,12 +144,62 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error connecting: {e}")
             return {'status': 'error', 'message': str(e)}
     
+    def _start_batch_timer(self):
+        """Start a timer to process batch subscriptions"""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.start()
+    
+    def _process_batch_subscriptions(self):
+        """Process queued subscriptions in batches"""
+        with self.lock:
+            if not self.subscription_queue:
+                return
+            
+            # Group by mode for efficient batch subscription
+            mode_groups = {}
+            token_exchange_map = {}
+            
+            for sub in self.subscription_queue:
+                mode = sub['mode']
+                token = sub['token']
+                exchange = sub['exchange']
+                
+                if mode not in mode_groups:
+                    mode_groups[mode] = []
+                mode_groups[mode].append(token)
+                
+                # Build token to exchange mapping
+                token_exchange_map[token] = exchange
+            
+            # Clear the queue
+            self.subscription_queue.clear()
+        
+        # Update token exchange mapping in WebSocket client
+        if token_exchange_map and self.ws_client:
+            self.ws_client.set_token_exchange_mapping(token_exchange_map)
+        
+        # Subscribe in batches by mode
+        for mode, tokens in mode_groups.items():
+            try:
+                self.logger.info(f"📦 Batch subscribing {len(tokens)} tokens in {mode} mode")
+                self.ws_client.subscribe_tokens(tokens, mode)
+            except Exception as e:
+                self.logger.error(f"❌ Batch subscription failed for {mode} mode: {e}")
+    
     def disconnect(self) -> Dict[str, Any]:
         """
         Disconnect from WebSocket and clean up resources.
         Ensures proper cleanup of ZMQ ports and WebSocket connections.
         """
         try:
+            # Cancel any pending batch timer
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            
             with self.lock:
                 if self.ws_client:
                     # Stop the WebSocket client
@@ -228,12 +283,25 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if not self.ws_client.wait_for_connection(timeout=10.0):
                     return {'status': 'error', 'message': 'WebSocket connection timeout'}
             
-            # Subscribe using WebSocket client
-            self.ws_client.subscribe_tokens([token], zerodha_mode)
-            
             # Track subscription with mapped exchange for consistency
             subscription_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
             
+            # Add to queue for batch processing
+            with self.lock:
+                self.subscription_queue.append({
+                    'token': token,
+                    'mode': zerodha_mode,
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'subscription_exchange': subscription_exchange,
+                    'mode_int': mode
+                })
+                
+                # If this is the first subscription in queue, start the batch timer
+                if len(self.subscription_queue) == 1:
+                    self._start_batch_timer()
+            
+            # Immediately track subscription (even before actual WebSocket subscription)
             with self.lock:
                 self.subscribed_symbols[f"{exchange}:{symbol}"] = {
                     'exchange': exchange,  # Original exchange for unsubscribe
@@ -244,7 +312,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 }
                 self.token_to_symbol[token] = (symbol, exchange)
             
-            self.logger.info(f"✅ Subscribed to {exchange}:{symbol} (token: {token}, mode: {zerodha_mode})")
+            self.logger.info(f"✅ Subscribed to {exchange}:{symbol} (token: [REDACTED], mode: {zerodha_mode})")
             return {'status': 'success', 'message': f'Subscribed to {symbol}'}
             
         except Exception as e:
@@ -338,57 +406,75 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if transformed_tick:
                     symbol = transformed_tick['symbol']
                     token = tick.get('instrument_token')
-                    subscription_mode = 'ltp'  # Default
+                    original_tick_mode = transformed_tick.get('mode', 'ltp')  # Original mode from the tick
                     subscription_exchange = None
+                    subscribed_modes = set()  # Track which modes this symbol is subscribed to
                     
-                    # Get subscription info to determine mode and exchange
+                    # Get subscription info to determine exchange and subscribed modes
                     with self.lock:
                         for key, sub_info in self.subscribed_symbols.items():
                             if sub_info['token'] == token:
-                                # Map OpenAlgo mode to string
-                                mode_num = sub_info['mode']
-                                if mode_num == 1:
-                                    subscription_mode = 'ltp'
-                                elif mode_num == 2:
-                                    subscription_mode = 'quote'
-                                elif mode_num == 3:
-                                    subscription_mode = 'full'
+                                # Found a subscription for this token
                                 subscription_exchange = sub_info['exchange']
-                                break
+                                mode_num = sub_info['mode']
+                                subscribed_modes.add(mode_num)
                     
                     if not subscription_exchange:
                         self.logger.warning(f"No subscription info found for token: {token}")
                         continue
                     
-                    # Override the tick mode with subscription mode
-                    transformed_tick['mode'] = subscription_mode
-                    
-                    # Map mode to string format
-                    mode_str = {
-                        'ltp': 'LTP',
-                        'quote': 'QUOTE', 
-                        'full': 'DEPTH'
-                    }.get(subscription_mode, 'LTP')
-                    
-                    # ✅ Set the data exchange field (always include, never remove)
+                    # Set the data exchange field
                     data_exchange = self._map_data_exchange(subscription_exchange)
                     transformed_tick['exchange'] = data_exchange
                     
-                    # ✅ Generate topic using dedicated function
-                    topic = self._generate_topic(symbol, subscription_exchange, mode_str)
-                    
-                    # Debug log to verify correct topic and data structure
-                    self.logger.info(f"📊 Publishing to topic: {topic}")
-                    self.logger.info(f"📊 Data structure: {transformed_tick}")
-                    self.logger.info(f"📊 Subscription exchange: {subscription_exchange} -> Topic: {topic}, Data exchange: {data_exchange}")
-                    
-                    # Publish to ZeroMQ exactly like Angel adapter
-                    self.publish_market_data(topic, transformed_tick)
-                    
-                    # Debug log for troubleshooting polling data issues
-                    if subscription_mode == 'ltp':
-                        self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
-                    
+                    # If we have a 'full' mode tick, create and publish separate messages for each subscribed mode
+                    if original_tick_mode == 'full':
+                        # Always publish the full depth data first
+                        depth_tick = transformed_tick.copy()
+                        depth_tick['mode'] = 'full'
+                        depth_topic = self._generate_topic(symbol, subscription_exchange, 'DEPTH')
+                        self.logger.info(f"📊 Publishing DEPTH data to topic: {depth_topic}")
+                        self.publish_market_data(depth_topic, depth_tick)
+                        
+                        # If subscribed to Quote (mode 2), publish quote data
+                        if 2 in subscribed_modes:
+                            quote_tick = transformed_tick.copy()
+                            # Remove depth data for quote message
+                            if 'depth' in quote_tick:
+                                del quote_tick['depth']
+                            quote_tick['mode'] = 'quote'
+                            quote_topic = self._generate_topic(symbol, subscription_exchange, 'QUOTE')
+                            self.logger.info(f"📊 Publishing QUOTE data to topic: {quote_topic}")
+                            self.publish_market_data(quote_topic, quote_tick)
+                        
+                        # If subscribed to LTP (mode 1), publish LTP data
+                        if 1 in subscribed_modes:
+                            ltp_tick = {
+                                'symbol': symbol,
+                                'exchange': data_exchange,
+                                'mode': 'ltp',
+                                'ltp': transformed_tick.get('ltp', 0),
+                                'timestamp': transformed_tick.get('timestamp', int(time.time() * 1000))
+                            }
+                            ltp_topic = self._generate_topic(symbol, subscription_exchange, 'LTP')
+                            self.logger.info(f"📊 Publishing LTP data to topic: {ltp_topic}")
+                            self.publish_market_data(ltp_topic, ltp_tick)
+                            self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
+                    else:
+                        # For non-full modes, just publish as-is
+                        mode_str = {
+                            'ltp': 'LTP',
+                            'quote': 'QUOTE',
+                            'full': 'DEPTH'
+                        }.get(original_tick_mode, 'LTP')
+                        
+                        topic = self._generate_topic(symbol, subscription_exchange, mode_str)
+                        self.logger.info(f"📊 Publishing to topic: {topic}")
+                        self.logger.info(f"📊 Data structure: {transformed_tick}")
+                        
+                        # Publish to ZeroMQ
+                        self.publish_market_data(topic, transformed_tick)
+                        
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
     

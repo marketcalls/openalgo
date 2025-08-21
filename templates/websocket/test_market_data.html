@@ -1,0 +1,1323 @@
+{% extends "base.html" %}
+
+{% block head %}
+<!-- No external scripts needed - using existing assets -->
+<style>
+    .data-value { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+    .positive { color: rgb(34, 197, 94); }
+    .negative { color: rgb(239, 68, 68); }
+    .unchanged { color: rgb(107, 114, 128); }
+    .flash { animation: flash 0.5s; }
+    @keyframes flash {
+        0% { background-color: rgb(251, 191, 36, 0.3); }
+        100% { background-color: transparent; }
+    }
+    .connection-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-connected { background-color: rgb(34, 197, 94); }
+    .status-disconnected { background-color: rgb(239, 68, 68); }
+    .status-connecting { background-color: rgb(251, 191, 36); animation: pulse 2s infinite; }
+    
+    .loading-indicator {
+        display: none;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        z-index: 10;
+    }
+    
+    #symbol-search-results {
+        max-height: 400px;
+        overflow-y: auto;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    
+    #symbol-search-results .menu-item:last-child {
+        border-bottom: none;
+    }
+    
+    #active-symbols .badge {
+        transition: all 0.2s ease;
+    }
+    
+    #active-symbols .badge:hover {
+        transform: scale(1.05);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h1 class="card-title text-3xl">WebSocket Market Data Test</h1>
+            <p class="text-base-content/70">Real-time testing for multiple symbols with dynamic symbol management</p>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Connection Status</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-center">
+                    <span class="text-base-content/70 mr-2">WebSocket:</span>
+                    <span class="connection-indicator status-disconnected"></span>
+                    <span id="websocket-status" class="font-semibold text-error">Disconnected</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="text-base-content/70 mr-2">Subscriptions:</span>
+                    <span id="subscription-count" class="badge badge-primary">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Symbol Management Panel -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Symbol Management</h2>
+            
+            <!-- Add Symbol Section -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Add Symbol</span>
+                    </label>
+                    <div class="relative">
+                        <input type="text" 
+                               id="symbol-search" 
+                               class="input input-bordered w-full" 
+                               placeholder="Search for symbol..."
+                               autocomplete="off">
+                        <div class="loading-indicator hidden absolute right-3 top-3">
+                            <span class="loading loading-spinner loading-sm"></span>
+                        </div>
+                        <div id="symbol-search-results" class="menu bg-base-200 w-full rounded-box absolute z-50 mt-1 hidden shadow-lg"></div>
+                    </div>
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Exchange</span>
+                    </label>
+                    <select id="exchange-filter" class="select select-bordered w-full">
+                        <option value="">All Exchanges</option>
+                        <option value="NSE">NSE</option>
+                        <option value="NFO">NFO</option>
+                        <option value="BSE">BSE</option>
+                        <option value="BFO">BFO</option>
+                        <option value="CDS">CDS</option>
+                        <option value="MCX">MCX</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Active Symbols Display -->
+            <div class="mb-4">
+                <h3 class="font-semibold mb-2">Active Symbols (<span id="active-symbol-count">2</span>)</h3>
+                <div id="active-symbols" class="flex flex-wrap gap-2">
+                    <div class="badge badge-primary gap-2 p-3" data-symbol="RELIANCE" data-exchange="NSE">
+                        NSE:RELIANCE
+                        <button onclick="removeSymbol('RELIANCE', 'NSE')" class="btn btn-ghost btn-xs">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="badge badge-secondary gap-2 p-3" data-symbol="TCS" data-exchange="NSE">
+                        NSE:TCS
+                        <button onclick="removeSymbol('TCS', 'NSE')" class="btn btn-ghost btn-xs">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Control Panel -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Control Panel</h2>
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <button onclick="connectWebSocket()" class="btn btn-primary btn-sm">
+                    Connect WebSocket
+                </button>
+                <button onclick="subscribeAll()" class="btn btn-success btn-sm">
+                    Subscribe All
+                </button>
+                <button onclick="subscribeAllLTP()" class="btn btn-info btn-sm">
+                    Subscribe All LTP
+                </button>
+                <button onclick="subscribeAllQuote()" class="btn btn-accent btn-sm">
+                    Subscribe All Quote
+                </button>
+                <button onclick="subscribeAllDepth()" class="btn btn-secondary btn-sm">
+                    Subscribe All Depth
+                </button>
+                <button onclick="unsubscribeAll()" class="btn btn-warning btn-sm">
+                    Unsubscribe All
+                </button>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                <button onclick="testSequential()" class="btn btn-outline btn-sm">
+                    Test Sequential
+                </button>
+                <button onclick="showSubscriptions()" class="btn btn-outline btn-sm">
+                    Show Subscriptions
+                </button>
+                <button onclick="clearData()" class="btn btn-error btn-sm">
+                    Clear Data
+                </button>
+                <button onclick="testPerformance()" class="btn btn-outline btn-sm">
+                    Performance Test
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Market Data Display -->
+    <div id="market-data-container" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Symbols will be dynamically generated here -->
+    </div>
+
+    <!-- Event Log -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="card-title text-xl">Event Log</h2>
+                <button onclick="clearLog()" class="btn btn-ghost btn-sm">
+                    Clear Log
+                </button>
+            </div>
+            <div id="event-log" class="mockup-code h-64 overflow-y-auto text-xs">
+                <pre class="text-base-content/70"><code>Waiting for events...</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
+    console.log('🌐 Current URL:', window.location.href);
+    console.log('📝 Script timestamp:', new Date().toISOString());
+    console.log('🔄 CACHE BUSTER:', Math.random());
+    
+    // Global variables
+    let socket = null;
+    let subscriptions = new Set();
+    let lastPrices = {};
+    let reconnectAttempts = 0;
+    let maxReconnectAttempts = 5;
+    let reconnectDelay = 1000;
+    let activeSymbols = new Set();
+    let debounceTimeout;
+    
+    // Initialize with default symbols
+    activeSymbols.add('NSE:RELIANCE');
+    activeSymbols.add('NSE:TCS');
+
+    // Utility function to get CSRF token
+    function getCSRFToken() {
+        const metaToken = document.querySelector('meta[name=csrf-token]');
+        if (metaToken) {
+            return metaToken.getAttribute('content');
+        }
+        
+        const cookieValue = document.cookie
+            .split('; ')
+            .find(row => row.startsWith('csrf_token='))
+            ?.split('=')[1];
+        return cookieValue || '';
+    }
+    
+    // Utility function to make CSRF-protected requests
+    async function fetchWithCSRF(url, options = {}) {
+        const csrfToken = getCSRFToken();
+        const headers = {
+            'X-CSRFToken': csrfToken,
+            ...options.headers
+        };
+        
+        return fetch(url, {
+            ...options,
+            headers: headers
+        });
+    }
+
+    // Initialize WebSocket connection to the proxy server
+    function connectWebSocket() {
+        logEvent('🔧 connectWebSocket() function called v2.0 - BYPASS MODE', 'info');
+        
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            logEvent('Already connected to WebSocket', 'info');
+            return;
+        }
+
+        logEvent('⚡ Attempting to connect to WebSocket server...', 'info');
+
+        try {
+            // Skip status check and go directly to WebSocket config and connection
+            logEvent('🔧 Fetching WebSocket config directly...', 'info');
+            fetchWithCSRF('/api/websocket/config')
+                .then(response => {
+                    logEvent(`🔧 Config response status: ${response.status}`, 'info');
+                    return response.json();
+                })
+                .then(configData => {
+                    logEvent(`🔧 Config data: ${JSON.stringify(configData)}`, 'info');
+                    if (configData.status === 'success') {
+                        const wsUrl = configData.websocket_url;
+                        logEvent(`WebSocket Config - URL: ${wsUrl}, Secure: ${configData.is_secure}, Original: ${configData.original_url}`, 'info');
+                        logEvent(`Current page protocol: ${window.location.protocol}`, 'info');
+                        logEvent(`🔌 Connecting to WebSocket server at ${wsUrl}...`, 'info');
+                        
+                        // Create WebSocket connection
+                        socket = new WebSocket(wsUrl);
+
+                        socket.onopen = () => {
+                            document.getElementById('websocket-status').textContent = 'Connected';
+                            document.getElementById('websocket-status').className = 'font-semibold text-success';
+                            document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connected';
+                            logEvent('Connected to WebSocket server', 'success');
+                            
+                            // Reset reconnection counter on successful connection
+                            reconnectAttempts = 0;
+                            
+                            // Get API key and authenticate
+                            fetchWithCSRF('/api/websocket/apikey')
+                                .then(response => response.json())
+                                .then(data => {
+                                    if (data.status === 'success' && data.api_key) {
+                                        const authMessage = {
+                                            action: 'authenticate',
+                                            api_key: data.api_key
+                                        };
+                                        socket.send(JSON.stringify(authMessage));
+                                        logEvent('Sent authentication request with API key', 'info');
+                                    } else {
+                                        logEvent(`Failed to get API key: ${data.message}`, 'error');
+                                        logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                                    }
+                                })
+                                .catch(error => {
+                                    logEvent(`Error getting API key: ${error}`, 'error');
+                                });
+                        };
+
+                        socket.onclose = (event) => {
+                            document.getElementById('websocket-status').textContent = 'Disconnected';
+                            document.getElementById('websocket-status').className = 'font-semibold text-error';
+                            document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-disconnected';
+                            
+                            if (event.wasClean) {
+                                logEvent('WebSocket connection closed cleanly', 'info');
+                            } else {
+                                logEvent(`WebSocket connection lost unexpectedly. Code: ${event.code}, Reason: ${event.reason}`, 'error');
+                                
+                                // Attempt to reconnect
+                                if (reconnectAttempts < maxReconnectAttempts) {
+                                    reconnectAttempts++;
+                                    logEvent(`Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`, 'info');
+                                    
+                                    document.getElementById('websocket-status').textContent = 'Reconnecting...';
+                                    document.getElementById('websocket-status').className = 'font-semibold text-warning';
+                                    document.querySelector('#websocket-status').previousElementSibling.className = 'connection-indicator status-connecting';
+                                    
+                                    setTimeout(() => {
+                                        connectWebSocket();
+                                    }, reconnectDelay);
+                                } else {
+                                    logEvent('Max reconnection attempts reached. Please refresh the page or click Connect WebSocket.', 'error');
+                                }
+                            }
+                        };
+
+                        socket.onerror = (error) => {
+                            logEvent(`WebSocket error occurred: ${error}`, 'error');
+                            logEvent(`WebSocket readyState: ${socket ? socket.readyState : 'undefined'}`, 'info');
+                            logEvent(`Attempted URL: ${wsUrl}`, 'info');
+                        };
+
+                        socket.onmessage = (event) => {
+                            try {
+                                const data = JSON.parse(event.data);
+                                handleWebSocketMessage(data);
+                            } catch (e) {
+                                logEvent(`Error parsing WebSocket message: ${e}`, 'error');
+                            }
+                        };
+                    } else {
+                        logEvent('Failed to get WebSocket configuration', 'error');
+                    }
+                })
+                .catch(error => {
+                    logEvent(`Error getting WebSocket configuration: ${error}`, 'error');
+                });
+
+        } catch (error) {
+            logEvent(`Error initializing WebSocket: ${error.message}`, 'error');
+        }
+    }
+
+    // Handle WebSocket messages
+    function handleWebSocketMessage(data) {
+        const type = data.type || data.status;
+        
+        switch(type) {
+            case 'auth':
+                if (data.status === 'success') {
+                    logEvent('WebSocket authentication successful', 'success');
+                    
+                    // Restore previous subscriptions if any
+                    if (subscriptions.size > 0) {
+                        logEvent(`Restoring ${subscriptions.size} previous subscriptions...`, 'info');
+                        restoreSubscriptions();
+                    }
+                } else {
+                    logEvent(`Authentication failed: ${data.message}`, 'error');
+                }
+                break;
+                
+            case 'market_data':
+                updateMarketData(data);
+                logEvent(`Market update: ${data.symbol} (${data.exchange})`, 'data');
+                break;
+                
+            case 'subscribe':
+                if (data.status === 'success') {
+                    logEvent(`Subscription successful`, 'success');
+                    updateSubscriptionCount();
+                } else {
+                    logEvent(`Subscription error: ${data.message}`, 'error');
+                }
+                break;
+                
+            case 'unsubscribe':
+                if (data.status === 'success') {
+                    if (data.successful && data.successful.length > 0) {
+                        data.successful.forEach(sub => {
+                            logEvent(`✅ Successfully unsubscribed: ${sub.exchange}:${sub.symbol}`, 'success');
+                        });
+                    } else {
+                        logEvent(`✅ Unsubscription successful`, 'success');
+                    }
+                } else {
+                    if (data.failed && data.failed.length > 0) {
+                        data.failed.forEach(sub => {
+                            logEvent(`❌ Failed to unsubscribe: ${sub.exchange}:${sub.symbol} - ${sub.message}`, 'error');
+                        });
+                    } else {
+                        logEvent(`❌ Unsubscription failed: ${data.message || 'Unknown error'}`, 'error');
+                    }
+                }
+                updateSubscriptionCount();
+                break;
+                
+            case 'error':
+                logEvent(`WebSocket error: ${data.message}`, 'error');
+                break;
+                
+            default:
+                logEvent(`Unknown message type: ${type}`, 'info');
+        }
+    }
+
+    // Restore subscriptions after reconnection
+    function restoreSubscriptions() {
+        if (subscriptions.size === 0) return;
+        
+        const subscriptionList = Array.from(subscriptions);
+        subscriptionList.forEach((sub, index) => {
+            const [exchange, symbol, mode] = sub.split(':');
+            setTimeout(() => {
+                subscribe(symbol, exchange, mode, true); // true flag for restore mode
+            }, index * 100); // Stagger subscriptions
+        });
+    }
+
+    // Subscribe to a symbol
+    function subscribe(symbol, exchange, mode, isRestore = false) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        const message = {
+            action: 'subscribe',
+            symbols: [{symbol: symbol, exchange: exchange}],
+            mode: mode
+        };
+        
+        socket.send(JSON.stringify(message));
+        
+        if (!isRestore) {
+            logEvent(`📤 Sent subscribe: ${JSON.stringify(message)}`, 'info');
+            subscriptions.add(`${exchange}:${symbol}:${mode}`);
+            logEvent(`✅ Subscribing to ${exchange}:${symbol} (${mode})`, 'success');
+        } else {
+            logEvent(`🔄 Restoring subscription: ${exchange}:${symbol} (${mode})`, 'info');
+        }
+        
+        updateSubscriptionCount();
+    }
+
+    // Unsubscribe from a symbol
+    function unsubscribe(symbol, exchange, mode) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        // Convert string mode to numeric for consistency with server
+        const modeMap = {"LTP": 1, "Quote": 2, "Depth": 3};
+        const numericMode = modeMap[mode] || mode;
+
+        const message = {
+            action: 'unsubscribe',
+            symbols: [{
+                symbol: symbol, 
+                exchange: exchange,
+                mode: numericMode
+            }],
+            mode: mode  // Keep string mode for frontend compatibility
+        };
+        
+        socket.send(JSON.stringify(message));
+        
+        logEvent(`📤 Sent unsubscribe: ${JSON.stringify(message)}`, 'info');
+
+        subscriptions.delete(`${exchange}:${symbol}:${mode}`);
+        updateSubscriptionCount();
+        logEvent(`❌ Unsubscribing from ${exchange}:${symbol} (${mode})`, 'info');
+    }
+
+    // Subscribe to all data for all active symbols
+    function subscribeAll() {
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => {
+                subscribe(symbol, exchange, 'LTP');
+                subscribe(symbol, exchange, 'Quote');
+                subscribe(symbol, exchange, 'Depth');
+            }, delay);
+            delay += 500;
+        });
+    }
+
+    // Subscribe to LTP for all active symbols
+    function subscribeAllLTP() {
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'LTP'), delay);
+            delay += 200;
+        });
+    }
+
+    // Subscribe to Quote for all active symbols
+    function subscribeAllQuote() {
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'Quote'), delay);
+            delay += 200;
+        });
+    }
+
+    // Subscribe to Depth for all active symbols
+    function subscribeAllDepth() {
+        let delay = 0;
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            setTimeout(() => subscribe(symbol, exchange, 'Depth'), delay);
+            delay += 200;
+        });
+    }
+
+    // Test sequential subscription/unsubscription
+    function testSequential() {
+        logEvent('🧪 Starting sequential test...', 'info');
+        
+        // Phase 1: Subscribe to LTP
+        setTimeout(() => {
+            logEvent('Phase 1: Subscribing to LTP', 'info');
+            subscribeAllLTP();
+        }, 1000);
+        
+        // Phase 2: Subscribe to Quote
+        setTimeout(() => {
+            logEvent('Phase 2: Subscribing to Quote', 'info');
+            subscribeAllQuote();
+        }, 3000);
+        
+        // Phase 3: Unsubscribe LTP, Subscribe Depth
+        setTimeout(() => {
+            logEvent('Phase 3: Switching LTP to Depth', 'info');
+            activeSymbols.forEach(symbolKey => {
+                const [exchange, symbol] = symbolKey.split(':');
+                unsubscribe(symbol, exchange, 'LTP');
+            });
+            setTimeout(() => subscribeAllDepth(), 500);
+        }, 5000);
+        
+        // Phase 4: Unsubscribe all
+        setTimeout(() => {
+            logEvent('Phase 4: Unsubscribing all', 'info');
+            unsubscribeAll();
+        }, 8000);
+        
+        setTimeout(() => {
+            logEvent('✅ Sequential test completed!', 'success');
+        }, 9000);
+    }
+
+    // Show current subscriptions
+    function showSubscriptions() {
+        logEvent('📊 Current subscriptions:', 'info');
+        if (subscriptions.size === 0) {
+            logEvent('  - No active subscriptions', 'info');
+        } else {
+            subscriptions.forEach(sub => {
+                logEvent(`  - ${sub}`, 'info');
+            });
+        }
+    }
+
+    // Performance test
+    function testPerformance() {
+        logEvent('⚡ Starting performance test...', 'info');
+        const startTime = Date.now();
+        let subscribeCount = 0;
+        let updateCount = 0;
+        
+        // Track updates
+        const originalCallback = updateMarketData;
+        updateMarketData = function(data) {
+            updateCount++;
+            originalCallback(data);
+        };
+        
+        // Rapid subscribe/unsubscribe with all active symbols
+        const modes = ['LTP', 'Quote', 'Depth'];
+        const activeSymbolsArray = Array.from(activeSymbols);
+        
+        activeSymbolsArray.forEach((symbolKey, i) => {
+            const [exchange, symbol] = symbolKey.split(':');
+            modes.forEach((mode, j) => {
+                setTimeout(() => {
+                    subscribe(symbol, exchange, mode);
+                    subscribeCount++;
+                }, (i * 3 + j) * 200);
+            });
+        });
+        
+        // Show results after 10 seconds
+        setTimeout(() => {
+            const duration = (Date.now() - startTime) / 1000;
+            logEvent(`📈 Performance Results:`, 'success');
+            logEvent(`  - Duration: ${duration}s`, 'info');
+            logEvent(`  - Active symbols: ${activeSymbols.size}`, 'info');
+            logEvent(`  - Subscriptions: ${subscribeCount}`, 'info');
+            logEvent(`  - Updates received: ${updateCount}`, 'info');
+            logEvent(`  - Updates/second: ${(updateCount/duration).toFixed(2)}`, 'info');
+            
+            // Restore original callback
+            updateMarketData = originalCallback;
+        }, 10000);
+    }
+
+    // Unsubscribe all
+    function unsubscribeAll() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            logEvent('Please connect to WebSocket first', 'error');
+            return;
+        }
+
+        const message = {
+            action: 'unsubscribe_all'
+        };
+        
+        socket.send(JSON.stringify(message));
+
+        subscriptions.clear();
+        updateSubscriptionCount();
+        logEvent('Unsubscribed from all symbols', 'info');
+        
+        // Clear saved subscriptions from localStorage
+        localStorage.removeItem('websocket_subscriptions');
+    }
+
+    // Update market data display
+    function updateMarketData(data) {
+        const symbol = data.symbol.toLowerCase();
+        const mode = data.mode;
+        const marketData = data.data || {};
+
+        // Handle LTP updates
+        if (mode === 1 && marketData.ltp !== undefined) {
+            const ltpElement = document.getElementById(`${symbol}-ltp`);
+            const timeElement = document.getElementById(`${symbol}-ltp-time`);
+            
+            if (ltpElement) {
+                const newPrice = marketData.ltp;
+                const oldPrice = lastPrices[`${symbol}-ltp`] || newPrice;
+                
+                ltpElement.textContent = formatPrice(newPrice);
+                ltpElement.classList.add('flash');
+                
+                // Color coding for price changes
+                if (newPrice > oldPrice) {
+                    ltpElement.classList.add('positive');
+                    ltpElement.classList.remove('negative', 'unchanged');
+                } else if (newPrice < oldPrice) {
+                    ltpElement.classList.add('negative');
+                    ltpElement.classList.remove('positive', 'unchanged');
+                } else {
+                    ltpElement.classList.add('unchanged');
+                    ltpElement.classList.remove('positive', 'negative');
+                }
+                
+                lastPrices[`${symbol}-ltp`] = newPrice;
+                
+                setTimeout(() => ltpElement.classList.remove('flash'), 500);
+            }
+            
+            if (timeElement) {
+                timeElement.textContent = formatTimestamp(marketData.timestamp);
+            }
+        }
+
+        // Handle Quote updates - supports both mode 1 and mode 2
+        if (mode === 1 || mode === 2) {
+            // Price fields
+            const priceFields = ['open', 'high', 'low', 'close'];
+            priceFields.forEach(field => {
+                const element = document.getElementById(`${symbol}-${field}`);
+                if (element && marketData[field] !== undefined && marketData[field] > 0) {
+                    element.textContent = formatPrice(marketData[field]);
+                    element.classList.add('flash');
+                    setTimeout(() => element.classList.remove('flash'), 500);
+                }
+            });
+
+            // Volume
+            const volumeElement = document.getElementById(`${symbol}-volume`);
+            if (volumeElement && marketData.volume !== undefined) {
+                volumeElement.textContent = formatVolume(marketData.volume);
+                volumeElement.classList.add('flash');
+                setTimeout(() => volumeElement.classList.remove('flash'), 500);
+            }
+
+            // Average price
+            const avgPriceElement = document.getElementById(`${symbol}-average-price`);
+            if (avgPriceElement && marketData.average_price !== undefined) {
+                avgPriceElement.textContent = formatPrice(marketData.average_price);
+                avgPriceElement.classList.add('flash');
+                setTimeout(() => avgPriceElement.classList.remove('flash'), 500);
+            }
+
+            // Buy/Sell quantities
+            const buyQtyElement = document.getElementById(`${symbol}-total-buy-quantity`);
+            if (buyQtyElement && marketData.total_buy_quantity !== undefined) {
+                buyQtyElement.textContent = formatVolume(marketData.total_buy_quantity);
+                buyQtyElement.classList.add('flash');
+                setTimeout(() => buyQtyElement.classList.remove('flash'), 500);
+            }
+
+            const sellQtyElement = document.getElementById(`${symbol}-total-sell-quantity`);
+            if (sellQtyElement && marketData.total_sell_quantity !== undefined) {
+                sellQtyElement.textContent = formatVolume(marketData.total_sell_quantity);
+                sellQtyElement.classList.add('flash');
+                setTimeout(() => sellQtyElement.classList.remove('flash'), 500);
+            }
+
+
+            // Update LTP from quote data as well
+            if (marketData.ltp !== undefined) {
+                const ltpElement = document.getElementById(`${symbol}-ltp`);
+                if (ltpElement) {
+                    const newPrice = marketData.ltp;
+                    const oldPrice = lastPrices[`${symbol}-ltp`] || newPrice;
+                    
+                    ltpElement.textContent = formatPrice(newPrice);
+                    ltpElement.classList.add('flash');
+                    
+                    // Color coding for price changes
+                    if (newPrice > oldPrice) {
+                        ltpElement.classList.add('positive');
+                        ltpElement.classList.remove('negative', 'unchanged');
+                    } else if (newPrice < oldPrice) {
+                        ltpElement.classList.add('negative');
+                        ltpElement.classList.remove('positive', 'unchanged');
+                    } else {
+                        ltpElement.classList.add('unchanged');
+                        ltpElement.classList.remove('positive', 'negative');
+                    }
+                    
+                    lastPrices[`${symbol}-ltp`] = newPrice;
+                    setTimeout(() => ltpElement.classList.remove('flash'), 500);
+                }
+
+                // Update timestamp
+                const timeElement = document.getElementById(`${symbol}-ltp-time`);
+                if (timeElement) {
+                    timeElement.textContent = formatTimestamp(marketData.timestamp);
+                }
+            }
+        }
+
+        // Handle Depth updates
+        if (mode === 3 && marketData.depth) {
+            updateDepth(symbol, marketData.depth);
+        }
+    }
+
+    // Update depth display
+    function updateDepth(symbol, depth) {
+        const buyDepthElement = document.getElementById(`${symbol}-buy-depth`);
+        const sellDepthElement = document.getElementById(`${symbol}-sell-depth`);
+
+        if (buyDepthElement && depth.buy && depth.buy.length > 0) {
+            buyDepthElement.innerHTML = depth.buy.slice(0, 5).map((level, i) => `
+                <div class="flex justify-between">
+                    <span>${formatPrice(level.price)}</span>
+                    <span class="text-success">${level.quantity}</span>
+                    <span class="text-base-content/50">${level.orders || '-'}</span>
+                </div>
+            `).join('');
+        }
+
+        if (sellDepthElement && depth.sell && depth.sell.length > 0) {
+            sellDepthElement.innerHTML = depth.sell.slice(0, 5).map((level, i) => `
+                <div class="flex justify-between">
+                    <span>${formatPrice(level.price)}</span>
+                    <span class="text-error">${level.quantity}</span>
+                    <span class="text-base-content/50">${level.orders || '-'}</span>
+                </div>
+            `).join('');
+        }
+    }
+
+    // Format price
+    function formatPrice(price) {
+        return new Intl.NumberFormat('en-IN', {
+            style: 'currency',
+            currency: 'INR',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(price);
+    }
+
+    // Format volume
+    function formatVolume(volume) {
+        return new Intl.NumberFormat('en-IN').format(volume);
+    }
+
+    // Format timestamp in IST
+    function formatTimestamp(timestamp) {
+        if (!timestamp) return '-';
+        const date = new Date(timestamp);
+        // Format in IST (Indian Standard Time)
+        return date.toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour12: true,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+
+    // Update subscription count and save to localStorage
+    function updateSubscriptionCount() {
+        document.getElementById('subscription-count').textContent = subscriptions.size;
+        // Save subscriptions to localStorage
+        localStorage.setItem('websocket_subscriptions', JSON.stringify(Array.from(subscriptions)));
+    }
+
+    // Load subscriptions from localStorage
+    function loadSubscriptions() {
+        try {
+            const saved = localStorage.getItem('websocket_subscriptions');
+            if (saved) {
+                const savedSubscriptions = JSON.parse(saved);
+                savedSubscriptions.forEach(sub => subscriptions.add(sub));
+                updateSubscriptionCount();
+                logEvent(`Loaded ${savedSubscriptions.length} saved subscriptions from previous session`, 'info');
+            }
+        } catch (error) {
+            logEvent('Error loading saved subscriptions', 'error');
+        }
+    }
+
+    // Log events
+    function logEvent(message, type = 'info') {
+        console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
+        
+        const logElement = document.getElementById('event-log');
+        if (!logElement) {
+            console.warn('Log element not found!');
+            return;
+        }
+        
+        const timestamp = new Date().toLocaleTimeString('en-IN');
+        
+        const colorClass = {
+            'info': 'text-info',
+            'success': 'text-success',
+            'error': 'text-error',
+            'data': 'text-warning'
+        }[type] || 'text-base-content/70';
+
+        const logEntry = document.createElement('pre');
+        logEntry.className = `${colorClass} mb-1`;
+        logEntry.innerHTML = `<code>[${timestamp}] ${message}</code>`;
+        
+        logElement.appendChild(logEntry);
+        logElement.scrollTop = logElement.scrollHeight;
+
+        // Limit log entries
+        if (logElement.children.length > 100) {
+            logElement.removeChild(logElement.firstChild);
+        }
+    }
+
+    // Test the logEvent function immediately
+    console.log('🧪 Testing logEvent function...');
+    try {
+        logEvent('🧪 Script loaded and logEvent function is working', 'success');
+        console.log('✅ logEvent function test passed');
+    } catch (error) {
+        console.error('❌ logEvent function test failed:', error);
+    }
+
+    // Clear log
+    function clearLog() {
+        const logElement = document.getElementById('event-log');
+        logElement.innerHTML = '<pre class="text-base-content/70"><code>Log cleared</code></pre>';
+    }
+
+    // Clear all data
+    function clearData() {
+        activeSymbols.forEach(symbolKey => {
+            const [exchange, symbol] = symbolKey.split(':');
+            const symbolId = symbol.toLowerCase();
+            
+            // Clear LTP data
+            const ltpElement = document.getElementById(`${symbolId}-ltp`);
+            const ltpTimeElement = document.getElementById(`${symbolId}-ltp-time`);
+            if (ltpElement) ltpElement.textContent = '-';
+            if (ltpTimeElement) ltpTimeElement.textContent = '-';
+            
+            // Clear quote data
+            ['open', 'high', 'low', 'close', 'volume', 'average-price', 
+             'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
+                const element = document.getElementById(`${symbolId}-${field}`);
+                if (element) element.textContent = '-';
+            });
+            
+            // Clear depth data
+            const buyDepthElement = document.getElementById(`${symbolId}-buy-depth`);
+            const sellDepthElement = document.getElementById(`${symbolId}-sell-depth`);
+            if (buyDepthElement) buyDepthElement.innerHTML = '<div class="text-base-content/50">No data</div>';
+            if (sellDepthElement) sellDepthElement.innerHTML = '<div class="text-base-content/50">No data</div>';
+        });
+        
+        lastPrices = {};
+        logEvent('Cleared all market data', 'info');
+    }
+
+    // Symbol search functionality
+    function initializeSymbolSearch() {
+        const symbolSearch = document.getElementById('symbol-search');
+        const exchangeFilter = document.getElementById('exchange-filter');
+        const searchResults = document.getElementById('symbol-search-results');
+        const loadingIndicator = document.querySelector('.loading-indicator');
+        
+        if (!symbolSearch) return;
+        
+        // Search input handler
+        symbolSearch.addEventListener('input', function(e) {
+            clearTimeout(debounceTimeout);
+            const query = e.target.value.trim();
+            const exchange = exchangeFilter ? exchangeFilter.value : '';
+            
+            if (query.length < 2) {
+                searchResults.classList.add('hidden');
+                return;
+            }
+            
+            debounceTimeout = setTimeout(() => {
+                fetchSymbolSearchResults(query, exchange);
+            }, 300);
+        });
+        
+        // Exchange filter change handler
+        if (exchangeFilter) {
+            exchangeFilter.addEventListener('change', function(e) {
+                const query = symbolSearch.value.trim();
+                if (query.length >= 2) {
+                    fetchSymbolSearchResults(query, e.target.value);
+                }
+            });
+        }
+        
+        // Click outside handler
+        document.addEventListener('click', function(e) {
+            if (!symbolSearch.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.classList.add('hidden');
+            }
+        });
+    }
+    
+    // Fetch symbol search results
+    async function fetchSymbolSearchResults(query, exchange) {
+        const searchResults = document.getElementById('symbol-search-results');
+        const loadingIndicator = document.querySelector('.loading-indicator');
+        
+        if (!searchResults || !loadingIndicator) return;
+        
+        try {
+            loadingIndicator.classList.remove('hidden');
+            const response = await fetchWithCSRF(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange || '')}`);
+            const data = await response.json();
+            
+            searchResults.innerHTML = '';
+            
+            if (data.results && data.results.length > 0) {
+                data.results.forEach(result => {
+                    const div = document.createElement('div');
+                    div.className = 'menu-item p-3 hover:bg-base-300 cursor-pointer border-b border-base-300';
+                    div.innerHTML = `
+                        <div class="flex items-center justify-between">
+                            <span class="font-medium">${result.symbol}</span>
+                            <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
+                        </div>
+                        <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
+                        <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
+                    `;
+                    div.addEventListener('click', () => {
+                        addSymbol(result.symbol, result.exchange);
+                        searchResults.classList.add('hidden');
+                        document.getElementById('symbol-search').value = '';
+                    });
+                    searchResults.appendChild(div);
+                });
+                searchResults.classList.remove('hidden');
+            } else {
+                searchResults.innerHTML = '<div class="p-3 text-base-content/60">No results found</div>';
+                searchResults.classList.remove('hidden');
+            }
+        } catch (error) {
+            console.error('Error fetching search results:', error);
+            logEvent('Error fetching search results', 'error');
+        } finally {
+            loadingIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Add symbol to active symbols
+    function addSymbol(symbol, exchange) {
+        const symbolKey = `${exchange}:${symbol}`;
+        
+        if (activeSymbols.has(symbolKey)) {
+            logEvent(`Symbol ${symbolKey} is already active`, 'info');
+            return;
+        }
+        
+        activeSymbols.add(symbolKey);
+        updateActiveSymbolsDisplay();
+        generateSymbolCard(symbol, exchange);
+        logEvent(`Added symbol: ${symbolKey}`, 'success');
+        
+        // Save to localStorage
+        localStorage.setItem('websocket_active_symbols', JSON.stringify(Array.from(activeSymbols)));
+    }
+    
+    // Remove symbol from active symbols
+    function removeSymbol(symbol, exchange) {
+        const symbolKey = `${exchange}:${symbol}`;
+        
+        if (!activeSymbols.has(symbolKey)) {
+            return;
+        }
+        
+        // Unsubscribe from all modes for this symbol
+        ['LTP', 'Quote', 'Depth'].forEach(mode => {
+            const subKey = `${exchange}:${symbol}:${mode}`;
+            if (subscriptions.has(subKey)) {
+                unsubscribe(symbol, exchange, mode);
+            }
+        });
+        
+        activeSymbols.delete(symbolKey);
+        updateActiveSymbolsDisplay();
+        
+        // Remove the card
+        const symbolCard = document.querySelector(`[data-symbol-card="${symbolKey}"]`);
+        if (symbolCard) {
+            symbolCard.remove();
+        }
+        
+        logEvent(`Removed symbol: ${symbolKey}`, 'success');
+        
+        // Save to localStorage
+        localStorage.setItem('websocket_active_symbols', JSON.stringify(Array.from(activeSymbols)));
+    }
+    
+    // Update active symbols display
+    function updateActiveSymbolsDisplay() {
+        const activeSymbolsContainer = document.getElementById('active-symbols');
+        const activeSymbolCount = document.getElementById('active-symbol-count');
+        
+        if (!activeSymbolsContainer || !activeSymbolCount) return;
+        
+        activeSymbolCount.textContent = activeSymbols.size;
+        
+        activeSymbolsContainer.innerHTML = '';
+        
+        Array.from(activeSymbols).forEach((symbolKey, index) => {
+            const [exchange, symbol] = symbolKey.split(':');
+            const badge = document.createElement('div');
+            const badgeColors = ['badge-primary', 'badge-secondary', 'badge-accent', 'badge-info', 'badge-success', 'badge-warning'];
+            const colorClass = badgeColors[index % badgeColors.length];
+            
+            badge.className = `badge ${colorClass} gap-2 p-3`;
+            badge.setAttribute('data-symbol', symbol);
+            badge.setAttribute('data-exchange', exchange);
+            badge.innerHTML = `
+                ${symbolKey}
+                <button onclick="removeSymbol('${symbol}', '${exchange}')" class="btn btn-ghost btn-xs">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            `;
+            activeSymbolsContainer.appendChild(badge);
+        });
+    }
+    
+    // Generate market data card for a symbol
+    function generateSymbolCard(symbol, exchange) {
+        const container = document.getElementById('market-data-container');
+        if (!container) return;
+        
+        const symbolKey = `${exchange}:${symbol}`;
+        const symbolId = symbol.toLowerCase();
+        
+        const card = document.createElement('div');
+        card.className = 'card bg-base-100 shadow-xl';
+        card.setAttribute('data-symbol-card', symbolKey);
+        
+        card.innerHTML = `
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="card-title text-xl">${symbolKey}</h3>
+                    <div class="text-xs space-y-2">
+                        <div>
+                            <span class="text-base-content/70">Subscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-success btn-xs">Quote</button>
+                                <button onclick="subscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-base-content/70">Unsubscribe:</span>
+                            <div class="btn-group ml-2">
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-error btn-xs">LTP</button>
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-error btn-xs">Quote</button>
+                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-error btn-xs">Depth</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LTP Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Price:</span>
+                                <div id="${symbolId}-ltp" class="data-value text-2xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="text-xs text-base-content/50">Last Update:</span>
+                            <span id="${symbolId}-ltp-time" class="data-value text-xs">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quote Section -->
+                <div class="card bg-base-200 mb-4">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-xs text-base-content/50">Open:</span>
+                                <div id="${symbolId}-open" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">High:</span>
+                                <div id="${symbolId}-high" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Low:</span>
+                                <div id="${symbolId}-low" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Close:</span>
+                                <div id="${symbolId}-close" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Volume:</span>
+                                <div id="${symbolId}-volume" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Avg Price:</span>
+                                <div id="${symbolId}-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Buy Qty:</span>
+                                <div id="${symbolId}-total-buy-quantity" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Sell Qty:</span>
+                                <div id="${symbolId}-total-sell-quantity" class="data-value">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Depth Section -->
+                <div class="card bg-base-200">
+                    <div class="card-body p-4">
+                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
+                                <div id="${symbolId}-buy-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
+                                <div id="${symbolId}-sell-depth" class="text-xs space-y-1">
+                                    <div class="text-base-content/50">No data</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(card);
+    }
+    
+    // Load active symbols from localStorage
+    function loadActiveSymbols() {
+        try {
+            const saved = localStorage.getItem('websocket_active_symbols');
+            if (saved) {
+                const savedSymbols = JSON.parse(saved);
+                activeSymbols.clear();
+                savedSymbols.forEach(symbolKey => {
+                    activeSymbols.add(symbolKey);
+                    const [exchange, symbol] = symbolKey.split(':');
+                    generateSymbolCard(symbol, exchange);
+                });
+                updateActiveSymbolsDisplay();
+                logEvent(`Loaded ${savedSymbols.length} saved symbols from previous session`, 'info');
+            } else {
+                // Generate default cards
+                activeSymbols.forEach(symbolKey => {
+                    const [exchange, symbol] = symbolKey.split(':');
+                    generateSymbolCard(symbol, exchange);
+                });
+                updateActiveSymbolsDisplay();
+            }
+        } catch (error) {
+            logEvent('Error loading saved symbols', 'error');
+            // Generate default cards on error
+            activeSymbols.forEach(symbolKey => {
+                const [exchange, symbol] = symbolKey.split(':');
+                generateSymbolCard(symbol, exchange);
+            });
+            updateActiveSymbolsDisplay();
+        }
+    }
+    
+    // Auto-connect on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        logEvent('🚀 Page loaded - initializing WebSocket test interface...', 'info');
+        logEvent('🌐 Current page URL: ' + window.location.href, 'info');
+        logEvent('🔒 Page protocol: ' + window.location.protocol, 'info');
+        
+        // Initialize symbol search
+        initializeSymbolSearch();
+        
+        // Load saved data
+        loadSubscriptions();
+        loadActiveSymbols();
+        
+        logEvent('📡 Checking WebSocket server status via REST API...', 'info');
+        // Check WebSocket server status via REST API first
+        fetchWithCSRF('/api/websocket/status')
+            .then(response => {
+                logEvent(`📡 Initial status check response: ${response.status}`, 'info');
+                return response.json();
+            })
+            .then(data => {
+                logEvent(`📡 Initial status data: ${JSON.stringify(data)}`, 'info');
+                if (data.status === 'error') {
+                    if (data.message.includes('No API key found')) {
+                        logEvent(`❌ ${data.message}`, 'error');
+                        logEvent('💡 Go to API Key page (/apikey) to generate an API key first', 'info');
+                        return;
+                    } else {
+                        logEvent(`⚠️  Server-side WebSocket status check failed: ${data.message}`, 'error');
+                        logEvent('🔄 Attempting direct browser WebSocket connection anyway...', 'info');
+                        // Try direct connection even if server-side check failed
+                        setTimeout(() => {
+                            connectWebSocket();
+                        }, 1000);
+                        return;
+                    }
+                }
+                
+                if (data.connected) {
+                    logEvent(`✅ WebSocket server is available via ${data.broker || 'unknown broker'}`, 'success');
+                    // Auto-connect to WebSocket client
+                    setTimeout(() => {
+                        logEvent('🔄 Auto-connecting to WebSocket in 1 second...', 'info');
+                        connectWebSocket();
+                    }, 1000);
+                } else {
+                    logEvent('⚠️  Server reports WebSocket not connected - trying direct connection anyway', 'info');
+                    // Try direct connection even if server reports not connected
+                    setTimeout(() => {
+                        logEvent('🔄 Attempting direct browser WebSocket connection...', 'info');
+                        connectWebSocket();
+                    }, 1000);
+                }
+            })
+            .catch(error => {
+                console.error('Error checking WebSocket status:', error);
+                logEvent(`❌ Failed to check WebSocket status - network error: ${error}`, 'error');
+                logEvent('🔧 You can still try to connect manually using the Connect WebSocket button', 'info');
+            });
+    });
+</script>
+{% endblock %}

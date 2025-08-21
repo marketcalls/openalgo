@@ -50,11 +50,21 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> Tuple[bool, Dict[st
         # Initialize broker's data handler
         data_handler = broker_module.BrokerData(auth_token)
         
-        # Get supported intervals from the timeframe map
+        # Get supported intervals from the timeframe map with proper numerical sorting
+        def sort_intervals(interval_list):
+            """Sort intervals numerically instead of alphabetically"""
+            def extract_number(interval):
+                """Extract numeric value from interval string for proper sorting"""
+                import re
+                match = re.match(r'(\d+)', interval)
+                return int(match.group(1)) if match else 0
+            
+            return sorted(interval_list, key=extract_number)
+        
         intervals = {
-            'seconds': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('s')]),
-            'minutes': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('m')]),
-            'hours': sorted([k for k in data_handler.timeframe_map.keys() if k.endswith('h')]),
+            'seconds': sort_intervals([k for k in data_handler.timeframe_map.keys() if k.endswith('s')]),
+            'minutes': sort_intervals([k for k in data_handler.timeframe_map.keys() if k.endswith('m')]),
+            'hours': sort_intervals([k for k in data_handler.timeframe_map.keys() if k.endswith('h')]),
             'days': sorted([k for k in data_handler.timeframe_map.keys() if k == 'D']),
             'weeks': sorted([k for k in data_handler.timeframe_map.keys() if k == 'W']),
             'months': sorted([k for k in data_handler.timeframe_map.keys() if k == 'M'])
