@@ -10,8 +10,8 @@ import websocket
 import time
 
 class FlattradeWebSocket:
-    #WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
-    WS_URL = "ws://localhost:8766"
+    WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
+    #WS_URL = "ws://localhost:8766"
 
     def __init__(self, user_id, actid, susertoken, on_message=None, on_error=None, on_close=None, on_open=None):
         self.user_id = user_id

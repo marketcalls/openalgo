@@ -227,23 +227,22 @@ class BacktestEngine:
         df_5m = df_all_dict['5m'].copy()
         df_1m = df_all_dict['1m'].copy()
         df_daily = df_all_dict['d'].copy()
-        df_nifty_1h = df_all_dict['1h'].copy()
+        #df_nifty_1h = df_all_dict['1h'].copy()
         df_nifty_15m = df_all_dict['nifty_15m'].copy()
         
         # === ENSURE TIME COLUMNS ARE DATETIME ===
-        for df in [df_15m, df_5m, df_1m, df_daily, df_nifty_1h, df_nifty_15m]:
+        for df in [df_15m, df_5m, df_1m, df_daily, df_nifty_15m]:
             if not df.empty:
                 df['time'] = pd.to_datetime(df['time'])
         
         # === EARLY RETURN IF CRITICAL DATA IS MISSING ===
-        if df_15m.empty or df_5m.empty or df_1m.empty or df_daily.empty or df_nifty_1h.empty or df_nifty_15m.empty:
+        if df_15m.empty or df_5m.empty or df_daily.empty or df_nifty_15m.empty:
             self.logger.warning(f"Missing critical data for {self.symbol} - skipping indicator calculations")
             return {
                 '15m': df_15m,
                 '5m': df_5m,
                 '1m': df_1m,
                 'd': df_daily,
-                '1h': df_nifty_1h,
                 'nifty_15m': df_nifty_15m
             }
         
@@ -269,7 +268,7 @@ class BacktestEngine:
         df_15m['date'] = pd.to_datetime(df_15m['time'].dt.date)
         df_5m['date'] = pd.to_datetime(df_5m['time'].dt.date)
         df_daily['date'] = pd.to_datetime(df_daily['time'].dt.date)
-        df_nifty_1h['date'] = pd.to_datetime(df_nifty_1h['time'].dt.date)
+        #df_nifty_1h['date'] = pd.to_datetime(df_nifty_1h['time'].dt.date)
         df_nifty_15m['date'] = pd.to_datetime(df_nifty_15m['time'].dt.date)
         
         # Merge ATR from daily data
@@ -277,44 +276,44 @@ class BacktestEngine:
         df_5m = df_5m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14']], on='date', how='left')
         
         # === HOURLY INDICATORS (Nifty 50EMA) ===
-        df_nifty_1h = df_nifty_1h.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14', 'rsi_14', 'adx_14']], on='date', how='left')    
+        # df_nifty_1h = df_nifty_1h.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14', 'rsi_14', 'adx_14']], on='date', how='left')    
 
-        df_nifty_1h['nifty_1hr_ema_50'] = df_nifty_1h['close'].ewm(span=50, adjust=False).mean()
-        df_nifty_1h['nifty_1hr_ema_200'] = df_nifty_1h['close'].ewm(span=200, adjust=False).mean()
-        df_nifty_1h['nifty_1hr_adx'] = talib.ADX(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
-        df_nifty_1h['nifty_1hr_+DI'] = talib.PLUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
-        df_nifty_1h['nifty_1hr_-DI'] = talib.MINUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
-        df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'], _ = talib.MACD(df_nifty_1h['close'], fastperiod=12, slowperiod=26, signalperiod=9)
-        df_nifty_1h['nifty_1hr_Volume_MA20'] = talib.MA(df_nifty_1h['volume'], timeperiod=20)
-        df_nifty_1h['nifty_1hr_Volume_Spike'] = df_nifty_1h['volume'] > 1.5 * df_nifty_1h['nifty_1hr_Volume_MA20']
-        df_nifty_1h['nifty_1hr_RSI'] = talib.RSI(df_nifty_1h['close'], timeperiod=14)
-        df_nifty_1h['nifty_1hr_volume_sma_20'] = df_nifty_1h['volume'].rolling(window=20).mean()
-        df_nifty_1h['nifty_1hr_RVOL'] = df_nifty_1h['volume'] / df_nifty_1h['nifty_1hr_volume_sma_20']
+        # df_nifty_1h['nifty_1hr_ema_50'] = df_nifty_1h['close'].ewm(span=50, adjust=False).mean()
+        # df_nifty_1h['nifty_1hr_ema_200'] = df_nifty_1h['close'].ewm(span=200, adjust=False).mean()
+        # df_nifty_1h['nifty_1hr_adx'] = talib.ADX(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
+        # df_nifty_1h['nifty_1hr_+DI'] = talib.PLUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
+        # df_nifty_1h['nifty_1hr_-DI'] = talib.MINUS_DI(df_nifty_1h['high'], df_nifty_1h['low'], df_nifty_1h['close'], timeperiod=50)
+        # df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'], _ = talib.MACD(df_nifty_1h['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+        # df_nifty_1h['nifty_1hr_Volume_MA20'] = talib.MA(df_nifty_1h['volume'], timeperiod=20)
+        # df_nifty_1h['nifty_1hr_Volume_Spike'] = df_nifty_1h['volume'] > 1.5 * df_nifty_1h['nifty_1hr_Volume_MA20']
+        # df_nifty_1h['nifty_1hr_RSI'] = talib.RSI(df_nifty_1h['close'], timeperiod=14)
+        # df_nifty_1h['nifty_1hr_volume_sma_20'] = df_nifty_1h['volume'].rolling(window=20).mean()
+        # df_nifty_1h['nifty_1hr_RVOL'] = df_nifty_1h['volume'] / df_nifty_1h['nifty_1hr_volume_sma_20']
 
-        # Price structure
-        df_nifty_1h['nifty_1hr_HH'] = df_nifty_1h['high'] > df_nifty_1h['high'].shift(1)
-        df_nifty_1h['nifty_1hr_HL'] = df_nifty_1h['low'] > df_nifty_1h['low'].shift(1)
-        df_nifty_1h['nifty_1hr_LL'] = df_nifty_1h['low'] < df_nifty_1h['low'].shift(1)
-        df_nifty_1h['nifty_1hr_LH'] = df_nifty_1h['high'] < df_nifty_1h['high'].shift(1)
+        # # Price structure
+        # df_nifty_1h['nifty_1hr_HH'] = df_nifty_1h['high'] > df_nifty_1h['high'].shift(1)
+        # df_nifty_1h['nifty_1hr_HL'] = df_nifty_1h['low'] > df_nifty_1h['low'].shift(1)
+        # df_nifty_1h['nifty_1hr_LL'] = df_nifty_1h['low'] < df_nifty_1h['low'].shift(1)
+        # df_nifty_1h['nifty_1hr_LH'] = df_nifty_1h['high'] < df_nifty_1h['high'].shift(1)
 
-        # Trend (HMA replaces EMA)
-        df_nifty_1h['nifty_1hr_hma_50'] = self.hull_moving_average(df_nifty_1h['close'], window=50)
-        df_nifty_1h['nifty_1hr_hma_200'] = self.hull_moving_average(df_nifty_1h['close'], window=200)
-        #df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'] = self.zero_lag_macd(df_nifty_1h['close'])
-        df_nifty_1h['nifty_1hr_RMI'] = self.relative_momentum_index(df_nifty_1h['close'])
+        # # Trend (HMA replaces EMA)
+        # df_nifty_1h['nifty_1hr_hma_50'] = self.hull_moving_average(df_nifty_1h['close'], window=50)
+        # df_nifty_1h['nifty_1hr_hma_200'] = self.hull_moving_average(df_nifty_1h['close'], window=200)
+        # #df_nifty_1h['nifty_1hr_MACD'], df_nifty_1h['nifty_1hr_MACD_Signal'] = self.zero_lag_macd(df_nifty_1h['close'])
+        # df_nifty_1h['nifty_1hr_RMI'] = self.relative_momentum_index(df_nifty_1h['close'])
         
-        #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_ema_50'] > (df_nifty_1h['nifty_1hr_ema_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_ema_50'] < (df_nifty_1h['nifty_1hr_ema_200'] * 0.99), -1, 0))
-        #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_hma_50'] > (df_nifty_1h['nifty_1hr_hma_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_hma_50'] < (df_nifty_1h['nifty_1hr_hma_200'] * 0.99), -1, 0))
-        df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(self.classify_trend, args=('1hr',), axis=1)
-        #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_2(row), axis=1)
-        #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_3(row), axis=1)
+        # #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_ema_50'] > (df_nifty_1h['nifty_1hr_ema_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_ema_50'] < (df_nifty_1h['nifty_1hr_ema_200'] * 0.99), -1, 0))
+        # #df_nifty_1h['nifty_trend'] = np.where(df_nifty_1h['nifty_1hr_hma_50'] > (df_nifty_1h['nifty_1hr_hma_200'] * 1.01), 1, np.where(df_nifty_1h['nifty_1hr_hma_50'] < (df_nifty_1h['nifty_1hr_hma_200'] * 0.99), -1, 0))
+        # df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(self.classify_trend, args=('1hr',), axis=1)
+        # #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_2(row), axis=1)
+        # #df_nifty_1h['nifty_trend'] = df_nifty_1h.apply(lambda row: self.classify_trend_3(row), axis=1)
 
-        # Merge trend into the 5min and 15min df
-        # Keep only the first record each day
-        df_nifty_1h = df_nifty_1h.groupby('date').last().reset_index()
-        df_nifty_1h['nifty_trend'] = df_nifty_1h['nifty_trend'].shift(1)
-        df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
-        df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
+        # # Merge trend into the 5min and 15min df
+        # # Keep only the first record each day
+        # df_nifty_1h = df_nifty_1h.groupby('date').last().reset_index()
+        # df_nifty_1h['nifty_trend'] = df_nifty_1h['nifty_trend'].shift(1)
+        # df_15m = df_15m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
+        # df_5m = df_5m.merge(df_nifty_1h[['date', 'nifty_trend']], on='date', how='left')
 
         # === NIFTY 15m INDICATORS (Nifty 50EMA) ===
         df_nifty_15m = df_nifty_15m.merge(df_daily[['date', 'atr_10', 'volume_10', 'close_10', 'atr_14', 'volume_14', 'close_14', 'rsi_14', 'adx_14']], on='date', how='left')    
@@ -656,14 +655,14 @@ class BacktestEngine:
 
         #df_15m.to_csv('15m.csv', index=False)
         #df_5m.to_csv('5m.csv', index=False)
-        df_nifty_1h.to_csv('1h.csv', index=False)
         
         return {
             '15m': df_15m,
             '5m': df_5m,
             '1m': df_1m,
             'd': df_daily,
-            '1h': df_nifty_1h
+            #'1h': df_nifty_1h,
+            'nifty_15m': df_nifty_15m
         }
     
     def get_day_data_optimized(self, df_with_indicators, day, lookback_days):
@@ -717,10 +716,10 @@ class BacktestEngine:
         # === STEP 1: Fetch all data once ===
         df_all_dict  = {
         '15m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '15m'),
-        '5m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '5m'),
-        '1m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, '1m'),
+        '5m': self.fetch_lookback_data_2(self.start_date - timedelta(days=10), self.end_date, '5m'),
+        '1m': self.fetch_lookback_data_2(self.start_date - timedelta(days=3), self.end_date, '1m'),
         'd': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'd'),
-        '1h': self.fetch_lookback_data_2(self.start_date - timedelta(days=45), self.end_date, '1h'),
+        #'1h': self.fetch_lookback_data_2(self.start_date - timedelta(days=45), self.end_date, '1h'),
         'nifty_15m': self.fetch_lookback_data_2(self.start_date - timedelta(days=20), self.end_date, 'nifty_15m'),
         }
 
@@ -735,8 +734,8 @@ class BacktestEngine:
         for day in self.daterange():
             try:
                 # Fast slicing of pre-calculated data (no more daily filtering/copying)
-                df = self.get_day_data_optimized(data_with_indicators['15m'], day, 5)
-                df_5min = self.get_day_data_optimized(data_with_indicators['5m'], day, 7)
+                df = self.get_day_data_optimized(data_with_indicators['15m'], day, 12)
+                df_5min = self.get_day_data_optimized(data_with_indicators['5m'], day, 6)
                 df_min = self.get_day_data_optimized(data_with_indicators['1m'], day, 2)
                 #df_daily = self.get_day_data_optimized(data_with_indicators['d'], day, 20)
                 #df_nifty_1h = self.get_day_data_optimized(data_with_indicators['1h'], day, 45)

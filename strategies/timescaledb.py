@@ -23,6 +23,7 @@ import sys
 from openalgo import api
 import pandas as pd
 from backtest_engine import BacktestEngine
+from trading_engine import LiveTradingEngine
 import glob
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -55,8 +56,9 @@ except ImportError:
     logger.warning("Kafka library not available. Install with: pip install kafka-python")
 
 class TimescaleDBManager:
-    def __init__(self, dbname=os.getenv('TIMESCALE_DB_NAME'), user=os.getenv('TIMESCALE_DB_USER'), password=os.getenv('TIMESCALE_DB_PASSWORD'), host=os.getenv('TIMESCALE_DB_HOST'), port=os.getenv('TIMESCALE_DB_PORT')):
+    def __init__(self, dbname=os.getenv('TIMESCALE_DB_NAME'), dbname_live=os.getenv('TIMESCALE_DB_NAME_LIVE'), user=os.getenv('TIMESCALE_DB_USER'), password=os.getenv('TIMESCALE_DB_PASSWORD'), host=os.getenv('TIMESCALE_DB_HOST'), port=os.getenv('TIMESCALE_DB_PORT')):
         self.dbname = dbname
+        self.dbname_live = dbname_live
         self.user = user
         self.password = password
         self.host = host
@@ -84,14 +86,14 @@ class TimescaleDBManager:
             self.logger.error(f"Failed to connect to PostgreSQL server: {e}")
             raise
 
-    def _database_exists(self):
+    def _database_exists(self, dbname):
         """Check if database exists"""
         try:
             with self._get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         "SELECT 1 FROM pg_database WHERE datname = %s",
-                        (self.dbname,)
+                        (dbname,)
                     )
                     return cursor.fetchone() is not None
         except Exception as e:
@@ -99,10 +101,10 @@ class TimescaleDBManager:
             return False
     
 
-    def _create_database(self):
+    def _create_database(self, dbname):
         """Create new database with TimescaleDB extension"""
         try:
-            self.logger.info(f"Creating database '{self.dbname}'...")
+            self.logger.info(f"Creating database '{dbname}'...")
             
             # Create database with autocommit connection
             conn = self._get_admin_connection()
@@ -111,10 +113,10 @@ class TimescaleDBManager:
                     # Create database
                     cursor.execute(
                         sql.SQL("CREATE DATABASE {}").format(
-                            sql.Identifier(self.dbname)
+                            sql.Identifier(dbname)
                         )
                     )
-                    self.logger.info(f"Database '{self.dbname}' created successfully")
+                    self.logger.info(f"Database '{dbname}' created successfully")
             finally:
                 conn.close()
                     
@@ -125,7 +127,7 @@ class TimescaleDBManager:
                 password=self.password,
                 host=self.host,
                 port=self.port,
-                dbname=self.dbname
+                dbname=dbname
             )
             try:
                 with conn_newdb.cursor() as cursor_new:
@@ -135,7 +137,7 @@ class TimescaleDBManager:
             finally:
                 conn_newdb.close()
                     
-            self.logger.info(f"Created database {self.dbname} with TimescaleDB extension")
+            self.logger.info(f"Created database {dbname} with TimescaleDB extension")
             return True
             
         except psycopg2.Error as e:
@@ -146,7 +148,7 @@ class TimescaleDBManager:
             return False
     
 
-    def _create_tables(self):
+    def _create_tables(self, dbname):
         """Create required tables and hypertables"""
         commands = [
             """
@@ -188,6 +190,19 @@ class TimescaleDBManager:
                 low DECIMAL(18, 2),
                 close DECIMAL(18, 2),
                 volume BIGINT,
+                atr_10 DECIMAL(18, 2),
+                volume_10 BIGINT,
+                atr_14 DECIMAL(18, 2),
+                volume_14 BIGINT,
+                nifty_trend_15m INT,
+                curbot DECIMAL(18, 2),
+                curtop DECIMAL(18, 2),
+                cum_intraday_volume BIGINT,
+                strategy_8 INT,
+                strategy_9 INT,
+                strategy_10 INT,
+                strategy_11 INT,
+                strategy_12 INT,
                 PRIMARY KEY (time, symbol)
             )
             """,
@@ -203,6 +218,19 @@ class TimescaleDBManager:
                 low DECIMAL(18, 2),
                 close DECIMAL(18, 2),
                 volume BIGINT,
+                atr_10 DECIMAL(18, 2),
+                volume_10 BIGINT,
+                atr_14 DECIMAL(18, 2),
+                volume_14 BIGINT,
+                nifty_trend_15m INT,
+                curbot DECIMAL(18, 2),
+                curtop DECIMAL(18, 2),
+                cum_intraday_volume BIGINT,
+                strategy_8 INT,
+                strategy_9 INT,
+                strategy_10 INT,
+                strategy_11 INT,
+                strategy_12 INT,
                 PRIMARY KEY (time, symbol)
             )
             """,
@@ -239,6 +267,26 @@ class TimescaleDBManager:
             """
             SELECT create_hypertable('ohlc_D', 'time', if_not_exists => TRUE)
             """,
+            """
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(20) NOT NULL,
+                strategy VARCHAR(10) NOT NULL,
+                quantity INTEGER NOT NULL,
+                entry_time TIMESTAMPTZ NOT NULL,
+                entry_price DECIMAL(18, 2) NOT NULL,
+                exit_time TIMESTAMPTZ NOT NULL,
+                exit_price DECIMAL(18, 2) NOT NULL,
+                exit_reason VARCHAR(20) NOT NULL,
+                gross_pnl DECIMAL(18, 2) NOT NULL,
+                direction VARCHAR(10) NOT NULL,
+                capital_used DECIMAL(18, 2) NOT NULL,
+                tax DECIMAL(18, 2) NOT NULL,
+                brokerage DECIMAL(18, 2) NOT NULL,
+                net_pnl DECIMAL(18, 2) NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """,
             """CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (time, symbol)""",
             """CREATE INDEX IF NOT EXISTS idx_ohlc_1m_symbol_time ON ohlc_1m (time, symbol)""",
             """CREATE INDEX IF NOT EXISTS idx_ohlc_5m_symbol_time ON ohlc_5m (time, symbol)""",
@@ -253,7 +301,7 @@ class TimescaleDBManager:
                 password=self.password,
                 host=self.host,
                 port=self.port,
-                dbname=self.dbname
+                dbname=dbname
             )
             try:
                 with conn.cursor() as cursor:
@@ -299,32 +347,32 @@ class TimescaleDBManager:
             self.logger.error(f"Database connection test failed: {e}")
             return False
 
-    def initialize_database(self):
+    def initialize_database(self, dbname):
         """Main initialization method"""
         # Test connection first
         if not self.test_connection():
             raise RuntimeError("Cannot connect to PostgreSQL server. Check your connection parameters.")
         
-        if not self._database_exists():
-            self.logger.info(f"Database {self.dbname} not found, creating...")
-            if not self._create_database():
+        if not self._database_exists(dbname):
+            self.logger.info(f"Database {dbname} not found, creating...")
+            if not self._create_database(dbname):
                 raise RuntimeError("Failed to create database")
         else:
-            self.logger.info(f"Database {self.dbname} already exists")
+            self.logger.info(f"Database {dbname} already exists")
         
-        self._create_tables()
+        self._create_tables(dbname)
         
         # Return an application connection
         try:
-            self.app_conn = psycopg2.connect(
+            app_conn = psycopg2.connect(
                 user=self.user,
                 password=self.password,
                 host=self.host,
                 port=self.port,
-                dbname=self.dbname
+                dbname=dbname
             )
             self.logger.info("Database connection established successfully")
-            return self.app_conn
+            return app_conn
         
         except psycopg2.Error as e:
             self.logger.error(f"Database connection failed: {e}")
@@ -338,10 +386,11 @@ class MarketDataProcessor:
     def __init__(self):
         # Initialize TimescaleDBManager and connect to the database
         self.db_manager = TimescaleDBManager()
-        self.db_conn = self.db_manager.initialize_database()
+        self.db_conn = self.db_manager.initialize_database('openalgo')
+        self.db_live_conn = self.db_manager.initialize_database('openalgo_live')
         self.logger = logging.getLogger(f"MarketDataProcessor")
         self.interrupt_flag = False  # Add interrupt flag
-        
+
         self.consumer = KafkaConsumer(
             'tick_data',
             bootstrap_servers='localhost:9092',
@@ -349,7 +398,7 @@ class MarketDataProcessor:
             auto_offset_reset='earliest'
             #key_deserializer=lambda k: k.decode('utf-8') if k else None,
             #value_deserializer=lambda v: json.loads(v.decode('utf-8'))
-        )
+        )        
 
         self.logger.info("Starting consumer with configuration:")
         self.logger.info(f"Group ID: {self.consumer.config['group_id']}")
@@ -370,13 +419,26 @@ class MarketDataProcessor:
             '15m': {}
         }
 
+        # self.client = api(
+        #     api_key="8009e08498f085ff1a3e7da718c5f4b585eaf9c2b7ce0c72740ab2b5d283d36c",  # Replace with your API key
+        #     host="http://127.0.0.1:5000"
+        # )
+
+        # # Initialize live trading engine
+        # self.trading_engine = LiveTradingEngine(
+        #     api_key=API_CONFIG['api_key'],
+        #     host=API_CONFIG['host'],
+        #     db_config=DB_CONFIG,
+        #     symbols=symbols
+        # )
+
     def clean_database(self):
         """Clear all records from all tables in the database"""
         try:
             self.logger.info("Cleaning database tables...")
             tables = ['ticks', 'ohlc_1m', 'ohlc_5m', 'ohlc_15m', 'ohlc_1h', 'ohlc_D']  # Add all your table names here
             
-            with self.db_conn.cursor() as cursor:
+            with self.db_live_conn.cursor() as cursor:
                 # Disable triggers temporarily to avoid hypertable constraints
                 cursor.execute("SET session_replication_role = 'replica';")
                 
@@ -386,23 +448,23 @@ class MarketDataProcessor:
                         self.logger.info(f"Cleared table: {table}")
                     except Exception as e:
                         self.logger.error(f"Error clearing table {table}: {e}")
-                        self.db_conn.rollback()
+                        self.db_live_conn.rollback()
                         continue
                 
                 # Re-enable triggers
                 cursor.execute("SET session_replication_role = 'origin';")
-                self.db_conn.commit()
+                self.db_live_conn.commit()
                 
             self.logger.info("Database cleaning completed successfully")
             return True
             
         except Exception as e:
             self.logger.error(f"Database cleaning failed: {e}")
-            self.db_conn.rollback()
+            self.db_live_conn.rollback()
             return False
 
 
-    def insert_historical_data(self, df, symbol, interval):
+    def insert_historical_data(self, df, symbol, interval, mode):
         """
         Insert historical data into the appropriate database table
         
@@ -465,8 +527,13 @@ class MarketDataProcessor:
             
             # Debug: print first record to verify format
             self.logger.debug(f"First record sample: {records[0] if records else 'No records'}")
+
+            if mode == "backtest":
+                conn = self.db_conn
+            elif mode == "live":
+                conn = self.db_live_conn
             
-            with self.db_conn.cursor() as cursor:
+            with conn.cursor() as cursor:
                 # Use execute_batch for efficient bulk insertion
                 execute_batch(cursor, f"""
                     INSERT INTO {table_name} 
@@ -480,7 +547,7 @@ class MarketDataProcessor:
                         volume = EXCLUDED.volume
                 """, records)
                 
-                self.db_conn.commit()
+                conn.commit()
                 self.logger.info(f"Successfully inserted {len(df)} records for {symbol} ({interval}) into {table_name}")
                 return True
                 
@@ -491,7 +558,7 @@ class MarketDataProcessor:
         except Exception as e:
             self.logger.error(f"Error inserting historical data for {symbol} {interval}: {e}")
             self.logger.error(traceback.format_exc())
-            self.db_conn.rollback()
+            conn.rollback()
             return False
         
 
@@ -562,7 +629,7 @@ class MarketDataProcessor:
             return set()
         
     
-    def fetch_missing_data(self, symbol, interval, client, start_date, end_date):
+    def fetch_missing_data(self, symbol, interval, client, start_date, end_date, mode):
         try:
             existing_dates = self.get_existing_dates(symbol, interval)
             all_dates = pd.date_range(start=start_date, end=end_date, freq='D').date
@@ -602,7 +669,7 @@ class MarketDataProcessor:
                         
                         # Success - process the dataframe
                         if hasattr(df, 'empty') and not df.empty:
-                            self.insert_historical_data(df, symbol, interval)
+                            self.insert_historical_data(df, symbol, interval, mode)
                         else:
                             self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {range_start}")
                         break  # Exit retry loop on success
@@ -622,7 +689,7 @@ class MarketDataProcessor:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
     
 
-    def fetch_historical_data(self, symbol, interval, client, start_date, end_date):
+    def fetch_historical_data(self, symbol, interval, client, start_date, end_date, mode):
         try:
             # Check for interrupt flag
             if self.interrupt_flag:
@@ -659,7 +726,7 @@ class MarketDataProcessor:
                     
                     # Success - process the dataframe
                     if hasattr(df, 'empty') and not df.empty:
-                        self.insert_historical_data(df, symbol, interval)
+                        self.insert_historical_data(df, symbol, interval, mode)
                     else:
                         self.logger.warning(f"[{symbol}] ⚠️ Empty Dataframe! No data on {start_date}")
                     return  # Exit function on success
@@ -678,7 +745,7 @@ class MarketDataProcessor:
         except Exception as e:
             self.logger.error(f"[{symbol}] ❌ Error during fetch: {e}")
 
-    def process_symbol_interval(self, symbol, interval, client, start_date, end_date):
+    def process_symbol_interval(self, symbol, interval, client, start_date, end_date, mode):
         """Process a single symbol-interval pair"""
         try:
             if interval == "5m" or interval == "1m":
@@ -693,10 +760,11 @@ class MarketDataProcessor:
                         interval, 
                         client, 
                         chunk_start.strftime("%Y-%m-%d"),
-                        chunk_end.strftime("%Y-%m-%d")
+                        chunk_end.strftime("%Y-%m-%d"),
+                        mode
                     )
             else:    
-                self.fetch_historical_data(symbol, interval, client, start_date, end_date)
+                self.fetch_historical_data(symbol, interval, client, start_date, end_date, mode)
         except Exception as e:
             self.logger.error(f"Error processing {symbol} {interval}: {str(e)}")
 
@@ -793,7 +861,7 @@ class MarketDataProcessor:
             #self.logger.info(f"Record---------> {record}")
             
             # Store in TimescaleDB
-            self.store_tick(record)
+            self.store_tick(record)            
 
             # Add to aggregation buffers
             self.buffer_tick(record)
@@ -809,7 +877,7 @@ class MarketDataProcessor:
     def store_tick(self, record):
         """Store raw tick in database"""
         try:
-            with self.db_conn.cursor() as cursor:
+            with self.db_live_conn.cursor() as cursor:
                 cursor.execute("""
                     INSERT INTO ticks (time, symbol, open, high, low, close, volume)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -820,10 +888,10 @@ class MarketDataProcessor:
                     close = EXCLUDED.close,
                     volume = EXCLUDED.volume
                     """, (record['time'], record['symbol'], record['open'], record['high'], record['low'], record['close'], record['volume']))
-                self.db_conn.commit()
+                self.db_live_conn.commit()
         except Exception as e:
             logger.error(f"Error storing tick: {e}")
-            self.db_conn.rollback()
+            self.db_live_conn.rollback()
 
     def buffer_tick(self, record):
         """Add tick to aggregation buffers"""
@@ -920,8 +988,21 @@ class MarketDataProcessor:
 
                         # Store the current last volume for next period
                         self.last_period_volume[timeframe][symbol] = current_last_volume
+
+                        candle = {
+                            'time': bucket_start,
+                            'symbol': symbol,
+                            'open': open_,
+                            'high': high,
+                            'low': low,
+                            'close': close,
+                            'volume': volume
+                        }
    
-                        aggregated.append((bucket_start, symbol, open_, high, low, close, volume))
+                        aggregated.append(candle)
+
+                        # Notify trading engine of new candle
+                        # self.trading_engine.on_new_candle(symbol, timeframe, candle)
 
                         # Remove this bucket to avoid re-aggregation
                         del self.tick_buffer[timeframe][symbol][bucket_start]
@@ -932,7 +1013,7 @@ class MarketDataProcessor:
 
             if aggregated:
                 try:
-                    with self.db_conn.cursor() as cursor:
+                    with self.db_live_conn.cursor() as cursor:
                         execute_batch(cursor, f"""
                             INSERT INTO {table_name} 
                             (time, symbol, open, high, low, close, volume)
@@ -943,22 +1024,24 @@ class MarketDataProcessor:
                                 low = EXCLUDED.low,
                                 close = EXCLUDED.close,
                                 volume = EXCLUDED.volume
-                            """, aggregated)
-                        self.db_conn.commit()
+                            """, [(c['time'], c['symbol'], c['open'], c['high'], c['low'], c['close'], c['volume']) for c in aggregated])
+                        self.db_live_conn.commit()
                         self.logger.info(f"Aggregated {len(aggregated)} symbols to {table_name}")
                         return True
                 except Exception as e:
                     self.logger.error(f"Error aggregating {timeframe} data: {e}")
-                    self.db_conn.rollback()
+                    self.db_live_conn.rollback()
                     return False
             return False
 
     def shutdown(self):
         """Clean shutdown"""
         logger.info("Shutting down processors")
+        self.trading_engine.stop()
         self.executor.shutdown(wait=True)
         self.consumer.close()
         self.db_conn.close()
+        self.db_live_conn.close()
         logger.info("Clean shutdown complete")
 
 if __name__ == "__main__":
@@ -1001,11 +1084,13 @@ if __name__ == "__main__":
                        help='End date for backtest (DD-MM-YYYY format)')
     parser.add_argument('--backtest_folder', type=str,
                        help='Folder to store backtest data')
+    parser.add_argument('--live_folder', type=str,
+                       help='Base output logs directory for live data')
     args = parser.parse_args()
 
-    # Validate arguments
+    # Validate arguments for Backtest
     if args.mode == 'backtest':
-        if not args.from_date or not args.to_date:
+        if not args.from_date or not args.to_date or not args.backtest_folder:
             parser.error("--from_date and --to_date are required in backtest mode")
         
         try:
@@ -1018,48 +1103,122 @@ if __name__ == "__main__":
         except ValueError as e:
             parser.error(f"Invalid date format. Please use DD-MM-YYYY. Error: {e}")
 
+    # Validate arguments for live
+    if args.mode == 'live':
+        if not args.from_date or not args.live_folder:
+            parser.error("--from_date and live_folder is required in live mode")
+
+        try:
+            from_date = datetime.strptime(args.from_date, '%d-%m-%Y').date()
+                
+        except ValueError as e:
+            parser.error(f"Invalid date format. Please use DD-MM-YYYY. Error: {e}")
+
     # Initialize the processor (update global variable for signal handler)
     processor = MarketDataProcessor()
     try:
         if args.mode == 'live':
+            logger.info(f"Running in live mode for the date {args.from_date}")
+
+            # Fetch the last 20 days historical data(1 min, 5 min, 15min, 1hr, D) and insert in the DB            
+            start_date = (from_date - timedelta(days=20)).strftime("%Y-%m-%d") 
+            end_date = from_date.strftime("%Y-%m-%d") 
+
+            # Cleaning the today's live folder
+            live_output_dir = args.live_folder
+            output_dir = os.path.join(live_output_dir)
+            os.makedirs(output_dir, exist_ok=True)
+            for filename in os.listdir(output_dir):
+                if filename.endswith(".csv"):
+                    os.remove(os.path.join(output_dir, filename))
+
             # Clean the database at the start of the intraday trading session(9:00 AM IST)
             if datetime.now().hour == 9 and datetime.now().minute == 0:
-                processor.clean_database()        
-
-            # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
-            # Dynamic date range: 7 days back to today
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+                processor.clean_database()            
 
             # Import symbol list from CSV file
             symbol_list = pd.read_csv('symbol_list.csv')
             symbol_list = symbol_list['Symbol'].tolist()
 
             # Fetch historical data for each symbol
-            for symbol in symbol_list:
-                for interval in ["D", "15m", "5m", "1m"]:
-                    df = client.history(
-                        symbol=symbol,
-                        exchange='NSE',
-                        interval=interval,
-                        start_date=start_date,
-                        end_date=end_date
-                    )
-                    #print(df.head())
-                    # Insert historical data into the database
-                    processor.insert_historical_data(df, symbol, interval)
+            intervals = ["D", "15m", "5m", "1m"]                       
+
+            # Create all combinations of (symbol, interval)
+            symbol_interval_pairs = list(product(symbol_list, intervals))
+
+            # Add "NIFTY" "15m" in the symbol_interval_pairs
+            symbol_interval_pairs.append(("NIFTY", "15m")) 
+
+            # Fetch historical data of each symbol for the past 20 days
+            with ThreadPoolExecutor(max_workers=2) as executor: 
+                futures = []                
+                try:
+                    for symbol, interval in symbol_interval_pairs:
+                        time.sleep(1.5)  # Increased delay to reduce server pressure
+                        futures.append(
+                            executor.submit(
+                                processor.process_symbol_interval,
+                                symbol,
+                                interval,
+                                client,
+                                start_date,
+                                end_date,
+                                "live"
+                            )
+                        )
+                    
+                    # Wait for all tasks to complete with proper interrupt handling
+                    completed = 0
+                    total = len(futures)
+                    
+                    for future in futures:
+                        try:
+                            future.result(timeout=30)  # 30 second timeout per task
+                            completed += 1
+                            if completed % 10 == 0:  # Progress update every 10 tasks
+                                logger.info(f"📊 Progress: {completed}/{total} tasks completed")
+                        except TimeoutError:
+                            logger.warning(f"⏰ Task timed out, continuing with next task")
+                            future.cancel()
+                        except Exception as e:
+                            logger.error(f"❌ Task failed: {e}")
+                    
+                    logger.info(f"✅ All {total} data fetching tasks completed")
+                    
+                except KeyboardInterrupt:
+                    logger.warning("\n🛑 KeyboardInterrupt received! Stopping all tasks...")
+                    
+                    # Set interrupt flag to stop running tasks
+                    processor.interrupt_flag = True
+                    
+                    # Cancel all pending futures
+                    cancelled_count = 0
+                    for future in futures:
+                        if future.cancel():
+                            cancelled_count += 1
+                    
+                    logger.info(f"📝 Cancelled {cancelled_count} pending tasks")
+                    
+                    # Force shutdown the executor
+                    logger.info("🔄 Shutting down executor...")
+                    executor.shutdown(wait=False)
+                    
+                    # Give running tasks a moment to cleanup and check interrupt flag
+                    logger.info("⏳ Waiting for running tasks to cleanup...")
+                    time.sleep(3)
+                    
+                    logger.info("🛑 Data fetching interrupted by user")
+                    raise  # Re-raise to exit the program
+            
+            # Start the Trading Engine        
+            processor.trading_engine.start()
 
             # Process the real-time data
             processor.process_messages()
             
         elif args.mode == 'backtest':
             logger.info(f"Running in backtest mode from {args.from_date} to {args.to_date}")
-            # Clean the database
-            # processor.clean_database()
 
-            # Load historical data for the specified date range
-            # Fetch the last 10 days historical data(1 min, 5 min, 15min, D) and insert in the DB
-            # Dynamic date range: 7 days back to today
             end_date = to_date.strftime("%Y-%m-%d")     
             start_date = (from_date - timedelta(days=20)).strftime("%Y-%m-%d") 
 
@@ -1117,9 +1276,6 @@ if __name__ == "__main__":
             symbol_list = pd.read_csv('symbol_list_backtest.csv')
             symbol_list = symbol_list['Symbol'].tolist()
 
-            # Randomly select 20 stocks from the symbol_list
-            # symbol_list = random.sample(symbol_list, 10)
-
             # Fetch historical data for each symbol
             intervals = ["D", "15m", "5m", "1m"]                       
 
@@ -1145,7 +1301,8 @@ if __name__ == "__main__":
             #                     interval,
             #                     client,
             #                     start_date,
-            #                     end_date
+            #                     end_date,
+            #                     "backtest"
             #                 )
             #             )
                     
