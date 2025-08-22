@@ -469,47 +469,55 @@ class BrokerData:
             try:
                 # Convert to datetime first - handle mixed formats (strings and floats)
                 def safe_to_datetime(ts):
-                    if isinstance(ts, str):
-                        return pd.to_datetime(ts)
-                    else:
-                        # Numeric timestamp in milliseconds, convert to datetime
-                        return pd.to_datetime(ts, unit='ms')
+                    try:
+                        if isinstance(ts, str):
+                            return pd.to_datetime(ts)
+                        elif isinstance(ts, pd.Timestamp):
+                            return ts
+                        else:
+                            # Numeric timestamp in milliseconds, convert to datetime
+                            return pd.to_datetime(ts, unit='ms')
+                    except Exception as e:
+                        logger.warning(f"Error converting timestamp {ts}: {e}")
+                        return pd.NaT
                 
                 df['timestamp'] = df['timestamp'].apply(safe_to_datetime)
+                
+                # Remove any NaT values
+                df = df.dropna(subset=['timestamp'])
                 
                 # For daily timeframe, normalize to date only (remove time component)
                 # This matches Angel's behavior for daily data
                 if interval == 'D':
                     # Convert to date only (YYYY-MM-DD format) then back to datetime at midnight
-                    df['timestamp'] = df['timestamp'].dt.date
+                    # Use apply to handle mixed types safely
+                    df['timestamp'] = df['timestamp'].apply(lambda x: x.date() if hasattr(x, 'date') else pd.to_datetime(x).date())
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                 
                 # Convert to Unix timestamp (seconds since epoch) - following Angel's pattern
-                df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+                # Use apply to safely handle any remaining mixed types
+                df['timestamp'] = df['timestamp'].apply(lambda x: int(x.timestamp()) if hasattr(x, 'timestamp') else int(pd.to_datetime(x).timestamp()))
                 logger.info(f"Successfully converted {len(df)} timestamps to Unix timestamps")
             except Exception as e:
                 logger.error(f"Failed to convert timestamps: {e}")
-                # Fallback: try to handle mixed formats
+                # Fallback: try to handle mixed formats using the same safe approach
                 def convert_timestamp(ts):
                     try:
                         if isinstance(ts, str):
                             # ISO 8601 string format
                             dt = pd.to_datetime(ts)
-                            # For daily, normalize to date only
-                            if interval == 'D':
-                                dt = dt.date()
-                                dt = pd.to_datetime(dt)
-                            return int(dt.timestamp())
                         elif isinstance(ts, pd.Timestamp):
-                            # pandas Timestamp object
-                            if interval == 'D':
-                                dt = ts.date()
-                                dt = pd.to_datetime(dt)
-                                return int(dt.timestamp())
-                            return int(ts.timestamp())
+                            # pandas Timestamp object - already converted
+                            dt = ts
                         else:
                             # Numeric format (milliseconds)
-                            return int(float(ts) / 1000)
+                            dt = pd.to_datetime(ts, unit='ms')
+                        
+                        # For daily, normalize to date only
+                        if interval == 'D':
+                            dt = pd.to_datetime(dt.date())
+                        
+                        return int(dt.timestamp())
                     except Exception as e:
                         logger.warning(f"Failed to convert timestamp {ts} ({type(ts)}): {e}")
                         return None
