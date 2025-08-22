@@ -223,15 +223,35 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             return
                             
                         # Data is already properly mapped by FyersAdapter and FyersDataMapper
-                        # Just ensure we have the subscription info for proper topic generation
+                        # Extract the actual symbol and exchange from the incoming data
                         if data:
-                            # Override with the original subscription details to ensure correct topic
-                            # This fixes the mismatch between NFO subscription and NSE data
-                            data['symbol'] = original_symbol
-                            data['exchange'] = original_exchange
+                            # Get the actual symbol from the data (not from subscription)
+                            incoming_symbol = data.get('symbol', '')
+                            incoming_exchange = data.get('exchange', '')
+                            
+                            # Parse the symbol format (e.g., "NSE:TCS-EQ" -> exchange="NSE", symbol="TCS")
+                            if ':' in incoming_symbol:
+                                parsed_exchange, symbol_part = incoming_symbol.split(':', 1)
+                                # Remove suffix like -EQ, -FUT, etc.
+                                if '-' in symbol_part:
+                                    clean_symbol = symbol_part.split('-')[0]
+                                else:
+                                    clean_symbol = symbol_part
+                                    
+                                # Use parsed values for topic generation
+                                data['symbol'] = clean_symbol
+                                data['exchange'] = parsed_exchange
+                            else:
+                                # Fallback to original subscription if parsing fails
+                                data['symbol'] = original_symbol
+                                data['exchange'] = original_exchange
+                            
                             data['subscription_mode'] = original_mode
                             
-                            # Send via ZeroMQ with the original subscription details
+                            # Log for debugging
+                            self.logger.info(f"Quote Mapping: original_symbol={incoming_symbol}, parsed exchange={data.get('exchange')}, symbol_name={data.get('symbol')}")
+                            
+                            # Send via ZeroMQ with the correctly parsed symbol details
                             self._send_data(data)
                     except Exception as e:
                         self.logger.error(f"Error processing data callback: {e}")
