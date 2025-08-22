@@ -46,6 +46,9 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.symbol_mapper = SymbolMapper()
         
+        # Add deduplication cache to prevent duplicate data publishing
+        self.last_data_cache = {}  # Format: {symbol_exchange_mode: {ltp, timestamp}}
+        
         self.logger.info("Fyers WebSocket Adapter initialized")
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
@@ -144,6 +147,13 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if callback_count > 0:
                         self.logger.info(f"Cleared {callback_count} active callbacks")
                 
+                # Clear deduplication cache
+                if hasattr(self, 'last_data_cache'):
+                    cache_count = len(self.last_data_cache)
+                    self.last_data_cache.clear()
+                    if cache_count > 0:
+                        self.logger.info(f"Cleared {cache_count} cached data entries")
+                
                 if subscription_count > 0:
                     self.logger.info(f"Cleared {subscription_count} active subscriptions")
             
@@ -223,15 +233,53 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             return
                             
                         # Data is already properly mapped by FyersAdapter and FyersDataMapper
-                        # Just ensure we have the subscription info for proper topic generation
+                        # Extract the actual symbol and exchange from the incoming data
                         if data:
-                            # Override with the original subscription details to ensure correct topic
-                            # This fixes the mismatch between NFO subscription and NSE data
-                            data['symbol'] = original_symbol
-                            data['exchange'] = original_exchange
+                            # Get the actual symbol from the data (not from subscription)
+                            incoming_symbol = data.get('symbol', '')
+                            incoming_exchange = data.get('exchange', '')
+                            
+                            # Parse the symbol format (e.g., "NSE:TCS-EQ" -> exchange="NSE", symbol="TCS")
+                            if ':' in incoming_symbol:
+                                parsed_exchange, symbol_part = incoming_symbol.split(':', 1)
+                                # Remove suffix like -EQ, -FUT, etc.
+                                if '-' in symbol_part:
+                                    clean_symbol = symbol_part.split('-')[0]
+                                else:
+                                    clean_symbol = symbol_part
+                                    
+                                # Use parsed values for topic generation
+                                data['symbol'] = clean_symbol
+                                data['exchange'] = parsed_exchange
+                            else:
+                                # Fallback to original subscription if parsing fails
+                                data['symbol'] = original_symbol
+                                data['exchange'] = original_exchange
+                            
                             data['subscription_mode'] = original_mode
                             
-                            # Send via ZeroMQ with the original subscription details
+                            # Angel-style deduplication: Only check LTP changes, not timestamp
+                            # This matches Angel's behavior where only price changes matter
+                            cache_key = f"{data.get('exchange')}_{data.get('symbol')}_{original_mode}"
+                            current_ltp = data.get('ltp', 0)
+                            
+                            # Check if this is duplicate LTP data (ignore timestamp differences)
+                            if cache_key in self.last_data_cache:
+                                last_ltp = self.last_data_cache[cache_key].get('ltp', 0)
+                                if abs(last_ltp - current_ltp) < 0.01:  # Same price (within 1 paisa)
+                                    # Duplicate price, skip publishing
+                                    return
+                            
+                            # Update cache with new LTP (Angel-style: only track price changes)
+                            self.last_data_cache[cache_key] = {
+                                'ltp': current_ltp,
+                                'last_update': time.time()
+                            }
+                            
+                            # Log for debugging (only for new data)
+                            self.logger.info(f"Quote Mapping: original_symbol={incoming_symbol}, parsed exchange={data.get('exchange')}, symbol_name={data.get('symbol')}")
+                            
+                            # Send via ZeroMQ with the correctly parsed symbol details
                             self._send_data(data)
                     except Exception as e:
                         self.logger.error(f"Error processing data callback: {e}")
