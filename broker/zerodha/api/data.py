@@ -340,6 +340,11 @@ class BrokerData:
             
             # Convert timestamp to epoch properly using ISO format
             final_df['timestamp'] = pd.to_datetime(final_df['timestamp'], format='ISO8601')
+            
+            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
+            if timeframe == 'D':
+                final_df['timestamp'] = final_df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+            
             final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9  # Convert nanoseconds to seconds
             
             # Sort by timestamp and remove duplicates
