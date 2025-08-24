@@ -33,3 +33,6 @@ class AnalyzerSchema(Schema):
 class AnalyzerToggleSchema(Schema):
     apikey = fields.Str(required=True)
     mode = fields.Bool(required=True)
+
+class PingSchema(Schema):
+    apikey = fields.Str(required=True)
