@@ -233,53 +233,15 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             return
                             
                         # Data is already properly mapped by FyersAdapter and FyersDataMapper
-                        # Extract the actual symbol and exchange from the incoming data
+                        # Just ensure we have the subscription info for proper topic generation
                         if data:
-                            # Get the actual symbol from the data (not from subscription)
-                            incoming_symbol = data.get('symbol', '')
-                            incoming_exchange = data.get('exchange', '')
-                            
-                            # Parse the symbol format (e.g., "NSE:TCS-EQ" -> exchange="NSE", symbol="TCS")
-                            if ':' in incoming_symbol:
-                                parsed_exchange, symbol_part = incoming_symbol.split(':', 1)
-                                # Remove suffix like -EQ, -FUT, etc.
-                                if '-' in symbol_part:
-                                    clean_symbol = symbol_part.split('-')[0]
-                                else:
-                                    clean_symbol = symbol_part
-                                    
-                                # Use parsed values for topic generation
-                                data['symbol'] = clean_symbol
-                                data['exchange'] = parsed_exchange
-                            else:
-                                # Fallback to original subscription if parsing fails
-                                data['symbol'] = original_symbol
-                                data['exchange'] = original_exchange
-                            
+                            # Override with the original subscription details to ensure correct topic
+                            # This fixes the mismatch between NFO subscription and NSE data
+                            data['symbol'] = original_symbol
+                            data['exchange'] = original_exchange
                             data['subscription_mode'] = original_mode
                             
-                            # Angel-style deduplication: Only check LTP changes, not timestamp
-                            # This matches Angel's behavior where only price changes matter
-                            cache_key = f"{data.get('exchange')}_{data.get('symbol')}_{original_mode}"
-                            current_ltp = data.get('ltp', 0)
-                            
-                            # Check if this is duplicate LTP data (ignore timestamp differences)
-                            if cache_key in self.last_data_cache:
-                                last_ltp = self.last_data_cache[cache_key].get('ltp', 0)
-                                if abs(last_ltp - current_ltp) < 0.01:  # Same price (within 1 paisa)
-                                    # Duplicate price, skip publishing
-                                    return
-                            
-                            # Update cache with new LTP (Angel-style: only track price changes)
-                            self.last_data_cache[cache_key] = {
-                                'ltp': current_ltp,
-                                'last_update': time.time()
-                            }
-                            
-                            # Log for debugging (only for new data)
-                            self.logger.info(f"Quote Mapping: original_symbol={incoming_symbol}, parsed exchange={data.get('exchange')}, symbol_name={data.get('symbol')}")
-                            
-                            # Send via ZeroMQ with the correctly parsed symbol details
+                            # Send via ZeroMQ with the original subscription details
                             self._send_data(data)
                     except Exception as e:
                         self.logger.error(f"Error processing data callback: {e}")
@@ -534,13 +496,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 symbol = data.get("symbol", "")
                 exchange = data.get("exchange", "")
                 
+                # Ensure we have valid symbol and exchange
+                if not symbol or not exchange:
+                    self.logger.warning(f"Invalid symbol or exchange: symbol='{symbol}', exchange='{exchange}'")
+                    return
+                
                 # Map subscription mode to mode string (same as Angel adapter)
                 subscription_mode = data.get('subscription_mode', 1)
-                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[subscription_mode]
+                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(subscription_mode, 'QUOTE')
                 
                 # Format: EXCHANGE_SYMBOL_MODE (following Angel adapter pattern)
                 topic = f"{exchange}_{symbol}_{mode_str}"
-                self.logger.info(f"Publishing data for symbol: {symbol}, exchange: {exchange}, topic: {topic}")
                 
                 # Use the base adapter's publish_market_data method like Angel does
                 self.publish_market_data(topic, data)
@@ -559,6 +525,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
         except Exception as e:
             self.logger.error(f"Error sending data via ZeroMQ: {e}")
+            self.logger.error(f"Data causing error: {data}")
     
     def get_connection_status(self) -> Dict[str, Any]:
         """Get connection status"""
