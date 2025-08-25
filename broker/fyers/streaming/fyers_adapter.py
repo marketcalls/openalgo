@@ -49,6 +49,9 @@ class FyersAdapter:
         # Threading
         self.lock = threading.Lock()
         
+        # Deduplication tracking
+        self.last_data = {}  # symbol -> {ltp, timestamp} for deduplication
+        
         self.logger.info(f"Fyers adapter initialized for user: {userid}")
     
     def connect(self) -> bool:
@@ -355,6 +358,26 @@ class FyersAdapter:
             mapped_data["exchange"] = matched_subscription['exchange']
             mapped_data["update_type"] = update_type
             mapped_data["timestamp"] = int(time.time())
+            
+            # Deduplication check
+            symbol_key = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
+            current_ltp = mapped_data.get('ltp', 0)
+            
+            # Check if this is duplicate data
+            if symbol_key in self.last_data:
+                last_ltp = self.last_data[symbol_key].get('ltp', 0)
+                last_time = self.last_data[symbol_key].get('timestamp', 0)
+                
+                # Skip if same LTP within 100ms (likely duplicate)
+                if (current_ltp == last_ltp and 
+                    abs(mapped_data["timestamp"] - last_time) < 0.1):
+                    return
+            
+            # Update last data for deduplication
+            self.last_data[symbol_key] = {
+                'ltp': current_ltp,
+                'timestamp': mapped_data["timestamp"]
+            }
             
             # Debug logging
             if openalgo_data_type == "Depth":
