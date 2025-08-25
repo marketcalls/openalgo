@@ -1008,7 +1008,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "1.0.28"
+version = "1.0.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1017,9 +1017,9 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/92/c5/26b3c3e5ab8eb5533a18d88c128829c851ccb3b82073be82ab57eebc5452/openalgo-1.0.28.tar.gz", hash = "sha256:291dc76e4b356aba6cca92e34e123d6b51d4430747bd0c1fb4a5c273984e4c8c", size = 93808 }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/e9/6980ec5fa3506cb28ecb700ecadd4b09166f89833334b85b0d46ce340ab4/openalgo-1.0.29.tar.gz", hash = "sha256:6e2606b4988e74df70fa2462b4006d54a31f4eff78b8c8c118ccdf9b1752b1d6", size = 93838 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/35/07806768fe13b59e00d8fd5df305ebf32c7dfe5235a170c04eb5cc80f924/openalgo-1.0.28-py3-none-any.whl", hash = "sha256:1b888b7f411a757ae0519002b7dac80a63cc73c02b65a970a5b2a540ba9a79ec", size = 95068 },
+    { url = "https://files.pythonhosted.org/packages/f5/cb/e1d7ba865385318063ad0eee7b5f3a0b223b48d7e281d4563f49e4e23e79/openalgo-1.0.29-py3-none-any.whl", hash = "sha256:7bdb0b550b70050b8ab3262d720401381f3badd588e8eddaf6da73e6744487d1", size = 95070 },
 ]
 
 [[package]]
@@ -1222,7 +1222,7 @@ requires-dist = [
     { name = "mdurl", specifier = "==0.1.2" },
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.2.4" },
-    { name = "openalgo", specifier = "==1.0.28" },
+    { name = "openalgo", specifier = "==1.0.29" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "packaging", specifier = "==24.1" },
     { name = "pandas", specifier = "==2.2.3" },
@@ -1262,7 +1262,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = "==2.0.31" },
     { name = "sse-starlette", specifier = "==2.4.1" },
     { name = "stack-data", specifier = "==0.6.3" },
-    { name = "starlette", specifier = "==0.47.1" },
+    { name = "starlette", specifier = "==0.47.2" },
     { name = "tornado", specifier = "==6.5.0" },
     { name = "traitlets", specifier = "==5.14.3" },
     { name = "typing-extensions", specifier = "==4.12.2" },
@@ -1901,15 +1901,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.47.1"
+version = "0.47.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/69/662169fdb92fb96ec3eaee218cf540a629d629c86d7993d9651226a6789b/starlette-0.47.1.tar.gz", hash = "sha256:aef012dd2b6be325ffa16698f9dc533614fb1cebd593a906b90dc1025529a79b", size = 2583072 }
+sdist = { url = "https://files.pythonhosted.org/packages/04/57/d062573f391d062710d4088fa1369428c38d51460ab6fedff920efef932e/starlette-0.47.2.tar.gz", hash = "sha256:6ae9aa5db235e4846decc1e7b79c4f346adf41e9777aebeb49dfd09bbd7023d8", size = 2583948 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/95/38ef0cd7fa11eaba6a99b3c4f5ac948d8bc6ff199aabd327a29cc000840c/starlette-0.47.1-py3-none-any.whl", hash = "sha256:5e11c9f5c7c3f24959edbf2dffdc01bba860228acf657129467d8a7468591527", size = 72747 },
+    { url = "https://files.pythonhosted.org/packages/f7/1f/b876b1f83aef204198a42dc101613fefccb32258e5428b5f9259677864b4/starlette-0.47.2-py3-none-any.whl", hash = "sha256:c5847e96134e5c5371ee9fac6fdf1a67336d5815e09eb2a01fdb57a351ef915b", size = 72984 },
 ]
 
 [[package]]
