@@ -135,8 +135,14 @@ class FyersAdapter:
         
         try:
             with self.lock:
-                # Store callback
-                self.subscription_callbacks[data_type] = callback
+                # Store callback per symbol to prevent data mixing
+                for symbol_info in symbols:
+                    exchange = symbol_info.get("exchange", "NSE")
+                    symbol = symbol_info.get("symbol", "")
+                    if symbol:
+                        full_symbol = f"{exchange}:{symbol}"
+                        # Store callback per symbol
+                        self.subscription_callbacks[f"{data_type}_{full_symbol}"] = callback
                 
                 # Store subscription info for tracking
                 valid_symbols = []
@@ -249,51 +255,119 @@ class FyersAdapter:
             fyers_type = fyers_data.get("type", "sf")
             update_type = fyers_data.get("update_type", "snapshot")
             
-            # Find the appropriate callback based on data type and subscription intent
+            # Map to OpenAlgo format first to get symbol info
+            mapped_data = self.data_mapper.map_fyers_data(fyers_data, "Quote")
+            if not mapped_data:
+                return
+            
+            # Extract symbol information from mapped data
+            symbol_str = mapped_data.get("symbol", "")
+            if not symbol_str:
+                return
+            
+            # Find matching subscription and callback
             callback = None
             openalgo_data_type = "Quote"  # Default
+            matched_subscription = None
             
-            # Check if we have a depth subscription callback for indices
-            depth_callback = self.subscription_callbacks.get("DepthUpdate")
-            symbol_callback = self.subscription_callbacks.get("SymbolUpdate")
+            # Debug: Log what we're trying to match
+            self.logger.info(f"🔍 Trying to match symbol_str='{symbol_str}' against subscriptions:")
+            for fs, si in self.active_subscriptions.items():
+                self.logger.info(f"  - {fs}: {si['exchange']}:{si['symbol']}")
+            
+            # Look for matching subscription based on symbol
+            for full_symbol, sub_info in self.active_subscriptions.items():
+                expected_symbol = f"{sub_info['exchange']}:{sub_info['symbol']}"
+                
+                # Try exact match first
+                if symbol_str == expected_symbol:
+                    matched_subscription = sub_info
+                    self.logger.info(f"✅ Exact match: {symbol_str} -> {full_symbol}")
+                    break
+                
+                # Try alternative formats for the same symbol
+                # Handle exchange and format mismatches
+                
+                # Case 1: Equity symbols - NSE:TCS-EQ should match NSE:TCS
+                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE':
+                    symbol_part = symbol_str.split(':', 1)[1]
+                    if symbol_part == f"{sub_info['symbol']}-EQ":
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ Equity match: {symbol_str} -> {full_symbol}")
+                        break
+                
+                # Case 2: Index symbols - NSE:NIFTY50 should match NSE_INDEX:NIFTY
+                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE_INDEX':
+                    symbol_part = symbol_str.split(':', 1)[1]
+                    if (symbol_part == 'NIFTY50' and sub_info['symbol'] == 'NIFTY') or \
+                       (symbol_part.replace('-INDEX', '') == sub_info['symbol']):
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ Index match: {symbol_str} -> {full_symbol}")
+                        break
+                
+                # Case 3: Options - NSE:NIFTY25AUG25550PE should match NFO:NIFTY28AUG2525550PE
+                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NFO':
+                    symbol_part = symbol_str.split(':', 1)[1]
+                    sub_symbol = sub_info['symbol']
+                    
+                    # Extract core parts for comparison
+                    # NSE:NIFTY25AUG25550PE vs NFO:NIFTY28AUG2525550PE
+                    if 'NIFTY' in symbol_part and 'NIFTY' in sub_symbol:
+                        # Extract strike and expiry info
+                        if '25550' in symbol_part and '25550' in sub_symbol:
+                            matched_subscription = sub_info
+                            self.logger.info(f"✅ Options match: {symbol_str} -> {full_symbol}")
+                            break
+            
+            if not matched_subscription:
+                return
+            
+            # Get the appropriate callback for this specific symbol
+            full_symbol = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
             
             if fyers_type == "dp":
-                callback = depth_callback
+                callback = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
                 openalgo_data_type = "Depth"
-            elif fyers_type == "if" and depth_callback:
-                # Index data but depth subscription exists - create synthetic depth
-                callback = depth_callback
-                openalgo_data_type = "Depth"
+            elif fyers_type == "if":
+                # Check if we have depth subscription for this symbol
+                depth_callback = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
+                if depth_callback:
+                    callback = depth_callback
+                    openalgo_data_type = "Depth"
+                else:
+                    callback = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
+                    openalgo_data_type = "Quote"
             else:
-                callback = symbol_callback
+                callback = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
                 openalgo_data_type = "Quote"
             
             if not callback:
                 return
             
-            # Map to OpenAlgo format
-            mapped_data = self.data_mapper.map_fyers_data(fyers_data, openalgo_data_type)
-            if not mapped_data:
-                return
+            # Re-map data with correct type if needed
+            if openalgo_data_type == "Depth":
+                mapped_data = self.data_mapper.map_fyers_data(fyers_data, "Depth")
+                if not mapped_data:
+                    return
             
-            # Add additional info
+            # Override symbol and exchange with subscription details to ensure consistency
+            mapped_data["symbol"] = matched_subscription['symbol']
+            mapped_data["exchange"] = matched_subscription['exchange']
             mapped_data["update_type"] = update_type
             mapped_data["timestamp"] = int(time.time())
             
-            # Debug logging for BSE/MCX/NSE_INDEX data
-            symbol = mapped_data.get("symbol", "")
-            if any(ex in symbol for ex in ["BSE:", "MCX:", "BFO:", "NSE_INDEX:"]):
-                if openalgo_data_type == "Depth":
-                    depth = mapped_data.get('depth', {})
-                    buy_levels = depth.get('buy', [])
-                    sell_levels = depth.get('sell', [])
-                    bid1 = buy_levels[0]['price'] if buy_levels else 'N/A'
-                    ask1 = sell_levels[0]['price'] if sell_levels else 'N/A'
-                    self.logger.info(f"🎉 {symbol} depth: Bid={bid1}, Ask={ask1}, Type={openalgo_data_type}")
-                else:
-                    self.logger.info(f"🎉 {symbol} data: LTP={mapped_data.get('ltp', 0)}, Type={openalgo_data_type}")
+            # Debug logging
+            if openalgo_data_type == "Depth":
+                depth = mapped_data.get('depth', {})
+                buy_levels = depth.get('buy', [])
+                sell_levels = depth.get('sell', [])
+                bid1 = buy_levels[0]['price'] if buy_levels else 'N/A'
+                ask1 = sell_levels[0]['price'] if sell_levels else 'N/A'
+                self.logger.info(f"🎉 {full_symbol} depth: Bid={bid1}, Ask={ask1}")
+            else:
+                self.logger.info(f"🎉 {full_symbol} data: LTP={mapped_data.get('ltp', 0)}")
             
-            # Send to callback
+            # Send to symbol-specific callback
             callback(mapped_data)
             
         except Exception as e:
