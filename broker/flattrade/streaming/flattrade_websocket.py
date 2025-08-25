@@ -15,6 +15,8 @@ class FlattradeWebSocket:
     
     # Connection constants
     WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
+    #WS_URL = "ws://localhost:8766"
+
     CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
     
