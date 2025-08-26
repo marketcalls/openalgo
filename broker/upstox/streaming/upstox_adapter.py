@@ -32,6 +32,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.market_status: Dict[str, Any] = {}
         self.connected = False
         self.running = False
+        self.lock = threading.Lock()  # Add threading lock for subscription management
 
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Initialize the adapter with authentication data"""
@@ -79,47 +80,81 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return self._create_error_response("CONNECTION_ERROR", str(e))
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 0) -> Dict[str, Any]:
-        """Subscribe to market data for a symbol/exchange"""
-        try:
-            if not self.connected:
-                return self._create_error_response("NOT_CONNECTED", "WebSocket is not connected")
+        """Subscribe to market data with Upstox-specific implementation following Angel's pattern"""
+        # Validate mode
+        if mode not in [1, 2, 3]:
+            return self._create_error_response("INVALID_MODE", 
+                                              f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+        
+        # Check connection status
+        if not self.connected:
+            return self._create_error_response("NOT_CONNECTED", "WebSocket is not connected")
 
-            if not self.ws_client or not self.event_loop:
-                return self._create_error_response("NOT_INITIALIZED", "WebSocket client not initialized")
+        if not self.ws_client or not self.event_loop:
+            return self._create_error_response("NOT_INITIALIZED", "WebSocket client not initialized")
 
-            token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-            if not token_info:
-                return self._create_error_response("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}")
+        # Get token info
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return self._create_error_response("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}")
 
-            instrument_key = self._create_instrument_key(token_info)
-            subscription_info = {
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'depth_level': depth_level,
-                'token': token_info['token']
-            }
+        instrument_key = self._create_instrument_key(token_info)
+        
+        # Generate unique correlation ID like Angel does
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        
+        # Check for duplicate subscriptions using correlation_id
+        with self.lock:
+            if correlation_id in self.subscriptions:
+                self.logger.info(f"Already subscribed to {symbol} on {exchange} with mode {mode}")
+                return self._create_success_response(f"Already subscribed to {symbol} on {exchange}")
+        
+        subscription_info = {
+            'symbol': symbol,
+            'exchange': exchange,
+            'mode': mode,
+            'depth_level': depth_level,
+            'token': token_info['token'],
+            'instrument_key': instrument_key
+        }
 
-            # Store subscription
-            self.subscriptions[instrument_key] = subscription_info
-            
-            # Send subscription request
-            future = asyncio.run_coroutine_threadsafe(
-                self.ws_client.subscribe([instrument_key], self._get_upstox_mode(mode, depth_level)),
-                self.event_loop
-            )
-
-            if future.result(timeout=5):
-                self.logger.info(f"Subscribed to {symbol} on {exchange} (key={instrument_key})")
-                return self._create_success_response(f"Subscribed to {symbol} on {exchange}")
-            else:
-                # Clean up on failure
-                self.subscriptions.pop(instrument_key, None)
-                return self._create_error_response("SUBSCRIBE_FAILED", f"Failed to subscribe to {symbol} on {exchange}")
-
-        except Exception as e:
-            self.logger.error(f"Subscribe error: {e}")
-            return self._create_error_response("SUBSCRIBE_ERROR", str(e))
+        # Store subscription before sending request (Angel pattern)
+        with self.lock:
+            self.subscriptions[correlation_id] = subscription_info
+            self.logger.info(f"Stored subscription: {correlation_id} -> {subscription_info}")
+        
+        # Subscribe if connected (Angel pattern)
+        if self.connected and self.ws_client:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.ws_client.subscribe([instrument_key], self._get_upstox_mode(mode, depth_level)),
+                    self.event_loop
+                )
+                
+                # Use shorter timeout like Angel (no retry loop in subscribe method)
+                if future.result(timeout=5):
+                    self.logger.info(f"Subscribed to {symbol} on {exchange} (key={instrument_key})")
+                    return self._create_success_response(f"Subscribed to {symbol} on {exchange}")
+                else:
+                    # Clean up on failure
+                    with self.lock:
+                        self.subscriptions.pop(correlation_id, None)
+                    return self._create_error_response("SUBSCRIBE_FAILED", f"Failed to subscribe to {symbol} on {exchange}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                # Clean up on error
+                with self.lock:
+                    self.subscriptions.pop(correlation_id, None)
+                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        
+        # Return success response (subscription will be processed when connected)
+        return self._create_success_response(
+            f"Subscription requested for {symbol}.{exchange}",
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode
+        )
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """Unsubscribe from market data for a symbol/exchange"""
@@ -127,12 +162,22 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.ws_client or not self.event_loop:
                 return self._create_error_response("NOT_INITIALIZED", "WebSocket client not initialized")
 
+            # Get token info
             token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
             if not token_info:
                 return self._create_error_response("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}")
 
             instrument_key = self._create_instrument_key(token_info)
             
+            # Generate unique correlation ID like Angel does
+            correlation_id = f"{symbol}_{exchange}_{mode}"
+            
+            # Check for subscription using correlation_id
+            with self.lock:
+                if correlation_id not in self.subscriptions:
+                    self.logger.info(f"Not subscribed to {symbol} on {exchange} with mode {mode}")
+                    return self._create_success_response(f"Not subscribed to {symbol} on {exchange}")
+        
             # Send unsubscription request
             future = asyncio.run_coroutine_threadsafe(
                 self.ws_client.unsubscribe([instrument_key]),
@@ -140,7 +185,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
             if future.result(timeout=5):
-                self.subscriptions.pop(instrument_key, None)
+                with self.lock:
+                    self.subscriptions.pop(correlation_id, None)
                 self.logger.info(f"Unsubscribed from {symbol} on {exchange}")
                 return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
             else:
@@ -227,18 +273,28 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return mode_map.get(mode, "ltpc")
 
     def _find_subscription_by_feed_key(self, feed_key: str) -> Optional[Dict[str, Any]]:
-        """Find subscription info by matching the feed key"""
-        # Try exact match first
-        if feed_key in self.subscriptions:
-            return self.subscriptions[feed_key]
-        
-        # Extract token and try to match
-        if '|' in feed_key:
-            token = feed_key.split('|')[-1]
-            for sub_info in self.subscriptions.values():
-                if sub_info['token'] == token:
+        """Find subscription info by matching the feed key to stored instrument_key"""
+        with self.lock:
+            self.logger.debug(f"Looking for feed_key: {feed_key}")
+            self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
+            
+            # Check all subscriptions to find matching instrument_key
+            for correlation_id, sub_info in self.subscriptions.items():
+                self.logger.debug(f"Checking {correlation_id}: instrument_key={sub_info.get('instrument_key')}")
+                if sub_info.get('instrument_key') == feed_key:
+                    self.logger.info(f"Found subscription match: {correlation_id} for feed_key: {feed_key}")
                     return sub_info
+            
+            # Fallback: Extract token and try to match
+            if '|' in feed_key:
+                token = feed_key.split('|')[-1]
+                self.logger.debug(f"Trying token fallback with token: {token}")
+                for correlation_id, sub_info in self.subscriptions.items():
+                    if sub_info.get('token') == token:
+                        self.logger.info(f"Found token match: {correlation_id} for token: {token}")
+                        return sub_info
         
+        self.logger.warning(f"No subscription found for feed key: {feed_key}")
         return None
 
     def _create_topic(self, exchange: str, symbol: str, mode: int) -> str:
@@ -248,6 +304,32 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return f"{exchange}_{symbol}_{mode_str}"
 
     # WebSocket event handlers
+    async def _on_open(self):
+        """Callback when WebSocket connection is opened"""
+        self.logger.info("Upstox WebSocket connection opened")
+        self.connected = True
+        
+        # Resubscribe to existing subscriptions on reconnection (Angel pattern)
+        with self.lock:
+            for correlation_id, sub in self.subscriptions.items():
+                try:
+                    instrument_key = sub['instrument_key']
+                    mode = sub['mode']
+                    depth_level = sub['depth_level']
+                    
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.ws_client.subscribe([instrument_key], self._get_upstox_mode(mode, depth_level)),
+                        self.event_loop
+                    )
+                    
+                    if future.result(timeout=5):
+                        self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                    else:
+                        self.logger.warning(f"Failed to resubscribe to {sub['symbol']}.{sub['exchange']}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+
     async def _on_error(self, error: str):
         """Handle WebSocket errors"""
         self.logger.error(f"WebSocket error: {error}")
@@ -321,34 +403,58 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _process_feed(self, feed_key: str, feed_data: Dict[str, Any], current_ts: int):
         """Process individual feed data"""
         try:
-            sub_info = self._find_subscription_by_feed_key(feed_key)
-            if not sub_info:
+            # Find all subscriptions that match this feed key (could be multiple modes)
+            matching_subscriptions = []
+            with self.lock:
+                self.logger.debug(f"Looking for matches for feed_key: {feed_key}")
+                self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
+                
+                for correlation_id, sub_info in self.subscriptions.items():
+                    # Check instrument_key match
+                    if sub_info.get('instrument_key') == feed_key:
+                        matching_subscriptions.append((correlation_id, sub_info))
+                        self.logger.debug(f"Matched by instrument_key: {correlation_id}")
+                    # Check token match as fallback
+                    elif '|' in feed_key:
+                        token = feed_key.split('|')[-1]
+                        if sub_info.get('token') == token or sub_info.get('token') == feed_key:
+                            matching_subscriptions.append((correlation_id, sub_info))
+                            self.logger.debug(f"Matched by token: {correlation_id}")
+                
+                self.logger.info(f"Found {len(matching_subscriptions)} matching subscriptions for {feed_key}")
+            
+            if not matching_subscriptions:
                 self.logger.warning(f"No subscription found for feed key: {feed_key}")
                 return
+            
+            # Process data for each matching subscription (different modes)
+            for correlation_id, sub_info in matching_subscriptions:
+                symbol = sub_info['symbol']
+                exchange = sub_info['exchange']
+                mode = sub_info['mode']
+                token = sub_info['token']
                 
-            symbol = sub_info['symbol']
-            exchange = sub_info['exchange']
-            mode = sub_info['mode']
-            token = sub_info['token']
-            
-            topic = self._create_topic(exchange, symbol, mode)
-            market_data = self._extract_market_data(feed_data, sub_info, current_ts)
-            
-            if market_data:
-                self.logger.debug(f"Publishing data for {symbol} on topic: {topic}")
-                if mode == 3:  # Depth mode
-                    # For depth mode, structure the data properly with LTP at top level
-                    depth_data = market_data.copy()
-                    depth_levels = {
-                        'buy': depth_data.pop('buy', []),
-                        'sell': depth_data.pop('sell', []),
-                        'timestamp': depth_data.get('timestamp', current_ts)
-                    }
-                    # Keep LTP and other data at top level, put depth levels in 'depth' key
-                    depth_data['depth'] = depth_levels
-                    self.publish_market_data(topic, depth_data)
-                else:
-                    self.publish_market_data(topic, market_data)
+                topic = self._create_topic(exchange, symbol, mode)
+                market_data = self._extract_market_data(feed_data, sub_info, current_ts)
+                
+                if market_data:
+                    self.logger.info(f"Publishing data for {symbol} mode {mode} on topic: {topic}")
+                    if mode == 2:  # Quote mode - show the complete data structure
+                        self.logger.info(f"QUOTE DATA: {market_data}")
+                    
+                    if mode == 3:  # Depth mode
+                        # For depth mode, structure the data properly with LTP at top level
+                        depth_data = market_data.copy()
+                        depth_levels = {
+                            'buy': depth_data.pop('buy', []),
+                            'sell': depth_data.pop('sell', []),
+                            'timestamp': depth_data.get('timestamp', current_ts)
+                        }
+                        # Keep LTP and other data at top level, put depth levels in 'depth' key
+                        depth_data['depth'] = depth_levels
+                        self.publish_market_data(topic, depth_data)
+                    else:
+                        self.publish_market_data(topic, market_data)
                     
         except Exception as e:
             self.logger.error(f"Error processing feed for {feed_key}: {e}")
@@ -396,11 +502,42 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         full_feed = feed_data["fullFeed"]
         ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
         
-        ltp = ff.get("ltpc", {}).get("ltp", 0)
-        ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
+        # Log the full feed structure to understand available fields
+        self.logger.info(f"Full feed structure for quote extraction: {list(ff.keys())}")
         
-        # Prefer '1d' interval, else first available
+        # Extract LTP and quantity data
+        ltpc = ff.get("ltpc", {})
+        ltp = ltpc.get("ltp", 0)
+        ltq = ltpc.get("ltq", 0)  # Last traded quantity
+        
+        # Extract OHLC data
+        ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
         ohlc = next((o for o in ohlc_list if o.get("interval") == "1d"), ohlc_list[0] if ohlc_list else {})
+        
+        # Extract market level data - try different possible field names
+        market_level = ff.get("marketLevel", {})
+        self.logger.info(f"Market level keys: {list(market_level.keys()) if market_level else 'None'}")
+        
+        # Also check what's in OHLC
+        self.logger.info(f"OHLC keys: {list(ohlc.keys()) if ohlc else 'None'}")
+        
+        # Check if there are other sections with volume data
+        if "marketStatus" in ff:
+            self.logger.info(f"Market status keys: {list(ff['marketStatus'].keys())}")
+        if "optionGreeks" in ff:
+            self.logger.info(f"Option Greeks keys: {list(ff['optionGreeks'].keys())}")
+        
+        # Extract volume from OHLC (confirmed working)
+        volume = ohlc.get("vol", 0) if ohlc else 0
+        
+        # Extract average price from 'atp' field (Average Traded Price)
+        avg_price = float(ff.get("atp", 0))
+        
+        # Extract buy/sell quantities from 'tbq' and 'tsq' fields
+        total_buy_qty = int(ff.get("tbq", 0))  # Total Buy Quantity
+        total_sell_qty = int(ff.get("tsq", 0))  # Total Sell Quantity
+        
+        self.logger.debug(f"Extracted values - volume: {volume}, atp: {avg_price}, tbq: {total_buy_qty}, tsq: {total_sell_qty}")
         
         market_data = base_data.copy()
         market_data.update({
@@ -409,6 +546,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "low": float(ohlc.get("low", 0)),
             "close": float(ohlc.get("close", 0)),
             "ltp": float(ltp),
+            "last_quantity": int(ltq),
+            "volume": int(volume),
+            "average_price": float(avg_price),
+            "total_buy_quantity": int(total_buy_qty),
+            "total_sell_quantity": int(total_sell_qty),
             "timestamp": int(ohlc.get("ts", current_ts))
         })
         
