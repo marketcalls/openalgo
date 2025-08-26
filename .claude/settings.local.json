@@ -20,7 +20,9 @@
       "Bash(source:*)",
       "Bash(.venv/Scripts/python.exe:*)",
       "WebFetch(domain:docs.openalgo.in)",
-      "WebFetch(domain:tradingview.github.io)"
+      "WebFetch(domain:tradingview.github.io)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)"
     ],
     "deny": []
   }

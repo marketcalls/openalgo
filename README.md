@@ -124,6 +124,13 @@ Each broker integration follows a standardized structure:
     - Endpoint-specific analytics
     - Error rate monitoring
     - System performance metrics
+  - **PnL Tracker**: Real-time profit and loss monitoring with advanced charting
+    - Intraday PnL curve visualization from 9 AM IST
+    - Current MTM, Max MTM with time, Min MTM with time
+    - Maximum drawdown tracking
+    - Interactive charts powered by TradingView Lightweight Charts
+    - Manual refresh control for performance optimization
+    - IST timezone support for accurate time display
   For detailed information about monitoring tools, see [traffic.md](docs/traffic.md)
 
 - **Modern UI with DaisyUI**: 
@@ -294,6 +301,22 @@ OpenAlgo is released under the AGPL V3.0 License. See the `LICENSE` file for mor
 This software is for educational purposes only. Do not risk money which
 you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS
 AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+
+## Credits and Acknowledgements
+
+### Third-Party Libraries
+
+- **[DaisyUI](https://github.com/saadeghi/daisyui)** - The most popular component library for Tailwind CSS
+  - License: MIT
+  - Version: 4.12.21
+  - Used for modern, responsive UI components throughout the application
+  - Provides theming system (Light, Dark, Garden themes)
+  - Powers the entire user interface design
+
+- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Advanced financial charting library
+  - License: Apache 2.0
+  - Version: 5.0.8
+  - Used for interactive intraday PnL and drawdown visualization in PnL Tracker
 
 ## Support
 
