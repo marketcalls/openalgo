@@ -17,6 +17,49 @@ logger = get_logger(__name__)
 # Define the blueprint
 pnltracker_bp = Blueprint('pnltracker_bp', __name__, url_prefix='/')
 
+def convert_timestamp_to_ist(df, symbol=""):
+    """
+    Convert timestamp to IST with robust handling for different formats.
+    Returns the dataframe with datetime index in IST timezone.
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    try:
+        # Try different timestamp formats
+        if 'timestamp' in df.columns:
+            # Try as Unix timestamp first (seconds)
+            try:
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='s', utc=True)
+                df['datetime'] = df['datetime'].dt.tz_convert(ist)
+            except:
+                # Try as milliseconds
+                try:
+                    df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+                    df['datetime'] = df['datetime'].dt.tz_convert(ist)
+                except:
+                    # Try as string datetime
+                    df['datetime'] = pd.to_datetime(df['timestamp'])
+                    if df['datetime'].dt.tz is None:
+                        df['datetime'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert(ist)
+                    else:
+                        df['datetime'] = df['datetime'].dt.tz_convert(ist)
+        elif 'datetime' in df.columns:
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            if df['datetime'].dt.tz is None:
+                df['datetime'] = df['datetime'].dt.tz_localize('UTC').dt.tz_convert(ist)
+            else:
+                df['datetime'] = df['datetime'].dt.tz_convert(ist)
+        else:
+            logger.warning(f"No timestamp field found for {symbol}")
+            return None
+        
+        df.set_index('datetime', inplace=True)
+        df = df.sort_index()
+        return df
+    except Exception as e:
+        logger.warning(f"Error converting timestamps for {symbol}: {e}")
+        return None
+
 def dynamic_import(broker, module_name, function_names):
     module_functions = {}
     try:
@@ -122,13 +165,26 @@ def get_pnl_data():
                 logger.info(f"Number of positions: {len(positions_data) if positions_data else 0}")
                 for pos in positions_data:
                     key = f"{pos['symbol']}_{pos['exchange']}"
+                    # Convert string values to float if needed
+                    try:
+                        qty = float(pos.get('quantity', 0))
+                        avg_price = float(pos.get('average_price', 0))
+                        ltp = float(pos.get('ltp', 0))
+                        pnl = float(pos.get('pnl', 0))
+                    except (ValueError, TypeError):
+                        logger.warning(f"Error converting position values to float for {key}")
+                        qty = 0
+                        avg_price = 0
+                        ltp = 0
+                        pnl = 0
+                    
                     current_positions[key] = {
-                        'quantity': pos.get('quantity', 0),
-                        'average_price': pos.get('average_price', 0),
-                        'ltp': pos.get('ltp', 0),
-                        'pnl': pos.get('pnl', 0)
+                        'quantity': qty,
+                        'average_price': avg_price,
+                        'ltp': ltp,
+                        'pnl': pnl
                     }
-                    logger.info(f"Position {key}: qty={pos.get('quantity', 0)}, avg={pos.get('average_price', 0)}, ltp={pos.get('ltp', 0)}, pnl={pos.get('pnl', 0)}")
+                    logger.info(f"Position {key}: qty={qty}, avg={avg_price}, ltp={ltp}, pnl={pnl}")
         except Exception as e:
             logger.warning(f"Error fetching positions: {e}")
             # Continue without positions data
@@ -189,19 +245,19 @@ def get_pnl_data():
                 if success and 'data' in hist_response:
                     df_hist = pd.DataFrame(hist_response['data'])
                     if not df_hist.empty:
-                        # Convert timestamp to datetime in IST
-                        # Timestamps are typically in UTC, convert to IST
-                        ist = pytz.timezone('Asia/Kolkata')
-                        df_hist['datetime'] = pd.to_datetime(df_hist['timestamp'], unit='s', utc=True)
-                        df_hist['datetime'] = df_hist['datetime'].dt.tz_convert(ist)
-                        df_hist.set_index('datetime', inplace=True)
-                        df_hist = df_hist.sort_index()
+                        # Convert timestamp to IST with robust handling
+                        df_hist = convert_timestamp_to_ist(df_hist, symbol_label)
                         
-                        # Filter to show data from 9 AM IST onwards
-                        today_9am = df_hist.index[0].replace(hour=9, minute=0, second=0, microsecond=0)
-                        current_time = datetime.now(ist)
-                        df_hist = df_hist[df_hist.index >= today_9am]
-                        df_hist = df_hist[df_hist.index <= current_time]
+                        if df_hist is not None:
+                            # Filter to show data from 9 AM IST onwards
+                            ist = pytz.timezone('Asia/Kolkata')
+                            today_9am = df_hist.index[0].replace(hour=9, minute=0, second=0, microsecond=0)
+                            current_time = datetime.now(ist)
+                            df_hist = df_hist[df_hist.index >= today_9am]
+                            df_hist = df_hist[df_hist.index <= current_time]
+                        else:
+                            logger.warning(f"Timestamp conversion failed for {symbol_label}, skipping")
+                            continue
                         
                         df_hist = df_hist[['close']].copy()
                         df_hist.rename(columns={'close': f'{symbol_label}_price'}, inplace=True)
@@ -226,21 +282,94 @@ def get_pnl_data():
                 logger.error(f"Error processing trade for {symbol}: {e}")
                 continue
         
-        # If we have no portfolio data, create a simple series based on current positions
+        # If we have no portfolio data but have positions, fetch historical data for positions
         if portfolio_pnl is None and current_positions:
-            # Create a time series from market open to now in IST
-            ist = pytz.timezone('Asia/Kolkata')
-            current_time = datetime.now(ist)
-            # Start from 9:00 AM IST
-            start_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
-            end_time = current_time
+            logger.info("No trades found, but positions exist. Fetching historical data for positions.")
             
-            time_range = pd.date_range(start=start_time, end=end_time, freq='1min', tz=ist)
-            portfolio_pnl = pd.DataFrame(index=time_range)
+            # Process each position and get its historical data
+            for pos_key, pos_data in current_positions.items():
+                # Extract symbol and exchange from the key
+                parts = pos_key.rsplit('_', 1)
+                if len(parts) == 2:
+                    symbol, exchange = parts
+                else:
+                    logger.warning(f"Could not parse position key: {pos_key}")
+                    continue
+                
+                qty = pos_data['quantity']
+                avg_price = pos_data['average_price']
+                
+                if qty == 0:
+                    continue
+                    
+                try:
+                    # Get historical data for this position
+                    success, hist_response, _ = get_history(
+                        symbol=symbol,
+                        exchange=exchange,
+                        interval='1m',
+                        start_date=today_str,
+                        end_date=today_str,
+                        api_key=api_key
+                    )
+                    
+                    if success and 'data' in hist_response:
+                        df_hist = pd.DataFrame(hist_response['data'])
+                        if not df_hist.empty:
+                            # Convert timestamp to IST with robust handling
+                            df_hist = convert_timestamp_to_ist(df_hist, symbol)
+                            
+                            if df_hist is not None:
+                                # Filter to show data from 9 AM IST onwards
+                                ist = pytz.timezone('Asia/Kolkata')
+                                today_9am = df_hist.index[0].replace(hour=9, minute=0, second=0, microsecond=0)
+                                current_time = datetime.now(ist)
+                                df_hist = df_hist[df_hist.index >= today_9am]
+                                df_hist = df_hist[df_hist.index <= current_time]
+                            else:
+                                logger.warning(f"Timestamp conversion failed for position {symbol}, skipping")
+                                continue
+                            
+                            df_hist = df_hist[['close']].copy()
+                            df_hist.rename(columns={'close': f'{symbol}_price'}, inplace=True)
+                            
+                            # Calculate MTM PnL for this position
+                            # For positions, we use the average price from the position data
+                            if qty > 0:  # Long position
+                                df_hist[f'{symbol}_pnl'] = (df_hist[f'{symbol}_price'] - avg_price) * qty
+                            else:  # Short position
+                                df_hist[f'{symbol}_pnl'] = (avg_price - df_hist[f'{symbol}_price']) * abs(qty)
+                            
+                            # Combine into portfolio
+                            if portfolio_pnl is None:
+                                portfolio_pnl = df_hist[[f'{symbol}_pnl']].copy()
+                            else:
+                                portfolio_pnl = portfolio_pnl.join(df_hist[[f'{symbol}_pnl']], how='outer')
+                            
+                            logger.info(f"Added PnL for position {symbol}: {len(df_hist)} data points")
+                    else:
+                        logger.warning(f"Could not get historical data for position {symbol}")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing position for {symbol}: {e}")
+                    continue
             
-            # Use current position P&L as constant value
-            total_pnl = sum(pos['pnl'] for pos in current_positions.values())
-            portfolio_pnl['Total_PnL'] = total_pnl
+            # If we still couldn't get any historical data, create a simple flat line
+            if portfolio_pnl is None:
+                ist = pytz.timezone('Asia/Kolkata')
+                current_time = datetime.now(ist)
+                start_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+                end_time = current_time
+                
+                if end_time <= start_time:
+                    end_time = start_time + timedelta(minutes=1)
+                
+                time_range = pd.date_range(start=start_time, end=end_time, freq='1min', tz=ist)
+                portfolio_pnl = pd.DataFrame(index=time_range)
+                
+                # Use current position P&L as constant value
+                total_pnl = sum(pos['pnl'] for pos in current_positions.values())
+                portfolio_pnl['Total_PnL'] = total_pnl
         elif portfolio_pnl is not None:
             # Calculate total MTM and drawdown
             # Use ffill() instead of fillna(method='ffill') for pandas 2.x compatibility
