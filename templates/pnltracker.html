@@ -80,7 +80,14 @@
         </div>
         
         <!-- Chart -->
-        <div id="pnl-chart" style="height: 500px;"></div>
+        <div id="pnl-chart" style="height: 500px; position: relative;">
+            <!-- Custom Tooltip -->
+            <div id="chart-tooltip" class="hidden absolute p-2 bg-base-300 text-base-content rounded-lg shadow-lg text-sm pointer-events-none z-50 border border-base-content/20">
+                <div id="tooltip-time" class="font-semibold text-xs mb-1"></div>
+                <div id="tooltip-pnl" class="font-mono"></div>
+                <div id="tooltip-drawdown" class="font-mono text-error"></div>
+            </div>
+        </div>
     </div>
 
     <!-- Loading Overlay -->
@@ -179,7 +186,7 @@ function initChart() {
                 width: 1,
                 color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
                 style: 2,
-                labelBackgroundColor: isDarkMode ? '#1f2937' : '#2563eb'
+                labelVisible: false  // Hide the default time label
             },
             horzLine: {
                 width: 1,
@@ -215,6 +222,62 @@ function initChart() {
             type: 'custom',
             formatter: (price) => formatCurrency(price)
         }
+    });
+
+    // Custom tooltip handler
+    const tooltip = document.getElementById('chart-tooltip');
+    const tooltipTime = document.getElementById('tooltip-time');
+    const tooltipPnl = document.getElementById('tooltip-pnl');
+    const tooltipDrawdown = document.getElementById('tooltip-drawdown');
+    
+    // Subscribe to crosshair move events for custom tooltip
+    chart.subscribeCrosshairMove((param) => {
+        if (!param.time || !param.point) {
+            tooltip.classList.add('hidden');
+            return;
+        }
+        
+        // Apply the SAME IST conversion as x-axis tickMarkFormatter
+        const timestamp = param.time;
+        const date = new Date(timestamp * 1000);
+        const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+        const istDate = new Date(date.getTime() + istOffset);
+        
+        const hours = istDate.getUTCHours().toString().padStart(2, '0');
+        const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
+        const day = istDate.getUTCDate().toString().padStart(2, '0');
+        const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0');
+        
+        // Get series data
+        const pnlData = param.seriesData.get(pnlSeries);
+        const drawdownData = param.seriesData.get(drawdownSeries);
+        
+        // Update tooltip content with IST time
+        tooltipTime.textContent = `${day}/${month} ${hours}:${minutes} IST`;
+        
+        if (pnlData) {
+            const pnlValue = pnlData.value !== undefined ? pnlData.value : 0;
+            tooltipPnl.textContent = `PnL: ${formatCurrency(pnlValue)}`;
+            tooltipPnl.className = `font-mono ${pnlValue >= 0 ? 'text-success' : 'text-error'}`;
+        }
+        
+        if (drawdownData) {
+            const ddValue = drawdownData.value !== undefined ? drawdownData.value : 0;
+            tooltipDrawdown.textContent = `Drawdown: ${formatCurrency(Math.abs(ddValue))}`;
+        }
+        
+        // Position tooltip near cursor
+        const chartRect = chartContainer.getBoundingClientRect();
+        const tooltipX = param.point.x - 75;
+        const tooltipY = param.point.y - 60;
+        
+        // Keep tooltip within chart bounds
+        const adjustedX = Math.max(10, Math.min(tooltipX, chartContainer.offsetWidth - 200));
+        const adjustedY = Math.max(10, Math.min(tooltipY, chartContainer.offsetHeight - 100));
+        
+        tooltip.style.left = adjustedX + 'px';
+        tooltip.style.top = adjustedY + 'px';
+        tooltip.classList.remove('hidden');
     });
 
     // Handle resize
