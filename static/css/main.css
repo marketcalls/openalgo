@@ -1628,6 +1628,14 @@ body {
 .link-hover {
   text-decoration-line: none;
 }
+.mask {
+  -webkit-mask-size: contain;
+          mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+          mask-position: center;
+}
 .menu {
   display: flex;
   flex-direction: column;
@@ -4793,6 +4801,9 @@ code[class*="language-"] {
 .inline-block {
   display: inline-block;
 }
+.inline {
+  display: inline;
+}
 .flex {
   display: flex;
 }
@@ -4802,11 +4813,47 @@ code[class*="language-"] {
 .table {
   display: table;
 }
+.inline-table {
+  display: inline-table;
+}
+.table-caption {
+  display: table-caption;
+}
+.table-cell {
+  display: table-cell;
+}
+.table-column {
+  display: table-column;
+}
+.table-column-group {
+  display: table-column-group;
+}
+.table-footer-group {
+  display: table-footer-group;
+}
+.table-header-group {
+  display: table-header-group;
+}
+.table-row-group {
+  display: table-row-group;
+}
+.table-row {
+  display: table-row;
+}
+.flow-root {
+  display: flow-root;
+}
 .grid {
   display: grid;
 }
+.inline-grid {
+  display: inline-grid;
+}
 .contents {
   display: contents;
+}
+.list-item {
+  display: list-item;
 }
 .hidden {
   display: none;
@@ -5125,6 +5172,9 @@ code[class*="language-"] {
 .whitespace-nowrap {
   white-space: nowrap;
 }
+.break-all {
+  word-break: break-all;
+}
 .rounded {
   border-radius: 0.25rem;
 }
@@ -5165,6 +5215,9 @@ code[class*="language-"] {
 .border-base-300 {
   --tw-border-opacity: 1;
   border-color: var(--fallback-b3,oklch(var(--b3)/var(--tw-border-opacity, 1)));
+}
+.border-base-content\/20 {
+  border-color: var(--fallback-bc,oklch(var(--bc)/0.2));
 }
 .border-success {
   --tw-border-opacity: 1;
@@ -5416,6 +5469,9 @@ code[class*="language-"] {
 .normal-case {
   text-transform: none;
 }
+.italic {
+  font-style: italic;
+}
 .tracking-\[1em\] {
   letter-spacing: 1em;
 }
@@ -5528,6 +5584,15 @@ code[class*="language-"] {
 .text-yellow-600 {
   --tw-text-opacity: 1;
   color: rgb(202 138 4 / var(--tw-text-opacity, 1));
+}
+.underline {
+  text-decoration-line: underline;
+}
+.overline {
+  text-decoration-line: overline;
+}
+.line-through {
+  text-decoration-line: line-through;
 }
 .opacity-50 {
   opacity: 0.5;

@@ -41,60 +41,63 @@
         </div>
     </div>
 
-    <!-- Metrics Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <!-- Current MTM -->
-        <div class="stat">
-            <div class="stat-title">Current MTM</div>
-            <div class="stat-value" id="current-mtm">₹ 0.00</div>
-            <div class="stat-desc" id="current-mtm-percent">0.00%</div>
-        </div>
+    <!-- Screenshot Container - wrap everything that should be in screenshot -->
+    <div id="screenshot-container">
+        <!-- Metrics Cards (moved inside screenshot container) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="metrics-section">
+            <!-- Current MTM -->
+            <div class="stat">
+                <div class="stat-title">Current MTM</div>
+                <div class="stat-value" id="current-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="current-mtm-percent">0.00%</div>
+            </div>
 
-        <!-- Max MTM -->
-        <div class="stat">
-            <div class="stat-title">Max MTM</div>
-            <div class="stat-value text-success" id="max-mtm">₹ 0.00</div>
-            <div class="stat-desc" id="max-mtm-time">--:--</div>
-        </div>
+            <!-- Max MTM -->
+            <div class="stat">
+                <div class="stat-title">Max MTM</div>
+                <div class="stat-value text-success" id="max-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="max-mtm-time">--:--</div>
+            </div>
 
-        <!-- Min MTM -->
-        <div class="stat">
-            <div class="stat-title">Min MTM</div>
-            <div class="stat-value text-error" id="min-mtm">₹ 0.00</div>
-            <div class="stat-desc" id="min-mtm-time">--:--</div>
-        </div>
+            <!-- Min MTM -->
+            <div class="stat">
+                <div class="stat-title">Min MTM</div>
+                <div class="stat-value text-error" id="min-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="min-mtm-time">--:--</div>
+            </div>
 
-        <!-- Max Drawdown -->
-        <div class="stat">
-            <div class="stat-title">Max Drawdown</div>
-            <div class="stat-value text-warning" id="max-drawdown">₹ 0.00</div>
-            <div class="stat-desc">Peak to trough</div>
-        </div>
-    </div>
-
-    <!-- Chart Container -->
-    <div class="chart-container">
-        <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-semibold">Intraday PnL Curve</h2>
-            <div class="text-sm text-base-content/60">
-                <span class="mr-4">
-                    <span class="inline-block w-3 h-3 bg-primary rounded-full mr-1"></span>
-                    MTM PnL
-                </span>
-                <span>
-                    <span class="inline-block w-3 h-3 bg-error rounded-full mr-1"></span>
-                    Drawdown
-                </span>
+            <!-- Max Drawdown -->
+            <div class="stat">
+                <div class="stat-title">Max Drawdown</div>
+                <div class="stat-value text-warning" id="max-drawdown">₹ 0.00</div>
+                <div class="stat-desc">Peak to trough</div>
             </div>
         </div>
-        
-        <!-- Chart -->
-        <div id="pnl-chart" style="height: 500px; position: relative;">
-            <!-- Custom Tooltip -->
-            <div id="chart-tooltip" class="hidden absolute p-2 bg-base-300 text-base-content rounded-lg shadow-lg text-sm pointer-events-none z-50 border border-base-content/20">
-                <div id="tooltip-time" class="font-semibold text-xs mb-1"></div>
-                <div id="tooltip-pnl" class="font-mono"></div>
-                <div id="tooltip-drawdown" class="font-mono text-error"></div>
+
+        <!-- Chart Container -->
+        <div class="chart-container">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold">Intraday PnL Curve</h2>
+                <div class="text-sm text-base-content/60">
+                    <span class="mr-4">
+                        <span class="inline-block w-3 h-3 bg-primary rounded-full mr-1"></span>
+                        MTM PnL
+                    </span>
+                    <span>
+                        <span class="inline-block w-3 h-3 bg-error rounded-full mr-1"></span>
+                        Drawdown
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Chart -->
+            <div id="pnl-chart" style="height: 500px; position: relative;">
+                <!-- Custom Tooltip -->
+                <div id="chart-tooltip" class="hidden absolute p-2 bg-base-300 text-base-content rounded-lg shadow-lg text-sm pointer-events-none z-50 border border-base-content/20">
+                    <div id="tooltip-time" class="font-semibold text-xs mb-1"></div>
+                    <div id="tooltip-pnl" class="font-mono"></div>
+                    <div id="tooltip-drawdown" class="font-mono text-error"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -112,6 +115,8 @@
 
 <!-- Include TradingView Lightweight Charts -->
 <script src="/static/js/lightweight-charts.standalone.production.js"></script>
+<!-- Include html2canvas-pro with oklch support for screenshots -->
+<script src="/static/js/html2canvas-oklch-fix.js"></script>
 
 <script>
 let chart = null;
@@ -486,95 +491,148 @@ function debugChart() {
     }
 }
 
-// Screenshot function
-function takeScreenshot() {
-    if (!chart) {
-        console.error('Chart not initialized');
-        return;
-    }
-    
+// Screenshot function - capture the entire PnL tracker including statistics
+async function takeScreenshot() {
     // Show loading state on button
     const screenshotBtn = document.getElementById('screenshot-btn');
     const originalContent = screenshotBtn.innerHTML;
     screenshotBtn.innerHTML = '<span class="loading loading-spinner loading-sm mr-2"></span> Capturing...';
     screenshotBtn.disabled = true;
     
-    try {
-        // Take screenshot using the TradingView API
-        const screenshot = chart.takeScreenshot();
-        
-        if (screenshot) {
-            // Create a download link
-            const link = document.createElement('a');
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-            link.download = `PnL_Tracker_${timestamp}.png`;
-            link.href = screenshot.toDataURL();
-            
-            // Trigger download
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            // Show success toast
-            const toast = document.createElement('div');
-            toast.className = 'toast toast-end';
-            toast.innerHTML = `
-                <div class="alert alert-success">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span>Screenshot saved successfully!</span>
-                </div>
-            `;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
-        } else {
-            throw new Error('Failed to capture screenshot');
-        }
-    } catch (error) {
-        console.error('Screenshot error:', error);
-        
-        // Try alternative method - capture entire chart container
-        captureChartContainer();
-    } finally {
-        // Restore button state
-        setTimeout(() => {
-            screenshotBtn.innerHTML = originalContent;
-            screenshotBtn.disabled = false;
-        }, 1000);
-    }
-}
-
-// Alternative screenshot method using html2canvas if available
-async function captureChartContainer() {
-    const chartContainer = document.getElementById('pnl-chart');
+    // Use html2canvas to capture the entire section including stats
+    await captureFullSection();
     
-    // Check if html2canvas is available
-    if (typeof html2canvas === 'undefined') {
-        // Load html2canvas library dynamically
-        const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-        script.onload = async function() {
-            await performCapture(chartContainer);
-        };
-        script.onerror = function() {
-            showErrorToast('Failed to load screenshot library. Please try again.');
-        };
-        document.head.appendChild(script);
-    } else {
-        await performCapture(chartContainer);
+    // Restore button state
+    setTimeout(() => {
+        screenshotBtn.innerHTML = originalContent;
+        screenshotBtn.disabled = false;
+    }, 1000);
+}
+
+// Capture the full PnL tracker section including stats and chart
+async function captureFullSection() {
+    const screenshotContainer = document.getElementById('screenshot-container');
+    
+    // Hide tooltip before capture
+    const tooltip = document.getElementById('chart-tooltip');
+    if (tooltip) {
+        tooltip.style.display = 'none';
+    }
+    
+    // Create a temporary date/time header
+    const dateTimeHeader = document.createElement('div');
+    dateTimeHeader.id = 'screenshot-datetime';
+    dateTimeHeader.style.cssText = `
+        text-align: center;
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        color: #333;
+        font-family: Arial, sans-serif;
+    `;
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    });
+    const timeStr = now.toLocaleTimeString('en-IN', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        hour12: true 
+    });
+    dateTimeHeader.textContent = `PnL Tracker - ${dateStr} | ${timeStr}`;
+    
+    // Insert date/time header at the beginning of screenshot container
+    screenshotContainer.insertBefore(dateTimeHeader, screenshotContainer.firstChild);
+    
+    // Temporarily set white background
+    const originalBg = screenshotContainer.style.backgroundColor;
+    screenshotContainer.style.backgroundColor = 'white';
+    screenshotContainer.style.padding = '20px';
+    
+    try {
+        await performFullCapture(screenshotContainer);
+    } finally {
+        // Clean up - remove date/time header and restore styles
+        if (dateTimeHeader && dateTimeHeader.parentNode) {
+            dateTimeHeader.remove();
+        }
+        screenshotContainer.style.backgroundColor = originalBg;
+        screenshotContainer.style.padding = '';
     }
 }
 
-async function performCapture(element) {
+async function performFullCapture(element) {
     try {
+        // Make sure watermark is visible
+        const watermark = element.querySelector('div[style*="OpenAlgo"]');
+        let originalWatermarkStyle = null;
+        if (watermark) {
+            originalWatermarkStyle = watermark.style.cssText;
+            // Temporarily make watermark more visible
+            watermark.style.color = 'rgba(100, 100, 100, 0.4)';
+            watermark.style.fontSize = '60px';
+            watermark.style.fontWeight = 'bold';
+        }
+        
+        // html2canvas-pro supports oklch colors natively
         const canvas = await html2canvas(element, {
-            backgroundColor: null,
-            scale: 2, // Higher quality
+            backgroundColor: '#ffffff',
+            scale: 2,
             logging: false,
             useCORS: true,
-            allowTaint: true
+            allowTaint: true,
+            width: element.scrollWidth,
+            height: element.scrollHeight,
+            windowWidth: element.scrollWidth,
+            windowHeight: element.scrollHeight,
+            onclone: function(clonedDoc) {
+                // Ensure all styles are applied in the cloned document
+                const clonedElement = clonedDoc.getElementById('screenshot-container');
+                if (clonedElement) {
+                    clonedElement.style.backgroundColor = 'white';
+                    clonedElement.style.padding = '20px';
+                }
+                
+                // Ensure stat cards have proper styling
+                const statCards = clonedDoc.querySelectorAll('.stat');
+                statCards.forEach(card => {
+                    card.style.backgroundColor = '#f9f9f9';
+                    card.style.border = '1px solid #e5e5e5';
+                    card.style.borderRadius = '8px';
+                    card.style.padding = '16px';
+                });
+                
+                // Ensure date/time header is styled properly
+                const clonedDateTime = clonedDoc.getElementById('screenshot-datetime');
+                if (clonedDateTime) {
+                    clonedDateTime.style.cssText = `
+                        text-align: center;
+                        font-size: 18px;
+                        font-weight: bold;
+                        margin-bottom: 20px;
+                        color: #333;
+                        font-family: Arial, sans-serif;
+                    `;
+                }
+                
+                // Ensure watermark is visible in clone
+                const clonedWatermark = clonedDoc.querySelector('div[style*="OpenAlgo"]');
+                if (clonedWatermark) {
+                    clonedWatermark.style.color = 'rgba(100, 100, 100, 0.3)';
+                    clonedWatermark.style.fontSize = '60px';
+                    clonedWatermark.style.position = 'absolute';
+                    clonedWatermark.style.zIndex = '1000';
+                }
+            }
         });
+        
+        // Restore watermark style
+        if (watermark && originalWatermarkStyle) {
+            watermark.style.cssText = originalWatermarkStyle;
+        }
         
         // Convert to blob and download
         canvas.toBlob(function(blob) {
@@ -588,25 +646,35 @@ async function performCapture(element) {
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
             
-            // Show success toast
-            const toast = document.createElement('div');
-            toast.className = 'toast toast-end';
-            toast.innerHTML = `
-                <div class="alert alert-success">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span>Screenshot saved successfully!</span>
-                </div>
-            `;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
-        });
+            showSuccessToast('Screenshot saved successfully!');
+        }, 'image/png', 1.0);
     } catch (error) {
         showErrorToast('Failed to capture screenshot. Please try again.');
         console.error('Capture error:', error);
+        
+        // Restore watermark on error
+        const watermark = element.querySelector('div[style*="OpenAlgo"]');
+        if (watermark && typeof originalWatermarkStyle !== 'undefined') {
+            watermark.style.cssText = originalWatermarkStyle;
+        }
     }
 }
+
+function showSuccessToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end';
+    toast.innerHTML = `
+        <div class="alert alert-success">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
 
 function showErrorToast(message) {
     const toast = document.createElement('div');
