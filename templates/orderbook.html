@@ -159,7 +159,13 @@
                         </div>
                     </td>
                     <td class="numeric-cell">{{ order.quantity }}</td>
-                    <td class="numeric-cell">{{ order.price }}</td>
+                    <td class="numeric-cell">
+                        {% if order.pricetype|upper == 'MARKET' %}
+                            0.00
+                        {% else %}
+                            {{ order.price }}
+                        {% endif %}
+                    </td>
                     <td class="numeric-cell">{{ order.trigger_price }}</td>
                     <td>
                         {% set order_type_colors = {
