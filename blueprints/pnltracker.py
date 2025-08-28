@@ -207,6 +207,80 @@ def get_pnl_data():
         
         # Process trades to build portfolio MTM
         portfolio_pnl = None
+        first_trade_time = None
+        
+        # Find the earliest trade time
+        for trade in trades:
+            # Try to parse trade timestamp - prioritize timestamp field which appears to be in HH:MM:SS format
+            trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
+            if trade_timestamp:
+                try:
+                    # Check if it's a time string in HH:MM:SS format
+                    if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
+                        # Parse as time string (e.g., "10:30:52")
+                        ist = pytz.timezone('Asia/Kolkata')
+                        today = datetime.now(ist).date()
+                        time_parts = trade_timestamp.split(':')
+                        trade_time = ist.localize(datetime.combine(today, time(
+                            int(time_parts[0]), 
+                            int(time_parts[1]), 
+                            int(time_parts[2]) if len(time_parts) > 2 else 0
+                        )))
+                    elif isinstance(trade_timestamp, (int, float)):
+                        # Unix timestamp
+                        trade_time = pd.to_datetime(trade_timestamp, unit='s')
+                        ist = pytz.timezone('Asia/Kolkata')
+                        if trade_time.tz is None:
+                            trade_time = trade_time.tz_localize('UTC').tz_convert(ist)
+                        else:
+                            trade_time = trade_time.tz_convert(ist)
+                    else:
+                        # String timestamp in datetime format
+                        trade_time = pd.to_datetime(trade_timestamp)
+                        ist = pytz.timezone('Asia/Kolkata')
+                        if trade_time.tz is None:
+                            # Assume it's already in IST
+                            trade_time = trade_time.tz_localize(ist)
+                        else:
+                            trade_time = trade_time.tz_convert(ist)
+                    
+                    # Track the earliest trade time
+                    if first_trade_time is None or trade_time < first_trade_time:
+                        first_trade_time = trade_time
+                        logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} for {trade['symbol']}")
+                except Exception as e:
+                    logger.warning(f"Could not parse trade timestamp {trade_timestamp}: {e}")
+        
+        # If we couldn't determine first trade time from timestamps, try from fill_time field
+        if first_trade_time is None and trades:
+            # Look for fill_time in format HH:MM:SS or timestamp
+            for trade in trades:
+                fill_time_str = trade.get('fill_time', '')
+                if fill_time_str:
+                    try:
+                        # Try parsing as time string (e.g., "10:30:52")
+                        if ':' in str(fill_time_str):
+                            ist = pytz.timezone('Asia/Kolkata')
+                            today = datetime.now(ist).date()
+                            time_parts = str(fill_time_str).split(':')
+                            trade_time = ist.localize(datetime.combine(today, time(
+                                int(time_parts[0]), 
+                                int(time_parts[1]), 
+                                int(time_parts[2]) if len(time_parts) > 2 else 0
+                            )))
+                            if first_trade_time is None or trade_time < first_trade_time:
+                                first_trade_time = trade_time
+                                logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} from fill_time for {trade['symbol']}")
+                    except Exception as e:
+                        logger.warning(f"Could not parse fill_time {fill_time_str}: {e}")
+        
+        # Log the first trade time
+        if first_trade_time:
+            logger.info(f"First trade time: {first_trade_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            logger.warning("Could not determine first trade time, using market open time")
+            ist = pytz.timezone('Asia/Kolkata')
+            first_trade_time = datetime.now(ist).replace(hour=9, minute=15, second=0, microsecond=0)
         
         # Process each trade and get its historical data
         for trade in trades:
@@ -249,11 +323,18 @@ def get_pnl_data():
                         df_hist = convert_timestamp_to_ist(df_hist, symbol_label)
                         
                         if df_hist is not None:
-                            # Filter to show data from 9 AM IST onwards
+                            # Filter to show data from first trade time onwards
                             ist = pytz.timezone('Asia/Kolkata')
-                            today_9am = df_hist.index[0].replace(hour=9, minute=0, second=0, microsecond=0)
                             current_time = datetime.now(ist)
-                            df_hist = df_hist[df_hist.index >= today_9am]
+                            
+                            # Start from first trade time, not market open
+                            if first_trade_time:
+                                df_hist = df_hist[df_hist.index >= first_trade_time]
+                            else:
+                                # Fallback to 9:15 AM if no first trade time
+                                today_915am = df_hist.index[0].replace(hour=9, minute=15, second=0, microsecond=0)
+                                df_hist = df_hist[df_hist.index >= today_915am]
+                            
                             df_hist = df_hist[df_hist.index <= current_time]
                         else:
                             logger.warning(f"Timestamp conversion failed for {symbol_label}, skipping")
@@ -320,11 +401,14 @@ def get_pnl_data():
                             df_hist = convert_timestamp_to_ist(df_hist, symbol)
                             
                             if df_hist is not None:
-                                # Filter to show data from 9 AM IST onwards
+                                # Filter to show data from first trade time onwards
                                 ist = pytz.timezone('Asia/Kolkata')
-                                today_9am = df_hist.index[0].replace(hour=9, minute=0, second=0, microsecond=0)
                                 current_time = datetime.now(ist)
-                                df_hist = df_hist[df_hist.index >= today_9am]
+                                
+                                # For positions without trades, we still need to determine when to start
+                                # Use market open time as default
+                                today_915am = df_hist.index[0].replace(hour=9, minute=15, second=0, microsecond=0)
+                                df_hist = df_hist[df_hist.index >= today_915am]
                                 df_hist = df_hist[df_hist.index <= current_time]
                             else:
                                 logger.warning(f"Timestamp conversion failed for position {symbol}, skipping")
@@ -371,6 +455,31 @@ def get_pnl_data():
                 total_pnl = sum(pos['pnl'] for pos in current_positions.values())
                 portfolio_pnl['Total_PnL'] = total_pnl
         elif portfolio_pnl is not None:
+            # Add zero PnL data from market open to first trade if needed
+            if first_trade_time and trades:
+                ist = pytz.timezone('Asia/Kolkata')
+                market_open = first_trade_time.replace(hour=9, minute=15, second=0, microsecond=0)
+                
+                # Only add pre-trade data if first trade is after market open
+                if first_trade_time > market_open:
+                    # Create a zero PnL series from market open to first trade
+                    pre_trade_index = pd.date_range(
+                        start=market_open,
+                        end=first_trade_time,
+                        freq='1min',
+                        tz=ist
+                    )[:-1]  # Exclude the first trade time itself
+                    
+                    if len(pre_trade_index) > 0:
+                        # Create zero PnL dataframe for pre-trade period
+                        pre_trade_df = pd.DataFrame(index=pre_trade_index)
+                        for col in portfolio_pnl.columns:
+                            pre_trade_df[col] = 0
+                        
+                        # Combine pre-trade zeros with actual PnL data
+                        portfolio_pnl = pd.concat([pre_trade_df, portfolio_pnl]).sort_index()
+                        logger.info(f"Added {len(pre_trade_index)} minutes of zero PnL before first trade")
+            
             # Calculate total MTM and drawdown
             # Use ffill() instead of fillna(method='ffill') for pandas 2.x compatibility
             portfolio_pnl = portfolio_pnl.ffill().fillna(0)
