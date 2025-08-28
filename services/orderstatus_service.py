@@ -75,22 +75,32 @@ def get_order_status_with_auth(
     
     # If in analyze mode, return simulated response
     if get_analyze_mode():
+        # Use dynamic values based on input only
+        symbol = status_data.get('symbol')
+        exchange = status_data.get('exchange')
+        action = status_data.get('action')
+        product = status_data.get('product')
+        quantity = status_data.get('quantity')
+        price = status_data.get('price')
+        pricetype = status_data.get('pricetype')
+        trigger_price = status_data.get('trigger_price')
+        
         response_data = {
             'mode': 'analyze',
             'status': 'success',
             'data': {
-                'action': 'BUY',
-                'exchange': 'NSE',
+                'action': action,
+                'exchange': exchange,
                 'order_status': 'COMPLETE',
                 'orderid': status_data['orderid'],
-                'price': 100.0,
-                'pricetype': 'MARKET',
-                'product': 'MIS',
-                'quantity': 10,
-                'symbol': 'SBIN',
+                'price': price,
+                'pricetype': pricetype,
+                'product': product,
+                'quantity': quantity,
+                'symbol': symbol,
                 'timestamp': '09-Dec-2024 10:00:00',
-                'trigger_price': 0,
-                'average_price': 99.75
+                'trigger_price': trigger_price,
+                'average_price': float(price) * 0.9975  # Simulate slight difference from order price
             }
         }
 
