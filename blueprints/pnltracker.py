@@ -282,31 +282,117 @@ def get_pnl_data():
             ist = pytz.timezone('Asia/Kolkata')
             first_trade_time = datetime.now(ist).replace(hour=9, minute=15, second=0, microsecond=0)
         
-        # Process each trade and get its historical data
+        # Group trades by symbol to track entry and exit
+        symbol_trades = {}
         for trade in trades:
-            symbol = trade['symbol']
-            exchange = trade['exchange']
-            executed_price = trade.get('average_price', 0)
-            action = trade['action']
+            symbol_key = f"{trade['symbol']}_{trade['exchange']}"
+            if symbol_key not in symbol_trades:
+                symbol_trades[symbol_key] = []
             
-            # Calculate quantity
-            qty = trade.get('quantity', 0)
-            if qty == 0 and executed_price > 0:
-                # For MCX/commodities, when trade_value equals average_price, it's 1 lot
-                if trade.get('trade_value', 0) == executed_price:
-                    qty = 1
-                else:
-                    qty = trade.get('trade_value', 0) / executed_price
+            # Parse trade time
+            trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
+            trade_time = None
+            if trade_timestamp:
+                try:
+                    if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
+                        ist = pytz.timezone('Asia/Kolkata')
+                        today = datetime.now(ist).date()
+                        time_parts = trade_timestamp.split(':')
+                        trade_time = ist.localize(datetime.combine(today, time(
+                            int(time_parts[0]), 
+                            int(time_parts[1]), 
+                            int(time_parts[2]) if len(time_parts) > 2 else 0
+                        )))
+                    else:
+                        trade_time = pd.to_datetime(trade_timestamp)
+                        ist = pytz.timezone('Asia/Kolkata')
+                        if trade_time.tz is None:
+                            trade_time = trade_time.tz_localize(ist)
+                        else:
+                            trade_time = trade_time.tz_convert(ist)
+                except Exception as e:
+                    logger.warning(f"Could not parse trade time for {trade}: {e}")
             
-            if qty <= 0:
-                logger.warning(f"Skipping trade with zero/negative quantity: {trade}")
-                continue
+            trade['parsed_time'] = trade_time
+            symbol_trades[symbol_key].append(trade)
+        
+        # Process each symbol's trades
+        for symbol_key, trades_list in symbol_trades.items():
+            # Sort trades by time
+            trades_list.sort(key=lambda x: x.get('parsed_time') or datetime.min.replace(tzinfo=pytz.UTC))
             
-            orderid_suffix = str(trade.get('orderid', ''))[-4:]
-            symbol_label = f"{symbol}_{orderid_suffix}"
+            symbol = trades_list[0]['symbol']
+            exchange = trades_list[0]['exchange']
             
+            # Track net position and time windows
+            net_position = 0
+            position_windows = []  # List of (start_time, end_time, qty, price, action)
+            
+            for trade in trades_list:
+                executed_price = trade.get('average_price', 0)
+                action = trade['action']
+                trade_time = trade.get('parsed_time')
+                
+                # Calculate quantity
+                qty = trade.get('quantity', 0)
+                if qty == 0 and executed_price > 0:
+                    if trade.get('trade_value', 0) == executed_price:
+                        qty = 1
+                    else:
+                        qty = trade.get('trade_value', 0) / executed_price
+                
+                if qty <= 0:
+                    logger.warning(f"Skipping trade with zero/negative quantity: {trade}")
+                    continue
+                
+                # Track position windows
+                if action == 'BUY':
+                    position_windows.append({
+                        'start_time': trade_time,
+                        'end_time': None,  # Will be filled when position is closed
+                        'qty': qty,
+                        'price': executed_price,
+                        'action': 'BUY',
+                        'exit_price': None  # Will be filled when position is closed
+                    })
+                    net_position += qty
+                else:  # SELL
+                    # Check if this closes a position
+                    if net_position > 0:
+                        # This is closing a long position
+                        remaining_qty = qty
+                        for window in position_windows:
+                            if window['action'] == 'BUY' and window['end_time'] is None and remaining_qty > 0:
+                                # Close this position window
+                                close_qty = min(window['qty'], remaining_qty)
+                                if close_qty == window['qty']:
+                                    window['end_time'] = trade_time
+                                    window['exit_price'] = executed_price  # Store the actual exit price
+                                else:
+                                    # Partial close - split the window
+                                    window['qty'] -= close_qty
+                                    # Create a closed window for the partial
+                                    closed_window = window.copy()
+                                    closed_window['qty'] = close_qty
+                                    closed_window['end_time'] = trade_time
+                                    closed_window['exit_price'] = executed_price  # Store the actual exit price
+                                    position_windows.append(closed_window)
+                                remaining_qty -= close_qty
+                        net_position -= qty
+                    else:
+                        # This is a short position
+                        position_windows.append({
+                            'start_time': trade_time,
+                            'end_time': None,
+                            'qty': qty,
+                            'price': executed_price,
+                            'action': 'SELL',
+                            'exit_price': None
+                        })
+                        net_position -= qty
+            
+            # Now get historical data and calculate PnL for each position window
             try:
-                # Get historical data for this symbol
                 success, hist_response, _ = get_history(
                     symbol=symbol,
                     exchange=exchange,
@@ -319,48 +405,87 @@ def get_pnl_data():
                 if success and 'data' in hist_response:
                     df_hist = pd.DataFrame(hist_response['data'])
                     if not df_hist.empty:
-                        # Convert timestamp to IST with robust handling
-                        df_hist = convert_timestamp_to_ist(df_hist, symbol_label)
+                        df_hist = convert_timestamp_to_ist(df_hist, symbol)
                         
                         if df_hist is not None:
-                            # Filter to show data from first trade time onwards
                             ist = pytz.timezone('Asia/Kolkata')
                             current_time = datetime.now(ist)
                             
-                            # Start from first trade time, not market open
+                            # Filter to trading hours
                             if first_trade_time:
                                 df_hist = df_hist[df_hist.index >= first_trade_time]
-                            else:
-                                # Fallback to 9:15 AM if no first trade time
-                                today_915am = df_hist.index[0].replace(hour=9, minute=15, second=0, microsecond=0)
-                                df_hist = df_hist[df_hist.index >= today_915am]
-                            
                             df_hist = df_hist[df_hist.index <= current_time]
+                            
+                            df_hist = df_hist[['close']].copy()
+                            df_hist.rename(columns={'close': f'{symbol}_price'}, inplace=True)
+                            
+                            # Initialize PnL column
+                            df_hist[f'{symbol}_pnl'] = 0.0
+                            
+                            # Track cumulative realized PnL
+                            cumulative_realized_pnl = 0.0
+                            
+                            # Sort position windows by start time
+                            position_windows_sorted = sorted(position_windows, 
+                                                            key=lambda x: x['start_time'] if x['start_time'] else datetime.min.replace(tzinfo=pytz.UTC))
+                            
+                            # Calculate PnL for each position window
+                            for window in position_windows_sorted:
+                                if window['start_time'] is None:
+                                    continue
+                                    
+                                # Determine the time range for this position
+                                start = window['start_time']
+                                end = window['end_time'] if window['end_time'] else current_time
+                                
+                                # Create mask for this time window
+                                mask = (df_hist.index >= start) & (df_hist.index <= end)
+                                
+                                # Calculate PnL for this window
+                                if window['action'] == 'BUY':
+                                    position_pnl = (df_hist.loc[mask, f'{symbol}_price'] - window['price']) * window['qty']
+                                    df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
+                                    
+                                    # If position is closed, calculate realized PnL using actual exit price
+                                    if window['end_time'] and window.get('exit_price'):
+                                        realized = (window['exit_price'] - window['price']) * window['qty']
+                                        cumulative_realized_pnl += realized
+                                        logger.info(f"Closed BUY position: entry={window['price']}, exit={window['exit_price']}, "
+                                                  f"qty={window['qty']}, realized PnL={realized}")
+                                else:  # SELL
+                                    position_pnl = (window['price'] - df_hist.loc[mask, f'{symbol}_price']) * window['qty']
+                                    df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
+                                    
+                                    # If position is closed, calculate realized PnL using actual exit price
+                                    if window['end_time'] and window.get('exit_price'):
+                                        realized = (window['price'] - window['exit_price']) * window['qty']
+                                        cumulative_realized_pnl += realized
+                                        logger.info(f"Closed SELL position: entry={window['price']}, exit={window['exit_price']}, "
+                                                  f"qty={window['qty']}, realized PnL={realized}")
+                                
+                                # After a position is closed, add the cumulative realized PnL to all future timestamps
+                                if window['end_time'] and cumulative_realized_pnl != 0:
+                                    future_mask = df_hist.index > window['end_time']
+                                    df_hist.loc[future_mask, f'{symbol}_pnl'] = cumulative_realized_pnl
+                                
+                                logger.info(f"Position window for {symbol}: {window['action']} {window['qty']} @ {window['price']}, "
+                                          f"from {start.strftime('%H:%M:%S') if start else 'None'} "
+                                          f"to {end.strftime('%H:%M:%S') if end else 'current'}")
+                            
+                            # Add to portfolio
+                            if portfolio_pnl is None:
+                                portfolio_pnl = df_hist[[f'{symbol}_pnl']].copy()
+                            else:
+                                portfolio_pnl = portfolio_pnl.join(df_hist[[f'{symbol}_pnl']], how='outer')
+                            
+                            logger.info(f"Added PnL for {symbol}: {len(df_hist)} data points")
                         else:
-                            logger.warning(f"Timestamp conversion failed for {symbol_label}, skipping")
-                            continue
-                        
-                        df_hist = df_hist[['close']].copy()
-                        df_hist.rename(columns={'close': f'{symbol_label}_price'}, inplace=True)
-                        
-                        # Calculate MTM PnL for this trade
-                        if action == 'BUY':
-                            df_hist[f'{symbol_label}_pnl'] = (df_hist[f'{symbol_label}_price'] - executed_price) * qty
-                        else:  # SELL
-                            df_hist[f'{symbol_label}_pnl'] = (executed_price - df_hist[f'{symbol_label}_price']) * qty
-                        
-                        # Combine into portfolio
-                        if portfolio_pnl is None:
-                            portfolio_pnl = df_hist[[f'{symbol_label}_pnl']].copy()
-                        else:
-                            portfolio_pnl = portfolio_pnl.join(df_hist[[f'{symbol_label}_pnl']], how='outer')
-                        
-                        logger.info(f"Added PnL for {symbol_label}: {len(df_hist)} data points")
+                            logger.warning(f"Timestamp conversion failed for {symbol}")
                 else:
                     logger.warning(f"Could not get historical data for {symbol}")
                     
             except Exception as e:
-                logger.error(f"Error processing trade for {symbol}: {e}")
+                logger.error(f"Error processing trades for {symbol}: {e}")
                 continue
         
         # If we have no portfolio data but have positions, fetch historical data for positions

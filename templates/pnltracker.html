@@ -196,6 +196,30 @@ function initChart() {
             }
         }
     });
+    
+    // Add OpenAlgo watermark
+    const watermark = document.createElement('div');
+    watermark.style.position = 'absolute';
+    watermark.style.zIndex = '2';
+    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)';
+    watermark.style.fontFamily = 'Arial, sans-serif';
+    watermark.style.fontSize = '48px';
+    watermark.style.fontWeight = 'bold';
+    watermark.style.userSelect = 'none';
+    watermark.style.pointerEvents = 'none';
+    watermark.textContent = 'OpenAlgo';
+    chartContainer.appendChild(watermark);
+    
+    // Position the watermark in the center of the chart
+    const positionWatermark = () => {
+        const chartRect = chartContainer.getBoundingClientRect();
+        watermark.style.left = (chartRect.width / 2 - watermark.offsetWidth / 2) + 'px';
+        watermark.style.top = (chartRect.height / 2 - watermark.offsetHeight / 2) + 'px';
+    };
+    
+    // Position the watermark initially and on resize
+    setTimeout(positionWatermark, 0);
+    window.addEventListener('resize', positionWatermark);
 
     // Create PnL series (Area) - Using v5.0 API with standalone version
     // In standalone version, use LightweightCharts.AreaSeries
@@ -285,6 +309,7 @@ function initChart() {
         chart.applyOptions({
             width: chartContainer.offsetWidth
         });
+        positionWatermark();
     });
 
     // Listen for theme changes
