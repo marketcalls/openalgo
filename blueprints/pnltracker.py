@@ -285,64 +285,87 @@ def get_pnl_data():
         # Group trades by symbol to track entry and exit
         symbol_trades = {}
         for trade in trades:
-            symbol_key = f"{trade['symbol']}_{trade['exchange']}"
-            if symbol_key not in symbol_trades:
-                symbol_trades[symbol_key] = []
-            
-            # Parse trade time
-            trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
-            trade_time = None
-            if trade_timestamp:
-                try:
-                    if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
-                        ist = pytz.timezone('Asia/Kolkata')
-                        today = datetime.now(ist).date()
-                        time_parts = trade_timestamp.split(':')
-                        trade_time = ist.localize(datetime.combine(today, time(
-                            int(time_parts[0]), 
-                            int(time_parts[1]), 
-                            int(time_parts[2]) if len(time_parts) > 2 else 0
-                        )))
-                    else:
-                        trade_time = pd.to_datetime(trade_timestamp)
-                        ist = pytz.timezone('Asia/Kolkata')
-                        if trade_time.tz is None:
-                            trade_time = trade_time.tz_localize(ist)
+            try:
+                symbol = trade.get('symbol', '')
+                exchange = trade.get('exchange', '')
+                if not symbol or not exchange:
+                    logger.warning(f"Trade missing symbol or exchange: {trade}")
+                    continue
+                    
+                symbol_key = f"{symbol}_{exchange}"
+                if symbol_key not in symbol_trades:
+                    symbol_trades[symbol_key] = []
+                
+                # Parse trade time
+                trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
+                trade_time = None
+                if trade_timestamp:
+                    try:
+                        if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
+                            ist = pytz.timezone('Asia/Kolkata')
+                            today = datetime.now(ist).date()
+                            time_parts = trade_timestamp.split(':')
+                            trade_time = ist.localize(datetime.combine(today, time(
+                                int(time_parts[0]), 
+                                int(time_parts[1]), 
+                                int(time_parts[2]) if len(time_parts) > 2 else 0
+                            )))
                         else:
-                            trade_time = trade_time.tz_convert(ist)
-                except Exception as e:
-                    logger.warning(f"Could not parse trade time for {trade}: {e}")
-            
-            trade['parsed_time'] = trade_time
-            symbol_trades[symbol_key].append(trade)
+                            trade_time = pd.to_datetime(trade_timestamp)
+                            ist = pytz.timezone('Asia/Kolkata')
+                            if trade_time.tz is None:
+                                trade_time = trade_time.tz_localize(ist)
+                            else:
+                                trade_time = trade_time.tz_convert(ist)
+                    except Exception as e:
+                        logger.warning(f"Could not parse trade time for {trade}: {e}")
+                
+                trade['parsed_time'] = trade_time
+                symbol_trades[symbol_key].append(trade)
+            except Exception as e:
+                logger.error(f"Error processing trade: {e}, trade: {trade}")
+                continue
         
         # Process each symbol's trades
         for symbol_key, trades_list in symbol_trades.items():
+            if not trades_list:
+                logger.warning(f"No trades found for {symbol_key}")
+                continue
+                
             # Sort trades by time
             trades_list.sort(key=lambda x: x.get('parsed_time') or datetime.min.replace(tzinfo=pytz.UTC))
             
-            symbol = trades_list[0]['symbol']
-            exchange = trades_list[0]['exchange']
+            symbol = trades_list[0].get('symbol', '')
+            exchange = trades_list[0].get('exchange', '')
+            
+            if not symbol or not exchange:
+                logger.warning(f"Missing symbol or exchange for {symbol_key}")
+                continue
             
             # Track net position and time windows
             net_position = 0
             position_windows = []  # List of (start_time, end_time, qty, price, action)
             
             for trade in trades_list:
-                executed_price = trade.get('average_price', 0)
-                action = trade['action']
-                trade_time = trade.get('parsed_time')
-                
-                # Calculate quantity
-                qty = trade.get('quantity', 0)
-                if qty == 0 and executed_price > 0:
-                    if trade.get('trade_value', 0) == executed_price:
-                        qty = 1
-                    else:
-                        qty = trade.get('trade_value', 0) / executed_price
-                
-                if qty <= 0:
-                    logger.warning(f"Skipping trade with zero/negative quantity: {trade}")
+                try:
+                    executed_price = float(trade.get('average_price', 0))
+                    action = trade.get('action', '')
+                    trade_time = trade.get('parsed_time')
+                    
+                    # Calculate quantity
+                    qty = float(trade.get('quantity', 0))
+                    if qty == 0 and executed_price > 0:
+                        trade_value = float(trade.get('trade_value', 0))
+                        if trade_value == executed_price:
+                            qty = 1
+                        elif trade_value > 0:
+                            qty = trade_value / executed_price
+                    
+                    if qty <= 0:
+                        logger.warning(f"Skipping trade with zero/negative quantity: {trade}")
+                        continue
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Error parsing trade values: {e}, trade: {trade}")
                     continue
                 
                 # Track position windows
@@ -440,6 +463,11 @@ def get_pnl_data():
                                 
                                 # Create mask for this time window
                                 mask = (df_hist.index >= start) & (df_hist.index <= end)
+                                
+                                # Skip if no data points in this window
+                                if not mask.any():
+                                    logger.warning(f"No data points found for position window from {start} to {end}")
+                                    continue
                                 
                                 # Calculate PnL for this window
                                 if window['action'] == 'BUY':
