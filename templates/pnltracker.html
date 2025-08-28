@@ -24,12 +24,21 @@
             <h1 class="text-3xl font-bold">PnL Tracker</h1>
             <p class="text-base-content/60">Monitor your intraday profit and loss</p>
         </div>
-        <button id="refresh-btn" class="btn btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refresh
-        </button>
+        <div class="flex gap-2">
+            <button id="screenshot-btn" class="btn btn-secondary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Screenshot
+            </button>
+            <button id="refresh-btn" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+            </button>
+        </div>
     </div>
 
     <!-- Metrics Cards -->
@@ -196,6 +205,30 @@ function initChart() {
             }
         }
     });
+    
+    // Add OpenAlgo watermark
+    const watermark = document.createElement('div');
+    watermark.style.position = 'absolute';
+    watermark.style.zIndex = '2';
+    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)';
+    watermark.style.fontFamily = 'Arial, sans-serif';
+    watermark.style.fontSize = '48px';
+    watermark.style.fontWeight = 'bold';
+    watermark.style.userSelect = 'none';
+    watermark.style.pointerEvents = 'none';
+    watermark.textContent = 'OpenAlgo';
+    chartContainer.appendChild(watermark);
+    
+    // Position the watermark in the center of the chart
+    const positionWatermark = () => {
+        const chartRect = chartContainer.getBoundingClientRect();
+        watermark.style.left = (chartRect.width / 2 - watermark.offsetWidth / 2) + 'px';
+        watermark.style.top = (chartRect.height / 2 - watermark.offsetHeight / 2) + 'px';
+    };
+    
+    // Position the watermark initially and on resize
+    setTimeout(positionWatermark, 0);
+    window.addEventListener('resize', positionWatermark);
 
     // Create PnL series (Area) - Using v5.0 API with standalone version
     // In standalone version, use LightweightCharts.AreaSeries
@@ -285,6 +318,7 @@ function initChart() {
         chart.applyOptions({
             width: chartContainer.offsetWidth
         });
+        positionWatermark();
     });
 
     // Listen for theme changes
@@ -452,6 +486,143 @@ function debugChart() {
     }
 }
 
+// Screenshot function
+function takeScreenshot() {
+    if (!chart) {
+        console.error('Chart not initialized');
+        return;
+    }
+    
+    // Show loading state on button
+    const screenshotBtn = document.getElementById('screenshot-btn');
+    const originalContent = screenshotBtn.innerHTML;
+    screenshotBtn.innerHTML = '<span class="loading loading-spinner loading-sm mr-2"></span> Capturing...';
+    screenshotBtn.disabled = true;
+    
+    try {
+        // Take screenshot using the TradingView API
+        const screenshot = chart.takeScreenshot();
+        
+        if (screenshot) {
+            // Create a download link
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            link.download = `PnL_Tracker_${timestamp}.png`;
+            link.href = screenshot.toDataURL();
+            
+            // Trigger download
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // Show success toast
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-end';
+            toast.innerHTML = `
+                <div class="alert alert-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Screenshot saved successfully!</span>
+                </div>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        } else {
+            throw new Error('Failed to capture screenshot');
+        }
+    } catch (error) {
+        console.error('Screenshot error:', error);
+        
+        // Try alternative method - capture entire chart container
+        captureChartContainer();
+    } finally {
+        // Restore button state
+        setTimeout(() => {
+            screenshotBtn.innerHTML = originalContent;
+            screenshotBtn.disabled = false;
+        }, 1000);
+    }
+}
+
+// Alternative screenshot method using html2canvas if available
+async function captureChartContainer() {
+    const chartContainer = document.getElementById('pnl-chart');
+    
+    // Check if html2canvas is available
+    if (typeof html2canvas === 'undefined') {
+        // Load html2canvas library dynamically
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        script.onload = async function() {
+            await performCapture(chartContainer);
+        };
+        script.onerror = function() {
+            showErrorToast('Failed to load screenshot library. Please try again.');
+        };
+        document.head.appendChild(script);
+    } else {
+        await performCapture(chartContainer);
+    }
+}
+
+async function performCapture(element) {
+    try {
+        const canvas = await html2canvas(element, {
+            backgroundColor: null,
+            scale: 2, // Higher quality
+            logging: false,
+            useCORS: true,
+            allowTaint: true
+        });
+        
+        // Convert to blob and download
+        canvas.toBlob(function(blob) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            link.download = `PnL_Tracker_${timestamp}.png`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            // Show success toast
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-end';
+            toast.innerHTML = `
+                <div class="alert alert-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Screenshot saved successfully!</span>
+                </div>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        });
+    } catch (error) {
+        showErrorToast('Failed to capture screenshot. Please try again.');
+        console.error('Capture error:', error);
+    }
+}
+
+function showErrorToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end';
+    toast.innerHTML = `
+        <div class="alert alert-error">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Check if library is loaded
@@ -467,6 +638,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Manual refresh button
     document.getElementById('refresh-btn').addEventListener('click', function() {
         loadPnLData();
+    });
+    
+    // Screenshot button
+    document.getElementById('screenshot-btn').addEventListener('click', function() {
+        takeScreenshot();
     });
     
     // Add debug info on error
