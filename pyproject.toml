@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "1.0.0.30"
+version = "1.0.0.31"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "annotated-types==0.7.0",
