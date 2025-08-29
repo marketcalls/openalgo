@@ -278,6 +278,10 @@ class FyersAdapter:
             for fs, si in self.active_subscriptions.items():
                 self.logger.info(f"  - {fs}: {si['exchange']}:{si['symbol']}")
             
+            # Special debug for MIDCPNIFTY
+            if 'MIDCP' in symbol_str.upper() or 'MIDCAP' in symbol_str.upper():
+                self.logger.info(f"📊 MIDCPNIFTY Debug: Received symbol format: {symbol_str}")
+            
             # Look for matching subscription based on symbol
             for full_symbol, sub_info in self.active_subscriptions.items():
                 expected_symbol = f"{sub_info['exchange']}:{sub_info['symbol']}"
@@ -299,13 +303,54 @@ class FyersAdapter:
                         self.logger.info(f"✅ Equity match: {symbol_str} -> {full_symbol}")
                         break
                 
-                # Case 2: Index symbols - NSE:NIFTY50 should match NSE_INDEX:NIFTY
+                # Case 2: Index symbols - Handle various index mappings
                 if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE_INDEX':
                     symbol_part = symbol_str.split(':', 1)[1]
-                    if (symbol_part == 'NIFTY50' and sub_info['symbol'] == 'NIFTY') or \
-                       (symbol_part.replace('-INDEX', '') == sub_info['symbol']):
+                    
+                    # Handle specific index mappings
+                    index_mappings = {
+                        'NIFTY50': 'NIFTY',
+                        'NIFTYBANK': 'BANKNIFTY',  # NIFTYBANK maps to BANKNIFTY
+                        'NIFTYBANK-INDEX': 'BANKNIFTY',  # NIFTYBANK-INDEX maps to BANKNIFTY
+                        'NIFTY-INDEX': 'NIFTY',
+                        'FINNIFTY': 'FINNIFTY',
+                        'FINNIFTY-INDEX': 'FINNIFTY'
+                    }
+                    
+                    # Check if we have a mapping for this index
+                    if symbol_part in index_mappings and index_mappings[symbol_part] == sub_info['symbol']:
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ Index match via mapping: {symbol_str} -> {full_symbol}")
+                        break
+                    
+                    # Also try direct match after removing -INDEX suffix
+                    if symbol_part.replace('-INDEX', '') == sub_info['symbol']:
                         matched_subscription = sub_info
                         self.logger.info(f"✅ Index match: {symbol_str} -> {full_symbol}")
+                        break
+                
+                # Case 2b: BSE Index symbols
+                if symbol_str.startswith("BSE:") and sub_info['exchange'] == 'BSE_INDEX':
+                    symbol_part = symbol_str.split(':', 1)[1]
+                    
+                    # Handle BSE index mappings
+                    bse_index_mappings = {
+                        'SENSEX': 'SENSEX',
+                        'SENSEX-INDEX': 'SENSEX',
+                        'BANKEX': 'BANKEX',
+                        'BANKEX-INDEX': 'BANKEX'
+                    }
+                    
+                    # Check if we have a mapping for this BSE index
+                    if symbol_part in bse_index_mappings and bse_index_mappings[symbol_part] == sub_info['symbol']:
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ BSE Index match via mapping: {symbol_str} -> {full_symbol}")
+                        break
+                    
+                    # Also try direct match after removing -INDEX suffix
+                    if symbol_part.replace('-INDEX', '') == sub_info['symbol']:
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ BSE Index match: {symbol_str} -> {full_symbol}")
                         break
                 
                 # Case 3: Options - NSE:NIFTY25AUG25550PE should match NFO:NIFTY28AUG2525550PE
