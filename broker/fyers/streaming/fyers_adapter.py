@@ -273,14 +273,15 @@ class FyersAdapter:
             openalgo_data_type = "Quote"  # Default
             matched_subscription = None
             
-            # Debug: Log what we're trying to match
-            self.logger.info(f"🔍 Trying to match symbol_str='{symbol_str}' against subscriptions:")
+            # Debug: Log what we're trying to match with more detail
+            self.logger.info(f"🔍 Received data with symbol_str='{symbol_str}'")
+            self.logger.info(f"   Raw Fyers data type: {fyers_data.get('type', 'unknown')}")
+            self.logger.info(f"   Original symbol from Fyers: {fyers_data.get('original_symbol', 'N/A')}")
+            self.logger.info(f"   Mapped symbol: {mapped_data.get('symbol', 'N/A')}")
+            self.logger.info(f"   Exchange from mapped data: {mapped_data.get('exchange', 'N/A')}")
+            self.logger.info(f"   Active subscriptions to match against:")
             for fs, si in self.active_subscriptions.items():
-                self.logger.info(f"  - {fs}: {si['exchange']}:{si['symbol']}")
-            
-            # Special debug for MIDCPNIFTY
-            if 'MIDCP' in symbol_str.upper() or 'MIDCAP' in symbol_str.upper():
-                self.logger.info(f"📊 MIDCPNIFTY Debug: Received symbol format: {symbol_str}")
+                self.logger.info(f"     - {fs}: exchange={si['exchange']}, symbol={si['symbol']}")
             
             # Look for matching subscription based on symbol
             for full_symbol, sub_info in self.active_subscriptions.items():
@@ -303,71 +304,111 @@ class FyersAdapter:
                         self.logger.info(f"✅ Equity match: {symbol_str} -> {full_symbol}")
                         break
                 
-                # Case 2: Index symbols - Handle various index mappings
-                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE_INDEX':
-                    symbol_part = symbol_str.split(':', 1)[1]
+                # Case 2: Index symbols - Handle various index formats
+                if sub_info['exchange'] == 'NSE_INDEX':
+                    # Index symbols can come in different formats from Fyers
+                    # NSE:NIFTY50-INDEX, NSE:BANKNIFTY-INDEX, or just the symbol part
+                    received_symbol = symbol_str
+                    if ':' in symbol_str:
+                        received_symbol = symbol_str.split(':', 1)[1]
                     
-                    # Handle specific index mappings
-                    index_mappings = {
-                        'NIFTY50': 'NIFTY',
-                        'NIFTYBANK': 'BANKNIFTY',  # NIFTYBANK maps to BANKNIFTY
-                        'NIFTYBANK-INDEX': 'BANKNIFTY',  # NIFTYBANK-INDEX maps to BANKNIFTY
-                        'NIFTY-INDEX': 'NIFTY',
-                        'FINNIFTY': 'FINNIFTY',
-                        'FINNIFTY-INDEX': 'FINNIFTY'
-                    }
+                    sub_symbol = sub_info['symbol']
                     
-                    # Check if we have a mapping for this index
-                    if symbol_part in index_mappings and index_mappings[symbol_part] == sub_info['symbol']:
-                        matched_subscription = sub_info
-                        self.logger.info(f"✅ Index match via mapping: {symbol_str} -> {full_symbol}")
-                        break
+                    # Remove -INDEX suffix if present for comparison
+                    clean_received = received_symbol.replace('-INDEX', '').upper()
+                    clean_sub = sub_symbol.upper()
                     
-                    # Also try direct match after removing -INDEX suffix
-                    if symbol_part.replace('-INDEX', '') == sub_info['symbol']:
+                    # Handle various index name variations
+                    if (clean_received == clean_sub or  # Exact match
+                        clean_received == f"{clean_sub}50" or  # NIFTY50 -> NIFTY
+                        clean_received.replace('50', '') == clean_sub or  # NIFTY50 -> NIFTY
+                        (clean_received == 'NIFTY BANK' and clean_sub == 'BANKNIFTY') or  # NIFTY BANK -> BANKNIFTY
+                        (clean_received == 'BANK NIFTY' and clean_sub == 'BANKNIFTY') or  # BANK NIFTY -> BANKNIFTY
+                        (clean_received == 'NIFTYBANK' and clean_sub == 'BANKNIFTY') or  # NIFTYBANK -> BANKNIFTY
+                        (clean_received == 'BANKNIFTY' and clean_sub == 'BANKNIFTY')):  # Direct match
                         matched_subscription = sub_info
                         self.logger.info(f"✅ Index match: {symbol_str} -> {full_symbol}")
                         break
                 
-                # Case 2b: BSE Index symbols
-                if symbol_str.startswith("BSE:") and sub_info['exchange'] == 'BSE_INDEX':
-                    symbol_part = symbol_str.split(':', 1)[1]
+                # Case 3: NFO Options - Handle format variations
+                if sub_info['exchange'] == 'NFO':
+                    # NFO options can come in different formats from Fyers
+                    # Could be NSE:, NFO:, or no prefix
+                    received_symbol = symbol_str
+                    if ':' in symbol_str:
+                        received_symbol = symbol_str.split(':', 1)[1]
                     
-                    # Handle BSE index mappings
-                    bse_index_mappings = {
-                        'SENSEX': 'SENSEX',
-                        'SENSEX-INDEX': 'SENSEX',
-                        'BANKEX': 'BANKEX',
-                        'BANKEX-INDEX': 'BANKEX'
-                    }
-                    
-                    # Check if we have a mapping for this BSE index
-                    if symbol_part in bse_index_mappings and bse_index_mappings[symbol_part] == sub_info['symbol']:
-                        matched_subscription = sub_info
-                        self.logger.info(f"✅ BSE Index match via mapping: {symbol_str} -> {full_symbol}")
-                        break
-                    
-                    # Also try direct match after removing -INDEX suffix
-                    if symbol_part.replace('-INDEX', '') == sub_info['symbol']:
-                        matched_subscription = sub_info
-                        self.logger.info(f"✅ BSE Index match: {symbol_str} -> {full_symbol}")
-                        break
-                
-                # Case 3: Options - NSE:NIFTY25AUG25550PE should match NFO:NIFTY28AUG2525550PE
-                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NFO':
-                    symbol_part = symbol_str.split(':', 1)[1]
                     sub_symbol = sub_info['symbol']
                     
-                    # Extract core parts for comparison
-                    # NSE:NIFTY25AUG25550PE vs NFO:NIFTY28AUG2525550PE
-                    if 'NIFTY' in symbol_part and 'NIFTY' in sub_symbol:
-                        # Extract strike and expiry info
-                        if '25550' in symbol_part and '25550' in sub_symbol:
+                    # Extract underlying (first part before digits)
+                    import re
+                    received_underlying = re.match(r'^([A-Z]+)', received_symbol)
+                    sub_underlying = re.match(r'^([A-Z]+)', sub_symbol)
+                    
+                    if received_underlying and sub_underlying:
+                        # Check if same underlying or related (NIFTY/BANKNIFTY)
+                        recv_under = received_underlying.group(1)
+                        sub_under = sub_underlying.group(1)
+                        
+                        if (recv_under == sub_under or
+                            (recv_under == 'NIFTY' and 'NIFTY' in sub_under) or
+                            (recv_under == 'BANKNIFTY' and 'BANKNIFTY' in sub_under) or
+                            ('NIFTY' in recv_under and sub_under == 'NIFTY') or
+                            ('BANKNIFTY' in recv_under and sub_under == 'BANKNIFTY')):
+                            # Check if both are calls or puts or futures
+                            if (('CE' in received_symbol and 'CE' in sub_symbol) or 
+                                ('PE' in received_symbol and 'PE' in sub_symbol) or
+                                ('FUT' in received_symbol and 'FUT' in sub_symbol) or
+                                # Also match if neither has CE/PE (could be futures)
+                                ('CE' not in received_symbol and 'PE' not in received_symbol and 
+                                 'CE' not in sub_symbol and 'PE' not in sub_symbol)):
+                                matched_subscription = sub_info
+                                self.logger.info(f"✅ NFO match: {symbol_str} -> {full_symbol}")
+                                break
+                
+                # Case 4: MCX symbols - Handle format variations 
+                if sub_info['exchange'] == 'MCX':
+                    # MCX symbols can have format variations
+                    # CRUDEOILM17SEP255400CE vs CRUDEOILM25SEP5400CE
+                    received_parts = symbol_str.split(':', 1)
+                    if len(received_parts) == 2:
+                        received_symbol = received_parts[1]
+                        sub_symbol = sub_info['symbol']
+                        
+                        # Extract commodity name (first part before digits/month)
+                        import re
+                        received_commodity = re.match(r'^([A-Z]+)', received_symbol)
+                        sub_commodity = re.match(r'^([A-Z]+)', sub_symbol)
+                        
+                        if received_commodity and sub_commodity:
+                            # Check if same commodity
+                            if received_commodity.group(1) == sub_commodity.group(1):
+                                # Check if both are calls or puts (if options)
+                                if (('CE' in received_symbol and 'CE' in sub_symbol) or 
+                                    ('PE' in received_symbol and 'PE' in sub_symbol) or
+                                    # Or both are futures (no CE/PE)
+                                    ('CE' not in received_symbol and 'PE' not in received_symbol and 
+                                     'CE' not in sub_symbol and 'PE' not in sub_symbol)):
+                                    matched_subscription = sub_info
+                                    self.logger.info(f"✅ MCX match: {symbol_str} -> {full_symbol}")
+                                    break
+                
+                # Case 5: BSE/BFO symbols
+                if sub_info['exchange'] in ['BSE', 'BFO']:
+                    received_parts = symbol_str.split(':', 1)
+                    if len(received_parts) == 2 and received_parts[0] == sub_info['exchange']:
+                        received_symbol = received_parts[1]
+                        sub_symbol = sub_info['symbol']
+                        
+                        # For BSE/BFO, try flexible matching
+                        if received_symbol == sub_symbol:
                             matched_subscription = sub_info
-                            self.logger.info(f"✅ Options match: {symbol_str} -> {full_symbol}")
+                            self.logger.info(f"✅ {sub_info['exchange']} match: {symbol_str} -> {full_symbol}")
                             break
             
             if not matched_subscription:
+                self.logger.warning(f"❌ No matching subscription found for {symbol_str}")
+                self.logger.warning(f"   Please check if the symbol format is correct in your subscription")
                 return
             
             # Get the appropriate callback for this specific symbol
