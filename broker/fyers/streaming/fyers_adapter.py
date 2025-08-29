@@ -268,62 +268,38 @@ class FyersAdapter:
             if not symbol_str:
                 return
             
-            # Find matching subscription and callback
+            # Find matching subscription using HSM token or original symbol
             callback = None
             openalgo_data_type = "Quote"  # Default
             matched_subscription = None
             
-            # Debug: Log what we're trying to match
-            self.logger.info(f"🔍 Trying to match symbol_str='{symbol_str}' against subscriptions:")
-            for fs, si in self.active_subscriptions.items():
-                self.logger.info(f"  - {fs}: {si['exchange']}:{si['symbol']}")
-            
-            # Look for matching subscription based on symbol
-            for full_symbol, sub_info in self.active_subscriptions.items():
-                expected_symbol = f"{sub_info['exchange']}:{sub_info['symbol']}"
-                
-                # Try exact match first
-                if symbol_str == expected_symbol:
-                    matched_subscription = sub_info
-                    self.logger.info(f"✅ Exact match: {symbol_str} -> {full_symbol}")
-                    break
-                
-                # Try alternative formats for the same symbol
-                # Handle exchange and format mismatches
-                
-                # Case 1: Equity symbols - NSE:TCS-EQ should match NSE:TCS
-                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE':
-                    symbol_part = symbol_str.split(':', 1)[1]
-                    if symbol_part == f"{sub_info['symbol']}-EQ":
+            # Try to match using HSM token first (most reliable)
+            hsm_token = fyers_data.get('hsm_token')
+            if hsm_token:
+                # Find subscription by reverse lookup of HSM token
+                for full_symbol, sub_info in self.active_subscriptions.items():
+                    if full_symbol in self.symbol_to_hsm and self.symbol_to_hsm[full_symbol] == hsm_token:
                         matched_subscription = sub_info
-                        self.logger.info(f"✅ Equity match: {symbol_str} -> {full_symbol}")
+                        self.logger.info(f"✅ Matched by HSM token: {hsm_token} -> {full_symbol}")
                         break
-                
-                # Case 2: Index symbols - NSE:NIFTY50 should match NSE_INDEX:NIFTY
-                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NSE_INDEX':
-                    symbol_part = symbol_str.split(':', 1)[1]
-                    if (symbol_part == 'NIFTY50' and sub_info['symbol'] == 'NIFTY') or \
-                       (symbol_part.replace('-INDEX', '') == sub_info['symbol']):
-                        matched_subscription = sub_info
-                        self.logger.info(f"✅ Index match: {symbol_str} -> {full_symbol}")
-                        break
-                
-                # Case 3: Options - NSE:NIFTY25AUG25550PE should match NFO:NIFTY28AUG2525550PE
-                if symbol_str.startswith("NSE:") and sub_info['exchange'] == 'NFO':
-                    symbol_part = symbol_str.split(':', 1)[1]
-                    sub_symbol = sub_info['symbol']
-                    
-                    # Extract core parts for comparison
-                    # NSE:NIFTY25AUG25550PE vs NFO:NIFTY28AUG2525550PE
-                    if 'NIFTY' in symbol_part and 'NIFTY' in sub_symbol:
-                        # Extract strike and expiry info
-                        if '25550' in symbol_part and '25550' in sub_symbol:
-                            matched_subscription = sub_info
-                            self.logger.info(f"✅ Options match: {symbol_str} -> {full_symbol}")
-                            break
             
+            # If no match by token, fall back to simple symbol matching
             if not matched_subscription:
-                return
+                # Simple fallback: if we have only one subscription, use it
+                if len(self.active_subscriptions) == 1:
+                    for full_symbol, sub_info in self.active_subscriptions.items():
+                        matched_subscription = sub_info
+                        self.logger.info(f"✅ Single subscription match: {full_symbol}")
+                        break
+                else:
+                    self.logger.warning(f"❌ No HSM token match for data. HSM token: {hsm_token}")
+                    self.logger.warning(f"   Symbol to HSM mappings: {self.symbol_to_hsm}")
+                    return
+            
+            """
+            # Complex string matching logic removed - we rely on HSM token matching
+            # This follows the same pattern as Angel adapter which uses token-based matching
+            """
             
             # Get the appropriate callback for this specific symbol
             full_symbol = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
