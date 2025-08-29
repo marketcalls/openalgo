@@ -420,12 +420,15 @@ class FyersHSMWebSocket:
                 scrip_data[field] = string_data
                 offset += string_len
             
-            # Add original symbol mapping
+            # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 scrip_data["original_symbol"] = self.symbol_mappings[topic_name]
                 self.logger.info(f"Symbol mapping: {topic_name} -> {self.symbol_mappings[topic_name]}")
             else:
                 self.logger.warning(f"No symbol mapping found for topic_name: {topic_name}")
+            
+            # Add HSM token for reliable matching in adapter
+            scrip_data["hsm_token"] = topic_name
             
             # Store data
             self.scrips_data[topic_id] = scrip_data
@@ -467,9 +470,12 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.INDEX_FIELDS):
                     index_data[self.INDEX_FIELDS[index]] = value
             
-            # Add original symbol mapping
+            # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 index_data["original_symbol"] = self.symbol_mappings[topic_name]
+            
+            # Add HSM token for reliable matching in adapter
+            index_data["hsm_token"] = topic_name
             
             # Store data
             self.index_data[topic_id] = index_data
@@ -536,9 +542,12 @@ class FyersHSMWebSocket:
                 depth_data[field] = string_data
                 offset += string_len
             
-            # Add original symbol mapping
+            # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 depth_data["original_symbol"] = self.symbol_mappings[topic_name]
+            
+            # Add HSM token for reliable matching in adapter
+            depth_data["hsm_token"] = topic_name
             
             # Store data
             self.depth_data[topic_id] = depth_data
