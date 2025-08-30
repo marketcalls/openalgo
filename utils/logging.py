@@ -68,10 +68,14 @@ class SensitiveDataFilter(logging.Filter):
             if hasattr(record, 'args') and record.args:
                 filtered_args = []
                 for arg in record.args:
-                    filtered_arg = str(arg)
-                    for pattern, replacement in SENSITIVE_PATTERNS:
-                        filtered_arg = re.sub(pattern, replacement, filtered_arg, flags=re.IGNORECASE)
-                    filtered_args.append(filtered_arg)
+                    # Preserve original types to avoid breaking %-style formatting (e.g., %d)
+                    if isinstance(arg, str):
+                        filtered_arg = arg
+                        for pattern, replacement in SENSITIVE_PATTERNS:
+                            filtered_arg = re.sub(pattern, replacement, filtered_arg, flags=re.IGNORECASE)
+                        filtered_args.append(filtered_arg)
+                    else:
+                        filtered_args.append(arg)
                 record.args = tuple(filtered_args)
         except Exception:
             # If filtering fails, don't block the log message
@@ -196,6 +200,7 @@ def setup_logging():
     log_to_file = os.getenv('LOG_TO_FILE', 'False').lower() == 'true'
     log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
     log_dir = os.getenv('LOG_DIR', 'log')
+    # Use %s for all string formatting to avoid type errors
     log_format = os.getenv('LOG_FORMAT', '[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
     log_retention = int(os.getenv('LOG_RETENTION', '14'))
     log_colors = os.getenv('LOG_COLORS', 'True').lower() == 'true'
