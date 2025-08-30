@@ -395,6 +395,17 @@ def broker_callback(broker,para=None):
         auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = 'broker.html'
         
+    elif broker == 'definedge':
+        if request.method == 'GET':
+            return render_template('definedgeotp.html')
+
+        elif request.method == 'POST':
+            api_token = get_broker_api_key()
+            api_secret = get_broker_api_secret()
+            otp_code = request.form.get('otp')
+
+            auth_token, error_message = auth_function(api_token, api_secret, otp_code)
+            forward_url = 'broker.html'
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
