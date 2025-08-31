@@ -231,7 +231,7 @@ def setup_environment(app):
         logger.info(f"ngrok URL: {public_url}")
 
 app = create_app()
-#Test add
+
 # Explicitly call the setup environment function
 setup_environment(app)
 
