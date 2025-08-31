@@ -227,8 +227,17 @@ def setup_environment(app):
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
-        public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
-        logger.info(f"ngrok URL: {public_url}")
+        flask_port = int(os.getenv('FLASK_PORT', 5000))  # Get Flask port from environment
+        ngrok_domain = os.getenv('NGROK_DOMAIN')  # Get custom ngrok domain if specified
+        
+        if ngrok_domain:
+            # Use static domain
+            public_url = ngrok.connect(flask_port, hostname=ngrok_domain, name='flask').public_url
+            logger.info(f"ngrok URL (static domain): {public_url}")
+        else:
+            # Use ephemeral domain
+            public_url = ngrok.connect(flask_port, name='flask').public_url  # Use the correct Flask port
+            logger.info(f"ngrok URL (ephemeral): {public_url}")
 
 app = create_app()
 
