@@ -98,10 +98,12 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def connect(self):
         """Establish connection to the Fyers HSM WebSocket"""
         try:
-            # Reinitialize adapter if it was disconnected
+            # Only reinitialize adapter if it doesn't exist
             if not self.fyers_adapter:
-                self.logger.info("Reinitializing Fyers adapter...")
+                self.logger.info("Initializing new Fyers adapter...")
                 self.fyers_adapter = FyersAdapter(self.access_token, self.user_id)
+            else:
+                self.logger.info("Using existing Fyers adapter instance")
             
             # Reinitialize ZMQ if needed
             if not self.socket:
@@ -160,7 +162,8 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Disconnect from Fyers HSM WebSocket
             if self.fyers_adapter:
                 try:
-                    self.fyers_adapter.disconnect()
+                    # Full disconnect with clearing all mappings
+                    self.fyers_adapter.disconnect(clear_mappings=True)
                     self.logger.info("Fyers HSM adapter disconnected")
                 except Exception as e:
                     self.logger.error(f"Error disconnecting Fyers adapter: {e}")
@@ -205,6 +208,16 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         "message": "Failed to reconnect to Fyers WebSocket"
                     }
                 self.logger.info("Successfully reconnected to Fyers WebSocket")
+            
+            # Ensure adapter is properly connected
+            if self.fyers_adapter and not self.fyers_adapter.connected:
+                self.logger.info("Fyers adapter exists but not connected, reconnecting...")
+                if not self.fyers_adapter.connect():
+                    self.logger.error("Failed to reconnect Fyers adapter")
+                    return {
+                        "status": "error",
+                        "message": "Failed to reconnect Fyers adapter"
+                    }
             
             with self.lock:
                 # Convert to OpenAlgo format
@@ -325,11 +338,13 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if len(self.subscriptions) == 0:
                         self.logger.info("No active subscriptions remaining - disconnecting from Fyers to stop all background data")
                         
-                        # Disconnect from Fyers completely
+                        # Disconnect from Fyers WebSocket but keep adapter instance and mappings
                         try:
                             if self.fyers_adapter:
-                                self.fyers_adapter.disconnect()
-                                self.fyers_adapter = None
+                                # Disconnect without clearing mappings for potential reuse
+                                self.fyers_adapter.disconnect(clear_mappings=False)
+                                # Don't set to None - keep the adapter instance for reuse
+                                # self.fyers_adapter = None
                             self.connected = False
                             
                             # Clear all callbacks
@@ -585,7 +600,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Cleanup Fyers adapter
             if self.fyers_adapter:
                 try:
-                    self.fyers_adapter.disconnect()
+                    self.fyers_adapter.disconnect(clear_mappings=True)
                 except Exception as e:
                     self.logger.error(f"Error cleaning up Fyers adapter: {e}")
                 finally:
@@ -620,7 +635,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
             if hasattr(self, 'fyers_adapter') and self.fyers_adapter:
                 try:
-                    self.fyers_adapter.disconnect()
+                    self.fyers_adapter.disconnect(clear_mappings=True)
                 except:
                     pass
                 self.fyers_adapter = None
