@@ -2,6 +2,8 @@ venopenalgo
 .venv/
 .env
 openalgo.db
+*.db-shm
+*.db-wal
 .env
 .flaskenv
 *.pyc
