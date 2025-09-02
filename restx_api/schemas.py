@@ -1,31 +1,31 @@
-from marshmallow import Schema, fields
+from marshmallow import Schema, fields, validate
 
 class OrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
-    action = fields.Str(required=True)
-    quantity = fields.Str(required=True)  # Changed from Int to Str
-    pricetype = fields.Str(missing='MARKET')
-    product = fields.Str(missing='MIS')
-    price = fields.Str(missing='0.0')  # Changed from Float to Str
-    trigger_price = fields.Str(missing='0.0')  # Changed from Float to Str
-    disclosed_quantity = fields.Str(missing='0')  # Changed from Int to Str
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
+    trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
+    disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
 
 class SmartOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
-    action = fields.Str(required=True)
-    quantity = fields.Str(required=True)  # Changed from Int to Str
-    position_size = fields.Str(required=True)  # Changed from Float to Str
-    pricetype = fields.Str(missing='MARKET')
-    product = fields.Str(missing='MIS')
-    price = fields.Str(missing='0.0')  # Changed from Float to Str
-    trigger_price = fields.Str(missing='0.0')  # Changed from Float to Str
-    disclosed_quantity = fields.Str(missing='0')  # Changed from Int to Str
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    position_size = fields.Int(required=True, validate=validate.Range(min=1, error="Position size must be a positive integer."))
+    pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
+    trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
+    disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
 
 class ModifyOrderSchema(Schema):
     apikey = fields.Str(required=True)
@@ -33,13 +33,13 @@ class ModifyOrderSchema(Schema):
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
     orderid = fields.Str(required=True)
-    action = fields.Str(required=True)
-    product = fields.Str(required=True)
-    pricetype = fields.Str(required=True)
-    price = fields.Str(required=True)  # Changed from Float to Str
-    quantity = fields.Str(required=True)  # Changed from Int to Str
-    disclosed_quantity = fields.Str(required=True)  # Changed from Int to Str
-    trigger_price = fields.Str(required=True)  # Changed from Float to Str
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
+    product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    pricetype = fields.Str(required=True, validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    price = fields.Float(required=True, validate=validate.Range(min=0, error="Price must be a non-negative number."))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    disclosed_quantity = fields.Int(required=True, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
+    trigger_price = fields.Float(required=True, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
 
 class CancelOrderSchema(Schema):
     apikey = fields.Str(required=True)
@@ -57,18 +57,18 @@ class CancelAllOrderSchema(Schema):
 class BasketOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
-    orders = fields.List(fields.Dict(), required=True)  # List of order details
+    orders = fields.List(fields.Nested(OrderSchema), required=True)  # List of order details
 
 class SplitOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
-    action = fields.Str(required=True)
-    quantity = fields.Str(required=True)  # Total quantity to split
-    splitsize = fields.Str(required=True)  # Size of each split
-    pricetype = fields.Str(missing='MARKET')
-    product = fields.Str(missing='MIS')
-    price = fields.Str(missing='0.0')
-    trigger_price = fields.Str(missing='0.0')
-    disclosed_quantity = fields.Str(missing='0')
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Total quantity must be a positive integer."))  # Total quantity to split
+    splitsize = fields.Int(required=True, validate=validate.Range(min=1, error="Split size must be a positive integer."))  # Size of each split
+    pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
+    trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
+    disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))

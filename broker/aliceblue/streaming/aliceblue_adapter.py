@@ -43,6 +43,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_session = None
         self.subscriptions = {}
         self.symbol_state = {}  # Store last known state for each symbol
+        self.market_snapshots = {}  # Store complete market snapshots with value retention
         
         # Initialize mappers and registry
         self.exchange_mapper = AliceBlueExchangeMapper()
@@ -273,6 +274,16 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Dict[str, Any]: Response with status and message
         """
         try:
+            # Auto-reconnect if disconnected (similar to Fyers)
+            if not self.ws_client or not self.ws_client.sock or not self.ws_client.sock.connected:
+                self.logger.info("AliceBlue WebSocket not connected - attempting to reconnect...")
+                reconnect_result = self.connect()
+                if reconnect_result and reconnect_result.get('success') == False:
+                    self.logger.error("Failed to reconnect to AliceBlue WebSocket")
+                    return self._create_error_response("RECONNECT_FAILED", "Failed to reconnect to WebSocket")
+                # Wait a bit for connection to stabilize
+                import time
+                time.sleep(1)
             # Convert exchange to AliceBlue format
             ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
             
@@ -293,17 +304,40 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self.ws_client and self.ws_client.sock and self.ws_client.sock.connected:
                 self.ws_client.send(json.dumps(sub_msg))
                 
-                # Track subscription with more details for resubscription
+                # Track subscription - use simple key for now
                 sub_key = f"{ab_exchange}|{str(token)}"
+                
                 with self.lock:
-                    self.subscriptions[sub_key] = {
-                        'symbol': symbol,
-                        'exchange': exchange,
-                        'ab_exchange': ab_exchange,
-                        'token': token,
-                        'mode': mode,
-                        'depth_level': depth_level
-                    }
+                    # If already subscribed with a lower mode, update to higher mode
+                    # AliceBlue sends all data for highest subscribed mode
+                    existing_mode = self.subscriptions.get(sub_key, {}).get('mode', 0)
+                    if mode > existing_mode:
+                        self.subscriptions[sub_key] = {
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'ab_exchange': ab_exchange,
+                            'token': token,
+                            'mode': mode,  # Store the highest mode subscribed
+                            'depth_level': depth_level,
+                            'original_symbol': symbol,  # Store original OpenAlgo symbol for lookup
+                            'original_exchange': exchange,  # Store original OpenAlgo exchange
+                            'all_modes': self.subscriptions.get(sub_key, {}).get('all_modes', set()) | {mode}  # Track all subscribed modes
+                        }
+                    elif sub_key not in self.subscriptions:
+                        self.subscriptions[sub_key] = {
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'ab_exchange': ab_exchange,
+                            'token': token,
+                            'mode': mode,
+                            'depth_level': depth_level,
+                            'original_symbol': symbol,
+                            'original_exchange': exchange,
+                            'all_modes': {mode}
+                        }
+                    else:
+                        # Add this mode to the set of subscribed modes
+                        self.subscriptions[sub_key]['all_modes'] = self.subscriptions[sub_key].get('all_modes', set()) | {mode}
                 
                 self.logger.info(f"Subscribed to {symbol} ({ab_exchange}|{token}) for mode {mode}")
                 self.logger.info(f"Stored subscription with key: {sub_key}")
@@ -317,6 +351,75 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error subscribing to {symbol}: {e}")
             return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+    
+    def _update_market_snapshot(self, symbol_key: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update market snapshot for value retention.
+        Only updates non-zero values to retain previous valid data.
+        AliceBlue sends 0 for unchanged values, so we need to preserve the last known valid values.
+        """
+        # Get existing snapshot or create empty one
+        snapshot = self.market_snapshots.get(symbol_key, {})
+        
+        # Fields to check and merge
+        price_fields = ['ltp', 'open', 'high', 'low', 'close', 'average_price']
+        volume_fields = ['volume', 'total_buy_quantity', 'total_sell_quantity']
+        other_fields = ['total_oi', 'change_percent', 'timestamp', 'symbol', 'exchange', 'token']
+        
+        # Update price fields - only if non-zero
+        for field in price_fields:
+            if field in data:
+                value = data[field]
+                # Only update if value is not 0 (AliceBlue sends 0 for unchanged)
+                if isinstance(value, (int, float)) and value != 0:
+                    snapshot[field] = value
+                # If it's 0 and we don't have a previous value, set it to 0
+                elif field not in snapshot:
+                    snapshot[field] = 0
+        
+        # Update volume fields - can be 0 at market open
+        for field in volume_fields:
+            if field in data:
+                value = data[field]
+                # Volume can legitimately be 0 at market open, but not negative
+                if isinstance(value, (int, float)) and value >= 0:
+                    snapshot[field] = value
+                elif field not in snapshot:
+                    snapshot[field] = 0
+        
+        # Update other fields - always update if present
+        for field in other_fields:
+            if field in data and data[field] is not None:
+                snapshot[field] = data[field]
+        
+        # Handle depth data specially
+        if 'bids' in data or 'asks' in data:
+            # Update bids if present and non-empty
+            if 'bids' in data and isinstance(data['bids'], list):
+                # Filter out entries with 0 price (invalid)
+                valid_bids = [bid for bid in data['bids'] 
+                             if bid.get('price', 0) != 0]
+                if valid_bids:
+                    snapshot['bids'] = valid_bids
+                elif 'bids' not in snapshot:
+                    snapshot['bids'] = []
+            
+            # Update asks if present and non-empty  
+            if 'asks' in data and isinstance(data['asks'], list):
+                # Filter out entries with 0 price (invalid)
+                valid_asks = [ask for ask in data['asks'] 
+                             if ask.get('price', 0) != 0]
+                if valid_asks:
+                    snapshot['asks'] = valid_asks
+                elif 'asks' not in snapshot:
+                    snapshot['asks'] = []
+        
+        # Store updated snapshot
+        self.market_snapshots[symbol_key] = snapshot
+        
+        self.logger.debug(f"Updated snapshot for {symbol_key}: {snapshot}")
+        
+        return snapshot
     
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """
@@ -348,15 +451,59 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 # Remove from tracked subscriptions
                 sub_key = f"{ab_exchange}|{token}"
+                
                 with self.lock:
                     if sub_key in self.subscriptions:
-                        del self.subscriptions[sub_key]
-                    # Also remove symbol state
-                    symbol_state_key = f"{ab_exchange}|{token}"
-                    if symbol_state_key in self.symbol_state:
-                        del self.symbol_state[symbol_state_key]
+                        # Remove this mode from the set of subscribed modes
+                        all_modes = self.subscriptions[sub_key].get('all_modes', set())
+                        if mode in all_modes:
+                            all_modes.discard(mode)
+                        
+                        if not all_modes:
+                            # No modes left, remove the subscription entirely
+                            del self.subscriptions[sub_key]
+                            # Also remove symbol state and market snapshot
+                            if sub_key in self.symbol_state:
+                                del self.symbol_state[sub_key]
+                            if sub_key in self.market_snapshots:
+                                del self.market_snapshots[sub_key]
+                        else:
+                            # Update to the highest remaining mode
+                            self.subscriptions[sub_key]['all_modes'] = all_modes
+                            self.subscriptions[sub_key]['mode'] = max(all_modes)
+                    
+                    # Check if no more subscriptions remain
+                    remaining_subscriptions = len(self.subscriptions)
                 
                 self.logger.info(f"Unsubscribed from {symbol} ({ab_exchange}|{token})")
+                
+                # If no more subscriptions, disconnect to stop all background data (like Fyers)
+                if remaining_subscriptions == 0:
+                    self.logger.info("No active subscriptions remaining - disconnecting from AliceBlue to stop all background data")
+                    try:
+                        # Close WebSocket connection but keep the adapter ready for reconnection
+                        if self.ws_client:
+                            self.ws_client.close()
+                            # Don't set ws_client to None - keep it for potential reconnection
+                        self.connected = False
+                        self.running = False
+                        
+                        # Clear all market data snapshots and states
+                        self.symbol_state.clear()
+                        self.market_snapshots.clear()
+                        
+                        self.logger.info("Disconnected from AliceBlue WebSocket - all background data stopped")
+                        
+                        return {
+                            'status': 'success',
+                            'message': f'Unsubscribed from {symbol} on {exchange} and disconnected (no active subscriptions)',
+                            'disconnected': True,
+                            'active_subscriptions': 0
+                        }
+                    except Exception as e:
+                        self.logger.error(f"Error disconnecting from AliceBlue: {e}")
+                        return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
+                
                 return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
             else:
                 self.logger.error("WebSocket not connected")
@@ -374,8 +521,8 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             message: Raw message from WebSocket
         """
         try:
-            # Log all incoming messages for debugging
-            self.logger.info(f"Received WebSocket message: {message}")
+            # Log all incoming messages for debugging (use debug level to avoid flooding)
+            self.logger.debug(f"Received WebSocket message: {message}")
             
             # Parse JSON message
             data = json.loads(message)
@@ -418,20 +565,24 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Don't return here - continue processing other message types
             
             elif msg_type == 'tf':
-                # Tick data
+                # Tick data - continuous updates
                 parsed_data = self.message_mapper.parse_tick_data(data)
                 if parsed_data.get('type') != 'error':
+                    # Always process tick feeds for continuous updates
                     self._on_data_received(parsed_data)
+                    self.logger.debug(f"Processing tick feed for token: {data.get('e', 'unknown')}|{data.get('tk', 'unknown')}")
                 else:
                     self.logger.error(f"Error parsing tick data: {parsed_data['message']}")
             
             elif msg_type == 'df':
-                # Depth data update (partial)
+                # Depth data update - continuous updates
                 parsed_data = self.message_mapper.parse_depth_data(data)
                 if parsed_data.get('type') != 'error':
                     # Add message type
                     parsed_data['message_type'] = 'df'
+                    # Always process depth feeds for continuous updates
                     self._on_data_received(parsed_data)
+                    self.logger.debug(f"Processing depth feed for token: {data.get('e', 'unknown')}|{data.get('tk', 'unknown')}")
                 else:
                     self.logger.error(f"Error parsing depth data: {parsed_data['message']}")
             
@@ -561,7 +712,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data_received(self, parsed_data):
         """Handle received and parsed market data"""
         try:
-            self.logger.info(f"_on_data_received called with parsed_data: {parsed_data}")
+            self.logger.debug(f"_on_data_received called with parsed_data: {parsed_data}")
             # Extract key identifiers
             token = parsed_data.get('token', '')
             broker_exchange = parsed_data.get('exchange', 'UNKNOWN')
@@ -571,74 +722,78 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Create a unique key for this symbol
             symbol_key = f"{broker_exchange}|{str(token)}"
-            self.logger.info(f"Processing data - broker_exchange: {broker_exchange}, token: {token}")
-            self.logger.info(f"Token type in data: {type(token)}, value: {repr(token)}")
-            self.logger.info(f"Current subscriptions keys: {list(self.subscriptions.keys())}")
+            self.logger.debug(f"Processing data - broker_exchange: {broker_exchange}, token: {token}")
+            self.logger.debug(f"Token type in data: {type(token)}, value: {repr(token)}")
+            self.logger.debug(f"Current subscriptions keys: {list(self.subscriptions.keys())}")
+            
+            # Update market snapshot with value retention
+            # This ensures we retain previous values when AliceBlue sends 0 for unchanged fields
+            snapshot_data = self._update_market_snapshot(symbol_key, parsed_data)
             
             # Handle different message types
             if msg_type == 'tk':
                 # Token acknowledgment - contains full data, store it
-                self.symbol_state[symbol_key] = parsed_data.copy()
-                symbol = parsed_data.get('symbol', 'UNKNOWN')
+                self.symbol_state[symbol_key] = snapshot_data.copy()
+                symbol = snapshot_data.get('symbol', 'UNKNOWN')
             elif msg_type == 'dk':
                 # Depth acknowledgment - contains full data including symbol, store it
-                self.symbol_state[symbol_key] = parsed_data.copy()
-                symbol = parsed_data.get('symbol', 'UNKNOWN')
+                self.symbol_state[symbol_key] = snapshot_data.copy()
+                symbol = snapshot_data.get('symbol', 'UNKNOWN')
             elif msg_type == 'tf':
-                # Tick feed - contains only changed fields, merge with stored state
-                if symbol_key in self.symbol_state:
-                    # Start with the last known state
-                    merged_data = self.symbol_state[symbol_key].copy()
-                    # Update only the fields present in the tick feed
-                    for key, value in parsed_data.items():
-                        if key not in ['type', 'message_type']:  # Don't overwrite these
-                            merged_data[key] = value
-                    # Update stored state
-                    self.symbol_state[symbol_key] = merged_data.copy()
-                    # Use merged data for publishing
-                    parsed_data = merged_data
-                    symbol = parsed_data.get('symbol', 'UNKNOWN')
+                # Tick feed - use snapshot data which has merged values
+                self.symbol_state[symbol_key] = snapshot_data.copy()
+                parsed_data = snapshot_data  # Use the snapshot with retained values
+                # For tick feed, get symbol from our stored subscription info if not in message
+                if 'symbol' not in snapshot_data or snapshot_data.get('symbol') == 'UNKNOWN':
+                    # Look up symbol from subscription data
+                    if symbol_key in self.subscriptions:
+                        sub_data = self.subscriptions[symbol_key]
+                        symbol = sub_data.get('original_symbol', f"TOKEN_{token}")
+                        parsed_data['symbol'] = symbol
+                    else:
+                        symbol = f"TOKEN_{token}"
+                        parsed_data['symbol'] = symbol
                 else:
-                    # We don't have initial state, use token as symbol
-                    symbol = f"TOKEN_{token}"
-                    self.logger.warning(f"Received tick feed for unknown symbol: {symbol_key}")
+                    symbol = snapshot_data.get('symbol', 'UNKNOWN')
             elif msg_type == 'df':
-                # Depth feed - contains only changed fields, merge with stored state
-                if symbol_key in self.symbol_state:
-                    # Get symbol from stored state
-                    symbol = self.symbol_state[symbol_key].get('symbol', f"TOKEN_{token}")
-                    # Update parsed_data with symbol
-                    parsed_data['symbol'] = symbol
+                # Depth feed - use snapshot data which has merged values
+                self.symbol_state[symbol_key] = snapshot_data.copy()
+                parsed_data = snapshot_data  # Use the snapshot with retained values
+                # For depth feed, get symbol from our stored subscription info if not in message
+                if 'symbol' not in snapshot_data or snapshot_data.get('symbol') == 'UNKNOWN' or snapshot_data.get('symbol', '').startswith('TOKEN_'):
+                    # Look up symbol from subscription data
+                    if symbol_key in self.subscriptions:
+                        sub_data = self.subscriptions[symbol_key]
+                        symbol = sub_data.get('original_symbol', sub_data.get('symbol', f"TOKEN_{token}"))
+                        parsed_data['symbol'] = symbol
+                    else:
+                        symbol = f"TOKEN_{token}"
+                        parsed_data['symbol'] = symbol
                 else:
-                    # We don't have initial state, use token as symbol
-                    symbol = f"TOKEN_{token}"
-                    parsed_data['symbol'] = symbol
-                    self.logger.warning(f"Received depth feed for unknown symbol: {symbol_key}")
+                    symbol = snapshot_data.get('symbol', f"TOKEN_{token}")
             else:
-                # Other message types
-                symbol = parsed_data.get('symbol', 'UNKNOWN')
+                # Other message types - use snapshot data
+                parsed_data = snapshot_data
+                symbol = snapshot_data.get('symbol', 'UNKNOWN')
             
             # Find the original subscription to get the correct exchange and symbol
             # This is important because the client subscribes with NSE_INDEX for NIFTY
             # but the data comes with NSE exchange
             # Also, for NFO/BFO symbols, AliceBlue returns broker symbols but we need OpenAlgo symbols
             sub_key = symbol_key  # Use the same key as created above
-            self.logger.info(f"Looking for subscription with key: {sub_key}")
+            self.logger.debug(f"Looking for subscription with key: {sub_key}")
             original_exchange = exchange  # Default to mapped exchange
             original_symbol = symbol  # Default to parsed symbol
             
             with self.lock:
-                self.logger.info(f"Subscription lookup - checking if '{sub_key}' in subscriptions")
-                self.logger.info(f"Available keys: {list(self.subscriptions.keys())}")
+                self.logger.debug(f"Subscription lookup - checking if '{sub_key}' in subscriptions")
                 if sub_key in self.subscriptions:
                     # Use the exchange and symbol from the original subscription
-                    original_exchange = self.subscriptions[sub_key]['exchange']
-                    original_symbol = self.subscriptions[sub_key]['symbol']
-                    self.logger.info(f"FOUND subscription: exchange={original_exchange}, symbol={original_symbol}")
-                    self.logger.info(f"Parsed data had: exchange={broker_exchange}, symbol={symbol}")
+                    original_exchange = self.subscriptions[sub_key].get('original_exchange', self.subscriptions[sub_key].get('exchange', exchange))
+                    original_symbol = self.subscriptions[sub_key].get('original_symbol', self.subscriptions[sub_key].get('symbol', symbol))
+                    self.logger.debug(f"FOUND subscription: exchange={original_exchange}, symbol={original_symbol}")
                 else:
-                    self.logger.warning(f"NO subscription found for key: {sub_key}")
-                    self.logger.warning(f"Available subscription keys: {list(self.subscriptions.keys())}")
+                    self.logger.debug(f"Subscription not found for key: {sub_key}, using parsed values")
             
             # Special handling for NIFTY index based on token (26000 is NIFTY token)
             if token == '26000' and broker_exchange == 'NSE':
@@ -649,87 +804,114 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Use the original subscription exchange and symbol for topic generation
             exchange = original_exchange
             symbol = original_symbol
-            self.logger.info(f"Final values for topic: exchange={exchange}, symbol={symbol}")
+            self.logger.debug(f"Final values for topic: exchange={exchange}, symbol={symbol}")
             
-            # Get the actual subscription mode from our stored subscriptions
-            sub_mode = 1  # Default to LTP
+            # Get all subscribed modes for this symbol
+            all_modes = set()
             with self.lock:
                 if sub_key in self.subscriptions:
-                    sub_mode = self.subscriptions[sub_key].get('mode', 1)
-                    self.logger.info(f"Using subscription mode: {sub_mode} for {symbol}")
+                    all_modes = self.subscriptions[sub_key].get('all_modes', {1})  # Default to LTP if not found
             
-            # Map numeric mode to string for topic
-            mode_map = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}
-            mode = mode_map.get(sub_mode, 'LTP')
+            # Determine what data we have
+            has_depth = 'bids' in parsed_data or 'asks' in parsed_data or 'depth' in parsed_data
+            has_quote = any(k in parsed_data for k in ['open', 'high', 'low', 'close', 'volume'])
+            has_ltp = 'ltp' in parsed_data
             
-            # Create topic for ZMQ publishing
-            topic = f"{exchange}_{symbol}_{mode}"
+            # Publish to appropriate topics based on subscribed modes and available data
+            topics_to_publish = []
+            
+            # For depth messages (df, dk), publish to DEPTH topic if subscribed
+            if msg_type in ['df', 'dk'] and 3 in all_modes:
+                topics_to_publish.append(('DEPTH', 3))
+            else:
+                # For other messages, publish to all applicable subscribed modes
+                if has_ltp and 1 in all_modes:
+                    topics_to_publish.append(('LTP', 1))
+                if has_quote and 2 in all_modes:
+                    topics_to_publish.append(('QUOTE', 2))
+                if has_depth and 3 in all_modes:
+                    topics_to_publish.append(('DEPTH', 3))
+            
+            # If no specific modes matched but we have data, publish to highest subscribed mode
+            if not topics_to_publish and all_modes:
+                max_mode = max(all_modes)
+                mode_map = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}
+                topics_to_publish.append((mode_map[max_mode], max_mode))
+            
+            # Publish to all applicable topics
+            for mode_name, mode_num in topics_to_publish:
+                topic = f"{exchange}_{symbol}_{mode_name}"
+                self.logger.debug(f"Publishing {msg_type} to {topic}")
             
             # Add timestamp if not present
             if 'timestamp' not in parsed_data:
                 parsed_data['timestamp'] = int(time.time() * 1000)
             
-            # Prepare data based on numeric mode (similar to Angel's approach)
-            if sub_mode == 1:  # LTP mode
-                # For LTP mode, only send minimal data
-                publish_data = {
-                    'ltp': parsed_data.get('ltp', 0.0),
-                    'ltt': parsed_data.get('timestamp', '')  # Last traded time
-                }
-            elif sub_mode == 2:  # QUOTE mode
-                # For QUOTE mode, send price and volume data
-                publish_data = {
-                    'ltp': parsed_data.get('ltp', 0.0),
-                    'ltt': parsed_data.get('timestamp', ''),
-                    'volume': parsed_data.get('volume', 0),
-                    'open': parsed_data.get('open', 0.0),
-                    'high': parsed_data.get('high', 0.0),
-                    'low': parsed_data.get('low', 0.0),
-                    'close': parsed_data.get('close', 0.0),
-                    'change_percent': parsed_data.get('change_percent', 0.0),
-                    'average_price': parsed_data.get('average_price', 0.0),
-                    'total_oi': parsed_data.get('total_oi', 0)
-                }
-            else:  # DEPTH mode
-                # For DEPTH mode, format data to match expected client format
-                if parsed_data.get('type') == 'market_depth':
-                    # Convert bids/asks arrays to buy/sell format expected by client
-                    depth_data = {
-                        'buy': [],
-                        'sell': []
-                    }
-                    
-                    # Convert bids to buy array
-                    for bid in parsed_data.get('bids', []):
-                        depth_data['buy'].append({
-                            'price': bid.get('price', 0),
-                            'quantity': bid.get('quantity', 0),
-                            'orders': 0  # AliceBlue doesn't provide order count
-                        })
-                    
-                    # Convert asks to sell array
-                    for ask in parsed_data.get('asks', []):
-                        depth_data['sell'].append({
-                            'price': ask.get('price', 0),
-                            'quantity': ask.get('quantity', 0),
-                            'orders': 0  # AliceBlue doesn't provide order count
-                        })
-                    
+            # Publish to all applicable topics
+            for mode_name, mode_num in topics_to_publish:
+                topic = f"{exchange}_{symbol}_{mode_name}"
+                
+                # Prepare data based on mode
+                if mode_num == 1:  # LTP mode
+                    # For LTP mode, only send minimal data
                     publish_data = {
-                        'ltp': parsed_data.get('ltp', 0),
-                        'timestamp': parsed_data.get('timestamp', ''),
-                        'depth': depth_data
+                        'ltp': parsed_data.get('ltp', 0.0),
+                        'ltt': parsed_data.get('timestamp', '')  # Last traded time
                     }
-                else:
-                    # Fallback for other data types
-                    publish_data = {k: v for k, v in parsed_data.items() 
-                                  if k not in ['message_type', 'type']}
-            
-            # Debug logging for data publishing
-            self.logger.info(f"Publishing data on topic '{topic}': {publish_data}")
-            
-            # Publish to ZMQ
-            self.publish_market_data(topic, publish_data)
+                elif mode_num == 2:  # QUOTE mode
+                    # For QUOTE mode, send price and volume data
+                    publish_data = {
+                        'ltp': parsed_data.get('ltp', 0.0),
+                        'ltt': parsed_data.get('timestamp', ''),
+                        'volume': parsed_data.get('volume', 0),
+                        'open': parsed_data.get('open', 0.0),
+                        'high': parsed_data.get('high', 0.0),
+                        'low': parsed_data.get('low', 0.0),
+                        'close': parsed_data.get('close', 0.0),
+                        'change_percent': parsed_data.get('change_percent', 0.0),
+                        'average_price': parsed_data.get('average_price', 0.0),
+                        'total_oi': parsed_data.get('total_oi', 0)
+                    }
+                else:  # DEPTH mode
+                    # For DEPTH mode, format data to match expected client format
+                    if parsed_data.get('type') == 'market_depth' or 'bids' in parsed_data or 'asks' in parsed_data:
+                        # Convert bids/asks arrays to buy/sell format expected by client
+                        depth_data = {
+                            'buy': [],
+                            'sell': []
+                        }
+                        
+                        # Convert bids to buy array
+                        for bid in parsed_data.get('bids', []):
+                            depth_data['buy'].append({
+                                'price': bid.get('price', 0),
+                                'quantity': bid.get('quantity', 0),
+                                'orders': 0  # AliceBlue doesn't provide order count
+                            })
+                        
+                        # Convert asks to sell array
+                        for ask in parsed_data.get('asks', []):
+                            depth_data['sell'].append({
+                                'price': ask.get('price', 0),
+                                'quantity': ask.get('quantity', 0),
+                                'orders': 0  # AliceBlue doesn't provide order count
+                            })
+                        
+                        publish_data = {
+                            'ltp': parsed_data.get('ltp', 0),
+                            'timestamp': parsed_data.get('timestamp', ''),
+                            'depth': depth_data
+                        }
+                    else:
+                        # Fallback for other data types
+                        publish_data = {k: v for k, v in parsed_data.items() 
+                                      if k not in ['message_type', 'type']}
+                
+                # Debug logging for data publishing
+                self.logger.debug(f"Publishing {msg_type} to topic {topic}")
+                
+                # Publish to ZMQ - this sends data to frontend
+                self.publish_market_data(topic, publish_data)
             
         except Exception as e:
             self.logger.error(f"Error processing received data: {e}")
