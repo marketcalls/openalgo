@@ -83,6 +83,7 @@ def get_order_status_with_auth(
         logger.info(f"[OrderStatus] Returning hardcoded response for order ID {orderid} in analyzer mode")
         
         response_data = {
+            'mode': 'analyze',
             'status': 'success',
             'data': {
                 'action': 'BUY',
