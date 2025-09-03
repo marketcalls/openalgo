@@ -83,6 +83,7 @@ def get_order_status_with_auth(
         logger.info(f"[OrderStatus] Returning hardcoded response for order ID {orderid} in analyzer mode")
         
         response_data = {
+            'mode': 'analyze',
             'status': 'success',
             'data': {
                 'action': 'BUY',
@@ -314,8 +315,7 @@ def get_order_status(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return get_order_status_with_auth(status_data, AUTH_TOKEN, broker_name, original_data)

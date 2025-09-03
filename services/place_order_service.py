@@ -1,7 +1,7 @@
 import importlib
 import traceback
 import copy
-from typing import Tuple, Dict, Any, Optional, List, Union
+from typing import Tuple, Dict, Any, Optional
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
@@ -250,7 +250,7 @@ def place_order(
         order_data['apikey'] = api_key
     
     # Validate the order data
-    is_valid, validated_data, error_message = validate_order_data(order_data)
+    is_valid, _, error_message = validate_order_data(order_data)
     if not is_valid:
         if get_analyze_mode():
             return False, emit_analyzer_error(original_data, error_message), 400
@@ -266,8 +266,7 @@ def place_order(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'placeorder', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return place_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data)

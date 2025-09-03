@@ -90,7 +90,7 @@
                         <td>
                             <div class="symbol-cell">
                                 {{ row.symbol }}
-                                <button class="copy-btn tooltip" data-tip="Copy symbol" onclick="copyToClipboard('{{ row.symbol }}', event)">
+                                <button class="copy-btn tooltip {% if loop.index <= 3 %}tooltip-bottom{% else %}tooltip-top{% endif %}" data-tip="Copy symbol" onclick="copyToClipboard('{{ row.symbol }}', event)">
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                                     </svg>
@@ -171,7 +171,15 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Clear and repopulate tbody
             tbody.innerHTML = '';
-            rows.forEach(row => tbody.appendChild(row));
+            rows.forEach((row, index) => {
+                // Update tooltip position based on row index
+                const copyBtn = row.querySelector('.copy-btn');
+                if (copyBtn) {
+                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
+                    copyBtn.classList.add(index < 3 ? 'tooltip-bottom' : 'tooltip-top');
+                }
+                tbody.appendChild(row);
+            });
         });
     });
 
@@ -182,10 +190,20 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentPage = 1;
 
     function showPage(pageNumber) {
+        let visibleIndex = 0;
         rows.forEach((row, index) => {
-            row.style.display = (index >= (pageNumber - 1) * rowsPerPage && index < pageNumber * rowsPerPage) 
-                ? '' 
-                : 'none';
+            const isVisible = (index >= (pageNumber - 1) * rowsPerPage && index < pageNumber * rowsPerPage);
+            row.style.display = isVisible ? '' : 'none';
+            
+            // Update tooltip position for visible rows
+            if (isVisible) {
+                const copyBtn = row.querySelector('.copy-btn');
+                if (copyBtn) {
+                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
+                    copyBtn.classList.add(visibleIndex < 3 ? 'tooltip-bottom' : 'tooltip-top');
+                }
+                visibleIndex++;
+            }
         });
     }
 
