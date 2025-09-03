@@ -315,8 +315,8 @@ if __name__ == "__main__":
     
     # You can fetch exchange_token from instruments.csv file
     instruments_list = [
-        {"exchange": "MCX", "symbol": "GOLDPETAL30MAY25FUT"},
-        {"exchange": "MCX", "symbol": "SILVER04JUL25FUT"}
+        {"exchange": "NSE", "symbol": "TCS"},
+        {"exchange": "NSE", "symbol": "SBIN"}
     ]
     
     print("\n===== TESTING QUOTE SUBSCRIPTION =====")
@@ -331,7 +331,7 @@ if __name__ == "__main__":
             for symbol, quote in quotes.items():
                 print(f"{symbol}: Open: {quote.get('open')} | High: {quote.get('high')} | "
                       f"Low: {quote.get('low')} | Close: {quote.get('close')} | "
-                      f"LTP: {quote.get('ltp')}")
+                      f"LTP: {quote.get('ltp')} | Volume: {quote.get('volume')} ")
         time.sleep(1)
     
     print("Unsubscribing...")
