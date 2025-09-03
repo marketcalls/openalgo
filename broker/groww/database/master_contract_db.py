@@ -409,8 +409,8 @@ def download_groww_instrument_data(output_path):
     file_path = os.path.join(output_path, "master.csv")
     csv_url = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 
-    # Expected headers
-    headers_csv = "exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,expiry_date,lot_size,strike_price,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,feed_key"
+    # Expected headers - Updated to match actual CSV structure
+    headers_csv = "exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,expiry_date,strike_price,lot_size,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,internal_trading_symbol,is_intraday"
     expected_headers = headers_csv.split(",")
 
     try:
@@ -423,13 +423,14 @@ def download_groww_instrument_data(output_path):
 
         content = response.text
         if ',' in content and len(content.splitlines()) > 1:
-            # Read CSV without headers and assign our expected headers
-            # This is more robust to changes in the source CSV
-            df = pd.read_csv(StringIO(content), header=None, names=expected_headers, low_memory=False)
+            # Read CSV using pandas
+            df = pd.read_csv(StringIO(content))
 
-            # The first row might be the actual header from the file, so skip it
-            if df.iloc[0, 0] == 'exchange': # Use iloc with tuple notation to avoid deprecation warning
-                df = df.iloc[1:].reset_index(drop=True)
+            # Replace headers if column count matches
+            if len(df.columns) == len(expected_headers):
+                df.columns = expected_headers
+            else:
+                raise ValueError("Downloaded CSV column count does not match expected headers.")
 
             # Save with new headers
             df.to_csv(file_path, index=False)
@@ -514,17 +515,28 @@ def process_groww_data(path):
         # Load the CSV file - from the documentation, we know the CSV format
         # CSV columns: exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,lot_size,expiry_date,strike_price,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,feed_key
         logger.info(f"Loading CSV file from {file_path}")
-        # Read CSV first without specifying dtypes to handle potential header issues
-        df = pd.read_csv(file_path, low_memory=False)
-        
-        # Convert numeric columns safely after reading
-        numeric_columns = ['lot_size', 'strike_price', 'tick_size']
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Specify dtypes for columns with known types to avoid mixed type warnings
+        dtype_dict = {
+            'exchange': str,
+            'exchange_token': str,  # Keep as string to preserve leading zeros
+            'trading_symbol': str,
+            'groww_symbol': str,
+            'name': str,
+            'instrument_type': str,
+            'segment': str,
+            'series': str,
+            'isin': str,
+            'underlying_symbol': str,
+            'underlying_exchange_token': str,
+            'lot_size': float,  # Convert to numeric later
+            'expiry_date': str,
+            'strike_price': float,  # Convert to numeric later
+            'tick_size': float,  # Convert to numeric later
+        }
+        df = pd.read_csv(file_path, low_memory=False, dtype=dtype_dict)
         
         logger.info(f"Loaded {len(df)} instruments from CSV file")
-        logger.info(f"CSV columns: {list(df.columns)}")
+        logger.info("CSV columns: {")
         
         # Create a mapping from Groww CSV columns to our database columns
         column_mapping = {
@@ -684,10 +696,7 @@ def process_groww_data(path):
         
     except Exception as e:
         logger.error(f"Error processing Groww instrument data: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Return empty dataframe with expected columns instead of completely empty
-        return pd.DataFrame(columns=['symbol', 'brsymbol', 'exchange', 'brexchange', 'token', 'name', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size'])
+        return pd.DataFrame()
     
     # Map instrument types to OpenAlgo standard types
     instrument_type_map = {
@@ -787,19 +796,23 @@ def process_groww_data(path):
     return token_df
 
 def delete_groww_temp_data(output_path):
-    """Delete temporary files created during instrument data download"""
+    """Delete only Groww-specific temporary files created during instrument data download"""
     try:
-        # Only delete Groww-specific files
-        groww_files = ['master.csv', 'instruments.csv']
+        # List of Groww-specific files to delete
+        groww_files = ['master.csv', 'groww_instruments.csv', 'groww_master.csv']
         
+        # Check each Groww-specific file
         for filename in groww_files:
             file_path = os.path.join(output_path, filename)
+            # Check if the file exists and delete it
             if os.path.isfile(file_path):
                 os.remove(file_path)
                 logger.info(f"Deleted Groww temporary file: {file_path}")
         
-        # Don't delete the directory or other files
-        # This preserves README.md and other non-Groww files
+        # Check if the directory is now empty
+        if not os.listdir(output_path):
+            os.rmdir(output_path)
+            logger.info(f"Deleted empty directory: {output_path}")
     except Exception as e:
         logger.error(f"Error deleting temporary files: {e}")
 
