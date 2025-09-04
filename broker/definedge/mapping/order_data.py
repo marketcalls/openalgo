@@ -160,7 +160,7 @@ def map_trade_data(trade_data):
     - trade_data: A dictionary containing trade data from DefinedGe API
     
     Returns:
-    - The modified trade_data with updated 'tradingsymbol' fields
+    - The modified trade_data with updated 'tradingsymbol' and 'product' fields
     """
     # Handle DefinedGe API response structure for trades
     if isinstance(trade_data, dict):
@@ -188,6 +188,18 @@ def map_trade_data(trade_data):
                     trade['tradingsymbol'] = oa_symbol
                 else:
                     logger.info(f"Symbol {symbol} on exchange {exchange} not found. Keeping original.")
+            
+            # Map product types to OpenAlgo constants (following OpenAlgo order constants)
+            product_type = trade.get('product_type', '')
+            if product_type == 'INTRADAY':
+                trade['product_type'] = 'MIS'
+            elif product_type == 'NORMAL':
+                if exchange in ['NSE', 'BSE']:
+                    trade['product_type'] = 'CNC'
+                elif exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+                    trade['product_type'] = 'NRML'
+            elif product_type == 'CNC':
+                trade['product_type'] = 'CNC'
                     
     return trades
 
@@ -200,7 +212,7 @@ def transform_tradebook_data(tradebook_data):
     - tradebook_data: List of trade dictionaries from DefinedGe API
     
     Returns:
-    - List of transformed trade dictionaries
+    - List of transformed trade dictionaries matching OpenAlgo format
     """
     transformed_data = []
     
@@ -208,23 +220,46 @@ def transform_tradebook_data(tradebook_data):
         if not isinstance(trade, dict):
             logger.warning(f"Expected a dict, but found a {type(trade)}. Skipping this item.")
             continue
-            
-        # Calculate trade value
-        quantity = float(trade.get('quantity', 0))
-        avg_price = float(trade.get('average_price', trade.get('price', 0)))
-        trade_value = quantity * avg_price
+        
+        # Extract quantity - ensure it's an integer
+        quantity = int(trade.get('filled_qty', trade.get('quantity', 0)))
+        
+        # Get fill price (executed trade price) - Definedge returns this as 'fill_price'
+        # If fill_price is 0 or not present, use average_traded_price or price as fallback
+        fill_price = float(trade.get('fill_price', 0))
+        if fill_price == 0:
+            fill_price = float(trade.get('average_traded_price', trade.get('price', 0)))
+        
+        # Calculate trade value = quantity * fill_price
+        trade_value = round(quantity * fill_price, 2)
+        
+        # Get timestamp - Definedge provides fill_time for executed trades
+        timestamp = trade.get('fill_time', trade.get('exchange_time', ''))
+        
+        # Map product type to OpenAlgo format
+        product_type = trade.get('product_type', '')
+        if product_type == 'INTRADAY':
+            product_type = 'MIS'
+        elif product_type == 'NORMAL':
+            # Check exchange to determine if it's CNC or NRML
+            exchange = trade.get('exchange', '')
+            if exchange in ['NSE', 'BSE']:
+                product_type = 'CNC'
+            else:
+                product_type = 'NRML'
         
         transformed_trade = {
             "symbol": trade.get('tradingsymbol', ''),
             "exchange": trade.get('exchange', ''),
-            "product": trade.get('product_type', ''),  # DefinedGe uses 'product_type'
-            "action": trade.get('order_type', ''),  # DefinedGe uses 'order_type' for BUY/SELL
+            "product": product_type,  # Mapped to OpenAlgo constants
+            "action": trade.get('order_type', '').upper(),  # BUY/SELL
             "quantity": quantity,
-            "average_price": avg_price,
-            "trade_value": trade_value,
+            "average_price": round(fill_price, 2),  # Using fill_price as average_price
+            "trade_value": trade_value,  # Calculated value
             "orderid": trade.get('order_id', ''),
-            "timestamp": trade.get('trade_timestamp', trade.get('timestamp', ''))
+            "timestamp": timestamp  # Using fill_time for executed trades
         }
+        
         transformed_data.append(transformed_trade)
         
     return transformed_data
@@ -238,7 +273,7 @@ def map_position_data(position_data):
     - position_data: A dictionary containing position data from DefinedGe API
     
     Returns:
-    - The modified position_data with updated 'tradingsymbol' fields
+    - The modified position_data with updated 'tradingsymbol' and 'product_type' fields
     """
     # Handle DefinedGe API response structure for positions
     if isinstance(position_data, dict):
@@ -266,6 +301,18 @@ def map_position_data(position_data):
                     position['tradingsymbol'] = oa_symbol
                 else:
                     logger.info(f"Symbol {symbol} on exchange {exchange} not found. Keeping original.")
+            
+            # Map product types to OpenAlgo constants
+            product_type = position.get('product_type', '')
+            if product_type == 'INTRADAY':
+                position['product_type'] = 'MIS'
+            elif product_type == 'NORMAL':
+                if exchange in ['NSE', 'BSE']:
+                    position['product_type'] = 'CNC'
+                elif exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+                    position['product_type'] = 'NRML'
+            elif product_type == 'CNC':
+                position['product_type'] = 'CNC'
                     
     return positions
 
@@ -273,58 +320,31 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     """
     Transform DefinedGe positions data to OpenAlgo format.
-    
-    Parameters:
-    - positions_data: List of position dictionaries from DefinedGe API
-    
-    Returns:
-    - List of transformed position dictionaries
+    Following Angel's pattern for consistency.
     """
     transformed_data = []
-
+    
     for position in positions_data:
-        if not isinstance(position, dict):
-            logger.warning(f"Expected a dict, but found a {type(position)}. Skipping this item.")
-            continue
-
-        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price = float(position.get('average_price', position.get('avg_price', 0.0)))
-        average_price_formatted = "{:.2f}".format(average_price)
-
-        # Calculate net quantity and other values
-        net_qty = int(position.get('net_quantity', position.get('netqty', 0)))
-        buy_qty = int(position.get('buy_quantity', position.get('buyqty', 0)))
-        sell_qty = int(position.get('sell_quantity', position.get('sellqty', 0)))
-        
-        # Calculate PnL values
-        realized_pnl = float(position.get('realized_pnl', position.get('rpnl', 0.0)))
-        unrealized_pnl = float(position.get('unrealized_pnl', position.get('pnl', 0.0)))
-        
-        # Get current market price (LTP)
-        ltp = float(position.get('ltp', position.get('lastPrice', 0.0)))
+        # Get net quantity to determine if position is closed
+        net_qty = int(position.get('net_quantity', 0))
         
         # For closed positions (net_qty = 0), show realized P&L, otherwise show unrealized P&L
-        display_pnl = realized_pnl if net_qty == 0 else unrealized_pnl
-
+        if net_qty == 0:
+            pnl = position.get('realized_pnl', 0.0)
+        else:
+            pnl = position.get('unrealized_pnl', 0.0)
+        
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),
             "exchange": position.get('exchange', ''),
-            "product": position.get('product_type', ''),  # DefinedGe uses 'product_type'
-            "quantity": str(net_qty),  # Template expects 'quantity' field
-            "netqty": str(net_qty),
-            "buyqty": str(buy_qty),
-            "sellqty": str(sell_qty),
-            "average_price": average_price_formatted,  # Template expects 'average_price' field
-            "avgprice": average_price_formatted,
-            "ltp": "{:.2f}".format(ltp),
-            "pnl": "{:.2f}".format(display_pnl),  # Show realized P&L for closed positions
-            "rpnl": "{:.2f}".format(realized_pnl),
-            "token": position.get('token', ''),
-            "lotsize": position.get('lotsize', position.get('lot_size', '1'))
+            "product": position.get('product_type', ''),  # Already mapped to MIS/CNC/NRML in map_position_data
+            "quantity": net_qty,
+            "average_price": position.get('net_averageprice', 0.0),
+            "ltp": position.get('lastPrice', 0.0),
+            "pnl": pnl,  # Shows realized P&L for closed, unrealized for open positions
         }
-        
         transformed_data.append(transformed_position)
-
+    
     return transformed_data
 
 
@@ -390,12 +410,7 @@ def map_portfolio_data(portfolio_data):
 def calculate_portfolio_statistics(holdings_data):
     """
     Calculates portfolio statistics from DefinedGe holdings data.
-    
-    Parameters:
-    - holdings_data: Dictionary containing holdings and total holding information
-    
-    Returns:
-    - Dictionary containing portfolio statistics
+    Following Angel's pattern for consistency.
     """
     # Initialize default values
     totalholdingvalue = 0
@@ -403,26 +418,34 @@ def calculate_portfolio_statistics(holdings_data):
     totalprofitandloss = 0
     totalpnlpercentage = 0
     
-    # Check if totalholding data exists
-    if holdings_data.get('totalholding'):
-        totalholding = holdings_data['totalholding']
-        totalholdingvalue = float(totalholding.get('totalholdingvalue', 0))
-        totalinvvalue = float(totalholding.get('totalinvvalue', 0))
-        totalprofitandloss = float(totalholding.get('totalprofitandloss', 0))
-        totalpnlpercentage = float(totalholding.get('totalpnlpercentage', 0))
-    elif holdings_data.get('holdings'):
-        # Calculate from individual holdings if total not provided
+    # Since Definedge doesn't provide totalholding summary, 
+    # we need to calculate from individual holdings
+    if holdings_data.get('holdings'):
         for holding in holdings_data['holdings']:
-            quantity = float(holding.get('quantity', 0))
-            avg_price = float(holding.get('average_price', holding.get('avg_price', 0)))
-            ltp = float(holding.get('ltp', holding.get('lastPrice', 0)))
+            # Get quantities
+            dp_qty = float(holding.get('dp_qty', 0))
+            t1_qty = float(holding.get('t1_qty', 0))
+            total_qty = dp_qty + t1_qty
             
-            investment_value = quantity * avg_price
-            current_value = quantity * ltp
-            pnl = current_value - investment_value
+            # Skip if no holdings
+            if total_qty == 0:
+                continue
             
+            # Get average buy price
+            avg_buy_price = float(holding.get('avg_buy_price', 0))
+            
+            # Calculate investment value
+            investment_value = total_qty * avg_buy_price
             totalinvvalue += investment_value
+            
+            # For current value, we need LTP which Definedge doesn't provide in holdings
+            # In production, this should be fetched from market data
+            # For now, use investment value as placeholder
+            current_value = investment_value  # Should be total_qty * ltp
             totalholdingvalue += current_value
+            
+            # Calculate P&L (will be 0 with placeholder values)
+            pnl = current_value - investment_value
             totalprofitandloss += pnl
         
         # Calculate percentage
@@ -430,22 +453,17 @@ def calculate_portfolio_statistics(holdings_data):
             totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100
 
     return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
+        'totalholdingvalue': round(totalholdingvalue, 2),
+        'totalinvvalue': round(totalinvvalue, 2),
+        'totalprofitandloss': round(totalprofitandloss, 2),
+        'totalpnlpercentage': round(totalpnlpercentage, 2)
     }
 
 
 def transform_holdings_data(holdings_data):
     """
     Transform DefinedGe holdings data to OpenAlgo format.
-    
-    Parameters:
-    - holdings_data: Dictionary containing holdings data from DefinedGe API
-    
-    Returns:
-    - List of transformed holding dictionaries
+    Following Angel's pattern for consistency.
     """
     transformed_data = []
     
@@ -456,39 +474,41 @@ def transform_holdings_data(holdings_data):
         if not isinstance(holding, dict):
             logger.warning(f"Expected a dict, but found a {type(holding)}. Skipping this item.")
             continue
-            
-        # Extract DefinedGe specific fields
+        
+        # Get quantity - use dp_qty + t1_qty for total holding quantity
         dp_qty = float(holding.get('dp_qty', 0))
+        t1_qty = float(holding.get('t1_qty', 0))
+        total_qty = dp_qty + t1_qty
+        
+        # Skip if no holdings
+        if total_qty == 0:
+            continue
+        
+        # Get average buy price
         avg_buy_price = float(holding.get('avg_buy_price', 0))
         
         # Get symbol and exchange (already processed by map_portfolio_data)
         symbol = holding.get('tradingsymbol', '')
         exchange = holding.get('exchange', '')
         
-        # For DefinedGe, we need to get current LTP from market data
-        # For now, use avg_buy_price as placeholder for LTP
-        ltp = avg_buy_price  # This should be updated with real-time price
+        # Calculate investment value
+        investment_value = total_qty * avg_buy_price
         
-        # Calculate PnL values
-        investment_value = dp_qty * avg_buy_price
-        current_value = dp_qty * ltp
-        pnl = current_value - investment_value
-        pnl_percent = (pnl / investment_value * 100) if investment_value > 0 else 0
+        # For current value, we need LTP - since Definedge doesn't provide it in holdings,
+        # we'll need to get it from market data or use a placeholder
+        # For now, calculate P&L as 0 since we don't have real-time price
+        # This should be updated with actual market prices in production
+        current_value = investment_value  # Placeholder - should be total_qty * ltp
+        pnl = 0.0  # Placeholder - should be current_value - investment_value
+        pnl_percent = 0.0  # Placeholder
         
         transformed_holding = {
             "symbol": symbol,
             "exchange": exchange,
-            "quantity": int(dp_qty),
-            "product": "CNC",  # DefinedGe holdings are typically delivery
+            "quantity": int(total_qty),
+            "product": "CNC",  # Holdings are always CNC (delivery)
             "pnl": round(pnl, 2),
-            "pnlpercent": round(pnl_percent, 2),
-            "average_price": round(avg_buy_price, 2),
-            "ltp": round(ltp, 2),
-            "investment_value": round(investment_value, 2),
-            "current_value": round(current_value, 2),
-            "collateral_qty": holding.get('collateral_qty', '0'),
-            "t1_qty": holding.get('t1_qty', '0'),
-            "haircut": holding.get('haircut', '0')
+            "pnlpercent": round(pnl_percent, 2)
         }
         
         transformed_data.append(transformed_holding)
