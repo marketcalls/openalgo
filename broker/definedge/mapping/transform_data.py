@@ -4,21 +4,30 @@ logger = get_logger(__name__)
 
 def transform_data(data, token_id):
     """Transform OpenAlgo order data to DefinedGe Securities format"""
+    from database.token_db import get_br_symbol
+    
     try:
-        # Map OpenAlgo fields to DefinedGe fields
+        # Get broker symbol format
+        symbol = get_br_symbol(data["symbol"], data["exchange"])
+        
+        # Map OpenAlgo fields to DefinedGe fields based on API docs
         transformed_data = {
-            "tradingsymbol": data['symbol'],
+            "tradingsymbol": symbol,
             "exchange": map_exchange(data['exchange']),
             "quantity": data['quantity'],
-            "price": data['price'],
+            "price": data.get('price', '0'),
             "price_type": map_price_type(data['pricetype']),
             "product_type": map_product_type(data['product']),
             "order_type": data['action'].upper()
         }
 
-        # Add token if available
-        if token_id:
-            transformed_data["token"] = token_id
+        # Add optional fields based on order type
+        if data.get('trigger_price') and data['pricetype'] in ['SL', 'SL-M']:
+            transformed_data["trigger_price"] = data['trigger_price']
+        
+        # Add disclosed quantity if provided
+        if data.get('disclosed_quantity'):
+            transformed_data["disclosed_quantity"] = data['disclosed_quantity']
 
         logger.info(f"Transformed order data: {transformed_data}")
         return transformed_data
@@ -27,19 +36,82 @@ def transform_data(data, token_id):
         logger.error(f"Error transforming data: {e}")
         return data
 
-def transform_modify_order_data(data):
+def transform_modify_order_data(data, token_id):
     """Transform modify order data to DefinedGe format"""
+    from database.token_db import get_br_symbol
+    
     try:
+        logger.info(f"Input modify order data: {data}")
+        
+        # Check if symbol already has broker format (-EQ suffix)
+        if '-' in data["symbol"]:
+            # Symbol is already in broker format, use it directly
+            symbol = data["symbol"]
+            logger.info(f"Symbol already in broker format: {symbol}")
+        else:
+            # Get broker symbol format
+            symbol = get_br_symbol(data["symbol"], data["exchange"])
+            logger.info(f"Broker symbol after conversion: {symbol}")
+        
+        # If symbol is None or empty, raise an error
+        if not symbol:
+            logger.error(f"Failed to get broker symbol for {data['symbol']} on {data['exchange']}")
+            symbol = data["symbol"]  # Use original as fallback
+        
+        # Map DefinedGe API fields according to documentation
         transformed_data = {
-            "order_id": data['orderid'],
-            "quantity": data.get('quantity'),
-            "price": data.get('price'),
-            "price_type": map_price_type(data.get('pricetype', 'LIMIT'))
+            "order_id": data['orderid'],  # API expects 'order_id', not 'norenordno'
+            "tradingsymbol": symbol,  # REQUIRED field
+            "exchange": map_exchange(data['exchange']),
+            "quantity": str(data.get('quantity')),  # Ensure it's a string
+            "price": str(data.get('price', '0')),  # Ensure it's a string
+            "price_type": map_definedge_price_type(data.get('pricetype', 'LIMIT')),
+            "product_type": map_product_type_for_modify(data.get('product', 'CNC')),
+            "order_type": data.get('action', 'BUY').upper()  # BUY/SELL required
         }
+        
+        # Only add trigger_price if it's actually provided AND the order type requires it
+        pricetype = data.get('pricetype', 'LIMIT')
+        trigger_price = data.get('trigger_price')
+        
+        # More robust filtering - only include trigger_price for stop loss orders with valid values
+        if (trigger_price and 
+            trigger_price != '0' and 
+            trigger_price != '' and
+            trigger_price != '0.0' and
+            str(trigger_price).replace('.', '').replace('0', '') and  # Not just zeros
+            pricetype in ['SL', 'SL-M']):
+            try:
+                # Validate it's actually a number
+                float(trigger_price)
+                transformed_data["trigger_price"] = trigger_price
+                logger.info(f"Added trigger_price: {trigger_price} for pricetype: {pricetype}")
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid trigger_price value: {trigger_price}, excluding from request")
+        else:
+            logger.info(f"Excluding trigger_price - pricetype: {pricetype}, trigger_price: {trigger_price}")
+        
+        # Add optional fields if provided
+        if data.get('disclosed_quantity'):
+            transformed_data["disclosed_quantity"] = data.get('disclosed_quantity')
+            
+        # Default values for required fields
+        transformed_data["validity"] = "DAY"  # Default validity
 
-        # Remove None values
-        transformed_data = {k: v for k, v in transformed_data.items() if v is not None}
+        # Remove None values and empty strings, but keep required fields
+        required_fields = ['order_id', 'tradingsymbol', 'exchange', 'quantity', 'price', 'price_type', 'product_type', 'order_type']
+        transformed_data = {
+            k: v for k, v in transformed_data.items() 
+            if (k in required_fields) or (v is not None and v != '')
+        }
+        
+        # Final safety check: Remove trigger_price if pricetype is not SL or SL-M
+        final_pricetype = data.get('pricetype', 'LIMIT')
+        if final_pricetype not in ['SL', 'SL-M'] and 'trigger_price' in transformed_data:
+            logger.warning(f"Removing trigger_price for non-SL order type: {final_pricetype}")
+            del transformed_data['trigger_price']
 
+        logger.info(f"Final transformed modify order data: {transformed_data}")
         return transformed_data
 
     except Exception as e:
@@ -85,10 +157,11 @@ def reverse_map_product_type(product):
     """Map DefinedGe product type to OpenAlgo product type"""
     reverse_mapping = {
         'INTRADAY': 'MIS',
-        'NORMAL': 'CNC',
+        'NORMAL': 'CNC',  # For NSE/BSE cash segment
         'COVER_ORDER': 'CO',
         'BRACKET_ORDER': 'BO'
     }
+    # Default based on exchange - NORMAL maps to CNC for cash, NRML for F&O
     return reverse_mapping.get(product, 'CNC')
 
 def map_price_type(pricetype):
@@ -100,6 +173,25 @@ def map_price_type(pricetype):
         'SL-M': 'STOP_LOSS_MARKET'
     }
     return price_mapping.get(pricetype, 'LIMIT')
+
+def map_definedge_price_type(pricetype):
+    """Map OpenAlgo price type to DefinedGe API price type (for modify order)"""
+    price_mapping = {
+        'MARKET': 'MARKET',
+        'LIMIT': 'LIMIT',
+        'SL': 'SL-LIMIT',
+        'SL-M': 'SL-MARKET'
+    }
+    return price_mapping.get(pricetype, 'LIMIT')
+
+def map_product_type_for_modify(product):
+    """Map OpenAlgo product type to DefinedGe product type for modify order"""
+    product_mapping = {
+        'MIS': 'INTRADAY',
+        'CNC': 'CNC',  # DefinedGe modify API expects CNC for equity
+        'NRML': 'NORMAL'
+    }
+    return product_mapping.get(product, 'CNC')
 
 def reverse_map_price_type(pricetype):
     """Map DefinedGe price type to OpenAlgo price type"""

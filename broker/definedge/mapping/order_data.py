@@ -39,6 +39,16 @@ def map_order_data(order_data):
                 oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
                 if oa_symbol:
                     order['tradingsymbol'] = oa_symbol
+                    
+                    # Map product types to OpenAlgo constants following Angel pattern
+                    if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order.get('product_type') == 'NORMAL':
+                        order['product_type'] = 'CNC'
+                        
+                    elif order.get('product_type') == 'INTRADAY':
+                        order['product_type'] = 'MIS'
+                    
+                    elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order.get('product_type') == 'NORMAL':
+                        order['product_type'] = 'NRML'
                 else:
                     logger.info(f"Symbol {symbol} on exchange {exchange} not found. Keeping original.")
                     
