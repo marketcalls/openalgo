@@ -1,90 +1,75 @@
-import http.client
+# api/funds.py
+
 import json
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
-    """Get margin data from DefinedGe Securities"""
+    """Fetch margin data from DefinedGe Securities API using the provided auth token."""
+    # Initialize with default values following OpenAlgo format (like AliceBlue)
+    processed_margin_data = {
+        "availablecash": "0.00",
+        "collateral": "0.00",
+        "m2munrealized": "0.00",
+        "m2mrealized": "0.00",
+        "utiliseddebits": "0.00",
+    }
+    
     try:
+        # Parse the auth token
         api_session_key, susertoken, api_token = auth_token.split(":::")
-
-        conn = http.client.HTTPSConnection("integrate.definedgesecurities.com")
+        
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
 
         headers = {
             'Authorization': api_session_key,
             'Content-Type': 'application/json'
         }
 
-        conn.request("GET", "/dart/v1/limits", '', headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
+        url = "https://integrate.definedgesecurities.com/dart/v1/limits"
+        
+        logger.debug(f"Making limits request to DefinedGe API")
+        response = client.get(url, headers=headers)
+        response.raise_for_status()  # Raise exception for error status codes
+        
+        response_data = response.json()
+        logger.debug(f"Funds Details: {json.dumps(response_data, indent=2)}")
 
-        response_data = json.loads(data)
-
-        # Transform to OpenAlgo format
-        # DefinedGe returns data directly in the response, not nested under 'data'
-        if response_data.get('status') == '200' or 'cash' in response_data:
+        # Check if the response is successful
+        if response_data.get('stat') == 'Ok' or response_data.get('status') == '200' or 'cash' in response_data:
+            # Format values to 2 decimal places like Angel and AliceBlue
+            def format_value(value):
+                try:
+                    return "{:.2f}".format(float(value))
+                except (ValueError, TypeError):
+                    return "0.00"
+            
             # Map DefinedGe margin fields to OpenAlgo format
-            formatted_data = {
-                'availablecash': response_data.get('cash', '0'),
-                'collateral': response_data.get('collateral', '0'),
-                'm2munrealized': response_data.get('m2munrealized', '0'),
-                'm2mrealized': response_data.get('m2mrealized', '0'),
-                'openingbalance': response_data.get('cash', '0'),
-                'payin': response_data.get('payin', '0'),
-                'payout': response_data.get('payout', '0'),
-                'utiliseddebits': response_data.get('marginUsed', '0'),
-                'utilisedpayout': response_data.get('payout', '0')
-            }
-
-            return formatted_data
+            # Using same field names as Angel/AliceBlue
+            processed_margin_data["availablecash"] = format_value(response_data.get('cash', response_data.get('net', 0)))
+            processed_margin_data["collateral"] = format_value(response_data.get('collateralvalue', response_data.get('collateral', 0)))
+            processed_margin_data["m2munrealized"] = format_value(response_data.get('unrealizedMtomPrsnt', response_data.get('m2munrealized', 0)))
+            processed_margin_data["m2mrealized"] = format_value(response_data.get('realizedMtomPrsnt', response_data.get('m2mrealized', 0)))
+            processed_margin_data["utiliseddebits"] = format_value(response_data.get('marginUsed', response_data.get('utiliseddebits', response_data.get('cncMarginUsed', 0))))
+            
+            return processed_margin_data
         else:
-            logger.error(f"Failed to get margin data: {response_data}")
+            # Log error if status is not OK
+            error_msg = response_data.get('emsg', response_data.get('message', 'Unknown error'))
+            logger.error(f"Error fetching margin data: {error_msg}")
             return {}
 
-    except Exception as e:
-        logger.error(f"Error getting margin data: {e}")
+    except KeyError as e:
+        # Return an empty dictionary in case of unexpected data structure
+        logger.error(f"KeyError while processing margin data: {str(e)}")
         return {}
-
-def get_limits_data(auth_token):
-    """Get limits data from DefinedGe Securities"""
-    try:
-        api_session_key, susertoken, api_token = auth_token.split(":::")
-
-        conn = http.client.HTTPSConnection("integrate.definedgesecurities.com")
-
-        headers = {
-            'Authorization': api_session_key,
-            'Content-Type': 'application/json'
-        }
-
-        conn.request("GET", "/dart/v1/limits", '', headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-
-        response_data = json.loads(data)
-
-        # Transform to OpenAlgo format
-        if response_data.get('status') == 'SUCCESS':
-            limits_data = response_data.get('data', {})
-
-            formatted_data = {
-                'equity': {
-                    'available': limits_data.get('equity_available', '0'),
-                    'used': limits_data.get('equity_used', '0')
-                },
-                'commodity': {
-                    'available': limits_data.get('commodity_available', '0'),
-                    'used': limits_data.get('commodity_used', '0')
-                }
-            }
-
-            return formatted_data
-        else:
-            logger.error(f"Failed to get limits data: {response_data}")
-            return {}
-
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return {}
     except Exception as e:
-        logger.error(f"Error getting limits data: {e}")
+        # General exception handling
+        logger.error(f"An exception occurred while fetching margin data: {str(e)}")
         return {}

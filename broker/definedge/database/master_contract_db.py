@@ -3,14 +3,12 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
-import gzip
 import io
 from datetime import datetime
+from utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -66,38 +64,39 @@ def copy_from_dataframe(df):
         logger.error(f"Error copying dataframe to database: {e}")
 
 def download_definedge_master_files(auth_token, output_path):
-    """Download master contract files from DefinedGe Securities"""
+    """Download master contract files from DefinedGe Securities using shared connection pooling"""
     try:
         # DefinedGe provides all master contracts in a single ZIP file
         # No authentication required for public master file
         master_url = "https://app.definedgesecurities.com/public/allmaster.zip"
         
-        # Download the ZIP file
-        response = requests.get(master_url, timeout=30)
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
         
-        if response.status_code == 200:
-            zip_filepath = os.path.join(output_path, "allmaster.zip")
-            
-            # Save the ZIP file
-            with open(zip_filepath, 'wb') as f:
-                f.write(response.content)
-            
-            logger.info("Downloaded DefinedGe master contract ZIP file")
-            
-            # Extract the ZIP file
-            import zipfile
-            with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
-                zip_ref.extractall(output_path)
-            
-            logger.info("Extracted DefinedGe master contract files")
-            
-            # Remove the ZIP file
-            os.remove(zip_filepath)
-            
-            return True
-        else:
-            logger.error(f"Failed to download master file: HTTP {response.status_code}")
-            return False
+        # Download the ZIP file
+        logger.info("Downloading DefinedGe master contract ZIP file")
+        response = client.get(master_url, timeout=30)
+        response.raise_for_status()  # Raise exception for error status codes
+        
+        zip_filepath = os.path.join(output_path, "allmaster.zip")
+        
+        # Save the ZIP file
+        with open(zip_filepath, 'wb') as f:
+            f.write(response.content)
+        
+        logger.info("Downloaded DefinedGe master contract ZIP file")
+        
+        # Extract the ZIP file
+        import zipfile
+        with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+            zip_ref.extractall(output_path)
+        
+        logger.info("Extracted DefinedGe master contract files")
+        
+        # Remove the ZIP file
+        os.remove(zip_filepath)
+        
+        return True
 
     except Exception as e:
         logger.error(f"Error downloading DefinedGe master files: {e}")

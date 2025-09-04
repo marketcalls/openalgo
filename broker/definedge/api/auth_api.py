@@ -1,6 +1,5 @@
-import http.client
-import json
 import os
+import json
 import urllib.parse
 from hashlib import sha256
 from utils.logging import get_logger
@@ -62,27 +61,26 @@ def login_step1(api_token=None, api_secret=None):
             api_token = os.getenv('BROKER_API_KEY')
         if not api_secret:
             api_secret = os.getenv('BROKER_API_SECRET')
-            
-        conn = http.client.HTTPSConnection("signin.definedgesecurities.com")
+        
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
+        
         headers = {
             'api_secret': api_secret
         }
 
-        url = f"/auth/realms/debroking/dsbpkc/login/{api_token}"
-        conn.request("GET", url, headers=headers)
-
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-
-        if res.status == 200:
-            response_data = json.loads(data)
-            # Add a message field if not present
-            if 'message' not in response_data:
-                response_data['message'] = 'OTP has been sent successfully'
-            return response_data
-        else:
-            logger.error(f"Step 1 failed: {data}")
-            return None
+        url = f"https://signin.definedgesecurities.com/auth/realms/debroking/dsbpkc/login/{api_token}"
+        
+        response = client.get(url, headers=headers)
+        response.raise_for_status()  # Raise exception for 4XX/5XX responses
+        
+        response_data = response.json()
+        
+        # Add a message field if not present
+        if 'message' not in response_data:
+            response_data['message'] = 'OTP has been sent successfully'
+        
+        return response_data
 
     except Exception as e:
         logger.error(f"Step 1 error: {e}")
@@ -91,7 +89,8 @@ def login_step1(api_token=None, api_secret=None):
 def login_step2(otp_token, otp, api_secret):
     """Step 2: Verify OTP with auth code to get session keys"""
     try:
-        conn = http.client.HTTPSConnection("signin.definedgesecurities.com")
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
 
         # Calculate authentication code using SHA256
         auth_string = f"{otp_token}{otp}{api_secret}"
@@ -107,19 +106,13 @@ def login_step2(otp_token, otp, api_secret):
             'Content-Type': 'application/json'
         }
 
-        json_payload = json.dumps(payload)
-        conn.request("POST", "/auth/realms/debroking/dsbpkc/token", json_payload, headers)
-
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-
-        if res.status == 200:
-            return json.loads(data)
-        else:
-            logger.error(f"Step 2 failed: {data}")
-            return None
+        url = "https://signin.definedgesecurities.com/auth/realms/debroking/dsbpkc/token"
+        
+        response = client.post(url, json=payload, headers=headers)
+        response.raise_for_status()  # Raise exception for 4XX/5XX responses
+        
+        return response.json()
 
     except Exception as e:
         logger.error(f"Step 2 error: {e}")
         return None
-
