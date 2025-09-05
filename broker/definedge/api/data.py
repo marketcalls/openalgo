@@ -24,25 +24,29 @@ def get_quotes(symbol, exchange, auth_token):
     try:
         api_session_key, susertoken, api_token = auth_token.split(":::")
 
-        conn = http.client.HTTPSConnection("data.definedgesecurities.com")
+        # Use httpx client for consistency
+        from utils.httpx_client import get_httpx_client
+        client = get_httpx_client()
 
         # Get token for the symbol
         from database.token_db import get_token
         token_id = get_token(symbol, exchange)
+        
+        logger.info(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
 
         headers = {
-            'Authorization': api_session_key,
-            'Content-Type': 'application/json'
+            'Authorization': api_session_key
         }
 
         # Use the correct DefinedGe quotes endpoint: /quotes/{exchange}/{token}
-        endpoint = f"/quotes/{exchange}/{token_id}"
+        url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{exchange}/{token_id}"
         
-        conn.request("GET", endpoint, '', headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-
-        return json.loads(data)
+        response = client.get(url, headers=headers)
+        
+        logger.debug(f"Quotes API Response Status: {response.status_code}")
+        logger.debug(f"Quotes API Response: {response.text}")
+        
+        return response.json()
 
     except Exception as e:
         logger.error(f"Error getting quotes: {e}")
@@ -151,23 +155,41 @@ class BrokerData:
             # Use the updated get_quotes function with correct endpoint
             response = get_quotes(symbol, exchange, self.auth_token)
             
+            logger.info(f"Raw quotes response: {response}")
+            
             if response.get('status') == 'error':
                 raise Exception(response.get('message', 'Unknown error'))
             
-            # Return quote in common format
+            # Check if response has SUCCESS status
+            if response.get('status') != 'SUCCESS':
+                raise Exception(f"API returned status: {response.get('status', 'Unknown')}")
+            
+            # Map Definedge response fields to OpenAlgo format
+            # Definedge fields based on the documentation:
+            # - best_bid_price1 -> bid
+            # - best_ask_price1 -> ask  
+            # - day_open -> open
+            # - day_high -> high
+            # - day_low -> low
+            # - ltp -> ltp
+            # - Previous close might be calculated or use day_open
+            # - volume -> volume
+            # - OI is not in equity but might be in derivatives
+            
             return {
-                'bid': float(response.get('bid', 0)),
-                'ask': float(response.get('ask', 0)),
-                'open': float(response.get('open', 0)),
-                'high': float(response.get('high', 0)),
-                'low': float(response.get('low', 0)),
+                'bid': float(response.get('best_bid_price1', 0)),
+                'ask': float(response.get('best_ask_price1', 0)),
+                'open': float(response.get('day_open', 0)),
+                'high': float(response.get('day_high', 0)),
+                'low': float(response.get('day_low', 0)),
                 'ltp': float(response.get('ltp', 0)),
-                'prev_close': float(response.get('prev_close', 0)),
+                'prev_close': float(response.get('day_open', response.get('ltp', 0))),  # Use day_open as prev_close
                 'volume': int(response.get('volume', 0)),
-                'oi': int(response.get('oi', 0))
+                'oi': 0  # OI might not be available for equity, set to 0
             }
             
         except Exception as e:
+            logger.error(f"Error in get_quotes: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, 
@@ -300,76 +322,59 @@ class BrokerData:
             dict: Market depth data with bids, asks and other details
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
-            token = get_token(symbol, exchange)
+            # Get quotes data which includes depth information
+            response = get_quotes(symbol, exchange, self.auth_token)
             
-            api_session_key, susertoken, api_token = self.auth_token.split(":::")
+            logger.debug(f"Depth API response: {response}")
             
-            conn = http.client.HTTPSConnection("data.definedgesecurities.com")
+            if response.get('status') == 'error':
+                raise Exception(response.get('message', 'Unknown error'))
             
-            headers = {
-                'Authorization': api_session_key,
-                'Content-Type': 'application/json'
-            }
-            
-            # Use the correct DefinedGe quotes endpoint for depth data
-            endpoint = f"/quotes/{exchange}/{token}"
-            
-            conn.request("GET", endpoint, '', headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-            
-            response = json.loads(data)
-            
-            if res.status != 200:
-                raise Exception(f"Error from DefinedGe API: HTTP {res.status}")
-            
-            depth_data = response.get('data', response)
+            if response.get('status') != 'SUCCESS':
+                raise Exception(f"API returned status: {response.get('status', 'Unknown')}")
             
             # Format bids and asks with exactly 5 entries each
             bids = []
             asks = []
             
-            # Process buy orders (top 5)
-            buy_orders = depth_data.get('bids', [])
-            for i in range(5):
-                if i < len(buy_orders):
-                    bid = buy_orders[i]
-                    bids.append({
-                        'price': bid.get('price', 0),
-                        'quantity': bid.get('quantity', 0)
-                    })
-                else:
-                    bids.append({'price': 0, 'quantity': 0})
+            # Process buy orders (top 5) - Definedge format
+            for i in range(1, 6):
+                bid_price = response.get(f'best_bid_price{i}', 0)
+                bid_qty = response.get(f'best_bid_qty{i}', 0)
+                bids.append({
+                    'price': float(bid_price) if bid_price else 0,
+                    'quantity': int(bid_qty) if bid_qty else 0
+                })
             
-            # Process sell orders (top 5)
-            sell_orders = depth_data.get('asks', [])
-            for i in range(5):
-                if i < len(sell_orders):
-                    ask = sell_orders[i]
-                    asks.append({
-                        'price': ask.get('price', 0),
-                        'quantity': ask.get('quantity', 0)
-                    })
-                else:
-                    asks.append({'price': 0, 'quantity': 0})
+            # Process sell orders (top 5) - Definedge format
+            for i in range(1, 6):
+                ask_price = response.get(f'best_ask_price{i}', 0)
+                ask_qty = response.get(f'best_ask_qty{i}', 0)
+                asks.append({
+                    'price': float(ask_price) if ask_price else 0,
+                    'quantity': int(ask_qty) if ask_qty else 0
+                })
+            
+            # Calculate total buy/sell quantities
+            totalbuyqty = sum(bid['quantity'] for bid in bids)
+            totalsellqty = sum(ask['quantity'] for ask in asks)
             
             # Return depth data in common format
             return {
                 'bids': bids,
                 'asks': asks,
-                'high': depth_data.get('high', 0),
-                'low': depth_data.get('low', 0),
-                'ltp': depth_data.get('ltp', 0),
-                'ltq': depth_data.get('ltq', 0),
-                'open': depth_data.get('open', 0),
-                'prev_close': depth_data.get('prev_close', 0),
-                'volume': depth_data.get('volume', 0),
-                'oi': depth_data.get('oi', 0),
-                'totalbuyqty': depth_data.get('totalbuyqty', 0),
-                'totalsellqty': depth_data.get('totalsellqty', 0)
+                'high': float(response.get('day_high', 0)),
+                'low': float(response.get('day_low', 0)),
+                'ltp': float(response.get('ltp', 0)),
+                'ltq': int(response.get('last_traded_qty', 0)),
+                'open': float(response.get('day_open', 0)),
+                'prev_close': float(response.get('day_open', 0)),  # Use day_open as prev_close
+                'volume': int(response.get('volume', 0)),
+                'oi': 0,  # OI might not be available for equity
+                'totalbuyqty': totalbuyqty,
+                'totalsellqty': totalsellqty
             }
             
         except Exception as e:
+            logger.error(f"Error in get_depth: {str(e)}")
             raise Exception(f"Error fetching market depth: {str(e)}")
