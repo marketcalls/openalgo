@@ -72,18 +72,69 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     
+    logger.info(f"=== GET OPEN POSITION ===")
+    logger.info(f"Looking for: Symbol={tradingsymbol}, Exchange={exchange}, Product={product}")
+    
     positions_data = get_positions(auth)
+    logger.info(f"Raw positions response: {positions_data}")
     
     net_qty = '0'
     
-    if positions_data and positions_data.get('stat') == 'Ok' and positions_data.get('data'):
-        for position in positions_data['data']:
-            if (position.get('tradingsymbol') == tradingsymbol and 
-                position.get('exchange') == exchange and 
-                position.get('product') == product):
-                net_qty = position.get('netqty', '0')
-                logger.info(f"Net Quantity {net_qty}")
+    # Check different possible response formats from Definedge
+    # Definedge may return data directly as a list or under 'data' or 'positions' key
+    positions_list = None
+    
+    if isinstance(positions_data, list):
+        # Direct list response
+        positions_list = positions_data
+        logger.info(f"Positions data is a direct list with {len(positions_list)} positions")
+    elif positions_data and isinstance(positions_data, dict):
+        # Check for successful response - Definedge might use different status indicators
+        if positions_data.get('stat') == 'Ok' or positions_data.get('status') == 'SUCCESS':
+            # Definedge uses 'positions' key, not 'data'
+            positions_list = positions_data.get('positions', positions_data.get('data', []))
+            logger.info(f"Found {len(positions_list)} positions in response")
+        elif 'positions' in positions_data:
+            # Definedge specific: positions key
+            positions_list = positions_data['positions']
+            logger.info(f"Found {len(positions_list)} positions under 'positions' key")
+        elif 'data' in positions_data and positions_data['data']:
+            # Sometimes data is present without explicit success status
+            positions_list = positions_data['data']
+            logger.info(f"Found {len(positions_list)} positions under 'data' key")
+        elif not positions_data.get('stat') and not positions_data.get('status'):
+            # Try to use data or positions if present even without status
+            positions_list = positions_data.get('positions', positions_data.get('data', []))
+            if positions_list:
+                logger.info(f"Using {len(positions_list)} positions despite missing status")
+    
+    if positions_list:
+        for position in positions_list:
+            # Log each position for debugging
+            pos_symbol = position.get('tradingsymbol')
+            pos_exchange = position.get('exchange')
+            pos_product = position.get('product')
+            pos_product_type = position.get('product_type')
+            # Definedge uses 'net_quantity' instead of 'netqty'
+            pos_netqty = position.get('net_quantity', position.get('netqty', '0'))
+            
+            logger.info(f"Position: Symbol={pos_symbol}, Exchange={pos_exchange}, "
+                       f"Product={pos_product}, ProductType={pos_product_type}, NetQty={pos_netqty}")
+            
+            # Check both 'product' and 'product_type' fields as Definedge might use either
+            position_product = pos_product or pos_product_type
+            
+            if (pos_symbol == tradingsymbol and 
+                pos_exchange == exchange and 
+                position_product == product):
+                net_qty = pos_netqty
+                logger.info(f"✓ MATCH FOUND! Net Quantity: {net_qty}")
                 break
+        
+        if net_qty == '0':
+            logger.info(f"✗ No matching position found for {tradingsymbol} with product {product}")
+    else:
+        logger.warning("No positions list available to process")
     
     return net_qty
 
@@ -171,69 +222,95 @@ def place_order_api(data, auth):
 def place_smartorder_api(data, auth):
     """Place smart order based on position sizing logic."""
     
-    # If no API call is made in this function then res will return None
+    # Initialize default return values
     res = None
+    response_data = {"status": "error", "message": "No action required or invalid parameters"}
+    orderid = None
 
-    # Extract necessary info from data
-    symbol = data.get("symbol")
-    exchange = data.get("exchange")
-    product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
-
-    # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
-
-    logger.info(f"position_size : {position_size}") 
-    logger.info(f"Open Position : {current_position}") 
-    
-    # Determine action based on position_size and current_position
-    action = None
-    quantity = 0
-
-    # If both position_size and current_position are 0, do nothing
-    if position_size == 0 and current_position == 0 and int(data['quantity']) != 0:
-        action = data['action']
-        quantity = data['quantity']
-        res, response, orderid = place_order_api(data, auth)
-        return res, response, orderid
+    try:
+        # Extract necessary info from data
+        symbol = data.get("symbol")
+        exchange = data.get("exchange")
+        product = data.get("product")
         
-    elif position_size == current_position:
-        if int(data['quantity']) == 0:
-            response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
-        else:
-            response = {"status": "success", "message": "No action needed. Position size matches current position"}
-        orderid = None
-        return res, response, orderid  # res remains None as no API call was made
+        if not all([symbol, exchange, product]):
+            logger.info("Missing required parameters in place_smartorder_api")
+            return res, response_data, orderid
+            
+        position_size = int(data.get("position_size", "0"))
 
-    if position_size == 0 and current_position > 0:
-        action = "SELL"
-        quantity = abs(current_position)
-    elif position_size == 0 and current_position < 0:
-        action = "BUY"
-        quantity = abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    else:
-        if position_size > current_position:
-            action = "BUY"
-            quantity = position_size - current_position
-        elif position_size < current_position:
+        # Get current open position for the symbol
+        current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
+
+        logger.info(f"=== SMART ORDER EXECUTION ===")
+        logger.info(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
+        logger.info(f"Target position_size: {position_size}")
+        logger.info(f"Current Open Position: {current_position}")
+
+        # Determine action based on position_size and current_position
+        action = None
+        quantity = 0
+
+        if position_size == 0 and current_position > 0:
+            # Square off long position
             action = "SELL"
-            quantity = current_position - position_size
+            quantity = abs(current_position)
+            logger.info(f"Squaring off long position: SELL {quantity}")
+        elif position_size == 0 and current_position < 0:
+            # Square off short position
+            action = "BUY"
+            quantity = abs(current_position)
+            logger.info(f"Squaring off short position: BUY {quantity}")
+        elif position_size == 0 and current_position == 0:
+            # No position to square off
+            logger.info("No position to square off (position_size=0, current_position=0)")
+            response_data = {"status": "success", "message": "No position to square off"}
+            return res, response_data, orderid
+        elif position_size == current_position:
+            # Position already matches target
+            logger.info(f"Position already matches target (both are {position_size})")
+            response_data = {"status": "success", "message": "Position already at target size"}
+            return res, response_data, orderid
+        elif current_position == 0:
+            # Open new position
+            action = "BUY" if position_size > 0 else "SELL"
+            quantity = abs(position_size)
+            logger.info(f"Opening new position: {action} {quantity}")
+        else:
+            # Adjust existing position
+            if position_size > current_position:
+                action = "BUY"
+                quantity = position_size - current_position
+                logger.info(f"Increasing position: BUY {quantity} (from {current_position} to {position_size})")
+            elif position_size < current_position:
+                action = "SELL"
+                quantity = current_position - position_size
+                logger.info(f"Reducing position: SELL {quantity} (from {current_position} to {position_size})")
 
-    if action:
-        # Prepare data for placing the order
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
+        if action and quantity > 0:
+            # Prepare data for placing the order
+            order_data = data.copy()
+            order_data["action"] = action
+            order_data["quantity"] = str(quantity)
 
-        # Place the order
-        res, response, orderid = place_order_api(order_data, auth)
-        logger.info(f"{response}")
-        logger.info(f"{orderid}")
-        
-        return res, response, orderid
+            logger.info(f"Placing order: {action} {quantity} {symbol}")
+            
+            # Place the order
+            res, response, orderid = place_order_api(order_data, auth)
+            logger.info(f"Order response: {response}")
+            logger.info(f"Order ID: {orderid}")
+            
+            return res, response, orderid
+        else:
+            logger.info("No action required or invalid quantity")
+            response_data = {"status": "success", "message": "No action required"}
+            return res, response_data, orderid
+            
+    except Exception as e:
+        error_msg = f"Error in place_smartorder_api: {e}"
+        logger.error(error_msg)
+        response_data = {"status": "error", "message": error_msg}
+        return res, response_data, orderid
 
 def close_all_positions(current_api_key, auth):
     """Close all open positions."""
