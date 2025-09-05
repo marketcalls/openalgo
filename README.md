@@ -96,6 +96,7 @@ OpenAlgo provides a RESTful API with standardized endpoints across all supported
 - **`/api/v1/expiry`**: Get option expiry dates
 - **`/api/v1/intervals`**: Get supported time intervals for historical data
 - **`/api/v1/analyzer`**: Test and analyze API requests without execution
+- **`/api/v1/ping`**: Test API connectivity and authentication
 
 ### Common Broker Integration Pattern
 Each broker integration follows a standardized structure:
