@@ -22,7 +22,8 @@
       "WebFetch(domain:docs.openalgo.in)",
       "WebFetch(domain:tradingview.github.io)",
       "Bash(npm install)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(dir:*)"
     ],
     "deny": []
   }
