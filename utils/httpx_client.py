@@ -78,17 +78,33 @@ def _create_http_client() -> httpx.Client:
     Returns:
         httpx.Client: A configured HTTP client with protocol auto-negotiation
     """
+    import os
+    
     try:
+        # Detect if running in Docker by checking for .dockerenv file or Docker-specific env vars
+        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+        
+        # Disable HTTP/2 in Docker environments to avoid protocol negotiation issues
+        http2_enabled = not is_docker
+        
         client = httpx.Client(
-            http2=True,  # Enable HTTP/2 support
-            http1=True,  # Also enable HTTP/1.1 for compatibility
+            http2=http2_enabled,  # Disable HTTP/2 in Docker, enable otherwise
+            http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=30.0,
             limits=httpx.Limits(
                 max_keepalive_connections=20,  # Balanced for most broker APIs
                 max_connections=50,  # Reasonable max without overloading
                 keepalive_expiry=120.0  # 2 minutes - good balance
-            )
+            ),
+            # Add verify parameter to handle SSL/TLS issues in Docker
+            verify=True  # Can be set to False for debugging SSL issues (not recommended for production)
         )
+        
+        if is_docker:
+            logger.info("Running in Docker environment - HTTP/2 disabled for compatibility")
+        else:
+            logger.info("HTTP/2 enabled for optimal performance")
+            
         return client
         
     except Exception as e:
