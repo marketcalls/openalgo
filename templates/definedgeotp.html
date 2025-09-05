@@ -6,15 +6,84 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         // Auto-focus OTP input on page load
-        document.getElementById('otp').focus();
-
         const otpInput = document.getElementById('otp');
+        if (otpInput) {
+            otpInput.focus();
+        }
 
         // Format OTP input
-        otpInput.addEventListener('input', function(e) {
-            // Remove any non-numeric characters
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
+        if (otpInput) {
+            otpInput.addEventListener('input', function(e) {
+                // Remove any non-numeric characters
+                this.value = this.value.replace(/[^0-9]/g, '');
+            });
+        }
+
+        // Resend OTP functionality
+        const resendBtn = document.getElementById('resendOTP');
+        if (resendBtn) {
+            resendBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                // Disable button and show loading state
+                resendBtn.disabled = true;
+                const originalText = resendBtn.innerHTML;
+                resendBtn.innerHTML = '<span class="loading loading-spinner"></span> Resending...';
+                
+                // Send AJAX request to resend OTP
+                fetch('/definedge/callback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'action=resend'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Show success/error message
+                    const alertDiv = document.getElementById('alertMessage');
+                    if (data.status === 'success') {
+                        alertDiv.className = 'alert alert-success';
+                        alertDiv.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>${data.message}</span>
+                        `;
+                        alertDiv.style.display = 'flex';
+                        
+                        // Start 30-second cooldown
+                        let cooldown = 30;
+                        const interval = setInterval(() => {
+                            cooldown--;
+                            if (cooldown > 0) {
+                                resendBtn.innerHTML = `Resend OTP (${cooldown}s)`;
+                            } else {
+                                clearInterval(interval);
+                                resendBtn.disabled = false;
+                                resendBtn.innerHTML = originalText;
+                            }
+                        }, 1000);
+                    } else {
+                        alertDiv.className = 'alert alert-error';
+                        alertDiv.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>${data.message}</span>
+                        `;
+                        alertDiv.style.display = 'flex';
+                        resendBtn.disabled = false;
+                        resendBtn.innerHTML = originalText;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    resendBtn.disabled = false;
+                    resendBtn.innerHTML = originalText;
+                });
+            });
+        }
     });
 </script>
 {% endblock %}
@@ -30,15 +99,11 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
+                    {% if otp_sent %}
                     <form action="/definedge/callback" method="POST" class="space-y-4">
                         <div class="form-control">
                             <label class="label">
-                                <span class="label-text">OTP</span>
-                                <span class="label-text-alt">
-                                    <div class="tooltip" data-tip="Enter the OTP from your mobile / email / authenticator">
-                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
-                                    </div>
-                                </span>
+                                <span class="label-text">Enter OTP</span>
                             </label>
                             <input type="password" 
                                    id="otp" 
@@ -48,10 +113,19 @@
                                    placeholder="••••"
                                    inputmode="numeric"
                                    autocomplete="one-time-code" />
-                            <label class="label">
-                                <span class="label-text-alt text-info">Enter the OTP from your registered mobile number / email / authenticator</span>
-                            </label>
                         </div>
+
+                        <!-- Alert message area -->
+                        <div id="alertMessage" style="display: none;"></div>
+
+                        {% if otp_message %}
+                        <div class="alert alert-success">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ otp_message }}</span>
+                        </div>
+                        {% endif %}
 
                         {% if error_message %}
                         <div class="alert alert-error">
@@ -70,7 +144,34 @@
                                 Verify OTP
                             </button>
                         </div>
+
+                        <div class="form-control">
+                            <button type="button" id="resendOTP" class="btn btn-outline btn-sm w-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Resend OTP
+                            </button>
+                        </div>
                     </form>
+                    {% else %}
+                    <!-- Show error state when OTP is not sent -->
+                    <div class="alert alert-error">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{{ error_message or "Failed to send OTP. Please try again." }}</span>
+                    </div>
+                    
+                    <div class="form-control mt-6">
+                        <a href="{{ url_for('brlogin.broker_callback', broker='definedge') }}" class="btn btn-primary w-full">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Retry Sending OTP
+                        </a>
+                    </div>
+                    {% endif %}
 
                     <div class="divider">OR</div>
 
@@ -87,18 +188,9 @@
             <div class="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
                 <h1 class="text-4xl lg:text-5xl font-bold mb-6">OTP <span class="text-primary">Verification</span></h1>
                 <p class="text-lg lg:text-xl mb-8 opacity-80">
-                    Enter the OTP sent to your registered mobile number and email to complete the authentication process with Kotak Securities.
+                    Complete the authentication process with Definedge Securities.
                 </p>
                 <div class="flex flex-col gap-4">
-                    <div class="alert alert-info shadow-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        <div>
-                            <h3 class="font-bold">Check Your Messages</h3>
-                            <div class="text-sm">An OTP has been sent to your registered mobile number and email address.</div>
-                        </div>
-                    </div>
                     <div class="flex justify-center lg:justify-start gap-4">
                         <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" class="btn btn-outline gap-2">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

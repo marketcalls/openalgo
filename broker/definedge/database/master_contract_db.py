@@ -3,14 +3,12 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
 import gzip
 import shutil
-import http.client
 import json
-import pandas as pd
-import gzip
 import io
+from datetime import datetime
+from utils.httpx_client import get_httpx_client
 
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -66,38 +64,39 @@ def copy_from_dataframe(df):
         logger.error(f"Error copying dataframe to database: {e}")
 
 def download_definedge_master_files(auth_token, output_path):
-    """Download master contract files from DefinedGe Securities"""
+    """Download master contract files from DefinedGe Securities using shared connection pooling"""
     try:
         # DefinedGe provides all master contracts in a single ZIP file
         # No authentication required for public master file
         master_url = "https://app.definedgesecurities.com/public/allmaster.zip"
         
-        # Download the ZIP file
-        response = requests.get(master_url, timeout=30)
+        # Get the shared httpx client with connection pooling
+        client = get_httpx_client()
         
-        if response.status_code == 200:
-            zip_filepath = os.path.join(output_path, "allmaster.zip")
-            
-            # Save the ZIP file
-            with open(zip_filepath, 'wb') as f:
-                f.write(response.content)
-            
-            logger.info("Downloaded DefinedGe master contract ZIP file")
-            
-            # Extract the ZIP file
-            import zipfile
-            with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
-                zip_ref.extractall(output_path)
-            
-            logger.info("Extracted DefinedGe master contract files")
-            
-            # Remove the ZIP file
-            os.remove(zip_filepath)
-            
-            return True
-        else:
-            logger.error(f"Failed to download master file: HTTP {response.status_code}")
-            return False
+        # Download the ZIP file
+        logger.info("Downloading DefinedGe master contract ZIP file")
+        response = client.get(master_url, timeout=30)
+        response.raise_for_status()  # Raise exception for error status codes
+        
+        zip_filepath = os.path.join(output_path, "allmaster.zip")
+        
+        # Save the ZIP file
+        with open(zip_filepath, 'wb') as f:
+            f.write(response.content)
+        
+        logger.info("Downloaded DefinedGe master contract ZIP file")
+        
+        # Extract the ZIP file
+        import zipfile
+        with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+            zip_ref.extractall(output_path)
+        
+        logger.info("Extracted DefinedGe master contract files")
+        
+        # Remove the ZIP file
+        os.remove(zip_filepath)
+        
+        return True
 
     except Exception as e:
         logger.error(f"Error downloading DefinedGe master files: {e}")
@@ -309,20 +308,195 @@ def process_definedge_allmaster_csv(path):
         
         processed_df = pd.DataFrame()
         
-        # Map columns based on DefinedGe format
-        processed_df['symbol'] = df['TradingSymbol']
+        # Store broker symbol as is
         processed_df['brsymbol'] = df['TradingSymbol']
         processed_df['token'] = df['Token'].astype(str)
         processed_df['name'] = df['Name'].fillna('')
-        processed_df['exchange'] = df['Exchange']
         processed_df['brexchange'] = df['Exchange']
         
-        # Handle other fields
+        # Handle expiry formatting
         processed_df['expiry'] = df['Expiry'].fillna('')
         processed_df['strike'] = pd.to_numeric(df['StrikePrice'], errors='coerce').fillna(0.0) / 100  # Convert paise to rupees
         processed_df['lotsize'] = pd.to_numeric(df['LotSize'], errors='coerce').fillna(1)
-        processed_df['instrumenttype'] = df['InstrumentType'].fillna('EQ')
         processed_df['tick_size'] = pd.to_numeric(df['TickSize'], errors='coerce').fillna(0.05)
+        
+        # Map instrument types based on exchange and instrument type
+        processed_df['instrumenttype'] = df['InstrumentType'].fillna('EQ')
+        processed_df['option_type'] = df['OptionType'].fillna('')
+        
+        # Format symbols according to OpenAlgo standard
+        processed_df['symbol'] = processed_df['brsymbol'].copy()
+        processed_df['exchange'] = processed_df['brexchange'].copy()
+        
+        # Filter NSE to keep only EQ, BE, and IDX (INDEX) instrument types
+        # BSE is NOT filtered (following AliceBlue pattern)
+        nse_allowed_types = ['EQ', 'BE', 'INDEX', 'IDX']  # Include IDX as it might be used for indices
+        nse_filter_mask = (processed_df['brexchange'] == 'NSE') & (~processed_df['instrumenttype'].isin(nse_allowed_types))
+        
+        # Log the filtering statistics
+        filtered_count = nse_filter_mask.sum()
+        if filtered_count > 0:
+            logger.info(f"Filtering out {filtered_count} non-equity/index instruments from NSE (keeping only EQ, BE, IDX, and INDEX types)")
+        
+        # Log what types we're keeping
+        nse_types = processed_df[processed_df['brexchange'] == 'NSE']['instrumenttype'].value_counts().to_dict()
+        bse_types = processed_df[processed_df['brexchange'] == 'BSE']['instrumenttype'].value_counts().to_dict()
+        if nse_types:
+            logger.info(f"NSE instrument types before filtering: {nse_types}")
+        if bse_types:
+            logger.info(f"BSE instrument types (no filtering): {bse_types}")
+        
+        # Apply filtering only to NSE, not BSE
+        processed_df = processed_df[~nse_filter_mask]
+        
+        # Remove empty symbols from BSE (similar to AliceBlue)
+        bse_empty_mask = (processed_df['brexchange'] == 'BSE') & (processed_df['brsymbol'].isna() | (processed_df['brsymbol'] == ''))
+        processed_df = processed_df[~bse_empty_mask]
+        
+        # NSE Equity formatting - remove suffixes like -EQ, -BE, -MF, -SG
+        nse_eq_mask = (processed_df['brexchange'] == 'NSE') & (processed_df['instrumenttype'].isin(['EQ', 'BE']))
+        processed_df.loc[nse_eq_mask, 'symbol'] = processed_df.loc[nse_eq_mask, 'brsymbol'].str.replace(r'-(EQ|BE|MF|SG)$', '', regex=True)
+        processed_df.loc[nse_eq_mask, 'instrumenttype'] = 'EQ'
+        # Set expiry and strike for NSE equities (following AliceBlue pattern)
+        processed_df.loc[nse_eq_mask, 'expiry'] = ''
+        processed_df.loc[nse_eq_mask, 'strike'] = 1.0
+        
+        # BSE Equity formatting - keep as is for BSE
+        bse_eq_mask = (processed_df['brexchange'] == 'BSE') & (processed_df['instrumenttype'].isin(['EQ', 'BE']))
+        processed_df.loc[bse_eq_mask, 'instrumenttype'] = 'EQ'
+        # Set expiry and strike for BSE equities (following AliceBlue pattern)
+        processed_df.loc[bse_eq_mask, 'expiry'] = ''
+        processed_df.loc[bse_eq_mask, 'strike'] = 1.0
+        
+        # Index formatting - handle both INDEX and IDX instrument types
+        index_mask = processed_df['instrumenttype'].isin(['INDEX', 'IDX'])
+        
+        # Map NSE indices to NSE_INDEX
+        nse_index_mask = index_mask & (processed_df['brexchange'] == 'NSE')
+        processed_df.loc[nse_index_mask, 'exchange'] = 'NSE_INDEX'
+        processed_df.loc[nse_index_mask, 'instrumenttype'] = 'IDX'  # Keep as IDX for indices
+        processed_df.loc[nse_index_mask, 'expiry'] = ''
+        processed_df.loc[nse_index_mask, 'strike'] = 1.0
+        
+        # Map BSE indices to BSE_INDEX
+        bse_index_mask = index_mask & (processed_df['brexchange'] == 'BSE')
+        processed_df.loc[bse_index_mask, 'exchange'] = 'BSE_INDEX'
+        processed_df.loc[bse_index_mask, 'instrumenttype'] = 'IDX'  # Keep as IDX for indices
+        processed_df.loc[bse_index_mask, 'expiry'] = ''
+        processed_df.loc[bse_index_mask, 'strike'] = 1.0
+        
+        # Map MCX indices to MCX_INDEX
+        mcx_index_mask = index_mask & (processed_df['brexchange'] == 'MCX')
+        processed_df.loc[mcx_index_mask, 'exchange'] = 'MCX_INDEX'
+        processed_df.loc[mcx_index_mask, 'instrumenttype'] = 'IDX'  # Keep as IDX for indices
+        processed_df.loc[mcx_index_mask, 'expiry'] = ''
+        processed_df.loc[mcx_index_mask, 'strike'] = 1.0
+        
+        # Common index symbol mapping
+        index_mapping = {
+            'Nifty 50': 'NIFTY',
+            'NIFTY50': 'NIFTY',
+            'Nifty Next 50': 'NIFTYNXT50',
+            'Nifty Fin Service': 'FINNIFTY',
+            'FINNIFTY': 'FINNIFTY',
+            'Nifty Bank': 'BANKNIFTY',
+            'BANKNIFTY': 'BANKNIFTY',
+            'NIFTY MID SELECT': 'MIDCPNIFTY',
+            'MIDCPNIFTY': 'MIDCPNIFTY',
+            'India VIX': 'INDIAVIX',
+            'INDIAVIX': 'INDIAVIX',
+            'SENSEX': 'SENSEX',
+            'SENSEX50': 'SENSEX50',
+            'SNSX50': 'SENSEX50'  # BSE index mapping
+        }
+        
+        for old_name, new_name in index_mapping.items():
+            processed_df.loc[processed_df['symbol'] == old_name, 'symbol'] = new_name
+        
+        # NFO (Futures and Options) formatting
+        # Convert expiry date format from DDMMYYYY to DD-MMM-YY (AliceBlue format)
+        def format_expiry_date(expiry_str):
+            try:
+                if pd.isna(expiry_str) or expiry_str == '':
+                    return ''
+                # Convert from DDMMYYYY to DD-MMM-YY
+                from datetime import datetime
+                expiry_date = datetime.strptime(str(expiry_str), '%d%m%Y')
+                return expiry_date.strftime('%d-%b-%y').upper()
+            except:
+                return str(expiry_str)
+        
+        # Apply expiry formatting for derivatives
+        derivatives_mask = processed_df['brexchange'].isin(['NFO', 'BFO', 'CDS', 'MCX'])
+        processed_df.loc[derivatives_mask, 'expiry'] = processed_df.loc[derivatives_mask, 'expiry'].apply(format_expiry_date)
+        
+        # Format Futures symbols: [Base Symbol][Expiration Date]FUT
+        futures_mask = (processed_df['brexchange'] == 'NFO') & (processed_df['instrumenttype'].isin(['FUTIDX', 'FUTSTK']))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[futures_mask, 'symbol'] = processed_df.loc[futures_mask, 'name'] + processed_df.loc[futures_mask, 'expiry'].str.replace('-', '') + 'FUT'
+        processed_df.loc[futures_mask, 'instrumenttype'] = 'FUT'
+        
+        # Format Options symbols: [Base Symbol][Expiration Date][Strike Price][Option Type]
+        options_mask = (processed_df['brexchange'] == 'NFO') & (processed_df['instrumenttype'].isin(['OPTIDX', 'OPTSTK']))
+        # Remove decimal points from strike price for options
+        strike_str = processed_df.loc[options_mask, 'strike'].apply(lambda x: str(int(x)) if x == int(x) else str(x).replace('.', ''))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[options_mask, 'symbol'] = (processed_df.loc[options_mask, 'name'] + 
+                                                     processed_df.loc[options_mask, 'expiry'].str.replace('-', '') + 
+                                                     strike_str + 
+                                                     processed_df.loc[options_mask, 'option_type'])
+        processed_df.loc[options_mask, 'instrumenttype'] = processed_df.loc[options_mask, 'option_type']
+        
+        # CDS Futures formatting
+        cds_fut_mask = (processed_df['brexchange'] == 'CDS') & (processed_df['instrumenttype'].isin(['FUTCUR', 'FUTIRC']))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[cds_fut_mask, 'symbol'] = processed_df.loc[cds_fut_mask, 'name'] + processed_df.loc[cds_fut_mask, 'expiry'].str.replace('-', '') + 'FUT'
+        processed_df.loc[cds_fut_mask, 'instrumenttype'] = 'FUT'
+        
+        # CDS Options formatting
+        cds_opt_mask = (processed_df['brexchange'] == 'CDS') & (processed_df['instrumenttype'].isin(['OPTCUR', 'OPTIRC']))
+        strike_str = processed_df.loc[cds_opt_mask, 'strike'].apply(lambda x: str(int(x)) if x == int(x) else str(x).replace('.', ''))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[cds_opt_mask, 'symbol'] = (processed_df.loc[cds_opt_mask, 'name'] + 
+                                                    processed_df.loc[cds_opt_mask, 'expiry'].str.replace('-', '') + 
+                                                    strike_str + 
+                                                    processed_df.loc[cds_opt_mask, 'option_type'])
+        processed_df.loc[cds_opt_mask, 'instrumenttype'] = processed_df.loc[cds_opt_mask, 'option_type']
+        
+        # MCX Futures formatting
+        mcx_fut_mask = (processed_df['brexchange'] == 'MCX') & (processed_df['instrumenttype'] == 'FUTCOM')
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[mcx_fut_mask, 'symbol'] = processed_df.loc[mcx_fut_mask, 'name'] + processed_df.loc[mcx_fut_mask, 'expiry'].str.replace('-', '') + 'FUT'
+        processed_df.loc[mcx_fut_mask, 'instrumenttype'] = 'FUT'
+        
+        # MCX Options formatting
+        mcx_opt_mask = (processed_df['brexchange'] == 'MCX') & (processed_df['instrumenttype'] == 'OPTFUT')
+        strike_str = processed_df.loc[mcx_opt_mask, 'strike'].apply(lambda x: str(int(x)) if x == int(x) else str(x).replace('.', ''))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[mcx_opt_mask, 'symbol'] = (processed_df.loc[mcx_opt_mask, 'name'] + 
+                                                    processed_df.loc[mcx_opt_mask, 'expiry'].str.replace('-', '') + 
+                                                    strike_str + 
+                                                    processed_df.loc[mcx_opt_mask, 'option_type'])
+        processed_df.loc[mcx_opt_mask, 'instrumenttype'] = processed_df.loc[mcx_opt_mask, 'option_type']
+        
+        # BFO (BSE F&O) Futures formatting
+        bfo_fut_mask = (processed_df['brexchange'] == 'BFO') & (processed_df['instrumenttype'].isin(['FUTIDX', 'FUTSTK']))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[bfo_fut_mask, 'symbol'] = processed_df.loc[bfo_fut_mask, 'name'] + processed_df.loc[bfo_fut_mask, 'expiry'].str.replace('-', '') + 'FUT'
+        processed_df.loc[bfo_fut_mask, 'instrumenttype'] = 'FUT'
+        
+        # BFO Options formatting
+        bfo_opt_mask = (processed_df['brexchange'] == 'BFO') & (processed_df['instrumenttype'].isin(['OPTIDX', 'OPTSTK']))
+        strike_str = processed_df.loc[bfo_opt_mask, 'strike'].apply(lambda x: str(int(x)) if x == int(x) else str(x).replace('.', ''))
+        # For symbol, remove dashes from expiry date
+        processed_df.loc[bfo_opt_mask, 'symbol'] = (processed_df.loc[bfo_opt_mask, 'name'] + 
+                                                    processed_df.loc[bfo_opt_mask, 'expiry'].str.replace('-', '') + 
+                                                    strike_str + 
+                                                    processed_df.loc[bfo_opt_mask, 'option_type'])
+        processed_df.loc[bfo_opt_mask, 'instrumenttype'] = processed_df.loc[bfo_opt_mask, 'option_type']
+        
+        # Remove temporary option_type column
+        processed_df = processed_df.drop(columns=['option_type'], errors='ignore')
         
         # Clean up data
         processed_df = processed_df.dropna(subset=['symbol', 'token', 'exchange'])
@@ -330,16 +504,24 @@ def process_definedge_allmaster_csv(path):
         
         logger.info(f"Processed {len(processed_df)} valid symbols from allmaster.csv")
         
-        # Log sample of NFO symbols for verification
-        nfo_symbols = processed_df[processed_df['exchange'] == 'NFO']
-        if not nfo_symbols.empty:
-            logger.info(f"Found {len(nfo_symbols)} NFO symbols")
-            logger.info(f"Sample NFO symbols: {nfo_symbols['brsymbol'].head(3).tolist()}")
+        # Log sample of different exchanges for verification
+        for exc in ['NSE', 'BSE', 'NSE_INDEX', 'BSE_INDEX', 'NFO', 'BFO', 'CDS', 'MCX']:
+            exc_symbols = processed_df[processed_df['exchange'] == exc]
+            if not exc_symbols.empty:
+                logger.info(f"Found {len(exc_symbols)} {exc} symbols")
+                # Show different samples based on exchange type
+                if exc in ['NSE', 'BSE']:
+                    # For equities, show instrument types
+                    inst_types = exc_symbols['instrumenttype'].value_counts().to_dict()
+                    logger.info(f"{exc} instrument types: {inst_types}")
+                logger.info(f"Sample {exc} symbols: {exc_symbols['symbol'].head(3).tolist()}")
         
         return processed_df
         
     except Exception as e:
         logger.error(f"Error processing allmaster.csv: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return pd.DataFrame()
 
 def delete_temp_files(output_path):

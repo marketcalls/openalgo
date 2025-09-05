@@ -397,15 +397,86 @@ def broker_callback(broker,para=None):
         
     elif broker == 'definedge':
         if request.method == 'GET':
-            return render_template('definedgeotp.html')
-
-        elif request.method == 'POST':
+            # Trigger OTP generation on page load
             api_token = get_broker_api_key()
             api_secret = get_broker_api_secret()
-            otp_code = request.form.get('otp')
+            
+            # Import the step1 function to trigger OTP
+            from broker.definedge.api.auth_api import login_step1
+            
+            try:
+                step1_response = login_step1(api_token, api_secret)
+                if step1_response and 'otp_token' in step1_response:
+                    # Store OTP token in session for later use
+                    session['definedge_otp_token'] = step1_response['otp_token']
+                    otp_message = step1_response.get('message', 'OTP has been sent successfully')
+                    logger.info(f"Definedge OTP triggered: {otp_message}")
+                    return render_template('definedgeotp.html', otp_message=otp_message, otp_sent=True)
+                else:
+                    error_msg = "Failed to send OTP. Please check your API credentials."
+                    logger.error(f"Definedge OTP generation failed: {step1_response}")
+                    return render_template('definedgeotp.html', error_message=error_msg, otp_sent=False)
+            except Exception as e:
+                error_msg = f"Error sending OTP: {str(e)}"
+                logger.error(f"Definedge OTP generation error: {e}")
+                return render_template('definedgeotp.html', error_message=error_msg, otp_sent=False)
 
-            auth_token, error_message = auth_function(api_token, api_secret, otp_code)
-            forward_url = 'broker.html'
+        elif request.method == 'POST':
+            action = request.form.get('action')
+            
+            # Handle OTP resend request
+            if action == 'resend':
+                api_token = get_broker_api_key()
+                api_secret = get_broker_api_secret()
+                
+                from broker.definedge.api.auth_api import login_step1
+                
+                try:
+                    step1_response = login_step1(api_token, api_secret)
+                    if step1_response and 'otp_token' in step1_response:
+                        session['definedge_otp_token'] = step1_response['otp_token']
+                        otp_message = "OTP has been resent successfully"
+                        logger.info(f"Definedge OTP resent successfully")
+                        return jsonify({'status': 'success', 'message': otp_message})
+                    else:
+                        return jsonify({'status': 'error', 'message': 'Failed to resend OTP'})
+                except Exception as e:
+                    logger.error(f"Definedge OTP resend error: {e}")
+                    return jsonify({'status': 'error', 'message': str(e)})
+            
+            # Handle OTP verification
+            else:
+                otp_code = request.form.get('otp')
+                otp_token = session.get('definedge_otp_token')
+                
+                if not otp_token:
+                    # Need to regenerate OTP token
+                    return render_template('definedgeotp.html', 
+                                         error_message="Session expired. Please refresh the page to get a new OTP.",
+                                         otp_sent=False)
+                
+                # Get api_secret for authentication
+                api_secret = get_broker_api_secret()
+                
+                # Use authenticate_broker for OTP verification
+                from broker.definedge.api.auth_api import authenticate_broker
+                
+                try:
+                    # Call authenticate_broker with OTP token and code
+                    auth_token, feed_token, user_id, error_message = authenticate_broker(otp_token, otp_code, api_secret)
+                    
+                    if auth_token:
+                        # Clear the OTP token from session
+                        session.pop('definedge_otp_token', None)
+                        
+                except Exception as e:
+                    logger.error(f"Definedge OTP verification error: {e}")
+                    auth_token = None
+                    feed_token = None
+                    user_id = None
+                    error_message = str(e)
+                
+                forward_url = 'definedgeotp.html'
 
     else:
         code = request.args.get('code') or request.args.get('request_token')
@@ -422,8 +493,8 @@ def broker_callback(broker,para=None):
         if broker == 'dhan':
             auth_token = f'{auth_token}'
         
-        # For compositedge and pocketful, we have the user_id from authenticate_broker
-        if broker =='angel' or broker == 'compositedge' or broker == 'pocketful':
+        # For brokers that have user_id and feed_token from authenticate_broker
+        if broker =='angel' or broker == 'compositedge' or broker == 'pocketful' or broker == 'definedge':
             # For Compositedge, handle missing session user
             if broker == 'compositedge' and 'user' not in session:
                 # Get the admin user from the database
