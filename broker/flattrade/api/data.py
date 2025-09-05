@@ -155,11 +155,13 @@ class BrokerData:
             for i in range(1, 6):
                 bids.append({
                     'price': float(response.get(f'bp{i}', 0)),
-                    'quantity': int(response.get(f'bq{i}', 0))
+                    'quantity': int(response.get(f'bq{i}', 0)),
+                    'orders': int(response.get(f'bo{i}', 0))  # Added order count
                 })
                 asks.append({
                     'price': float(response.get(f'sp{i}', 0)),
-                    'quantity': int(response.get(f'sq{i}', 0))
+                    'quantity': int(response.get(f'sq{i}', 0)),
+                    'orders': int(response.get(f'so{i}', 0))  # Added order count
                 })
             
             # Return depth data
