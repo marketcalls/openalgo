@@ -44,6 +44,7 @@ def setup():
             
             # Automatically generate and save API key
             api_key = generate_api_key()
+            logger.info(f"Generated API key for user: {api_key}")
             key_id = upsert_api_key(username, api_key)
             if not key_id:
                 logger.error(f"Failed to create API key for user {username}")

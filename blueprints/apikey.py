@@ -39,7 +39,8 @@ def manage_api_key():
         
         # Generate new API key
         api_key = generate_api_key()
-        
+        logger.info(f"Generated API key for user: {api_key}")
+
         # Store the API key (auth_db will handle both hashing and encryption)
         key_id = upsert_api_key(user_id, api_key)
         

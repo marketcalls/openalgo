@@ -228,6 +228,14 @@ class DepthNormalizer:
         return result
 
 
+# RedPanda/Kafka imports
+try:
+    from kafka import KafkaProducer
+    from kafka.errors import KafkaError
+    KAFKA_AVAILABLE = True
+except ImportError:
+    KAFKA_AVAILABLE = False
+
 class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Flattrade WebSocket adapter with improved structure and error handling"""
     
@@ -256,8 +264,17 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Initialize connection management"""
         self.running = False
         self.connected = False
+        
+        # Kafka/RedPanda specific attributes        
+        self.kafka_enabled = self.redpanda_enabled and KAFKA_AVAILABLE
+        self.kafka_publish_lock = threading.Lock()
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
+        
+        if self.kafka_enabled:
+            self.logger.info("Kafka publishing enabled for Flattrade adapter")
+        else:
+            self.logger.info("Kafka publishing disabled - using ZMQ only")
     
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -567,7 +584,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 elif mode == Config.MODE_DEPTH:
                     depth_scrips.add(scrip)
                     self.ws_subscription_refs[scrip]['depth_count'] += 1
-            
+                    
             # Resubscribe in batches
             if touchline_scrips:
                 scrip_list = '#'.join(touchline_scrips)
@@ -603,6 +620,27 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"JSON decode error: {e}, message: {message}")
         except Exception as e:
             self.logger.error(f"Message processing error: {e}", exc_info=True)
+    
+    def publish_market_data(self, topic: str, data: dict) -> None:
+        # --- 1) ZMQ Publish (existing) ---
+        if self.zmq_enabled:
+            self.logger.info(f"[ZMQ PUBLISH] Topic: {topic} | Data: {data}")
+            self.logger.debug(f"[DEBUG] ZMQ publish call for topic: {topic}, data keys: {list(data.keys())}")
+            super().publish_market_data(topic, data)
+
+        # --- 2) Kafka Publish (new) ---
+        if self.kafka_enabled and self.kafka_producer:
+            try:
+                with self.kafka_publish_lock:
+                    # The KafkaProducer was set up in BaseBrokerWebSocketAdapter._setup_redpanda()
+                    # We assume the topic already exists or auto‐creation is enabled.
+                    # You can also prefix or map your ZMQ topic to a Kafka topic namespace here.
+                    self.kafka_producer.send("tick_data", key=topic, value=data)
+                    # Optionally flush immediately (costly):
+                    # self.kafka_producer.flush()
+                self.logger.info(f"[KAFKA PUBLISH] Topic: {"tick_data"} | Key:{topic} | Data: {data}")
+            except KafkaError as e:
+                self.logger.error(f"[KAFKA ERROR] Failed to publish to Kafka topic {"tick_data"}:{topic}: {e}")
 
     def _process_market_message(self, data: Dict[str, Any]) -> None:
         """Process market data messages with better error handling"""
