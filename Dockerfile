@@ -8,12 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY pyproject.toml .
 
-# create isolated virtual-env with uv, then add gunicorn + eventlet
+# create isolated virtual-env with uv, then add gunicorn (removed eventlet to fix greenlet errors)
 RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install gunicorn eventlet && \
+    uv pip install gunicorn && \
     rm -rf /root/.cache
 # --------------------------------------------------------------------------- #
 

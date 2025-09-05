@@ -23,7 +23,10 @@
       "WebFetch(domain:tradingview.github.io)",
       "Bash(npm install)",
       "Bash(npm run build:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker-compose up:*)"
     ],
     "deny": []
   }
