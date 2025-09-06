@@ -12,6 +12,7 @@ from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
 from utils.logging import get_logger, log_startup_banner  # Import centralized logging
+from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
 
@@ -76,6 +77,9 @@ def create_app():
 
     # Apply Content Security Policy middleware
     apply_csp_middleware(app)
+    
+    # Initialize Socket.IO error handling
+    init_socketio_error_handling(socketio)
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
