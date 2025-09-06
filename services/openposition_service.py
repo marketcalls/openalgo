@@ -198,8 +198,7 @@ def get_open_position(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                log_executor.submit(async_log_order, 'openposition', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return get_open_position_with_auth(position_data, AUTH_TOKEN, broker_name, original_data)

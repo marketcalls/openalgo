@@ -1,22 +1,10 @@
-from flask import Blueprint, render_template, session, redirect, url_for, g, jsonify, request
+from flask import Blueprint, render_template, session, redirect, url_for
 from database.auth_db import get_auth_token
-from importlib import import_module
+from services.funds_service import get_funds
 from utils.session import check_session_validity
-import multiprocessing
-import sys
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-def dynamic_import(broker):
-    try:
-        module_path = f'broker.{broker}.api.funds'
-        module = import_module(module_path)
-        get_margin_data = getattr(module, 'get_margin_data')
-        return get_margin_data
-    except ImportError as e:
-        logger.error(f"Error importing module: {e}")
-        return None
 
 dashboard_bp = Blueprint('dashboard_bp', __name__, url_prefix='/')
 scalper_process = None
@@ -36,22 +24,28 @@ def dashboard():
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
     
-    get_margin_data_func = dynamic_import(broker)
-    if get_margin_data_func is None:
-        logger.error(f"Failed to import broker module for {broker}")
-        return "Failed to import broker module", 500
-
-    margin_data = get_margin_data_func(AUTH_TOKEN)
+    # Use the centralized funds service
+    success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
+    
+    if not success:
+        logger.error(f"Failed to get funds data: {response.get('message', 'Unknown error')}")
+        if status_code == 404:
+            return "Failed to import broker module", 500
+        return redirect(url_for('auth.logout'))
+    
+    margin_data = response.get('data', {})
     
     # Check if margin_data is empty (authentication failed)
     if not margin_data:
         logger.error(f"Failed to get margin data for user {login_username} - authentication may have expired")
         return redirect(url_for('auth.logout'))
     
-    # Check if all values are zero (likely authentication error)
+    # Check if all values are zero (but don't log warning during known service hours)
     if (margin_data.get('availablecash') == '0.00' and 
         margin_data.get('collateral') == '0.00' and
         margin_data.get('utiliseddebits') == '0.00'):
-        logger.warning(f"All margin data values are zero for user {login_username} - possible authentication issue")
+        # This could be service hours or authentication issue
+        # The service already logs the appropriate message
+        logger.debug(f"All margin data values are zero for user {login_username}")
     
     return render_template('dashboard.html', margin_data=margin_data)

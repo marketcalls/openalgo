@@ -62,14 +62,10 @@ class BrokerData:
     def __init__(self, auth_token=None):
         self.token_mapping = {}
         self.session_id = auth_token  # Store the session ID from authentication
+        # AliceBlue only supports 1-minute and daily data
         self.timeframe_map = {
-            '1m': '1',
-            '5m': '5',
-            '10m': '10',
-            '15m': '15',
-            '30m': '30',
-            '1h': '60',
-            'D': 'D'
+            '1m': '1',      # 1-minute data
+            'D': 'D'        # Daily data
         }
     
     def get_websocket(self, force_new=False):
@@ -862,7 +858,7 @@ class BrokerData:
         # For multiple symbols, return the full list
         return depth_data
     
-    def get_history(self, symbol: str, exchange: str, timeframe: str, start_time: int, end_time: int) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, timeframe: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical candle data for a symbol.
         
@@ -870,14 +866,16 @@ class BrokerData:
             symbol (str): Trading symbol (e.g., 'TCS', 'RELIANCE')
             exchange (str): Exchange code (NSE, BSE, NFO, etc.)
             timeframe (str): Timeframe such as '1m', '5m', etc.
-            start_time (int): Start time in Unix timestamp (seconds)
-            end_time (int): End time in Unix timestamp (seconds)
+            start_date (str): Start date in YYYY-MM-DD format
+            end_date (str): End date in YYYY-MM-DD format
             
         Returns:
             pd.DataFrame: DataFrame with historical candle data
         """
         try:
             logger.info(f"Getting historical data for {symbol}:{exchange}, timeframe: {timeframe}")
+            logger.info(f"Date range: {start_date} to {end_date}")
+            logger.info(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
             
             # Get token for the symbol
             token = get_token(symbol, exchange)
@@ -887,11 +885,23 @@ class BrokerData:
             
             logger.info(f"Found token {token} for {symbol}:{exchange}")
             
-            # Convert timeframe to AliceBlue format
-            aliceblue_timeframe = self.timeframe_map.get(timeframe)
-            if not aliceblue_timeframe:
-                logger.error(f"Invalid timeframe: {timeframe}")
+            # Check for exchange limitations based on AliceBlue API documentation
+            if exchange in ['BSE', 'BCD', 'BFO']:
+                logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
+            
+            # For MCX, NFO, CDS - only current expiry contracts are supported
+            if exchange in ['MCX', 'NFO', 'CDS']:
+                logger.warning(f"Note: AliceBlue only provides historical data for current expiry contracts on {exchange}")
+            
+            # Check if timeframe is supported
+            if timeframe not in self.timeframe_map:
+                supported = list(self.timeframe_map.keys())
+                logger.error(f"Unsupported timeframe: {timeframe}. AliceBlue only supports: {', '.join(supported)}")
+                return pd.DataFrame()
+            
+            # Get the AliceBlue resolution format
+            aliceblue_timeframe = self.timeframe_map[timeframe]
             
             # Get credentials - user_id is BROKER_API_KEY, auth token is session_id
             from utils.config import get_broker_api_key, get_broker_api_secret
@@ -920,8 +930,24 @@ class BrokerData:
             import time
             from datetime import datetime
             
-            def convert_to_unix_ms(timestamp):
-                """Convert various timestamp formats to Unix milliseconds"""
+            def convert_to_unix_ms(timestamp, is_end_date=False):
+                """Convert various timestamp formats to Unix milliseconds in IST
+                
+                Args:
+                    timestamp: The timestamp to convert
+                    is_end_date: If True, sets time to end of day (23:59:59) for date-only strings
+                """
+                import pytz
+                ist = pytz.timezone('Asia/Kolkata')
+                
+                logger.debug(f"Converting timestamp: {timestamp} (type: {type(timestamp)}, is_end_date: {is_end_date})")
+                
+                # Handle datetime.date objects from marshmallow schema
+                if hasattr(timestamp, 'strftime'):
+                    # It's a date or datetime object
+                    timestamp = timestamp.strftime('%Y-%m-%d')
+                    logger.debug(f"Converted date object to string: {timestamp}")
+                
                 if isinstance(timestamp, str):
                     # Handle date strings like '2025-07-03'
                     try:
@@ -931,11 +957,25 @@ class BrokerData:
                         else:
                             # Handle date-only strings like '2025-07-03'
                             dt = datetime.strptime(timestamp, '%Y-%m-%d')
+                            if is_end_date:
+                                # Set to end of day (23:59:59) for end dates
+                                dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                            else:
+                                # Set to start of day (00:00:00) for start dates
+                                dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                        
+                        # Localize to IST timezone (AliceBlue expects IST timestamps)
+                        dt_ist = ist.localize(dt)
+                        
                         # Convert to Unix timestamp in seconds, then to milliseconds
-                        return str(int(dt.timestamp() * 1000))
-                    except ValueError as e:
+                        result = str(int(dt_ist.timestamp() * 1000))
+                        logger.debug(f"Converted '{timestamp}' to {result} (Date: {dt_ist})")
+                        return result
+                    except (ValueError, Exception) as e:
                         logger.error(f"Error parsing timestamp string '{timestamp}': {e}")
-                        # Fallback to current time
+                        logger.error(f"Timestamp type: {type(timestamp)}, value: {repr(timestamp)}")
+                        # Fallback to current time - THIS SHOULD NOT HAPPEN
+                        logger.error("WARNING: Falling back to current time - this is likely a bug!")
                         return str(int(time.time() * 1000))
                 elif isinstance(timestamp, (int, float)):
                     if timestamp > 1000000000000:
@@ -945,14 +985,32 @@ class BrokerData:
                         # In seconds, convert to milliseconds
                         return str(int(timestamp * 1000))
                     else:
-                        # Unknown format, assume milliseconds
-                        return str(int(timestamp))
+                        # Unknown format, assume seconds and convert
+                        return str(int(timestamp * 1000))
                 else:
                     # Fallback to current time
                     return str(int(time.time() * 1000))
             
-            start_ms = convert_to_unix_ms(start_time)
-            end_ms = convert_to_unix_ms(end_time)
+            start_ms = convert_to_unix_ms(start_date, is_end_date=False)
+            end_ms = convert_to_unix_ms(end_date, is_end_date=True)
+            
+            # Log the conversion for debugging
+            logger.info(f"Date conversion - Start: {start_date} -> {start_ms}, End: {end_date} -> {end_ms}")
+            
+            # Ensure start and end times are different and valid
+            if start_ms == end_ms:
+                logger.warning(f"Start and end timestamps are the same: {start_ms}. Adjusting end time.")
+                # If they're the same, add one day to the end time
+                end_ms = str(int(end_ms) + 86400000)  # Add 24 hours in milliseconds
+            
+            # For intraday data, ensure minimum time range
+            if timeframe != 'D':
+                time_diff_ms = int(end_ms) - int(start_ms)
+                min_range_ms = 3600000  # Minimum 1 hour for intraday data
+                
+                if time_diff_ms < min_range_ms:
+                    logger.warning(f"Time range too small ({time_diff_ms}ms). Extending to minimum 1 hour for intraday data.")
+                    end_ms = str(int(start_ms) + min_range_ms)
             
             # Prepare request payload according to AliceBlue API docs
             payload = {
@@ -977,7 +1035,20 @@ class BrokerData:
             
             # Check if response contains valid data
             if data.get('stat') == 'Not_Ok' or 'result' not in data:
-                logger.error(f"Error in historical data response: {data.get('emsg', 'Unknown error')}")
+                error_msg = data.get('emsg', 'Unknown error')
+                logger.error(f"Error in historical data response: {error_msg}")
+                
+                # Provide more helpful error messages based on the error
+                if "No data available" in error_msg:
+                    if exchange in ['MCX', 'NFO', 'CDS']:
+                        logger.error(f"No data available. For {exchange}, AliceBlue only provides data for current expiry contracts.")
+                        logger.error(f"Symbol '{symbol}' might be an expired contract or not a current expiry.")
+                    elif exchange in ['BSE', 'BCD', 'BFO']:
+                        logger.error(f"AliceBlue does not support historical data for {exchange} exchange yet.")
+                    else:
+                        logger.error(f"No historical data available for {symbol} on {exchange}.")
+                        logger.error(f"This could be due to: 1) Symbol not traded in the date range, 2) Invalid symbol, or 3) Data not available during market hours (available from 5:30 PM to 8 AM on weekdays)")
+                
                 return pd.DataFrame()
             
             # Convert response to DataFrame
@@ -998,8 +1069,9 @@ class BrokerData:
                 logger.error(f"Missing required columns in historical data response")
                 return pd.DataFrame()
             
-            # Convert time column from milliseconds to datetime
-            df['datetime'] = pd.to_datetime(df['datetime'].astype(int), unit='ms')
+            # Convert time column to datetime
+            # AliceBlue returns time as string in format 'YYYY-MM-DD HH:MM:SS'
+            df['datetime'] = pd.to_datetime(df['datetime'])
             
             # Return only required columns in the correct order
             df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]

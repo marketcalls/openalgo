@@ -197,8 +197,7 @@ def cancel_order(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'cancelorder', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data)

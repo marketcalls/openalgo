@@ -157,7 +157,7 @@ def get_analyzer_status(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            log_executor.submit(async_log_order, 'analyzer_status', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return get_analyzer_status_with_auth(analyzer_data, AUTH_TOKEN, broker_name, original_data)
@@ -211,7 +211,7 @@ def toggle_analyzer_mode(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            log_executor.submit(async_log_order, 'analyzer_toggle', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return toggle_analyzer_mode_with_auth(analyzer_data, AUTH_TOKEN, broker_name, original_data)

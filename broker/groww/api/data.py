@@ -136,6 +136,35 @@ class BrokerData:
             {'max_days': float('inf'), 'min_interval': '10080'} # >1080 days: 10080 min minimum
         ]
 
+    def _convert_openalgo_to_groww_derivative_symbol(self, symbol):
+        """
+        Convert OpenAlgo NFO/BFO symbol format to Groww format
+        
+        Examples:
+        - SBIN30SEP25FUT -> SBIN25SEPFUT
+        - SBIN30SEP25800CE -> SBIN25SEP800CE
+        """
+        import re
+        
+        # Pattern for futures: SYMBOL + DAY + MONTH + YEAR + FUT
+        fut_pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(FUT)$'
+        fut_match = re.match(fut_pattern, symbol)
+        if fut_match:
+            base_symbol, day, month, year, fut = fut_match.groups()
+            # Groww format: SYMBOL + YEAR + MONTH + FUT (no day)
+            return f"{base_symbol}{year}{month}{fut}"
+        
+        # Pattern for options: SYMBOL + DAY + MONTH + YEAR + STRIKE + CE/PE
+        opt_pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
+        opt_match = re.match(opt_pattern, symbol)
+        if opt_match:
+            base_symbol, day, month, year, strike, opt_type = opt_match.groups()
+            # Groww format: SYMBOL + YEAR + MONTH + STRIKE + CE/PE (no day)
+            return f"{base_symbol}{year}{month}{strike}{opt_type}"
+        
+        # If no pattern matches, return original
+        return symbol
+
     def _convert_to_groww_params(self, symbol, exchange):
         """
         Convert symbol and exchange to Groww API parameters
@@ -176,9 +205,21 @@ class BrokerData:
             groww_exchange = exchange
             logger.debug(f"Using exchange as-is: {exchange}")
             
-        # Get broker-specific symbol if needed
-        br_symbol = get_br_symbol(symbol, exchange)
-        trading_symbol = br_symbol or symbol
+        # For derivatives, convert symbol format
+        if exchange in ["NFO", "BFO"]:
+            # First try to get from database
+            br_symbol = get_br_symbol(symbol, exchange)
+            if br_symbol:
+                trading_symbol = br_symbol
+                logger.debug(f"Found broker symbol in database: {trading_symbol}")
+            else:
+                # If not in database, convert format
+                trading_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
+                logger.debug(f"Converted derivative symbol: {symbol} -> {trading_symbol}")
+        else:
+            # For equity, use broker symbol if available
+            br_symbol = get_br_symbol(symbol, exchange)
+            trading_symbol = br_symbol or symbol
         
         return groww_exchange, segment, trading_symbol
 
@@ -295,9 +336,20 @@ class BrokerData:
             # Treat both daily and weekly similarly for timestamp handling
             is_eod = is_daily or is_weekly
             
-            # Parse start and end dates
-            start_date = datetime.strptime(start_time, '%Y-%m-%d')
-            end_date = datetime.strptime(end_time, '%Y-%m-%d')
+            # Parse start and end dates - handle both string and datetime.date formats
+            if isinstance(start_time, str):
+                start_date = datetime.strptime(start_time, '%Y-%m-%d')
+            elif hasattr(start_time, 'strftime'):  # datetime.date or datetime.datetime object
+                start_date = datetime.combine(start_time, datetime.min.time()) if not hasattr(start_time, 'hour') else start_time
+            else:
+                raise ValueError(f"Invalid start_time format: {type(start_time)}")
+                
+            if isinstance(end_time, str):
+                end_date = datetime.strptime(end_time, '%Y-%m-%d')
+            elif hasattr(end_time, 'strftime'):  # datetime.date or datetime.datetime object
+                end_date = datetime.combine(end_time, datetime.min.time()) if not hasattr(end_time, 'hour') else end_time
+            else:
+                raise ValueError(f"Invalid end_time format: {type(end_time)}")
             
             # Implement chunking for better reliability and to avoid API limits
             # Define chunk size based on timeframe
@@ -387,20 +439,25 @@ class BrokerData:
                 dates = []
                 rows = []
                 
-                # Parse start date
-                start_date = datetime.strptime(start_time, '%Y-%m-%d').date()
+                # Parse start date - handle both string and datetime formats
+                if isinstance(start_time, str):
+                    start_date = datetime.strptime(start_time, '%Y-%m-%d').date()
+                elif hasattr(start_time, 'strftime'):
+                    start_date = start_time if hasattr(start_time, 'year') else start_time.date()
+                else:
+                    start_date = datetime.strptime(str(start_time), '%Y-%m-%d').date()
                 
-                # Process all candles
+                # Process all candles - extract actual dates from timestamps if available
                 for i, candle in enumerate(candles):
-                    # Create date at 09:15 AM IST (market open time)
-                    current_date = start_date + timedelta(days=i)
-                    # Important: Create the datetime explicitly at 09:15 AM and set proper IST timezone
-                    market_open = datetime.combine(current_date, datetime.min.time()).replace(hour=9, minute=15)
-                    market_open = ist.localize(market_open)
-                    dates.append(market_open)
-                    
-                    # Extract OHLCV data based on format
+                    # Try to get the actual date from the candle timestamp
+                    actual_date = None
                     if isinstance(candle, list) and len(candle) >= 6:
+                        ts = int(candle[0])
+                        # Check if timestamp is in milliseconds
+                        if ts > 4102444800:
+                            ts = ts / 1000
+                        actual_date = datetime.fromtimestamp(ts, tz=ist).date()
+                        
                         # [timestamp, open, high, low, close, volume]
                         row = {
                             'open': float(candle[1]),
@@ -409,7 +466,12 @@ class BrokerData:
                             'close': float(candle[4]),
                             'volume': int(candle[5])
                         }
-                    else:
+                    elif isinstance(candle, dict):
+                        if 'timestamp' in candle:
+                            ts = int(candle['timestamp'])
+                            if ts > 4102444800:
+                                ts = ts / 1000
+                            actual_date = datetime.fromtimestamp(ts, tz=ist).date()
                         # Dictionary format
                         row = {
                             'open': float(candle.get('open', 0)),
@@ -418,11 +480,35 @@ class BrokerData:
                             'close': float(candle.get('close', 0)),
                             'volume': int(candle.get('volume', 0))
                         }
+                    else:
+                        row = {}
+                        
+                    # Use actual date if available, otherwise calculate based on index
+                    if actual_date:
+                        current_date = actual_date
+                    else:
+                        current_date = start_date + timedelta(days=i)
+                        
+                    # For daily data, use midnight UTC for clean date display
+                    # This will show as just the date when converted
+                    midnight_utc = datetime.combine(current_date, datetime.min.time())
+                    # Create as UTC directly (pytz is already imported at the top)
+                    utc = pytz.UTC
+                    midnight_utc = utc.localize(midnight_utc)
+                    dates.append(midnight_utc)
                     rows.append(row)
                 
-                # Create DataFrame with dates as index
-                df = pd.DataFrame(rows, index=dates)
-                logger.info(f"Created DataFrame with {len(df)} rows using date index at 09:15 AM IST")
+                # Create DataFrame with dates as index initially
+                if dates and rows:
+                    df = pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
+                    # Add timestamp column - these will be midnight UTC timestamps
+                    df['timestamp'] = [int(dt.timestamp()) for dt in df.index]
+                    # Reset index to have timestamp as a column (matching Angel format)
+                    df = df.reset_index(drop=True)
+                    logger.info(f"Created DataFrame with {len(df)} rows for daily timeframe")
+                else:
+                    df = pd.DataFrame()
+                    logger.warning("No valid data for daily timeframe")
             else:
                 # For intraday data (1m, 5m, 15m, 1h, 4h, W)
                 logger.info(f"Processing intraday data for timeframe {timeframe}")
@@ -434,8 +520,11 @@ class BrokerData:
                 for candle in candles:
                     if isinstance(candle, list) and len(candle) >= 6:
                         # For list format candles
-                        # Convert timestamp to datetime with proper IST timezone
+                        # Groww returns timestamps in milliseconds, not seconds
                         ts = int(candle[0])
+                        # Check if timestamp is in milliseconds (larger than year 2100 in seconds)
+                        if ts > 4102444800:  # If timestamp is likely in milliseconds
+                            ts = ts / 1000  # Convert to seconds
                         # Create timezone-aware datetime in IST
                         dt = datetime.fromtimestamp(ts, tz=ist_tz)
                         
@@ -450,17 +539,21 @@ class BrokerData:
                         # For dictionary format candles
                         if 'timestamp' in candle:
                             ts = int(candle['timestamp'])
+                            # Check if timestamp is in milliseconds
+                            if ts > 4102444800:  # If timestamp is likely in milliseconds
+                                ts = ts / 1000  # Convert to seconds
                             # Create timezone-aware datetime in IST
                             dt = datetime.fromtimestamp(ts, tz=ist_tz)
                         else:
                             # Fallback: Create market hours timestamp at proper intervals
                             # Start with market open time
-                            base_dt = datetime.strptime(f"{start_time} 09:15:00", '%Y-%m-%d %H:%M:%S')
+                            start_str = start_time if isinstance(start_time, str) else start_time.strftime('%Y-%m-%d')
+                            base_dt = datetime.strptime(f"{start_str} 09:15:00", '%Y-%m-%d %H:%M:%S')
                             base_dt = ist_tz.localize(base_dt)
                             # Create proper interval based on timeframe
                             dt = base_dt + timedelta(minutes=int(interval_minutes) * len(timestamps))
                             # Ensure it's within market hours
-                            market_close = datetime.strptime(f"{start_time} 15:30:00", '%Y-%m-%d %H:%M:%S')
+                            market_close = datetime.strptime(f"{start_str} 15:30:00", '%Y-%m-%d %H:%M:%S')
                             market_close = ist_tz.localize(market_close)
                             if dt > market_close:
                                 # Move to next day's market open
@@ -495,88 +588,75 @@ class BrokerData:
                 logger.info(f"Processed {len(timestamps)} valid intraday candles within market hours")
                 
                 # Create DataFrame with timestamps as index
-                df = pd.DataFrame(rows, index=timestamps)
+                if timestamps:
+                    # Ensure we have a proper DatetimeIndex
+                    df = pd.DataFrame(rows, index=pd.DatetimeIndex(timestamps))
+                    # Sort by index to ensure chronological order
+                    df = df.sort_index()
+                else:
+                    df = pd.DataFrame(rows)
                 
             # Log information for debugging
             logger.info(f"Final DataFrame has {len(df)} records")
             if not df.empty:
-                logger.info(f"First index timestamp: {df.index[0]}")
+                if is_eod and 'timestamp' in df.columns:
+                    # For daily data, we already have timestamp column
+                    logger.info(f"Daily data with {len(df)} records")
+                elif not isinstance(df.index, pd.RangeIndex):
+                    logger.info(f"First index timestamp: {df.index[0]}")
                 
-            # For proper timestamp handling: Keep the datetime object in the index
-            # This ensures we preserve timezone information which is important for display
+            # For proper timestamp handling
             if not df.empty:
-                # For daily data, explicitly ensure all timestamps are at 09:15:00 IST
-                if is_daily:
-                    logger.info("Ensuring all daily candles have 09:15:00 IST timestamp as per market open time")
-                    # Make sure all timestamps have the correct time (09:15 AM) with IST timezone
-                    # This follows the successful FivePaisa implementation approach
-                    for i in range(len(df)):
-                        date_only = df.index[i].date()
-                        # Create a new datetime at exactly 09:15:00 IST
-                        new_dt = datetime.combine(date_only, datetime.min.time()).replace(hour=9, minute=15)
-                        if df.index[i].tzinfo:
-                            new_dt = new_dt.replace(tzinfo=df.index[i].tzinfo)
-                        else:
-                            # If no timezone, explicitly add IST
-                            ist_tz = pytz.timezone('Asia/Kolkata')
-                            new_dt = ist_tz.localize(new_dt)
-                        df.index.values[i] = new_dt
+                # Skip this processing for daily data as it already has timestamp column
+                if is_eod and 'timestamp' in df.columns:
+                    logger.info("Daily/weekly data already has timestamp column, skipping index processing")
+                    # For daily data, timestamp column already exists, no need to create
+                    pass
+                elif not isinstance(df.index, pd.RangeIndex):
+                    # For intraday data with DatetimeIndex
+                    # Convert datetime index to Unix timestamp (seconds) for the API response
+                    unix_timestamps = [int(dt.timestamp()) for dt in df.index]
                 
-                # Convert datetime index to Unix timestamp (seconds) for the API response
-                unix_timestamps = [int(dt.timestamp()) for dt in df.index]
+                # Handle different data types
+                if is_eod and 'timestamp' in df.columns:
+                    # Daily data already has timestamp column, just use it
+                    result_df = df.copy()
+                elif not isinstance(df.index, pd.RangeIndex):
+                    # Intraday data with DatetimeIndex
+                    # Create a proper copy of the DataFrame with the datetime index
+                    result_df = df.copy()
+                    # Reset the index and add timestamp column
+                    result_df = result_df.reset_index()
+                    result_df.rename(columns={'index': 'datetime'}, inplace=True)
+                    # Add the Unix timestamp column
+                    result_df['timestamp'] = unix_timestamps
+                    # Set the datetime column as the index for display purposes
+                    df = result_df.set_index('datetime')
+                else:
+                    # Fallback
+                    result_df = df.copy()
                 
-                # Important: For display in the client, create a DataFrame with datetime index
-                # Format the index as timezone-aware datetime objects at 09:15:00 IST
-                # This follows the successful FivePaisa implementation pattern
-                
-                # First, create a proper copy of the DataFrame with the datetime index
-                result_df = df.copy()
-                
-                # Then, reset the index correctly
-                result_df = result_df.reset_index()
-                result_df.rename(columns={'index': 'datetime'}, inplace=True)
-                
-                # Add the Unix timestamp column
-                result_df['timestamp'] = unix_timestamps
-                
-                # Set the datetime column as the index for display purposes
-                df = result_df.set_index('datetime')
-                
-                # Explicitly log the index format to verify it shows 09:15:00 IST
-                if not df.empty:
-                    logger.info(f"Final index format sample: {df.index[0]} (should show 09:15:00+05:30)")
-                    
-                # Keep the timestamp column as Unix timestamp for API compatibility
-                
-                # Define IST timezone for timestamp conversion and display
-                ist_tz = pytz.timezone('Asia/Kolkata')  # Define it here to ensure it's available in this scope
-                
-                logger.info(f"Converted all timestamps to Unix seconds format in IST timezone")
-                sample_row = df.iloc[0] if len(df) > 0 else None
-                if sample_row is not None:
-                    sample_timestamp = sample_row['timestamp']
-                    # Convert the timestamp to a readable datetime for logging
+                # Log sample data for debugging
+                if not result_df.empty and 'timestamp' in result_df.columns:
+                    sample_timestamp = result_df['timestamp'].iloc[0]
+                    ist_tz = pytz.timezone('Asia/Kolkata')
                     sample_dt = datetime.fromtimestamp(sample_timestamp, tz=ist_tz)
                     logger.info(f"First row timestamp: {sample_timestamp} ({sample_dt})")
-                    logger.info(f"Sample row: {sample_row.to_dict()}")
+                
+                # Update df to use result_df for further processing
+                df = result_df
             else:
                 # Empty DataFrame case
                 df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 logger.warning("Returning empty DataFrame with expected columns")
             
-            # Fix timestamps to align with Indian market hours in IST
-            df = self.fix_timestamps(df, timeframe)
-            
-            # Convert to Unix timestamps for consistency with other brokers
+            # Final processing for consistency
             if not df.empty:
-                # For consistent market hour representation across all timeframes:
-                # 1. First make sure all timestamps are properly timezone-aware with IST
-                # 2. Then convert to Unix timestamps without additional offset
-                # This ensures market hours are preserved (9:15 AM - 3:30 PM IST)
-                
                 try:
-                    # Apply the fix_timestamps function to ensure market hour alignment
-                    df = self.fix_timestamps(df, timeframe)
+                    # Only apply fix_timestamps for intraday data that needs adjustment
+                    # Skip for daily/weekly as they're already processed
+                    if not is_eod:
+                        df = self.fix_timestamps(df, timeframe)
                     
                     # Check if DataFrame is still empty after processing
                     if df.empty:
@@ -696,8 +776,16 @@ class BrokerData:
                             df = weekly_df
                     
                     # Now get Unix timestamps from the properly aligned IST datetime index
-                    #unix_timestamps_ist = [int(dt.timestamp()) for dt in df.index]
-                    unix_timestamps_ist = [int((dt + timedelta(hours=5, minutes=30)).timestamp()) for dt in df.index]
+                    # Check if we already have timestamps (for daily data)
+                    if 'timestamp' in df.columns:
+                        unix_timestamps_ist = df['timestamp'].tolist()
+                    elif len(df.index) > 0 and hasattr(df.index[0], 'timestamp'):
+                        # Don't add offset - timestamps should already be in IST
+                        unix_timestamps_ist = [int(dt.timestamp()) for dt in df.index]
+                    else:
+                        # Index might be a RangeIndex or similar
+                        logger.warning("Unable to extract timestamps from index")
+                        unix_timestamps_ist = list(range(len(df)))
                     if unix_timestamps_ist:
                         logger.info(f'Unix timestamps (showing proper market hours): {unix_timestamps_ist[:min(5, len(unix_timestamps_ist))]}...')
                 except Exception as e:
@@ -705,10 +793,25 @@ class BrokerData:
                     # Create empty DataFrame with proper columns as fallback
                     return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                # Create a new DataFrame with numeric Unix timestamps
-                # Build the final timestamps in the exact same format used by the FivePaisa implementation
+                # Build the final DataFrame - ensure all required columns exist
+                if 'timestamp' not in df.columns:
+                    # This shouldn't happen, but handle it gracefully
+                    logger.warning("timestamp column missing, creating from index")
+                    if hasattr(df.index, 'to_timestamp'):
+                        df['timestamp'] = [int(dt.timestamp()) for dt in df.index]
+                    else:
+                        # Create sequential timestamps
+                        df['timestamp'] = range(len(df))
+                
+                # Ensure all required columns exist
+                required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                for col in required_cols:
+                    if col not in df.columns:
+                        df[col] = 0
+                
+                # Create clean data dictionary
                 data = {
-                    'timestamp': unix_timestamps_ist,  # Must be named 'timestamp' for API compatibility
+                    'timestamp': df['timestamp'].values,
                     'open': df['open'].values,
                     'high': df['high'].values,
                     'low': df['low'].values,
@@ -736,9 +839,16 @@ class BrokerData:
                 
                 # Ensure the DataFrame has the expected columns in the right order (consistent with other brokers)
                 expected_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                # Add oi column for consistency
+                result_df['oi'] = 0  # Historical data doesn't have OI
+                expected_columns.append('oi')
                 result_df = result_df[expected_columns]
                 
-                # Return the DataFrame with timestamp as a column (NOT as index)
+                # Keep timestamp as Unix timestamp column (not as index) - matches Angel implementation
+                # Sort by timestamp and remove any duplicates
+                result_df = result_df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+                
+                # Return DataFrame with timestamp as column, similar to Angel
                 df = result_df
                 
                 # No need to set index for API client compatibility
@@ -814,9 +924,20 @@ class BrokerData:
             logger.warning(f"Unsupported interval: {requested_interval}, defaulting to 'D'")
             return '1440'  # Default to daily
             
-        # Calculate the duration in days
-        start_dt = datetime.strptime(start_time, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_time, '%Y-%m-%d')
+        # Calculate the duration in days - handle both string and datetime formats
+        if isinstance(start_time, str):
+            start_dt = datetime.strptime(start_time, '%Y-%m-%d')
+        elif hasattr(start_time, 'strftime'):
+            start_dt = datetime.combine(start_time, datetime.min.time()) if not hasattr(start_time, 'hour') else start_time
+        else:
+            start_dt = datetime.strptime(str(start_time), '%Y-%m-%d')
+            
+        if isinstance(end_time, str):
+            end_dt = datetime.strptime(end_time, '%Y-%m-%d')
+        elif hasattr(end_time, 'strftime'):
+            end_dt = datetime.combine(end_time, datetime.min.time()) if not hasattr(end_time, 'hour') else end_time
+        else:
+            end_dt = datetime.strptime(str(end_time), '%Y-%m-%d')
         duration_days = (end_dt - start_dt).days
         
         # Get the requested interval in minutes
@@ -896,7 +1017,12 @@ class BrokerData:
         # Handle plain string (like just "RELIANCE")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            exchange = 'NSE'  # Default to NSE for Indian stocks
+            # Auto-detect if it's a derivative based on symbol format
+            if symbol.endswith('FUT') or symbol.endswith('CE') or symbol.endswith('PE'):
+                exchange = 'NFO'  # It's a derivative
+                logger.info(f"Auto-detected derivative symbol: {symbol}, using NFO exchange")
+            else:
+                exchange = 'NSE'  # Default to NSE for equity
             logger.info(f"Processing string symbol: {symbol} on {exchange}")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
@@ -911,7 +1037,11 @@ class BrokerData:
                     exchange = sym['exchange']
                 elif isinstance(sym, str):
                     symbol = sym
-                    exchange = 'NSE'  # Default to NSE
+                    # Auto-detect if it's a derivative based on symbol format
+                    if symbol.endswith('FUT') or symbol.endswith('CE') or symbol.endswith('PE'):
+                        exchange = 'NFO'  # It's a derivative
+                    else:
+                        exchange = 'NSE'  # Default to NSE for equity
                 else:
                     logger.warning(f"Invalid symbol format: {sym}")
                     continue
@@ -1035,6 +1165,9 @@ class BrokerData:
                             last_price = safe_float(response.get('last_price'))
                             logger.info(f"EXTRACTED last_price = {last_price}")
                             
+                            # Determine if this is a derivative instrument
+                            is_derivative = exchange in ['NFO', 'BFO'] or segment == SEGMENT_FNO
+                            
                             quote_item = {
                                 'symbol': symbol,
                                 'exchange': exchange,
@@ -1060,6 +1193,8 @@ class BrokerData:
                                 'ask_qty': safe_int(response.get('offer_quantity')),
                                 'total_buy_qty': safe_float(response.get('total_buy_quantity')),
                                 'total_sell_qty': safe_float(response.get('total_sell_quantity')),
+                                # Only show OI for derivatives, 0 for equity
+                                'oi': safe_int(response.get('open_interest', 0)) if is_derivative else 0,
                                 'timestamp': response.get('last_trade_time', int(datetime.now().timestamp() * 1000))
                             }
                             
@@ -1213,7 +1348,8 @@ class BrokerData:
             "prev_close": quote.get("prev_close", 0),
             "volume": quote.get("volume", 0),
             "bid": quote.get("bid_price", 0),
-            "ask": quote.get("ask_price", 0)
+            "ask": quote.get("ask_price", 0),
+            "oi": quote.get("oi", 0)  # Add Open Interest field
         }
 
         logger.debug(f"Final OpenAlgo quote format (data only): {result}")
@@ -1376,8 +1512,20 @@ class BrokerData:
             groww_exchange = EXCHANGE_NSE
             segment = SEGMENT_CASH
         
-        # Get broker-specific symbol if needed
-        trading_symbol = get_br_symbol(symbol, exchange) or symbol
+        # Convert symbol format for derivatives
+        if exchange in ["NFO", "BFO"]:
+            # First try to get from database
+            br_symbol = get_br_symbol(symbol, exchange)
+            if br_symbol:
+                trading_symbol = br_symbol
+                logger.debug(f"Found broker symbol in database: {trading_symbol}")
+            else:
+                # If not in database, convert format
+                trading_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
+                logger.debug(f"Converted derivative symbol: {symbol} -> {trading_symbol}")
+        else:
+            # For equity, use broker symbol if available
+            trading_symbol = get_br_symbol(symbol, exchange) or symbol
         
         logger.info(f"Requesting quote with depth for {trading_symbol} on {groww_exchange} (segment: {segment})")
         
@@ -1490,6 +1638,9 @@ class BrokerData:
             total_buy_qty = safe_int(payload.get('total_buy_quantity', 0))
             total_sell_qty = safe_int(payload.get('total_sell_quantity', 0))
             
+            # Determine if this is a derivative instrument
+            is_derivative = exchange in ['NFO', 'BFO'] or segment == SEGMENT_FNO
+            
             # Format the depth response according to OpenAlgo requirements
             depth_response = {
                 'bids': bids,
@@ -1503,7 +1654,7 @@ class BrokerData:
                 'volume': volume,
                 'totalbuyqty': total_buy_qty,
                 'totalsellqty': total_sell_qty,
-                'oi': safe_int(payload.get('open_interest', 0))  # Open interest if available
+                'oi': safe_int(payload.get('open_interest', 0)) if is_derivative else 0  # OI only for derivatives
             }
             
             logger.info(f"Formatted market depth response with {len(bids)} bids and {len(asks)} asks")

@@ -1,7 +1,9 @@
 import os
-import sqlite3
 import glob
 import logging
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.sql import text
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -39,44 +41,40 @@ def add_user_id_column():
     return success
 
 def _add_column_to_database(db_path):
-    """Add the user_id column to the auth table in the specified database."""
+    """Add the user_id column to the auth table in the specified database using SQLAlchemy."""
     try:
-        # Check if the file exists and is a database
         if not os.path.exists(db_path):
             logger.error(f"Database file does not exist: {db_path}")
             return False
 
-        # Connect to the database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Check if the auth table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auth'")
-        if not cursor.fetchone():
-            logger.warning(f"The auth table does not exist in: {db_path}")
-            conn.close()
-            return False
+        engine = create_engine(f'sqlite:///{db_path}')
+        inspector = inspect(engine)
+
+        with engine.connect() as connection:
+            # Check if the auth table exists
+            if not inspector.has_table('auth'):
+                logger.warning(f"The auth table does not exist in: {db_path}")
+                return False
+
+            # Check if the column already exists
+            columns = inspector.get_columns('auth')
+            column_names = [col['name'] for col in columns]
+
+            if 'user_id' not in column_names:
+                # Use a text construct for the DDL statement for safety
+                alter_statement = text("ALTER TABLE auth ADD COLUMN user_id VARCHAR(255)")
+                connection.execute(alter_statement)
+                logger.info(f"Successfully added user_id column to auth table in: {db_path}")
+            else:
+                logger.info(f"Column user_id already exists in auth table in: {db_path}")
             
-        # Check if the column already exists
-        cursor.execute("PRAGMA table_info(auth)")
-        columns = cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        if 'user_id' not in column_names:
-            # Add the user_id column to the auth table
-            cursor.execute("ALTER TABLE auth ADD COLUMN user_id VARCHAR(255)")
-            conn.commit()
-            logger.info(f"Successfully added user_id column to auth table in: {db_path}")
-            result = True
-        else:
-            logger.info(f"Column user_id already exists in auth table in: {db_path}")
-            result = True
-        
-        conn.close()
-        return result
-        
+            return True
+
+    except SQLAlchemyError as e:
+        logger.error(f"SQLAlchemy error processing database {db_path}: {e}", exc_info=True)
+        return False
     except Exception as e:
-        logger.error(f"Error processing database {db_path}: {e}", exc_info=True)
+        logger.error(f"Generic error processing database {db_path}: {e}", exc_info=True)
         return False
 
 if __name__ == "__main__":

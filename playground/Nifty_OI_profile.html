@@ -1,0 +1,1377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nifty_OI_profile</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: white;
+        }
+        #chart {
+            width: 100%;
+            height: 100%;
+            min-height: 300px;
+            background-color: #131722;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .controls .spacer { flex: 1; }
+        .controls-right { display: flex; gap: 12px; margin-left: auto; align-items: center; }
+        .controls label { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+        .controls select,
+        .controls input[type="number"],
+        .controls button {
+            height: 32px;
+            line-height: 32px;
+        }
+        .controls select,
+        .controls input[type="number"] {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            color: #ffffff;
+            border-radius: 4px;
+            padding: 0 10px;
+        }
+        .controls input[type="number"] { width: 72px; }
+        button {
+            height: 32px;
+            line-height: 32px;
+            padding: 0 12px;
+            background-color: #2962ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+        }
+        button:hover {
+            background-color: #1e53e5;
+        }
+        .info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border-radius: 4px;
+        }
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin: 10px 0;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .legend-color {
+            width: 20px;
+            height: 15px;
+            border-radius: 2px;
+        }
+        .ce-color { background-color: #f44336; }
+        .pe-color { background-color: #4caf50; }
+    </style>
+</head>
+<body>
+    
+    
+    <div class="controls">
+        <button onclick="updateOIData()">Update OI Data</button>
+        <button id="oiToggle" onclick="toggleOI()">Enable OI</button>
+        <label for="oiView">OI View:</label>
+        <select id="oiView" onchange="onOIViewChange()">
+            <option value="right">Right</option>
+            <option value="left" selected>Left</option>
+        </select>
+        <label for="oiX">OI X (%):</label>
+        <input id="oiX" type="number" min="0" max="100" value="95" oninput="onOIAnchorChange()" />
+        <span id="maxOIInfo" style="margin-left: 20px; color: #ffd700;"></span>
+        <label><input id="oiShowStrike" type="checkbox" checked onchange="onOIShowStrikeChange()" /> OI Strike Labels</label>
+        <label><input id="oiShowValues" type="checkbox" checked onchange="onOIShowValuesChange()" /> OI Value Labels</label>
+        <span class="spacer"></span>
+        <div class="controls-right">
+            <button onclick="updateCOIData()">Update COI Data</button>
+            <button id="coiToggle" onclick="toggleCOI()">Enable COI</button>
+            <label for="coiView">COI View:</label>
+            <select id="coiView" onchange="onCOIViewChange()">
+                <option value="right">Right</option>
+                <option value="left" selected>Left</option>
+            </select>
+            <label for="coiX">COI X (%):</label>
+            <input id="coiX" type="number" min="0" max="100" value="70" oninput="onCOIAnchorChange()" />
+            <label><input id="coiShowStrike" type="checkbox" checked onchange="onCOIShowStrikeChange()" /> COI Strike Labels</label>
+            <label><input id="coiShowValues" type="checkbox" checked onchange="onCOIShowValuesChange()" /> COI Value Labels</label>
+        </div>
+    </div>
+    
+    <div id="chart"></div>
+
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        // Simple COI Renderer (center-anchored bars)
+        class SeparateCOIRenderer {
+            constructor(data) { this._data = data; }
+            draw(target) {
+                if (!this._data.show) return;
+                target.useBitmapCoordinateSpace(scope => {
+                    if (!this._data.items || this._data.items.length === 0) return;
+                    const ctx = scope.context;
+                    const series = this._data.series;
+                    const chartWidth = scope.bitmapSize.width / scope.horizontalPixelRatio;
+                    const anchorX = chartWidth * (this._data.anchorRatio ?? 0.5); // configurable X anchor
+                    const view = this._data.view || 'right';
+                    const dir = view === 'right' ? 1 : -1; // positive bars go to 'view' side
+                    // anchor line
+                    ctx.strokeStyle = '#666';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(anchorX * scope.horizontalPixelRatio, 0);
+                    ctx.lineTo(anchorX * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                    ctx.stroke();
+
+                    // Pre-compute fixed label offset based on max negative/positive extents
+                    const maxLeftExtent = this._data.items.reduce((mx, it) => {
+                        const ceNeg = (it.ceOI ?? 0) < 0 ? (it.ceWidth ?? 0) : 0;
+                        const peNeg = (it.peOI ?? 0) < 0 ? (it.peWidth ?? 0) : 0;
+                        return Math.max(mx, ceNeg + peNeg);
+                    }, 0);
+                    const maxRightExtent = this._data.items.reduce((mx, it) => {
+                        const cePos = (it.ceOI ?? 0) >= 0 ? (it.ceWidth ?? 0) : 0;
+                        const pePos = (it.peOI ?? 0) >= 0 ? (it.peWidth ?? 0) : 0;
+                        return Math.max(mx, cePos + pePos);
+                    }, 0);
+                    const fixedLabelPad = 8 + (view === 'right' ? maxLeftExtent : maxRightExtent); // CSS px
+
+                    this._data.items.forEach(item => {
+                        const yStrike = series.priceToCoordinate(item.strike);
+                        if (yStrike === null) return;
+                        const delta = 15;
+                        const yUp = series.priceToCoordinate(item.strike + delta);
+                        const yDown = series.priceToCoordinate(item.strike - delta);
+                        if (yUp === null || yDown === null) return;
+                        const marginPx = 0;
+
+                        // PE: from strike to strike+delta (upper area)
+                        // Ensure bottom edge aligns exactly at strike even when height is capped
+                        const peFullUpH = Math.max(0, Math.abs(yStrike - yUp));
+                        const peHeightCss = Math.min(15, Math.max(2, peFullUpH));
+                        const peTopPx = yStrike - peHeightCss;
+                        const peTop = (peTopPx) * scope.verticalPixelRatio;
+                        const peBarH = peHeightCss * scope.verticalPixelRatio;
+
+                        // CE: from strike to strike-delta (lower area)
+                        const ceTopPx = yStrike;
+                        const ceBottomPx = Math.max(yStrike, yDown);
+                        const ceHeightCss = Math.min(15, Math.max(2, (ceBottomPx - ceTopPx)));
+                        const ceTop = (ceTopPx) * scope.verticalPixelRatio;
+                        const ceBarH = ceHeightCss * scope.verticalPixelRatio;
+
+                        // Draw CE bar (upper band). Positive -> to 'view' side with RED. Negative -> opposite side with GREEN.
+                        if (item.ceWidth > 0) {
+                            const cePositive = (item.ceOI ?? 0) >= 0;
+                            const ceColorFill = cePositive ? '#f44336' : '#4caf50';
+                            const ceColorStroke = cePositive ? '#b71c1c' : '#1b5e20';
+                            const ceWidthPx = item.ceWidth * scope.horizontalPixelRatio;
+                            const anchorPx = anchorX * scope.horizontalPixelRatio;
+                            const ceX = cePositive
+                                ? (dir === 1 ? anchorPx : anchorPx - ceWidthPx)
+                                : (dir === 1 ? anchorPx - ceWidthPx : anchorPx);
+                            ctx.fillStyle = ceColorFill;
+                            ctx.fillRect(
+                                ceX,
+                                peTop,
+                                ceWidthPx,
+                                peBarH
+                            );
+                            ctx.strokeStyle = ceColorStroke;
+                            ctx.lineWidth = 1;
+                            ctx.strokeRect(
+                                ceX,
+                                peTop,
+                                ceWidthPx,
+                                peBarH
+                            );
+                            if (this._data.showValueLabels && item.ceWidth > 15) {
+                                ctx.fillStyle = '#ffffff';
+                                ctx.font = '8px Arial';
+                                ctx.textAlign = 'center';
+                                const textX = (anchorX + ((cePositive ? 1 : -1) * dir * item.ceWidth / 2)) * scope.horizontalPixelRatio;
+                                const textY = (peTopPx + peHeightCss / 2) * scope.verticalPixelRatio;
+                                ctx.fillText((Math.abs(item.ceOI) / 1000).toFixed(0) + 'K', textX, textY);
+                            }
+                        }
+
+                        // Draw PE bar (lower band). Positive -> to 'view' side with GREEN. Negative -> opposite side with RED.
+                        if (item.peWidth > 0) {
+                            const pePositive = (item.peOI ?? 0) >= 0;
+                            const peColorFill = pePositive ? '#4caf50' : '#f44336';
+                            const peColorStroke = pePositive ? '#1b5e20' : '#b71c1c';
+                            const peWidthPx = item.peWidth * scope.horizontalPixelRatio;
+                            const anchorPx = anchorX * scope.horizontalPixelRatio;
+                            const peX = pePositive
+                                ? (dir === 1 ? anchorPx : anchorPx - peWidthPx)
+                                : (dir === 1 ? anchorPx - peWidthPx : anchorPx);
+                            ctx.fillStyle = peColorFill;
+                            ctx.fillRect(
+                                peX,
+                                ceTop,
+                                peWidthPx,
+                                ceBarH
+                            );
+                            ctx.strokeStyle = peColorStroke;
+                            ctx.lineWidth = 1;
+                            ctx.strokeRect(
+                                peX,
+                                ceTop,
+                                peWidthPx,
+                                ceBarH
+                            );
+                            if (this._data.showValueLabels && item.peWidth > 15) {
+                                ctx.fillStyle = '#ffffff';
+                                ctx.font = '8px Arial';
+                                ctx.textAlign = 'center';
+                                const textX = (anchorX + ((pePositive ? 1 : -1) * dir * item.peWidth / 2)) * scope.horizontalPixelRatio;
+                                const textY = (ceTopPx + ceHeightCss / 2) * scope.verticalPixelRatio;
+                                ctx.fillText((Math.abs(item.peOI) / 1000).toFixed(0) + 'K', textX, textY);
+                            }
+                        }
+
+                        // Strike price label: fixed position on opposite side of bar direction based on view
+                        if (this._data.showStrikeLabels) {
+                            ctx.fillStyle = '#ffffff';
+                            ctx.font = '11px Arial';
+                            if (view === 'right') {
+                                ctx.textAlign = 'right';
+                                ctx.fillText(
+                                    item.strike.toString(),
+                                    (anchorX - fixedLabelPad) * scope.horizontalPixelRatio,
+                                    (yStrike + 3) * scope.verticalPixelRatio
+                                );
+                            } else {
+                                ctx.textAlign = 'left';
+                                ctx.fillText(
+                                    item.strike.toString(),
+                                    (anchorX + fixedLabelPad) * scope.horizontalPixelRatio,
+                                    (yStrike + 3) * scope.verticalPixelRatio
+                                );
+                            }
+                        }
+                    });
+                });
+            }
+        }
+
+        class SeparateCOIPaneView {
+            constructor(source) {
+                this._source = source;
+                this._maxWidth = 140;
+                this._items = [];
+            }
+            update() {
+                const data = this._source._coiData;
+                const maxCE = Math.max(...data.strikes.map(s => Math.abs(s.ceOI ?? 0)));
+                const maxPE = Math.max(...data.strikes.map(s => Math.abs(s.peOI ?? 0)));
+                const maxOI = Math.max(1, maxCE, maxPE);
+                this._items = data.strikes.map(s => ({
+                    strike: s.price,
+                    ceOI: s.ceOI ?? 0,
+                    peOI: s.peOI ?? 0,
+                    ceWidth: Math.max(4, Math.abs(s.ceOI ?? 0) / maxOI * this._maxWidth),
+                    peWidth: Math.max(4, Math.abs(s.peOI ?? 0) / maxOI * this._maxWidth),
+                }));
+            }
+            renderer() {
+                return new SeparateCOIRenderer({
+                    items: this._items,
+                    series: this._source._series,
+                    show: this._source._show,
+                    showStrikeLabels: this._source._showStrikeLabels,
+                    showValueLabels: this._source._showValueLabels,
+                    view: this._source._view || 'right',
+                    anchorRatio: this._source._anchorRatio ?? 0.5,
+                });
+            }
+        }
+
+        class SeparateCOI {
+            constructor(chart, series, coiData) {
+                this._chart = chart;
+                this._series = series;
+                this._coiData = coiData; // { strikes: [{price, oi}] }
+                this._show = false;
+                this._showStrikeLabels = true;
+                this._showValueLabels = true;
+                this._view = 'left';
+                this._anchorRatio = 0.7;
+                this._paneViews = [new SeparateCOIPaneView(this)];
+            }
+            updateAllViews() { this._paneViews.forEach(p => p.update()); }
+            updateData(newData) { this._coiData = newData; this.updateAllViews(); }
+            toggleCOI() { this._show = !this._show; this.updateAllViews(); return this._show; }
+            autoscaleInfo() {
+                const minP = Math.min(...this._coiData.strikes.map(s => s.price));
+                const maxP = Math.max(...this._coiData.strikes.map(s => s.price));
+                return { priceRange: { minValue: minP, maxValue: maxP } };
+            }
+            paneViews() { return this._paneViews; }
+            setView(view) { this._view = view === 'left' ? 'left' : 'right'; this.updateAllViews(); }
+            setAnchorRatio(r) { this._anchorRatio = Math.max(0, Math.min(1, Number(r) || 0.5)); this.updateAllViews(); }
+            setShowStrikeLabels(v) { this._showStrikeLabels = !!v; this.updateAllViews(); }
+            setShowValueLabels(v) { this._showValueLabels = !!v; this.updateAllViews(); }
+        }
+        // Separate CE/PE OI Renderer
+        class SeparateOIRenderer {
+            constructor(data) {
+                this._data = data;
+            }
+
+            draw(target) {
+                target.useBitmapCoordinateSpace(scope => {
+                    if (!this._data.items || this._data.items.length === 0) return;
+                    const ctx = scope.context;
+                    const series = this._data.series; // for priceToCoordinate per frame
+                    
+                    // Chart positioning
+                    const chartWidth = scope.bitmapSize.width / scope.horizontalPixelRatio;
+                    const view = (this._data.view ?? 'right');
+                    const isRight = view === 'right';
+                    const anchorX = chartWidth * (this._data.anchorRatio ?? (isRight ? 0.95 : 0.05));
+                    const ceAnchorX = anchorX;
+                    const peAnchorX = anchorX;
+                    const offsetPx = this._data.offsetPx ?? 20; // vertical offset in CSS pixels
+                    
+                    // Vertical reference line at shared anchor
+                    ctx.strokeStyle = '#555';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(anchorX * scope.horizontalPixelRatio, 0);
+                    ctx.lineTo(anchorX * scope.horizontalPixelRatio, scope.bitmapSize.height);
+                    ctx.stroke();
+                    
+
+                    // Draw OI bars at each strike price level (recompute Y each frame)
+                    const strikes = this._data.items;
+                    const maxBarWidth = Math.max(0, ...strikes.map(s => Math.max(s.ceWidth || 0, s.peWidth || 0)));
+                    const fixedLabelPad = Math.max(8, Math.min(40, maxBarWidth * 0.3));
+                    const ys = strikes.map(s => series.priceToCoordinate(s.strike));
+                    const delta = this._data.deltaPrice ?? 15; // price units
+                    strikes.forEach((item, idx) => {
+                        const yStrike = ys[idx];
+                        if (yStrike == null) return;
+                        const yUp = series.priceToCoordinate(item.strike + delta);
+                        const yDown = series.priceToCoordinate(item.strike - delta);
+                        if (yUp == null || yDown == null) return;
+
+                        const marginPx = 0;
+
+                        // PE: from strike to strike+delta (upper area)
+                        // Ensure bottom edge aligns exactly at strike even when height is capped
+                        const peFullUpH = Math.max(0, Math.abs(yStrike - yUp));
+                        const peHeightCss = Math.min(15, Math.max(2, peFullUpH));
+                        const peTopPx = yStrike - peHeightCss;
+                        const peTop = (peTopPx) * scope.verticalPixelRatio;
+                        const peBarH = peHeightCss * scope.verticalPixelRatio;
+
+                        // CE: from strike-delta to strike (lower area)
+                        const ceTopPx = Math.min(yStrike, yDown) === yStrike ? yStrike : Math.min(yStrike, yDown);
+                        // Since yDown is below (greater y), ceTop should be at strike
+                        const ceTopPxFinal = yStrike;
+                        const ceBottomPx = Math.max(yStrike, yDown);
+                        const ceHeightCss = Math.min(15, Math.max(2, (ceBottomPx - ceTopPxFinal)));
+                        const ceTop = (ceTopPxFinal) * scope.verticalPixelRatio;
+                        const ceBarH = ceHeightCss * scope.verticalPixelRatio;
+
+                        // Only CE and PE bars (no COI)
+                        
+                        // Draw CE bar in UPPER band with RED palette (direction depends on view)
+                        if (this._data.showCE && item.ceWidth > 0) {
+                            ctx.fillStyle = item.ceIntensity > 0.7 ? '#b71c1c' : 
+                                           item.ceIntensity > 0.4 ? '#c62828' : '#f44336';
+                            if (isRight) {
+                                // extend right from anchor
+                                ctx.fillRect(
+                                    ceAnchorX * scope.horizontalPixelRatio,
+                                    peTop,
+                                    item.ceWidth * scope.horizontalPixelRatio,
+                                    peBarH
+                                );
+                            } else {
+                                // extend left from anchor
+                                ctx.fillRect(
+                                    (ceAnchorX - item.ceWidth) * scope.horizontalPixelRatio,
+                                    peTop,
+                                    item.ceWidth * scope.horizontalPixelRatio,
+                                    peBarH
+                                );
+                            }
+                            
+                            ctx.strokeStyle = '#b71c1c';
+                            ctx.lineWidth = 1;
+                            if (isRight) {
+                                ctx.strokeRect(
+                                    ceAnchorX * scope.horizontalPixelRatio,
+                                    peTop,
+                                    item.ceWidth * scope.horizontalPixelRatio,
+                                    peBarH
+                                );
+                            } else {
+                                ctx.strokeRect(
+                                    (ceAnchorX - item.ceWidth) * scope.horizontalPixelRatio,
+                                    peTop,
+                                    item.ceWidth * scope.horizontalPixelRatio,
+                                    peBarH
+                                );
+                            }
+                            
+                            // CE OI value (if labels enabled)
+                            if (this._data.showValueLabels && item.ceWidth > 15) {
+                                ctx.fillStyle = '#ffffff';
+                                ctx.font = '8px Arial';
+                                ctx.textAlign = 'center';
+                                const ceTextX = isRight
+                                    ? (ceAnchorX + item.ceWidth / 2)
+                                    : (ceAnchorX - item.ceWidth / 2);
+                                ctx.fillText(
+                                    (item.ceOI / 1000).toFixed(0) + 'K',
+                                    ceTextX * scope.horizontalPixelRatio,
+                                    (peTopPx + peHeightCss / 2) * scope.verticalPixelRatio
+                                );
+                            }
+                        }
+                        
+                        // Draw PE bar in LOWER band with GREEN palette (direction depends on view)
+                        if (this._data.showPE && item.peWidth > 0) {
+                            ctx.fillStyle = item.peIntensity > 0.7 ? '#1b5e20' : 
+                                           item.peIntensity > 0.4 ? '#388e3c' : '#4caf50';
+                            if (isRight) {
+                                // extend right from anchor
+                                ctx.fillRect(
+                                    peAnchorX * scope.horizontalPixelRatio,
+                                    ceTop,
+                                    item.peWidth * scope.horizontalPixelRatio,
+                                    ceBarH
+                                );
+                            } else {
+                                // extend left from anchor
+                                ctx.fillRect(
+                                    (peAnchorX - item.peWidth) * scope.horizontalPixelRatio,
+                                    ceTop,
+                                    item.peWidth * scope.horizontalPixelRatio,
+                                    ceBarH
+                                );
+                            }
+                            
+                            ctx.strokeStyle = '#1b5e20';
+                            ctx.lineWidth = 1;
+                            if (isRight) {
+                                ctx.strokeRect(
+                                    peAnchorX * scope.horizontalPixelRatio,
+                                    ceTop,
+                                    item.peWidth * scope.horizontalPixelRatio,
+                                    ceBarH
+                                );
+                            } else {
+                                ctx.strokeRect(
+                                    (peAnchorX - item.peWidth) * scope.horizontalPixelRatio,
+                                    ceTop,
+                                    item.peWidth * scope.horizontalPixelRatio,
+                                    ceBarH
+                                );
+                            }
+                            
+                            // PE OI value (if labels enabled)
+                            if (this._data.showValueLabels && item.peWidth > 15) {
+                                ctx.fillStyle = '#ffffff';
+                                ctx.font = '8px Arial';
+                                ctx.textAlign = 'center';
+                                const peTextX = isRight
+                                    ? (peAnchorX + item.peWidth / 2)
+                                    : (peAnchorX - item.peWidth / 2);
+                                ctx.fillText(
+                                    (item.peOI / 1000).toFixed(0) + 'K',
+                                    peTextX * scope.horizontalPixelRatio,
+                                    (ceTopPxFinal + ceHeightCss / 2) * scope.verticalPixelRatio
+                                );
+                            }
+                        }
+                        
+
+                        // Draw strike price label near anchor (opposite side of bar direction, if labels enabled)
+                        if (this._data.showStrikeLabels) {
+                            ctx.fillStyle = '#ffffff';
+                            ctx.font = '11px Arial';
+                            if (isRight) {
+                                // bars go right -> label goes left of anchor
+                                ctx.textAlign = 'right';
+                                ctx.fillText(
+                                    item.strike.toString(),
+                                    (anchorX - fixedLabelPad) * scope.horizontalPixelRatio,
+                                    (yStrike + 3) * scope.verticalPixelRatio
+                                );
+                            } else {
+                                // bars go left -> label goes right of anchor
+                                ctx.textAlign = 'left';
+                                ctx.fillText(
+                                    item.strike.toString(),
+                                    (anchorX + fixedLabelPad) * scope.horizontalPixelRatio,
+                                    (yStrike + 3) * scope.verticalPixelRatio
+                                );
+                            }
+                        }
+                    });
+                });
+            }
+        }
+
+        class SeparateOIPaneView {
+            constructor(source) {
+                this._source = source;
+                this._maxWidth = 160;
+                this._items = [];
+            }
+            update() {
+                const data = this._source._oiData;
+                if (!data || !data.strikes) { this._items = []; return; }
+                const maxCE = Math.max(1, ...data.strikes.map(s => Math.abs(s.ceOI ?? 0)));
+                const maxPE = Math.max(1, ...data.strikes.map(s => Math.abs(s.peOI ?? 0)));
+                const maxOI = Math.max(1, maxCE, maxPE);
+                this._items = data.strikes.map(s => ({
+                    strike: s.price,
+                    ceOI: s.ceOI ?? 0,
+                    peOI: s.peOI ?? 0,
+                    ceWidth: Math.max(4, Math.abs(s.ceOI ?? 0) / maxOI * this._maxWidth),
+                    peWidth: Math.max(4, Math.abs(s.peOI ?? 0) / maxOI * this._maxWidth),
+                    ceIntensity: Math.abs(s.ceOI ?? 0) / maxOI,
+                    peIntensity: Math.abs(s.peOI ?? 0) / maxOI,
+                }));
+            }
+            renderer() {
+                return new SeparateOIRenderer({
+                    items: this._items,
+                    series: this._source._series,
+                    showCE: this._source._showCE,
+                    showPE: this._source._showPE,
+                    showStrikeLabels: this._source._showStrikeLabels,
+                    showValueLabels: this._source._showValueLabels,
+                    view: this._source._view,
+                    anchorRatio: this._source._anchorRatio,
+                    offsetPx: 20,
+                });
+
+            }
+        }
+
+        class SeparateOI {
+            constructor(chart, series, oiData) {
+                this._chart = chart;
+                this._series = series;
+                this._oiData = oiData;
+                this._minPrice = Math.min(...oiData.strikes.map(s => s.price));
+                this._maxPrice = Math.max(...oiData.strikes.map(s => s.price));
+                this._showCE = false; // Controlled by global OI toggle
+                this._showPE = false; // Controlled by global OI toggle
+                this._view = 'left';
+                this._anchorRatio = 0.95;
+                this._showStrikeLabels = true;
+                this._showValueLabels = true;
+                this._paneViews = [new SeparateOIPaneView(this)];
+            }
+
+            updateAllViews() {
+                this._paneViews.forEach(pw => pw.update());
+            }
+
+            updateData(newOiData) {
+                this._oiData = newOiData;
+                this._minPrice = Math.min(...newOiData.strikes.map(s => s.price));
+                this._maxPrice = Math.max(...newOiData.strikes.map(s => s.price));
+                this.updateAllViews();
+            }
+
+            toggleCE() {
+                this._showCE = !this._showCE;
+                this.updateAllViews();
+                return this._showCE;
+            }
+
+            togglePE() {
+                this._showPE = !this._showPE;
+                this.updateAllViews();
+                return this._showPE;
+            }
+
+
+            toggleOI() {
+                const newState = !(this._showCE && this._showPE);
+                this._showCE = newState;
+                this._showPE = newState;
+                this.updateAllViews();
+                return newState;
+            }
+
+            autoscaleInfo(startTimePoint, endTimePoint) {
+                return {
+                    priceRange: {
+                        minValue: this._minPrice,
+                        maxValue: this._maxPrice,
+                    },
+                };
+            }
+
+            paneViews() {
+                return this._paneViews;
+            }
+
+            setView(view) {
+                this._view = (view === 'left') ? 'left' : 'right';
+                this.updateAllViews();
+            }
+
+            setAnchorRatio(r) {
+                this._anchorRatio = Math.max(0, Math.min(1, Number(r) || 0.95));
+                this.updateAllViews();
+            }
+
+            setShowStrikeLabels(v) { this._showStrikeLabels = !!v; this.updateAllViews(); }
+            setShowValueLabels(v) { this._showValueLabels = !!v; this.updateAllViews(); }
+        }
+
+        // Chart setup
+        const chart = LightweightCharts.createChart('chart', {
+            width: document.getElementById('chart').clientWidth,
+            height: Math.max(300, window.innerHeight - document.querySelector('.controls').offsetHeight - 40),
+            layout: {
+                background: { color: '#131722' },
+                textColor: '#d1d4dc',
+            },
+            localization: {
+                locale: 'en-IN',
+                timeFormatter: (t) => {
+                    // t can be UTCTimestamp (seconds) or BusinessDay object
+                    if (t && typeof t === 'object' && 'year' in t) {
+                        const d = new Date(Date.UTC(t.year, (t.month || 1) - 1, t.day || 1));
+                        return d.toLocaleDateString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            day: '2-digit',
+                            month: 'short',
+                        });
+                    }
+                    const date = new Date((Number(t) || 0) * 1000);
+                    return date.toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                    });
+                },
+            },
+            grid: {
+                vertLines: { color: '#2B2B43' },
+                horzLines: { color: '#2B2B43' },
+            },
+            timeScale: {
+                borderColor: '#485c7b',
+                timeVisible: true,
+                secondsVisible: false,
+                rightOffset: 10,
+                tickMarkFormatter: (t, tickMarkType, locale) => {
+                    // Support BusinessDay and UTCTimestamp (seconds)
+                    if (t && typeof t === 'object' && 'year' in t) {
+                        const d = new Date(Date.UTC(t.year, (t.month || 1) - 1, t.day || 1));
+                        return d.toLocaleDateString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            day: '2-digit',
+                            month: 'short',
+                        });
+                    }
+                    const date = new Date((Number(t) || 0) * 1000);
+                    return date.toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                    });
+                },
+            },
+            rightPriceScale: {
+                borderColor: '#485c7b',
+            },
+        });
+
+        // Add candlestick series for NIFTY-like data
+        const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+        });
+
+        // Generate NIFTY-like price data with realistic movements (5-minute candles)
+        function generateNIFTYData() {
+            const data = [];
+            let basePrice = 25200;
+            const bars = 200; // number of 5-minute candles
+            const startTime = Math.floor(Date.now() / 1000) - bars * 5 * 60; // start bars ago
+
+            for (let i = 0; i < bars; i++) {
+                const time = startTime + i * 5 * 60; // 5-minute increments
+                const volatility = 0.001; // ~0.1% per 5-min
+                const change = (Math.random() - 0.5) * basePrice * volatility;
+
+                const open = basePrice;
+                const close = basePrice + change;
+                const high = Math.max(open, close) + Math.random() * basePrice * 0.0005;
+                const low = Math.min(open, close) - Math.random() * basePrice * 0.0005;
+
+                data.push({
+                    time,
+                    open: Math.round(open * 100) / 100,
+                    high: Math.round(high * 100) / 100,
+                    low: Math.round(low * 100) / 100,
+                    close: Math.round(close * 100) / 100,
+                });
+                basePrice = close;
+            }
+            return data;
+        }
+
+        const oiProfiles = [];
+        let coiProfile = null;
+        let showMaxOI = true;
+        
+        // Global data holders - static OHLC from user payload
+        const staticOHLC = {"t":[1755833700,1755834300,1755834600,1755834900,1755835200,1755835500,1755835800,1755836100,1755836400,1755836700,1755837000,1755837300,1755837600,1755837900,1755838200,1755838500,1755838800,1755839100,1755839400,1755839700,1755840000,1755840300,1755840600,1755840900,1755841200,1755841500,1755841800,1755842100,1755842400,1755842700,1755843000,1755843300,1755843600,1755843900,1755844200,1755844500,1755844800,1755845100,1755845400,1755845700,1755846000,1755846300,1755846600,1755846900,1755847200,1755847500,1755847800,1755848100,1755848400,1755848700,1755849000,1755849300,1755849600,1755849900,1755850200,1755850500,1755850800,1755851100,1755851400,1755851700,1755852000,1755852300,1755852600,1755852900,1755853200,1755853500,1755853800,1755854100,1755854400,1755854700,1755855000,1755855300,1755855600,1755855900,1755856200,1755856500,1756092900,1756093500,1756093800,1756094100,1756094400,1756094700,1756095000,1756095300,1756095600,1756095900,1756096200,1756096500,1756096800,1756097100,1756097400,1756097700,1756098000,1756098300,1756098600,1756098900,1756099200,1756099500,1756099800,1756100100,1756100400,1756100700,1756101000,1756101300,1756101600,1756101900,1756102200,1756102500,1756102800,1756103100,1756103400,1756103700,1756104000,1756104300,1756104600,1756104900,1756105200,1756105500,1756105800,1756106100,1756106400,1756106700,1756107000,1756107300,1756107600,1756107900,1756108200,1756108500,1756108800,1756109100,1756109400,1756109700,1756110000,1756110300,1756110600,1756110900,1756111200,1756111500,1756111800,1756112100,1756112400,1756112700,1756113000,1756113300,1756113600,1756113900,1756114200,1756114500,1756114800,1756115100,1756115400,1756115700,1756179300,1756179900,1756180200,1756180500,1756180800,1756181100,1756181400,1756181700,1756182000,1756182300,1756182600,1756182900,1756183200,1756183500,1756183800,1756184100,1756184400,1756184700,1756185000,1756185300,1756185600,1756185900,1756186200,1756186500,1756186800,1756187100,1756187400,1756187700,1756188000,1756188300,1756188600,1756188900,1756189200,1756189500,1756189800,1756190100,1756190400,1756190700,1756191000,1756191300,1756191600,1756191900,1756192200,1756192500,1756192800,1756193100,1756193400,1756193700,1756194000,1756194300,1756194600,1756194900,1756195200,1756195500,1756195800,1756196100,1756196400,1756196700,1756197000,1756197300,1756197600,1756197900,1756198200,1756198500,1756198800,1756199100,1756199400,1756199700,1756200000,1756200300,1756200600,1756200900,1756201200,1756201500,1756201800,1756202100],"c":[25064.150390625,25022.44921875,24996.94921875,24986.19921875,24964.849609375,24962.900390625,24980.25,24971.5,24974.5,24961,24959.44921875,24967.44921875,24960.900390625,24931.69921875,24920,24933.099609375,24924.44921875,24923.55078125,24914.44921875,24913,24909,24910.44921875,24913.44921875,24923.099609375,24908.94921875,24908.44921875,24922.900390625,24920.30078125,24920.80078125,24927.349609375,24936.44921875,24937.900390625,24943,24950.44921875,24957.099609375,24939.400390625,24925.30078125,24917.349609375,24918.150390625,24926.099609375,24930.44921875,24925.19921875,24922.650390625,24925.55078125,24927.19921875,24920.05078125,24919.400390625,24918.80078125,24922.150390625,24923.19921875,24933.599609375,24932.05078125,24935.19921875,24947,24943.55078125,24941.349609375,24941.900390625,24931.849609375,24925.150390625,24930.400390625,24922.69921875,24908,24900.5,24905.55078125,24878,24886.94921875,24887.849609375,24885.30078125,24895.25,24893.5,24870.400390625,24871.150390625,24873.30078125,24870.75,24866,24870.099609375,24949.150390625,24920.599609375,24934.94921875,24947.599609375,24956.30078125,24967.30078125,24968.099609375,24955.400390625,24947.099609375,24926.19921875,24920,24904.349609375,24905.650390625,24918.849609375,24928.19921875,24914.69921875,24927.19921875,24945.19921875,24936,24944.69921875,24953.849609375,24949.099609375,24960.19921875,24954.05078125,24950.30078125,24948.55078125,24945.94921875,24949.05078125,24948.80078125,24947,24961.30078125,24956.44921875,24951.900390625,24964.400390625,24967.94921875,24968.900390625,24970.650390625,24978,24978.400390625,24974.55078125,24977.80078125,24979.94921875,24981.650390625,24991.19921875,24988.400390625,24989.599609375,24993.5,24994.94921875,25002.05078125,24994.80078125,24989.75,24987.80078125,24989.30078125,24992.44921875,24996.650390625,25005.19921875,25008.94921875,25004.55078125,25004.349609375,25008.650390625,24996.150390625,24997,24983.44921875,24983.900390625,24974.80078125,24963.05078125,24960.849609375,24972.5,24979.75,24990.650390625,24967.5,24962.900390625,24954.69921875,24968.5,24974.599609375,24967.75,24899.5,24853.94921875,24805.30078125,24800.25,24796.19921875,24767.69921875,24760.44921875,24775.650390625,24779.900390625,24795.900390625,24799.150390625,24801.30078125,24797.44921875,24802.900390625,24805.349609375,24798.349609375,24786.80078125,24788.5,24781,24768.30078125,24770.94921875,24794.25,24803.400390625,24797.05078125,24800.19921875,24808.650390625,24811.349609375,24823.400390625,24821.099609375,24809.69921875,24806.25,24805.44921875,24801.80078125,24806.25,24804.19921875,24801.19921875,24799.05078125,24808.25,24810,24801.150390625,24787.94921875,24786.44921875,24785.75,24786,24787.25,24794.650390625,24804.75,24807.599609375,24804.19921875,24796.30078125,24806.349609375,24807.900390625,24811.150390625,24805.19921875,24811.94921875,24804.150390625,24809.400390625,24806.349609375,24801.55078125,24799.55078125,24772.69921875,24760.150390625,24761.099609375,24787.400390625,24767,24789.80078125,24776.25,24773.05078125,24763.650390625,24758.94921875,24719.099609375,24720.349609375,24693.75,24695.25,24696.849609375,24712.05078125],"o":[25064.150390625,25070.650390625,25022.25,24996.94921875,24986.349609375,24965.25,24963.599609375,24980.30078125,24971.69921875,24973.5,24960.44921875,24958.900390625,24968.150390625,24961.30078125,24932.44921875,24919.400390625,24933.44921875,24924.30078125,24922.25,24915.44921875,24912.44921875,24908.900390625,24911.599609375,24912.900390625,24923.19921875,24909.19921875,24910.25,24923.150390625,24920.599609375,24920.5,24928.400390625,24937.349609375,24938.75,24943.150390625,24952.099609375,24956.400390625,24941.150390625,24924.94921875,24915.150390625,24917.30078125,24926.650390625,24930.30078125,24922.900390625,24923.30078125,24924.900390625,24926.349609375,24919.69921875,24919.30078125,24918.650390625,24920.94921875,24923.19921875,24934.099609375,24931.80078125,24935.55078125,24947.5,24943.75,24942.849609375,24940.849609375,24930.900390625,24924.44921875,24931.30078125,24921.5,24907.55078125,24898.80078125,24905.94921875,24878,24886.650390625,24889.19921875,24885.849609375,24894.849609375,24892.05078125,24870.05078125,24872.55078125,24873.55078125,24870.94921875,24868,24949.150390625,24957.25,24923.099609375,24933.900390625,24948.30078125,24958.099609375,24967.25,24967.900390625,24952.69921875,24948.55078125,24926.599609375,24919.19921875,24906.099609375,24906.05078125,24919.69921875,24927.69921875,24914.900390625,24927.30078125,24945.69921875,24937.400390625,24945.349609375,24954.150390625,24950.099609375,24959.849609375,24954.150390625,24949.650390625,24947.900390625,24948,24949.94921875,24949.19921875,24947.05078125,24960.900390625,24955.80078125,24951.900390625,24964.30078125,24968.75,24969.400390625,24972.849609375,24979.849609375,24978.55078125,24975.849609375,24978.25,24979.150390625,24981.400390625,24992.75,24990.69921875,24990.80078125,24995.349609375,24996,25001.80078125,24995.25,24990.80078125,24988.099609375,24988.599609375,24993.05078125,24997.400390625,25006.150390625,25009.599609375,25004.75,25003.5,25008.400390625,24996.349609375,24997.05078125,24983.849609375,24986.05078125,24975.05078125,24963.30078125,24960.05078125,24972.69921875,24981.44921875,24991.44921875,24968.80078125,24964.80078125,24956.05078125,24968.94921875,24972.849609375,24899.5,24894.25,24846.599609375,24807.5,24800.05078125,24791.099609375,24766.75,24762.30078125,24776.75,24780.75,24797.55078125,24799.19921875,24800.30078125,24797.19921875,24802.30078125,24804.650390625,24797.05078125,24786.25,24789.80078125,24780.099609375,24767.94921875,24770.349609375,24795.05078125,24803.30078125,24796.25,24800.25,24809.900390625,24811.849609375,24826.349609375,24821.55078125,24806.650390625,24805.849609375,24806.099609375,24801.94921875,24806.5,24803.55078125,24799.30078125,24800.400390625,24808.69921875,24810.19921875,24800.69921875,24787.25,24785.849609375,24785.150390625,24789,24787.099609375,24795.19921875,24805.900390625,24806.849609375,24803.30078125,24796.75,24805.80078125,24807.05078125,24812.05078125,24806.94921875,24811.55078125,24803.55078125,24809.900390625,24806.349609375,24802.150390625,24798.650390625,24774,24760.849609375,24761,24786.900390625,24770.5,24787.55078125,24776.30078125,24773.650390625,24766.55078125,24758.44921875,24719.650390625,24722.349609375,24695.25,24695.69921875,24695.94921875],"h":[25064.150390625,25070.650390625,25022.25,25000.80078125,24986.349609375,24968.19921875,24980.25,24985.650390625,24983.400390625,24973.5,24960.44921875,24969.650390625,24970.30078125,24961.30078125,24935.69921875,24938.05078125,24934.400390625,24934,24922.25,24920.5,24915.19921875,24912.75,24917.650390625,24925.349609375,24923.19921875,24909.19921875,24925.099609375,24923.30078125,24926.349609375,24929.05078125,24937.349609375,24942.650390625,24943,24950.5,24958.19921875,24958.75,24943,24927.05078125,24923.80078125,24929.650390625,24930.94921875,24933.94921875,24924.900390625,24926.25,24929.94921875,24928.44921875,24922.30078125,24920.05078125,24925.599609375,24924.650390625,24933.599609375,24937.69921875,24935.19921875,24951.44921875,24951,24946.400390625,24943.400390625,24944.05078125,24932.80078125,24933.400390625,24932.44921875,24921.5,24912.849609375,24907.94921875,24906.099609375,24887.94921875,24891.69921875,24893.150390625,24896.55078125,24897.650390625,24892.05078125,24877,24873.80078125,24876.75,24871.80078125,24871.19921875,24949.150390625,24957.25,24936.599609375,24950.400390625,24956.650390625,24967.5,24972.44921875,24968.69921875,24953.94921875,24950.55078125,24931.05078125,24919.19921875,24913.55078125,24918.849609375,24929.69921875,24930.150390625,24936.05078125,24946.55078125,24946.150390625,24945.099609375,24953.900390625,24954.150390625,24960.19921875,24961.55078125,24954.150390625,24956.94921875,24948.44921875,24953.400390625,24957.650390625,24953.94921875,24961.44921875,24973.30078125,24957.150390625,24964.400390625,24969.25,24971.05078125,24971.19921875,24979.599609375,24981.69921875,24982.150390625,24981,24984.30078125,24984.400390625,24993.44921875,24995.349609375,24993.25,24996.19921875,24997.69921875,25002.849609375,25002.69921875,24996.900390625,24995.400390625,24993.55078125,24997.44921875,24998.150390625,25006.05078125,25010.19921875,25011.849609375,25007.349609375,25010.599609375,25010.25,25019.69921875,24997.94921875,24989.900390625,24986.19921875,24975.25,24965.69921875,24972.55078125,24980.349609375,24991.900390625,24991.44921875,24970.05078125,24964.80078125,24969.69921875,24976.099609375,24983.349609375,24899.5,24915.900390625,24846.599609375,24818.80078125,24802.25,24794.650390625,24781.05078125,24776.80078125,24786,24796.349609375,24801.099609375,24804.30078125,24806.900390625,24804.349609375,24808.55078125,24807.849609375,24802.150390625,24790.30078125,24790.900390625,24780.349609375,24773.94921875,24794.80078125,24808.19921875,24812.400390625,24805.05078125,24810.650390625,24818,24833.19921875,24828.94921875,24836.19921875,24811,24810.650390625,24808,24806.25,24809.19921875,24818.650390625,24801.19921875,24809,24811,24811.30078125,24801.349609375,24793.099609375,24792.599609375,24790.30078125,24796.55078125,24797.349609375,24807.94921875,24811.5,24809.19921875,24806,24806.349609375,24824.650390625,24815.75,24815.599609375,24815.44921875,24814.25,24813.55078125,24811.94921875,24807.05078125,24809.900390625,24799.05078125,24774.900390625,24766.19921875,24788.650390625,24789.69921875,24790.25,24791.30078125,24781.900390625,24774.599609375,24767.400390625,24760.55078125,24729.69921875,24722.349609375,24707.69921875,24705.25,24716.349609375],"l":[25064.150390625,25022.44921875,24996.94921875,24986.19921875,24951.849609375,24957.650390625,24958.650390625,24970.349609375,24960.05078125,24954.099609375,24946.19921875,24955.19921875,24960.349609375,24929.650390625,24914.94921875,24905.69921875,24921.150390625,24923.05078125,24909.900390625,24906.150390625,24908.150390625,24905.44921875,24898.75,24912.900390625,24907.55078125,24894.849609375,24908.650390625,24915.44921875,24915.05078125,24919.94921875,24926.69921875,24931.400390625,24935.5,24937.25,24935.150390625,24931.55078125,24923.099609375,24917,24915.150390625,24914.400390625,24920.30078125,24921.599609375,24918.19921875,24920.55078125,24923.55078125,24917.44921875,24914.5,24914.400390625,24916.94921875,24917.599609375,24919.849609375,24930.900390625,24929.900390625,24935.55078125,24941.650390625,24937.650390625,24937.650390625,24931.849609375,24923.849609375,24923.849609375,24919.80078125,24904.400390625,24899,24890.75,24875.099609375,24876.44921875,24882.44921875,24881.400390625,24885.400390625,24892.099609375,24866.55078125,24870.05078125,24866.19921875,24869.400390625,24865.69921875,24860.55078125,24949.150390625,24916.05078125,24917.80078125,24926.099609375,24943.55078125,24952,24962.099609375,24951.5,24941.5,24924.5,24914.599609375,24904.30078125,24899.25,24894.5,24917.80078125,24912.099609375,24913.849609375,24926.849609375,24935.650390625,24935.599609375,24943.400390625,24946.25,24944.849609375,24951.75,24945.099609375,24947.75,24941.69921875,24946.5,24946.80078125,24944.55078125,24947.05078125,24951.099609375,24949.150390625,24951.30078125,24961.25,24964.05078125,24963.099609375,24969.900390625,24973.400390625,24974.44921875,24971.25,24977.400390625,24977.44921875,24981.400390625,24987.55078125,24986.30078125,24988.25,24990.55078125,24994.75,24994.80078125,24987.19921875,24986.80078125,24986.75,24988.599609375,24990.650390625,24994.05078125,25004.05078125,25004.55078125,25001.94921875,25002.44921875,24995.400390625,24996.150390625,24982.94921875,24980.25,24972.05078125,24949.5,24957.30078125,24958.900390625,24972.5,24978.44921875,24966.94921875,24961.55078125,24954.400390625,24953.400390625,24963.099609375,24967.75,24899.5,24852.599609375,24797.849609375,24798.400390625,24782.349609375,24760.80078125,24759.44921875,24756.599609375,24767.19921875,24778.150390625,24778,24789.150390625,24793.30078125,24779.55078125,24798.25,24793.55078125,24785.150390625,24782,24779.80078125,24768.30078125,24765.55078125,24769.400390625,24793.099609375,24793.94921875,24796.25,24798.30078125,24807.30078125,24810.25,24820.69921875,24809.599609375,24798.400390625,24803.80078125,24799.349609375,24798.94921875,24801.94921875,24801.19921875,24795.55078125,24796.30078125,24805.44921875,24800.94921875,24783.599609375,24784.05078125,24776.19921875,24782.30078125,24787.25,24784.599609375,24794.94921875,24801.25,24798.650390625,24792.099609375,24795.349609375,24802.900390625,24806.150390625,24798.69921875,24804.099609375,24799.599609375,24799.5,24801.849609375,24799.599609375,24798.80078125,24765.25,24760.150390625,24758.349609375,24743.19921875,24766.69921875,24766.94921875,24774.849609375,24760.900390625,24757.44921875,24757.150390625,24711.69921875,24711.75,24690.94921875,24695.25,24693.55078125,24695.94921875]};
+        const priceData = staticOHLC.t.map((time, i) => ({
+            time,
+            open: staticOHLC.o[i],
+            high: staticOHLC.h[i],
+            low: staticOHLC.l[i],
+            close: staticOHLC.c[i],
+        }));
+        candlestickSeries.setData(priceData);
+
+        // ==== Indicators: EMA(55) and EMA(34) on main chart ====
+        function computeEMA(values, period) {
+            const k = 2 / (period + 1);
+            const out = new Array(values.length).fill(null);
+            let emaPrev = null;
+            for (let i = 0; i < values.length; i++) {
+                const v = values[i];
+                if (v == null) continue;
+                if (i === 0) {
+                    emaPrev = v; // seed with first value
+                } else {
+                    emaPrev = v * k + emaPrev * (1 - k);
+                }
+                if (i >= period - 1) out[i] = emaPrev;
+            }
+            return out;
+        }
+        const closes = priceData.map(p => p.close);
+        const ema55 = computeEMA(closes, 55);
+        const ema34 = computeEMA(closes, 34);
+
+        const ema55Series = chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#ffcc00',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+        });
+        const ema34Series = chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#42a5f5',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+        });
+        const ema55Data = priceData
+            .map((p, i) => (ema55[i] == null ? null : { time: p.time, value: ema55[i] }))
+            .filter(Boolean);
+        const ema34Data = priceData
+            .map((p, i) => (ema34[i] == null ? null : { time: p.time, value: ema34[i] }))
+            .filter(Boolean);
+        ema55Series.setData(ema55Data);
+        ema34Series.setData(ema34Data);
+
+        // Show full range on load
+        chart.timeScale().fitContent();
+
+        // ===== Add a second panel below (dynamically) + draggable splitter =====
+        const chartEl = document.getElementById('chart');
+        // splitter
+        const splitterEl = document.createElement('div');
+        splitterEl.id = 'chart-splitter';
+        splitterEl.style.height = '6px';
+        splitterEl.style.cursor = 'row-resize';
+        splitterEl.style.background = '#2B2B43';
+        splitterEl.style.userSelect = 'none';
+        splitterEl.style.width = '100%';
+        // bottom pane
+        const bottomEl = document.createElement('div');
+        bottomEl.id = 'chart-bottom';
+        bottomEl.style.height = '150px';
+        bottomEl.style.width = '100%';
+        // insert elements
+        chartEl.insertAdjacentElement('afterend', splitterEl);
+        splitterEl.insertAdjacentElement('afterend', bottomEl);
+
+        // Create bottom chart with same localization/time formatting
+        const chartBottom = LightweightCharts.createChart('chart-bottom', {
+            width: bottomEl.clientWidth || chartEl.clientWidth,
+            height: 150,
+            layout: {
+                background: { color: '#131722' },
+                textColor: '#d1d4dc',
+            },
+            localization: {
+                locale: 'en-IN',
+                timeFormatter: (t) => {
+                    if (t && typeof t === 'object' && 'year' in t) {
+                        const d = new Date(Date.UTC(t.year, (t.month || 1) - 1, t.day || 1));
+                        return d.toLocaleDateString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            day: '2-digit',
+                            month: 'short',
+                        });
+                    }
+                    const date = new Date((Number(t) || 0) * 1000);
+                    return date.toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                    });
+                },
+            },
+            grid: {
+                vertLines: { color: '#2B2B43' },
+                horzLines: { color: '#2B2B43' },
+            },
+            timeScale: {
+                borderColor: '#485c7b',
+                timeVisible: true,
+                secondsVisible: false,
+                rightOffset: 10,
+                tickMarkFormatter: (t) => {
+                    if (t && typeof t === 'object' && 'year' in t) {
+                        const d = new Date(Date.UTC(t.year, (t.month || 1) - 1, t.day || 1));
+                        return d.toLocaleDateString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            day: '2-digit',
+                            month: 'short',
+                        });
+                    }
+                    const date = new Date((Number(t) || 0) * 1000);
+                    return date.toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                    });
+                },
+            },
+            rightPriceScale: { borderColor: '#485c7b' },
+        });
+
+        // Bottom pane: only RSI (removed price area series)
+        
+        // ==== Indicator: RSI(14) on bottom chart ====
+        function computeRSI(values, period) {
+            const out = new Array(values.length).fill(null);
+            let gain = 0, loss = 0;
+            for (let i = 1; i <= period; i++) {
+                const ch = values[i] - values[i - 1];
+                gain += Math.max(ch, 0);
+                loss += Math.max(-ch, 0);
+            }
+            let avgGain = gain / period;
+            let avgLoss = loss / period;
+            const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
+            out[period] = 100 - 100 / (1 + rs);
+            for (let i = period + 1; i < values.length; i++) {
+                const ch = values[i] - values[i - 1];
+                const g = Math.max(ch, 0);
+                const l = Math.max(-ch, 0);
+                avgGain = (avgGain * (period - 1) + g) / period;
+                avgLoss = (avgLoss * (period - 1) + l) / period;
+                const rs2 = avgLoss === 0 ? Infinity : avgGain / avgLoss;
+                out[i] = 100 - 100 / (1 + rs2);
+            }
+            return out;
+        }
+        const rsi = computeRSI(closes, 14);
+        const rsiSeries = chartBottom.addSeries(LightweightCharts.LineSeries, {
+            color: '#ff7043',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+        });
+        const rsiData = priceData
+            .map((p, i) => (rsi[i] == null ? null : { time: p.time, value: rsi[i] }))
+            .filter(Boolean);
+        rsiSeries.setData(rsiData);
+
+        // 30/70 guide lines
+        const rsi30Series = chartBottom.addSeries(LightweightCharts.LineSeries, {
+            color: '#888',
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+        });
+        const rsi70Series = chartBottom.addSeries(LightweightCharts.LineSeries, {
+            color: '#888',
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+        });
+        const rsiGuides = priceData.map(p => ({ time: p.time, value: 30 }));
+        rsi30Series.setData(rsiGuides);
+        rsi70Series.setData(priceData.map(p => ({ time: p.time, value: 70 })));
+        chartBottom.timeScale().fitContent();
+
+        // Split sizing state
+        let splitRatio = 0.7; // main pane height ratio (0..1)
+        const getSplitterH = () => (document.getElementById('chart-splitter')?.offsetHeight || 6);
+
+        // Drag to resize panes
+        (function enableSplitterDrag() {
+            let dragging = false;
+            function onMouseDown(e) {
+                dragging = true;
+                document.body.style.cursor = 'row-resize';
+                e.preventDefault();
+            }
+            function onMouseMove(e) {
+                if (!dragging) return;
+                const rect = chartEl.getBoundingClientRect();
+                const controlsH = document.querySelector('.controls').offsetHeight;
+                const totalH = Math.max(300, window.innerHeight - controlsH - 40);
+                const splitterH = getSplitterH();
+                // position of mouse relative to top of chartEl
+                const relY = e.clientY - rect.top;
+                const minMain = 120; // min px for main pane
+                const minBottom = 80; // min px for bottom pane
+                let newMain = Math.max(minMain, Math.min(relY, totalH - splitterH - minBottom));
+                splitRatio = newMain / totalH;
+                resizeChart();
+            }
+            function onMouseUp() {
+                if (!dragging) return;
+                dragging = false;
+                document.body.style.cursor = '';
+            }
+            splitterEl.addEventListener('mousedown', onMouseDown);
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+        })();
+
+        // Sync ranges using logical range (more stable than time range)
+        let syncing = false;
+        function syncLogical(from, to) {
+            if (syncing) return;
+            const src = from.timeScale();
+            const dst = to.timeScale();
+            const r = src.getVisibleLogicalRange();
+            if (!r) return;
+            const dstR = dst.getVisibleLogicalRange();
+            // compare with small epsilon to avoid thrashing
+            const eps = 0.01;
+            const equal = dstR && Math.abs(dstR.from - r.from) < eps && Math.abs(dstR.to - r.to) < eps;
+            if (equal) return;
+            syncing = true;
+            dst.setVisibleLogicalRange(r);
+            syncing = false;
+        }
+        chart.timeScale().subscribeVisibleLogicalRangeChange(() => syncLogical(chart, chartBottom));
+        chartBottom.timeScale().subscribeVisibleLogicalRangeChange(() => syncLogical(chartBottom, chart));
+
+        // ===== Static current-day data (no external payload needed) =====
+        let initialOiData = {
+            strikes: [
+                { price: 24350, ceOI: 27600,   peOI: 1360275 },
+                { price: 24400, ceOI: 198075,  peOI: 3383025 },
+                { price: 24450, ceOI: 111675,  peOI: 1714125 },
+                { price: 24500, ceOI: 1136100, peOI: 7931700 },
+                { price: 24550, ceOI: 145425,  peOI: 2286750 },
+                { price: 24600, ceOI: 1407450, peOI: 6796350 },
+                { price: 24650, ceOI: 677025,  peOI: 3124350 },
+                { price: 24700, ceOI: 4343100, peOI: 6804150 },
+                { price: 24750, ceOI: 5782425, peOI: 2990325 },
+                { price: 24800, ceOI: 11793225,peOI: 4409850 },
+                { price: 24850, ceOI: 6321300, peOI: 1229700 },
+                { price: 24900, ceOI: 10401900,peOI: 2535375 },
+                { price: 24950, ceOI: 6226425, peOI: 914850 },
+                { price: 25000, ceOI: 17657250,peOI: 4182000 },
+                { price: 25050, ceOI: 5839650, peOI: 413625 },
+                { price: 25100, ceOI: 10967100,peOI: 1148700 },
+                { price: 25150, ceOI: 5153250, peOI: 347475 },
+                { price: 25200, ceOI: 11451000,peOI: 1269525 },
+                { price: 25250, ceOI: 3192225, peOI: 107550 },
+                { price: 25300, ceOI: 6901725, peOI: 403650 },
+                { price: 25350, ceOI: 1832250, peOI: 49800 },
+                { price: 25400, ceOI: 4631025, peOI: 296100 },
+                { price: 25450, ceOI: 3994650, peOI: 37725 }
+            ]
+        };  // Static current-day OI
+        let initialCoiData = {
+            strikes: [
+                { price: 24350, ceOI:    0,      peOI:      0 },
+                { price: 24400, ceOI: -42000,    peOI: -653250 },
+                { price: 24450, ceOI:  24000,    peOI:  383850 },
+                { price: 24500, ceOI: -34200,    peOI:  -74925 },
+                { price: 24550, ceOI:  89025,    peOI:  -65250 },
+                { price: 24600, ceOI: 641475,    peOI: 1377375 },
+                { price: 24650, ceOI: 543375,    peOI: -131175 },
+                { price: 24700, ceOI: 3539175,   peOI: 1769100 },
+                { price: 24750, ceOI: 5601675,   peOI:  -43725 },
+                { price: 24800, ceOI: 10133325,  peOI: -3210000 },
+                { price: 24850, ceOI:  5573925,  peOI: -2903325 },
+                { price: 24900, ceOI:  5934975,  peOI: -7146225 },
+                { price: 24950, ceOI:  2443200,  peOI: -5351025 },
+                { price: 25000, ceOI:  1961925,  peOI: -7832175 },
+                { price: 25050, ceOI:   894375,  peOI: -1162800 },
+                { price: 25100, ceOI:   349500,  peOI: -1468200 },
+                { price: 25150, ceOI:   489750,  peOI:  -355200 },
+                { price: 25200, ceOI:   727800,  peOI:  -952575 },
+                { price: 25250, ceOI:  -729150,  peOI:   -56850 },
+                { price: 25300, ceOI:  -756150,  peOI:  -201000 },
+                { price: 25350, ceOI: -1877775,  peOI:   -12675 },
+                { price: 25400, ceOI: -3633525,  peOI:   -92775 },
+                { price: 25450, ceOI:   784200,  peOI:    -2025 }
+            ]
+        };  // Static current-day COI
+
+        
+
+        // Generate CE/PE OI data for strikes - no time dependency
+        function generateCEPEOIData(basePrice) {
+            const strikes = [];
+            const baseStrike = Math.round(basePrice / 50) * 50;
+            
+            for (let i = -8; i <= 8; i++) {
+                const strike = baseStrike + (i * 50);
+                const distanceFromPrice = Math.abs(strike - basePrice);
+                
+                let ceOI, peOI;
+                
+                if (strike > basePrice) {
+                    // OTM Calls, ITM Puts
+                    ceOI = Math.max(1000, 12000 - distanceFromPrice * 25 + Math.random() * 4000);
+                    peOI = Math.max(2000, 6000 + distanceFromPrice * 35 + Math.random() * 8000);
+                } else if (strike < basePrice) {
+                    // ITM Calls, OTM Puts  
+                    ceOI = Math.max(2000, 6000 + distanceFromPrice * 30 + Math.random() * 6000);
+                    peOI = Math.max(1000, 10000 - distanceFromPrice * 20 + Math.random() * 5000);
+                } else {
+                    // ATM - highest OI
+                    ceOI = 18000 + Math.random() * 8000;
+                    peOI = 16000 + Math.random() * 10000;
+                }
+                
+                strikes.push({
+                    price: strike,
+                    ceOI: Math.round(ceOI),
+                    peOI: Math.round(peOI)
+                });
+            }
+            
+            return {
+                strikes: strikes
+            };
+        }
+
+        // Generate synthetic COI data when CE/PE data isn't available (with CE/PE split)
+        function generateSyntheticCOIData(basePrice) {
+            const cepe = generateCEPEOIData(basePrice);
+            return {
+                strikes: cepe.strikes.map(s => ({ price: s.price, ceOI: s.ceOI, peOI: s.peOI }))
+            };
+        }
+
+        // Helper: randomly introduce negative values to COI ceOI/peOI for testing
+        function maybeIntroduceNegatives(coiData, prob = 0.35) {
+            if (!coiData || !coiData.strikes) return coiData;
+            const mutated = {
+                strikes: coiData.strikes.map(s => {
+                    let ce = s.ceOI ?? 0;
+                    let pe = s.peOI ?? 0;
+                    if (Math.random() < prob) ce = -Math.abs(ce);
+                    if (Math.random() < prob) pe = -Math.abs(pe);
+                    return { price: s.price, ceOI: ce, peOI: pe };
+                })
+            };
+            return mutated;
+        }
+
+        function updateOIData() {
+            // Ensure a profile exists; if not, create one based on latest price
+            if (oiProfiles.length === 0) {
+                const latestPrice = priceData[priceData.length - 1].close;
+                const oiData = (initialOiData && initialOiData.strikes && initialOiData.strikes.length > 0)
+                    ? initialOiData
+                    : generateCEPEOIData(latestPrice);
+                const oiProfile = new SeparateOI(chart, candlestickSeries, oiData);
+                candlestickSeries.attachPrimitive(oiProfile);
+                oiProfiles.push(oiProfile);
+                // apply current OI view and anchor
+                const sel = document.getElementById('oiView');
+                if (sel) oiProfile.setView(sel.value);
+                const inp = document.getElementById('oiX');
+                if (inp) {
+                    const pct = Math.max(0, Math.min(100, Number(inp.value)));
+                    oiProfile.setAnchorRatio(pct / 100);
+                }
+                // apply label toggles
+                const oiStrikeCb = document.getElementById('oiShowStrike');
+                const oiValuesCb = document.getElementById('oiShowValues');
+                if (oiStrikeCb) oiProfile.setShowStrikeLabels(oiStrikeCb.checked);
+                if (oiValuesCb) oiProfile.setShowValueLabels(oiValuesCb.checked);
+                // auto-enable OI on first creation
+                const enabled = oiProfile.toggleOI();
+                const oiBtn = document.getElementById('oiToggle');
+                oiBtn.textContent = enabled ? 'Disable OI' : 'Enable OI';
+                oiBtn.style.backgroundColor = enabled ? '#f44336' : '#2962ff';
+                // repaint
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+                console.log('Created OI profile at current price:', Math.round(latestPrice));
+                console.log('Strike range:', oiData.strikes[0].price, 'to', oiData.strikes[oiData.strikes.length - 1].price);
+            }
+
+            const lastProfile = oiProfiles[oiProfiles.length - 1];
+            // Update OI values with realistic changes
+            lastProfile._oiData.strikes.forEach(strike => {
+                const ceChange = (Math.random() - 0.5) * 0.3; // ±15% change
+                const peChange = (Math.random() - 0.5) * 0.3;
+                strike.ceOI = Math.max(500, Math.round(strike.ceOI * (1 + ceChange)));
+                strike.peOI = Math.max(500, Math.round(strike.peOI * (1 + peChange)));
+            });
+            lastProfile.updateAllViews();
+            // Update CE/PE details info in UI
+            const infoEl = document.getElementById('maxOIInfo');
+            if (infoEl) {
+                infoEl.textContent = 'OI: CE upper (red), PE lower (green)';
+            }
+            // Force a repaint without changing visuals by re-updating the last candle
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+            console.log('Updated OI data — CE upper (red), PE lower (green)');
+        }
+
+        function onOIViewChange() {
+            if (oiProfiles.length > 0) {
+                const lastProfile = oiProfiles[oiProfiles.length - 1];
+                const sel = document.getElementById('oiView');
+                if (sel && lastProfile.setView) lastProfile.setView(sel.value);
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+            }
+        }
+
+        function onOIAnchorChange() {
+            if (oiProfiles.length > 0) {
+                const lastProfile = oiProfiles[oiProfiles.length - 1];
+                const inp = document.getElementById('oiX');
+                if (inp && lastProfile.setAnchorRatio) {
+                    const pct = Math.max(0, Math.min(100, Number(inp.value)));
+                    lastProfile.setAnchorRatio(pct / 100);
+                }
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+            }
+        }
+
+        // OI label toggle handlers
+        function onOIShowStrikeChange() {
+            if (oiProfiles.length === 0) return;
+            const cb = document.getElementById('oiShowStrike');
+            if (!cb) return;
+            const lastProfile = oiProfiles[oiProfiles.length - 1];
+            if (lastProfile.setShowStrikeLabels) lastProfile.setShowStrikeLabels(cb.checked);
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+        }
+
+        function onOIShowValuesChange() {
+            if (oiProfiles.length === 0) return;
+            const cb = document.getElementById('oiShowValues');
+            if (!cb) return;
+            const lastProfile = oiProfiles[oiProfiles.length - 1];
+            if (lastProfile.setShowValueLabels) lastProfile.setShowValueLabels(cb.checked);
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+        }
+        function onCOIViewChange() {
+            const sel = document.getElementById('coiView');
+            if (!sel) return;
+            if (coiProfile) {
+                coiProfile.setView(sel.value);
+                // repaint
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+            }
+        }
+
+        // COI label toggle handlers
+        function onCOIShowStrikeChange() {
+            const cb = document.getElementById('coiShowStrike');
+            if (!cb || !coiProfile) return;
+            coiProfile.setShowStrikeLabels(cb.checked);
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+        }
+
+        function onCOIShowValuesChange() {
+            const cb = document.getElementById('coiShowValues');
+            if (!cb || !coiProfile) return;
+            coiProfile.setShowValueLabels(cb.checked);
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+        }
+
+        function onCOIAnchorChange() {
+            const inp = document.getElementById('coiX');
+            if (!inp) return;
+            const pct = Math.max(0, Math.min(100, Number(inp.value)));
+            if (coiProfile) {
+                coiProfile.setAnchorRatio(pct / 100);
+                // repaint
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+            }
+        }
+
+        function updateCOIData() {
+            // Create COI profile if missing
+            if (!coiProfile) {
+                let coiData;
+                let fromInitial = false;
+                if (initialCoiData && initialCoiData.strikes && initialCoiData.strikes.length > 0) {
+                    coiData = initialCoiData;
+                    fromInitial = true;
+                } else if (oiProfiles.length > 0) {
+                    const lastProfile = oiProfiles[oiProfiles.length - 1];
+                    coiData = {
+                        strikes: lastProfile._oiData.strikes.map(s => ({ price: s.price, ceOI: s.ceOI, peOI: s.peOI }))
+                    };
+                } else {
+                    const latestPrice = priceData[priceData.length - 1].close;
+                    coiData = generateSyntheticCOIData(latestPrice);
+                }
+                // introduce negatives for testing only if not initial external payload
+                if (!fromInitial) {
+                    coiData = maybeIntroduceNegatives(coiData, 0.45);
+                }
+                // create and attach COI profile
+                coiProfile = new SeparateCOI(chart, candlestickSeries, coiData);
+                candlestickSeries.attachPrimitive(coiProfile);
+                // Apply current COI UI defaults (view and anchor)
+                const coiViewSel = document.getElementById('coiView');
+                if (coiViewSel && coiProfile.setView) coiProfile.setView(coiViewSel.value);
+                const coiXInp = document.getElementById('coiX');
+                if (coiXInp && coiProfile.setAnchorRatio) {
+                    const pct = Math.max(0, Math.min(100, Number(coiXInp.value)));
+                    coiProfile.setAnchorRatio(pct / 100);
+                }
+                // apply label toggles
+                const coiStrikeCb = document.getElementById('coiShowStrike');
+                const coiValuesCb = document.getElementById('coiShowValues');
+                if (coiStrikeCb) coiProfile.setShowStrikeLabels(coiStrikeCb.checked);
+                if (coiValuesCb) coiProfile.setShowValueLabels(coiValuesCb.checked);
+                // auto-enable COI on first creation
+                const enabled = coiProfile.toggleCOI();
+                const coiBtn = document.getElementById('coiToggle');
+                if (coiBtn) {
+                    coiBtn.textContent = enabled ? 'Disable COI' : 'Enable COI';
+                    coiBtn.style.backgroundColor = enabled ? '#f44336' : '#2962ff';
+                }
+            } else {
+                // Nudge existing COI values
+                coiProfile._coiData.strikes.forEach(s => {
+                    const ceChange = (Math.random() - 0.5) * 0.2;
+                    const peChange = (Math.random() - 0.5) * 0.2;
+                    s.ceOI = Math.max(500, Math.round((s.ceOI ?? 0) * (1 + ceChange)));
+                    s.peOI = Math.max(500, Math.round((s.peOI ?? 0) * (1 + peChange)));
+                    // small chance to flip sign while testing
+                    if (Math.random() < 0.1) s.ceOI = -Math.abs(s.ceOI);
+                    if (Math.random() < 0.1) s.peOI = -Math.abs(s.peOI);
+                });
+                coiProfile.updateAllViews();
+            }
+            // Update CE/PE details info in UI
+            const infoEl = document.getElementById('maxOIInfo');
+            if (infoEl) {
+                infoEl.textContent = 'COI: CE upper (red), PE lower (green)';
+            }
+            // repaint
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+            console.log('Updated COI data — CE upper (red), PE lower (green)');
+        }
+
+        function toggleCOI() {
+            if (!coiProfile) return;
+            const isEnabled = coiProfile.toggleCOI();
+            const btn = document.getElementById('coiToggle');
+            btn.textContent = isEnabled ? 'Disable COI' : 'Enable COI';
+            btn.style.backgroundColor = isEnabled ? '#f44336' : '#2962ff';
+            // repaint
+            const lastCandle = priceData[priceData.length - 1];
+            candlestickSeries.update({ ...lastCandle });
+            console.log('COI:', isEnabled ? 'Enabled' : 'Disabled');
+        }
+
+        function toggleOI() {
+            if (oiProfiles.length > 0) {
+                const lastProfile = oiProfiles[oiProfiles.length - 1];
+                const isEnabled = lastProfile.toggleOI();
+                const button = document.getElementById('oiToggle');
+                button.textContent = isEnabled ? 'Disable OI' : 'Enable OI';
+                button.style.backgroundColor = isEnabled ? '#f44336' : '#2962ff';
+                // Repaint so OI visibility change reflects immediately
+                const lastCandle = priceData[priceData.length - 1];
+                candlestickSeries.update({ ...lastCandle });
+                console.log('OI (CE & PE):', isEnabled ? 'Enabled' : 'Disabled');
+            }
+        }
+
+        // Removed individual CE/PE toggle handlers in favor of single OI toggle
+
+        // No auto profile creation; use "Update OI Data" to create and update values
+
+        // Handle resize
+        function resizeChart() {
+            const controlsH = document.querySelector('.controls').offsetHeight;
+            const baseW = document.getElementById('chart').clientWidth;
+            const totalH = Math.max(300, window.innerHeight - controlsH - 40);
+            const splitterH = getSplitterH();
+            const mainH = Math.round(totalH * splitRatio);
+            const bottomH = Math.max(0, totalH - mainH - splitterH);
+            chart.applyOptions({ width: baseW, height: mainH });
+            if (document.getElementById('chart-bottom')) {
+                chartBottom.applyOptions({ width: baseW, height: bottomH });
+                // Reapply visible range to keep panels synced post-resize
+                const r = chart.timeScale().getVisibleLogicalRange();
+                if (r) {
+                    chartBottom.timeScale().setVisibleLogicalRange(r);
+                }
+            }
+        }
+        window.addEventListener('resize', resizeChart);
+        // initial sizing
+        setTimeout(resizeChart, 0);
+    </script>
+</body>
+</html>

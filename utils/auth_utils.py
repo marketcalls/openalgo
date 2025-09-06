@@ -61,6 +61,15 @@ def async_master_contract_download(broker):
         # Since socketio.emit doesn't return a meaningful value, we check if no exception was raised
         update_status(broker, 'success', 'Master contract download completed successfully', total_symbols)
         logger.info(f"Master contract download completed for {broker}")
+        
+        # Load symbols into memory cache after successful download
+        try:
+            from database.master_contract_cache_hook import hook_into_master_contract_download
+            logger.info(f"Loading symbols into memory cache for broker: {broker}")
+            hook_into_master_contract_download(broker)
+        except Exception as cache_error:
+            logger.error(f"Failed to load symbols into cache: {cache_error}")
+            # Don't fail the whole process if cache loading fails
             
     except Exception as e:
         logger.error(f"Error during master contract download for {broker}: {str(e)}")

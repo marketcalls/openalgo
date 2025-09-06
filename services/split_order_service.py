@@ -377,8 +377,7 @@ def split_order(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return split_order_with_auth(split_data, AUTH_TOKEN, broker_name, original_data)

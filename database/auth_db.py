@@ -107,6 +107,16 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         auth_obj.broker = broker
         auth_obj.user_id = user_id
         auth_obj.is_revoked = revoke
+        
+        # Clear cache entries when revoking
+        if revoke:
+            cache_key_auth = f"auth-{name}"
+            cache_key_feed = f"feed-{name}"
+            if cache_key_auth in auth_cache:
+                del auth_cache[cache_key_auth]
+            if cache_key_feed in feed_token_cache:
+                del feed_token_cache[cache_key_feed]
+            logger.info(f"Cleared cache entries for revoked tokens of user: {name}")
     else:
         auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, user_id=user_id, is_revoked=revoke)
         db_session.add(auth_obj)
@@ -115,6 +125,11 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
 
 def get_auth_token(name):
     """Get decrypted auth token"""
+    # Handle None or empty name gracefully
+    if not name:
+        logger.debug("get_auth_token called with empty/None name, returning None")
+        return None
+        
     cache_key = f"auth-{name}"
     if cache_key in auth_cache:
         auth_obj = auth_cache[cache_key]
@@ -132,11 +147,18 @@ def get_auth_token(name):
 
 def get_auth_token_dbquery(name):
     try:
+        # Handle None or empty name gracefully
+        if not name:
+            logger.debug("get_auth_token_dbquery called with empty/None name")
+            return None
+            
         auth_obj = Auth.query.filter_by(name=name).first()
         if auth_obj and not auth_obj.is_revoked:
             return auth_obj
         else:
-            logger.warning(f"No valid auth token found for name '{name}'.")
+            # Only log warning for actual usernames, not None/empty
+            if name:
+                logger.warning(f"No valid auth token found for name '{name}'.")
             return None
     except Exception as e:
         logger.error(f"Error while querying the database for auth token: {e}")
@@ -144,6 +166,11 @@ def get_auth_token_dbquery(name):
 
 def get_feed_token(name):
     """Get decrypted feed token"""
+    # Handle None or empty name gracefully
+    if not name:
+        logger.debug("get_feed_token called with empty/None name, returning None")
+        return None
+        
     cache_key = f"feed-{name}"
     if cache_key in feed_token_cache:
         auth_obj = feed_token_cache[cache_key]
@@ -161,11 +188,18 @@ def get_feed_token(name):
 
 def get_feed_token_dbquery(name):
     try:
+        # Handle None or empty name gracefully  
+        if not name:
+            logger.debug("get_feed_token_dbquery called with empty/None name")
+            return None
+            
         auth_obj = Auth.query.filter_by(name=name).first()
         if auth_obj and not auth_obj.is_revoked:
             return auth_obj
         else:
-            logger.warning(f"No valid feed token found for name '{name}'.")
+            # Only log warning for actual usernames, not None/empty
+            if name:
+                logger.warning(f"No valid feed token found for name '{name}'.")
             return None
     except Exception as e:
         logger.error(f"Error while querying the database for feed token: {e}")

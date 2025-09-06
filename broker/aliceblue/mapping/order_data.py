@@ -270,23 +270,39 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
+    
+    # Return empty list if holdings_data is not a list
+    if not isinstance(holdings_data, list):
+        logger.warning(f"Holdings data is not a list: {type(holdings_data)}")
+        return []
+    
     for holdings in holdings_data:
-        ltp = float(holdings.get('Ltp', 0))
-        price = float(holdings.get('Price', 0.0))
-        quantity = int(holdings.get('Holdqty', 0))
+        # Skip if holdings is not a dictionary
+        if not isinstance(holdings, dict):
+            logger.warning(f"Skipping invalid holdings item: {holdings}")
+            continue
+            
+        try:
+            ltp = float(holdings.get('Ltp', 0))
+            price = float(holdings.get('Price', 0.0))
+            quantity = int(holdings.get('Holdqty', holdings.get('HUqty', 0)))
 
-        pnl = round(ltp - price, 2)
-        pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
+            pnl = round((ltp - price) * quantity, 2) if quantity else 0
+            pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
 
-        transformed_position = {
-            "symbol": holdings.get('Bsetsym', ''),
-            "exchange": holdings.get('ExchSeg1', ''),
-            "quantity": quantity,
-            "product": holdings.get('Pcode', ''),
-            "pnl": pnl,  # Rounded to two decimals
-            "pnlpercent": pnlpercent  # Rounded to two decimals
-        }
-        transformed_data.append(transformed_position)
+            transformed_position = {
+                "symbol": holdings.get('Bsetsym', holdings.get('Symbol', '')),
+                "exchange": holdings.get('ExchSeg1', holdings.get('Exchange', '')),
+                "quantity": quantity,
+                "product": holdings.get('Pcode', 'CNC'),
+                "pnl": pnl,  # Rounded to two decimals
+                "pnlpercent": pnlpercent  # Rounded to two decimals
+            }
+            transformed_data.append(transformed_position)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"Error transforming holdings item: {e}, Item: {holdings}")
+            continue
+            
     return transformed_data
 
 
@@ -302,39 +318,69 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with  'product' fields.
     """
     
-        # Check if 'data' is None
+    # Check if portfolio_data is a string (might be JSON string)
+    if isinstance(portfolio_data, str):
+        try:
+            import json
+            portfolio_data = json.loads(portfolio_data)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse portfolio_data as JSON: {portfolio_data}")
+            return []
+    
+    # Check if 'data' is None
     if isinstance(portfolio_data, dict):
-        if portfolio_data['stat'] == 'Not_Ok' :
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-            logger.info("No data available.")
-            portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
+        if portfolio_data.get('stat') == 'Not_Ok':
+            # Handle the case where there is no data
+            logger.info("No data available or error in response.")
+            return []
+        elif 'HoldingVal' in portfolio_data:
+            portfolio_data = portfolio_data['HoldingVal']
+        # If it's a dict but doesn't have 'HoldingVal', assume it's the holdings data itself
+    elif isinstance(portfolio_data, list):
+        # If it's already a list, use it as is
+        pass
     else:
-        portfolio_data = portfolio_data['HoldingVal']
+        logger.error(f"Unexpected portfolio_data type: {type(portfolio_data)}")
+        return []
         
-    logger.info(f"{portfolio_data}")
+    logger.info(f"Processing portfolio data: {portfolio_data}")
 
-    if portfolio_data:
+    if portfolio_data and isinstance(portfolio_data, list):
         for portfolio in portfolio_data:
-            if portfolio['Pcode'] == 'CNC':
+            if isinstance(portfolio, dict) and portfolio.get('Pcode') == 'CNC':
                 portfolio['Pcode'] = 'CNC'
-
             else:
                 logger.info("AliceBlue Portfolio - Product Value for Delivery Not Found or Changed.")
                 
-    return portfolio_data
+    return portfolio_data if isinstance(portfolio_data, list) else []
 
 def calculate_portfolio_statistics(holdings_data):
+    # Return empty statistics if holdings_data is empty or not a list
+    if not holdings_data or not isinstance(holdings_data, list):
+        return {
+            'totalholdingvalue': 0,
+            'totalinvvalue': 0,
+            'totalprofitandloss': 0,
+            'totalpnlpercentage': 0
+        }
     
-    totalholdingvalue = sum(float(item['Ltp']) * int(item['HUqty']) for item in holdings_data)
-    totalinvvalue = sum(float(item['Price']) * int(item['HUqty']) for item in holdings_data)
-    totalprofitandloss = sum((float(item['Ltp']) - float(item['Price'])) * int(item['HUqty']) for item in holdings_data)
-    
-    for item in holdings_data:
-        logger.info(f"{(item['Ltp'],item['Price'],item['HUqty'])}")
-    # To avoid division by zero in the case when totalinvvalue is 0
-    totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
+    try:
+        totalholdingvalue = sum(float(item.get('Ltp', 0)) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
+        totalinvvalue = sum(float(item.get('Price', 0)) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
+        totalprofitandloss = sum((float(item.get('Ltp', 0)) - float(item.get('Price', 0))) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
+        
+        for item in holdings_data:
+            logger.info(f"Holdings item: LTP={item.get('Ltp')}, Price={item.get('Price')}, Qty={item.get('HUqty', item.get('Holdqty'))}")
+        # To avoid division by zero in the case when totalinvvalue is 0
+        totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
+    except (KeyError, TypeError, ValueError) as e:
+        logger.error(f"Error calculating portfolio statistics: {e}")
+        return {
+            'totalholdingvalue': 0,
+            'totalinvvalue': 0,
+            'totalprofitandloss': 0,
+            'totalpnlpercentage': 0
+        }
 
     return {
         'totalholdingvalue': totalholdingvalue,

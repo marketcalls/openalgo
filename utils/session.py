@@ -70,7 +70,23 @@ def revoke_user_tokens():
     if 'user' in session:
         username = session.get('user')
         try:
-            from database.auth_db import upsert_auth
+            from database.auth_db import upsert_auth, auth_cache, feed_token_cache
+            
+            # Clear cache entries first to prevent stale data access
+            cache_key_auth = f"auth-{username}"
+            cache_key_feed = f"feed-{username}"
+            if cache_key_auth in auth_cache:
+                del auth_cache[cache_key_auth]
+            if cache_key_feed in feed_token_cache:
+                del feed_token_cache[cache_key_feed]
+            
+            # Clear symbol cache on logout/session expiry
+            try:
+                from database.master_contract_cache_hook import clear_cache_on_logout
+                clear_cache_on_logout()
+            except Exception as cache_error:
+                logger.error(f"Error clearing symbol cache: {cache_error}")
+            
             # Revoke the auth token in database
             inserted_id = upsert_auth(username, "", "", revoke=True)
             if inserted_id is not None:

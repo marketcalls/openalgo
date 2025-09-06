@@ -35,12 +35,19 @@ def format_order_data(order_data):
     return order_data
 
 def format_statistics(stats):
-    """Format all numeric values in statistics to 2 decimal places"""
+    """Format numeric values in statistics - keep counts as integers, prices as decimals"""
     if isinstance(stats, dict):
-        return {
-            key: format_decimal(value) if isinstance(value, (int, float)) else value
-            for key, value in stats.items()
-        }
+        formatted = {}
+        for key, value in stats.items():
+            # Keep order counts as integers
+            if any(count_type in key for count_type in ['total_', 'orders', 'completed', 'open', 'rejected']):
+                formatted[key] = int(value) if isinstance(value, (int, float)) else value
+            # Format other numeric values to 2 decimal places
+            elif isinstance(value, (int, float)):
+                formatted[key] = format_decimal(value)
+            else:
+                formatted[key] = value
+        return formatted
     return stats
 
 def import_broker_module(broker_name: str) -> Optional[Dict[str, Any]]:
