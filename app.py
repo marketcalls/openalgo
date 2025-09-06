@@ -12,6 +12,7 @@ from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
 from utils.logging import get_logger, log_startup_banner  # Import centralized logging
+from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
 
@@ -32,6 +33,7 @@ from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
 from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
+from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
 
 from restx_api import api_v1_bp, api
 
@@ -75,6 +77,9 @@ def create_app():
 
     # Apply Content Security Policy middleware
     apply_csp_middleware(app)
+    
+    # Initialize Socket.IO error handling
+    init_socketio_error_handling(socketio)
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
@@ -152,6 +157,7 @@ def create_app():
     app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
+    app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     
 
     # Exempt webhook endpoints from CSRF protection after app initialization

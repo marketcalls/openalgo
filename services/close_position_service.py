@@ -207,8 +207,7 @@ def close_position(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                executor.submit(async_log_order, 'closeposition', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return close_position_with_auth(position_data, AUTH_TOKEN, broker_name, original_data)

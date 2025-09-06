@@ -397,28 +397,55 @@ class BrokerData:
                     logger.debug(f"Historical endpoint failed: {e}")
                     logger.exception("Historical endpoint exception details:")
             
-            # Handle special case for today's daily data if no historical data
-            if not all_candles and unit == 'days' and interval == 'D':
+            # Handle special case for today's daily data - use intraday API for current day
+            logger.info(f"Checking daily logic: unit={unit}, interval_value={interval_value}, original_interval={interval}")
+            if unit == 'days' and interval == 'D':
                 today = datetime.now().date()
+                logger.info(f"Daily timeframe check: today={today}, start_date={start_date.date()}, end_date={end_date.date()}")
                 if start_date.date() <= today <= end_date.date():
-                    logger.debug("Trying to get today's daily data from quotes...")
-                    try:
-                        quotes = self.get_quotes(symbol, exchange)
-                        if quotes and quotes.get('ltp', 0) > 0:
-                            today_ts = int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=5, minutes=30)).timestamp())
-                            today_candle = [
-                                today_ts * 1000,  # Upstox uses milliseconds
-                                quotes.get('open', quotes.get('ltp', 0)),
-                                quotes.get('high', quotes.get('ltp', 0)),
-                                quotes.get('low', quotes.get('ltp', 0)),
-                                quotes.get('ltp', 0),
-                                quotes.get('volume', 0),
-                                quotes.get('oi', 0)
-                            ]
-                            all_candles = [today_candle]
-                            logger.debug("Created today's candle from quotes")
-                    except Exception as e:
-                        logger.debug(f"Could not get today's data from quotes: {e}")
+                    logger.info("Today is within date range, checking if today's data exists")
+                    # Check if today's data is already in historical data
+                    today_found = False
+                    if all_candles:
+                        for candle in all_candles:
+                            try:
+                                candle_date = pd.to_datetime(candle[0], unit='ms' if isinstance(candle[0], (int, float)) else None).date()
+                                logger.debug(f"Checking candle date: {candle_date}")
+                                if candle_date == today:
+                                    today_found = True
+                                    logger.debug("Today's data found in historical candles")
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Error parsing candle date: {e}")
+                                continue
+                    
+                    # If today's data not found, get it from quotes API
+                    if not today_found:
+                        logger.info("Today's data not found, fetching from quotes API")
+                        try:
+                            quotes = self.get_quotes(symbol, exchange)
+                            logger.info(f"Quotes API response: {quotes}")
+                            
+                            if quotes and quotes.get('ltp', 0) > 0:
+                                # Create today's daily candle with midnight timestamp
+                                today_ts = int((datetime.combine(today, datetime.min.time()) + timedelta(hours=5, minutes=30)).timestamp())
+                                today_candle = [
+                                    today_ts * 1000,  # Upstox uses milliseconds
+                                    quotes.get('open', quotes.get('ltp', 0)),
+                                    quotes.get('high', quotes.get('ltp', 0)),
+                                    quotes.get('low', quotes.get('ltp', 0)),
+                                    quotes.get('ltp', 0),
+                                    quotes.get('volume', 0),
+                                    quotes.get('oi', 0)
+                                ]
+                                all_candles.append(today_candle)
+                                logger.info("Added today's daily candle from quotes API")
+                            else:
+                                logger.info("No valid quotes data available for today")
+                                
+                        except Exception as e:
+                            logger.info(f"Could not get today's data from quotes API: {e}")
+                            logger.exception("Quotes API exception details:")
             
             # Return empty DataFrame if no data
             if not all_candles:
@@ -440,36 +467,59 @@ class BrokerData:
             # Convert timestamp from ISO 8601 string to Unix timestamp (seconds since epoch)
             # Upstox returns timestamps like '2024-12-09T15:29:00+05:30'
             try:
-                # Convert to datetime first
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                # Convert to datetime first - handle mixed formats (strings and floats)
+                def safe_to_datetime(ts):
+                    try:
+                        if isinstance(ts, str):
+                            return pd.to_datetime(ts)
+                        elif isinstance(ts, pd.Timestamp):
+                            return ts
+                        else:
+                            # Numeric timestamp in milliseconds, convert to datetime
+                            return pd.to_datetime(ts, unit='ms')
+                    except Exception as e:
+                        logger.warning(f"Error converting timestamp {ts}: {e}")
+                        return pd.NaT
+                
+                df['timestamp'] = df['timestamp'].apply(safe_to_datetime)
+                
+                # Remove any NaT values
+                df = df.dropna(subset=['timestamp'])
                 
                 # For daily timeframe, normalize to date only (remove time component)
                 # This matches Angel's behavior for daily data
                 if interval == 'D':
                     # Convert to date only (YYYY-MM-DD format) then back to datetime at midnight
-                    df['timestamp'] = df['timestamp'].dt.date
+                    # Use apply to handle mixed types safely
+                    df['timestamp'] = df['timestamp'].apply(lambda x: x.date() if hasattr(x, 'date') else pd.to_datetime(x).date())
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                 
-                # Convert to Unix timestamp (seconds since epoch)
-                df['timestamp'] = df['timestamp'].astype(int) // 10**9
-                logger.info(f"Successfully converted {len(df)} ISO 8601 timestamps to Unix timestamps")
+                # Convert to Unix timestamp (seconds since epoch) - following Angel's pattern
+                # Use apply to safely handle any remaining mixed types
+                df['timestamp'] = df['timestamp'].apply(lambda x: int(x.timestamp()) if hasattr(x, 'timestamp') else int(pd.to_datetime(x).timestamp()))
+                logger.info(f"Successfully converted {len(df)} timestamps to Unix timestamps")
             except Exception as e:
                 logger.error(f"Failed to convert timestamps: {e}")
-                # Fallback: try to handle mixed formats
+                # Fallback: try to handle mixed formats using the same safe approach
                 def convert_timestamp(ts):
                     try:
                         if isinstance(ts, str):
                             # ISO 8601 string format
                             dt = pd.to_datetime(ts)
-                            # For daily, normalize to date only
-                            if interval == 'D':
-                                dt = dt.date()
-                                dt = pd.to_datetime(dt)
-                            return int(dt.timestamp())
+                        elif isinstance(ts, pd.Timestamp):
+                            # pandas Timestamp object - already converted
+                            dt = ts
                         else:
                             # Numeric format (milliseconds)
-                            return int(float(ts) / 1000)
-                    except:
+                            dt = pd.to_datetime(ts, unit='ms')
+                        
+                        # For daily, normalize to date only
+                        if interval == 'D':
+                            dt = pd.to_datetime(dt.date())
+                        
+                        return int(dt.timestamp())
+                    except Exception as e:
+                        logger.warning(f"Failed to convert timestamp {ts} ({type(ts)}): {e}")
                         return None
                 
                 df['timestamp'] = df['timestamp'].apply(convert_timestamp)
@@ -499,12 +549,6 @@ class BrokerData:
     def _filter_candles_by_date(self, candles: list, start_date: datetime, end_date: datetime) -> list:
         """
         Filter candles to only include those within the specified date range
-        Args:
-            candles: List of candle data
-            start_date: Start date
-            end_date: End date
-        Returns:
-            list: Filtered candles
         """
         if not candles:
             return []
@@ -515,7 +559,27 @@ class BrokerData:
         
         for candle in candles:
             candle_ts = candle[0]  # Timestamp is first element
+            
+            # Handle different timestamp formats
+            if isinstance(candle_ts, str):
+                # Convert ISO 8601 string to timestamp (milliseconds)
+                try:
+                    dt = pd.to_datetime(candle_ts)
+                    candle_ts = dt.timestamp() * 1000
+                except Exception as e:
+                    logger.warning(f"Failed to parse timestamp {candle_ts}: {e}")
+                    continue
+            elif isinstance(candle_ts, (int, float)):
+                # Already numeric, ensure it's in milliseconds
+                if candle_ts < 1e12:  # If less than year 2001 in milliseconds, assume seconds
+                    candle_ts = candle_ts * 1000
+            else:
+                logger.warning(f"Unknown timestamp format: {type(candle_ts)} - {candle_ts}")
+                continue
+                
             if start_ts <= candle_ts < end_ts:
+                # Update the candle with the converted timestamp
+                candle[0] = candle_ts
                 filtered.append(candle)
         
         return filtered

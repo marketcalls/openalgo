@@ -1,6 +1,4 @@
-import traceback
 import copy
-import requests
 from typing import Tuple, Dict, Any, Optional
 
 from database.auth_db import get_auth_token_broker
@@ -9,10 +7,11 @@ from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.logging import get_logger
-from utils.config import get_host_server
+from services.tradebook_service import get_tradebook
 
 # Initialize logger
 logger = get_logger(__name__)
+
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """
@@ -73,26 +72,35 @@ def get_order_status_with_auth(
     if 'apikey' in request_data:
         request_data.pop('apikey', None)
     
-    # If in analyze mode, return simulated response
-    if get_analyze_mode():
+    # Log the mode and order details
+    is_analyze_mode = get_analyze_mode()
+    orderid = status_data.get('orderid')
+    logger.info(f"[OrderStatus] Processing order status request - Mode: {'ANALYZE' if is_analyze_mode else 'LIVE'}, OrderID: {orderid}, Broker: {broker}")
+    
+    # In analyze mode, return hardcoded response for any order ID
+    if is_analyze_mode and orderid:
+        # Return hardcoded response for any order ID in analyzer mode
+        logger.info(f"[OrderStatus] Returning hardcoded response for order ID {orderid} in analyzer mode")
+        
         response_data = {
             'mode': 'analyze',
             'status': 'success',
             'data': {
                 'action': 'BUY',
+                'average_price': 100.00,
                 'exchange': 'NSE',
-                'order_status': 'COMPLETE',
-                'orderid': status_data['orderid'],
-                'price': 100.0,
+                'order_status': 'complete',
+                'orderid': str(orderid),  # Use the actual order ID from request
+                'price': 100.00,
                 'pricetype': 'MARKET',
                 'product': 'MIS',
-                'quantity': 10,
+                'quantity': '1',
                 'symbol': 'SBIN',
-                'timestamp': '09-Dec-2024 10:00:00',
-                'trigger_price': 0
+                'timestamp': '28-Aug-2025 09:59:10',
+                'trigger_price': 99.75
             }
         }
-
+        
         # Store complete request data without apikey
         analyzer_request = request_data.copy()
         analyzer_request['api_type'] = 'orderstatus'
@@ -107,69 +115,168 @@ def get_order_status_with_auth(
         })
         
         return True, response_data, 200
-
-    # Live mode - get order status from orderbook
-    try:
-        # For internal service calls, we'll use the orderbook service directly
-        # But for now, we'll maintain compatibility by using the API endpoint
-        
-        # Prepare orderbook request with just apikey
-        orderbook_request = {'apikey': status_data.get('apikey')}
-        
-        # Make request to orderbook API using HOST_SERVER from config
-        host_server = get_host_server()
-        orderbook_response = requests.post(f'{host_server}/api/v1/orderbook', json=orderbook_request)
-        
-        if orderbook_response.status_code != 200:
-            error_response = {
-                'status': 'error',
-                'message': 'Failed to fetch orderbook'
-            }
-            log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
-            return False, error_response, orderbook_response.status_code
-
-        orderbook_data = orderbook_response.json()
-        if orderbook_data.get('status') != 'success':
-            error_response = {
-                'status': 'error',
-                'message': orderbook_data.get('message', 'Error fetching orderbook')
-            }
-            log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
-            return False, error_response, 500
-
-        # Find the specific order in the orderbook
-        order_found = None
-        for order in orderbook_data['data']['orders']:
-            if str(order.get('orderid')) == str(status_data['orderid']):
-                order_found = order
-                break
-
-        if not order_found:
-            error_response = {
-                'status': 'error',
-                'message': f'Order {status_data["orderid"]} not found'
-            }
-            log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
-            return False, error_response, 404
-
-        # Return the found order
-        response_data = {
-            'status': 'success',
-            'data': order_found
-        }
-        log_executor.submit(async_log_order, 'orderstatus', request_data, response_data)
-
-        return True, response_data, 200
-
-    except Exception as e:
-        logger.error(f"Error processing order status: {e}")
-        traceback.print_exc()
+    
+    # For live mode or real orders in analyze mode, fetch from orderbook
+    # Both analyze mode and live mode use the same logic - fetch from orderbook
+    # This ensures consistent behavior and real data in both modes
+    
+    # Use orderbook_service to get order data
+    from services.orderbook_service import get_orderbook
+    
+    logger.debug(f"[OrderStatus] Fetching orderbook for OrderID: {orderid}")
+    
+    success, orderbook_response, status_code = get_orderbook(
+        auth_token=auth_token,
+        broker=broker
+    )
+    
+    logger.debug(f"[OrderStatus] Orderbook service response: success={success}, status_code={status_code}")
+    
+    if not success or orderbook_response.get('status') != 'success':
+        logger.error(f"[OrderStatus] Failed to fetch orderbook - Message: {orderbook_response.get('message', 'Unknown error')}, OrderID: {orderid}")
         error_response = {
             'status': 'error',
-            'message': str(e)
+            'message': orderbook_response.get('message', 'Failed to fetch orderbook')
         }
-        log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
-        return False, error_response, 500
+        if is_analyze_mode:
+            error_response['mode'] = 'analyze'
+            # Log to analyzer database
+            log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
+            # Emit socket event
+            socketio.emit('analyzer_update', {
+                'request': request_data,
+                'response': error_response
+            })
+        else:
+            log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
+        return False, error_response, status_code
+
+    # Find the specific order in the orderbook
+    order_found = None
+    orderbook_data = orderbook_response.get('data', {})
+    
+    # Handle different orderbook response structures
+    if isinstance(orderbook_data, dict) and 'orders' in orderbook_data:
+        orders_list = orderbook_data.get('orders', [])
+    elif isinstance(orderbook_data, list):
+        orders_list = orderbook_data
+    else:
+        orders_list = []
+    
+    logger.info(f"[OrderStatus] Searching for OrderID {orderid} in {len(orders_list)} orders from orderbook")
+    
+    for idx, order in enumerate(orders_list):
+        current_orderid = str(order.get('orderid'))
+        if idx < 5:  # Log first 5 order IDs for debugging
+            logger.debug(f"[OrderStatus] Order {idx+1}: OrderID={current_orderid}, Symbol={order.get('symbol')}, Status={order.get('order_status')}")
+        
+        if current_orderid == str(orderid):
+            order_found = order
+            logger.info(f"[OrderStatus] Found matching order - Symbol: {order.get('symbol')}, Status: {order.get('order_status')}, Price: {order.get('price')}")
+            break
+    
+    if not order_found:
+        logger.warning(f"[OrderStatus] Order {orderid} not found in orderbook after searching {len(orders_list)} orders")
+        error_response = {
+            'status': 'error',
+            'message': f'Order {status_data["orderid"]} not found'
+        }
+        if is_analyze_mode:
+            error_response['mode'] = 'analyze'
+            # Log to analyzer database
+            log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
+            # Emit socket event
+            socketio.emit('analyzer_update', {
+                'request': request_data,
+                'response': error_response
+            })
+        else:
+            log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
+        return False, error_response, 404
+
+    # Fetch average_price from tradebook if order is executed
+    average_price = 0.0
+    order_status = order_found.get('order_status', '')
+    
+    logger.info(f"[OrderStatus] Order status is '{order_status}', checking if tradebook lookup needed")
+    
+    # Only fetch average_price for complete orders
+    # Order statuses can be: open, complete, rejected
+    if order_status.lower() == 'complete':
+        logger.info(f"[OrderStatus] Order is complete, fetching average price from tradebook")
+        try:
+            # Use tradebook_service to get trade data
+            success, tradebook_response, status_code = get_tradebook(
+                auth_token=auth_token,
+                broker=broker
+            )
+            
+            logger.debug(f"[OrderStatus] Tradebook service response: success={success}, status_code={status_code}")
+            
+            if success and tradebook_response.get('status') == 'success':
+                # Get trades list from response
+                trades_list = tradebook_response.get('data', [])
+                logger.debug(f"[OrderStatus] Tradebook returned {len(trades_list)} trades")
+                
+                # Find matching trade by orderid and get average_price
+                logger.info(f"[OrderStatus] Searching for OrderID {orderid} in {len(trades_list)} trades")
+                for trade_idx, trade in enumerate(trades_list):
+                    trade_orderid = str(trade.get('orderid'))
+                    # Log all trades for better debugging
+                    logger.debug(f"[OrderStatus] Trade {trade_idx+1}: OrderID={trade_orderid}, Symbol={trade.get('symbol')}, AvgPrice={trade.get('average_price')}")
+                    
+                    if trade_orderid == str(orderid):
+                        # Extract average_price from trade data
+                        avg_price_raw = trade.get('average_price', 0.0)
+                        average_price = float(avg_price_raw) if avg_price_raw else 0.0
+                        logger.info(f"[OrderStatus] Found trade for OrderID {orderid}, average_price: {average_price} (raw: {avg_price_raw})")
+                        break
+                else:
+                    logger.warning(f"[OrderStatus] No trade found for OrderID {orderid} in tradebook. Available order IDs: {[str(t.get('orderid')) for t in trades_list[:5]]}")
+            else:
+                logger.warning(f"[OrderStatus] Tradebook service call failed: {tradebook_response.get('message', 'Unknown error')}")
+        except Exception as e:
+            logger.error(f"[OrderStatus] Exception while fetching tradebook: {e}", exc_info=True)
+            # Continue without average price if tradebook fetch fails
+    else:
+        logger.info(f"[OrderStatus] Order status '{order_status}' is not complete (open/rejected/other) - skipping average_price fetch")
+
+    # Add average_price to the order data
+    order_found['average_price'] = average_price
+    logger.debug(f"[OrderStatus] Final average_price set to: {average_price}")
+
+    # Prepare response data
+    response_data = {
+        'status': 'success',
+        'data': order_found
+    }
+    
+    # Add mode indicator for analyze mode
+    if is_analyze_mode:
+        response_data['mode'] = 'analyze'
+        logger.info(f"[OrderStatus] ANALYZE mode - Preparing response for OrderID {orderid} with status: {order_found.get('order_status')}")
+        
+        # Store complete request data without apikey
+        analyzer_request = request_data.copy()
+        analyzer_request['api_type'] = 'orderstatus'
+        
+        # Log to analyzer database
+        log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'orderstatus')
+        logger.debug(f"[OrderStatus] Logged to analyzer database")
+        
+        # Emit socket event for toast notification
+        socketio.emit('analyzer_update', {
+            'request': analyzer_request,
+            'response': response_data
+        })
+        logger.debug(f"[OrderStatus] Emitted socket event for analyzer update")
+    else:
+        logger.info(f"[OrderStatus] LIVE mode - Preparing response for OrderID {orderid} with status: {order_found.get('order_status')}")
+        log_executor.submit(async_log_order, 'orderstatus', request_data, response_data)
+        logger.debug(f"[OrderStatus] Logged to order database")
+
+    logger.info(f"[OrderStatus] Successfully processed order status for OrderID {orderid} - Status: {order_found.get('order_status')}, Symbol: {order_found.get('symbol')}, Average Price: {average_price}")
+    return True, response_data, 200
 
 def get_order_status(
     status_data: Dict[str, Any],
@@ -208,8 +315,7 @@ def get_order_status(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }
-            if not get_analyze_mode():
-                log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
+            # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
         
         return get_order_status_with_auth(status_data, AUTH_TOKEN, broker_name, original_data)

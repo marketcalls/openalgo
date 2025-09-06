@@ -214,14 +214,19 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+        # Format numeric values to 2 decimal places for tradebook only
+        avg_price = round(float(trade.get('avgprc', 0)), 2)
+        quantity = int(trade.get('qty', 0))
+        trade_value = round(avg_price * quantity, 2)
+        
         transformed_trade = {
             "symbol": trade.get('tsym', ''),
             "exchange": trade.get('exch', ''),
             "product": trade.get('prd', ''),
             "action": trade.get('trantype', ''),
-            "quantity": trade.get('qty', 0),
-            "average_price": trade.get('avgprc', 0.0),
-            "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
+            "quantity": quantity,
+            "average_price": avg_price,
+            "trade_value": trade_value,
             "orderid": trade.get('norenordno', ''),
             "timestamp": trade.get('norentm', '')
         }

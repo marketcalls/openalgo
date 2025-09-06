@@ -1,0 +1,213 @@
+{% extends "layout.html" %}
+
+{% block title %}Definedge Securities OTP Verification - OpenAlgo{% endblock %}
+
+{% block head %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Auto-focus OTP input on page load
+        const otpInput = document.getElementById('otp');
+        if (otpInput) {
+            otpInput.focus();
+        }
+
+        // Format OTP input
+        if (otpInput) {
+            otpInput.addEventListener('input', function(e) {
+                // Remove any non-numeric characters
+                this.value = this.value.replace(/[^0-9]/g, '');
+            });
+        }
+
+        // Resend OTP functionality
+        const resendBtn = document.getElementById('resendOTP');
+        if (resendBtn) {
+            resendBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                // Disable button and show loading state
+                resendBtn.disabled = true;
+                const originalText = resendBtn.innerHTML;
+                resendBtn.innerHTML = '<span class="loading loading-spinner"></span> Resending...';
+                
+                // Send AJAX request to resend OTP
+                fetch('/definedge/callback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'action=resend'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Show success/error message
+                    const alertDiv = document.getElementById('alertMessage');
+                    if (data.status === 'success') {
+                        alertDiv.className = 'alert alert-success';
+                        alertDiv.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>${data.message}</span>
+                        `;
+                        alertDiv.style.display = 'flex';
+                        
+                        // Start 30-second cooldown
+                        let cooldown = 30;
+                        const interval = setInterval(() => {
+                            cooldown--;
+                            if (cooldown > 0) {
+                                resendBtn.innerHTML = `Resend OTP (${cooldown}s)`;
+                            } else {
+                                clearInterval(interval);
+                                resendBtn.disabled = false;
+                                resendBtn.innerHTML = originalText;
+                            }
+                        }, 1000);
+                    } else {
+                        alertDiv.className = 'alert alert-error';
+                        alertDiv.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>${data.message}</span>
+                        `;
+                        alertDiv.style.display = 'flex';
+                        resendBtn.disabled = false;
+                        resendBtn.innerHTML = originalText;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    resendBtn.disabled = false;
+                    resendBtn.innerHTML = originalText;
+                });
+            });
+        }
+    });
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="min-h-[calc(100vh-8rem)] flex items-center justify-center py-8">
+    <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-16">
+            <!-- Right side OTP form - Shown first on mobile -->
+            <div class="card flex-shrink-0 w-full max-w-md shadow-2xl bg-base-100 order-1 lg:order-2">
+                <div class="card-body">
+                    <div class="flex justify-center mb-6">
+                        <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+                    </div>
+
+                    {% if otp_sent %}
+                    <form action="/definedge/callback" method="POST" class="space-y-4">
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Enter OTP</span>
+                            </label>
+                            <input type="password" 
+                                   id="otp" 
+                                   name="otp" 
+                                   required 
+                                   class="input input-bordered text-center text-2xl tracking-[1em]" 
+                                   placeholder="••••"
+                                   inputmode="numeric"
+                                   autocomplete="one-time-code" />
+                        </div>
+
+                        <!-- Alert message area -->
+                        <div id="alertMessage" style="display: none;"></div>
+
+                        {% if otp_message %}
+                        <div class="alert alert-success">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ otp_message }}</span>
+                        </div>
+                        {% endif %}
+
+                        {% if error_message %}
+                        <div class="alert alert-error">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ error_message }}</span>
+                        </div>
+                        {% endif %}
+
+                        <div class="form-control mt-6">
+                            <button type="submit" class="btn btn-primary w-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                </svg>
+                                Verify OTP
+                            </button>
+                        </div>
+
+                        <div class="form-control">
+                            <button type="button" id="resendOTP" class="btn btn-outline btn-sm w-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Resend OTP
+                            </button>
+                        </div>
+                    </form>
+                    {% else %}
+                    <!-- Show error state when OTP is not sent -->
+                    <div class="alert alert-error">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{{ error_message or "Failed to send OTP. Please try again." }}</span>
+                    </div>
+                    
+                    <div class="form-control mt-6">
+                        <a href="{{ url_for('brlogin.broker_callback', broker='definedge') }}" class="btn btn-primary w-full">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Retry Sending OTP
+                        </a>
+                    </div>
+                    {% endif %}
+
+                    <div class="divider">OR</div>
+
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
+                        </svg>
+                        Back to Broker Selection
+                    </a>
+                </div>
+            </div>
+
+            <!-- Left side content - Shown second on mobile -->
+            <div class="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
+                <h1 class="text-4xl lg:text-5xl font-bold mb-6">OTP <span class="text-primary">Verification</span></h1>
+                <p class="text-lg lg:text-xl mb-8 opacity-80">
+                    Complete the authentication process with Definedge Securities.
+                </p>
+                <div class="flex flex-col gap-4">
+                    <div class="flex justify-center lg:justify-start gap-4">
+                        <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" class="btn btn-outline gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                            </svg>
+                            Documentation
+                        </a>
+                        <a href="/auth/broker" class="btn btn-outline gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"></path>
+                            </svg>
+                            Back to Brokers
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

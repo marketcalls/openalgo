@@ -45,7 +45,7 @@ from broker.upstox.streaming.upstox_adapter import UpstoxWebSocketAdapter
 from broker.kotak.streaming.kotak_adapter import KotakWebSocketAdapter
 
 # Import the fyers_adapter
-from broker.fyers.streaming.fyers_adapter import FyersWebSocketAdapter
+from broker.fyers.streaming.fyers_websocket_adapter import FyersWebSocketAdapter
 
 # AliceBlue adapter will be loaded dynamically
 

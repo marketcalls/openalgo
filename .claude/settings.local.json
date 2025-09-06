@@ -19,7 +19,14 @@
       "Bash(chmod:*)",
       "Bash(source:*)",
       "Bash(.venv/Scripts/python.exe:*)",
-      "WebFetch(domain:docs.openalgo.in)"
+      "WebFetch(domain:docs.openalgo.in)",
+      "WebFetch(domain:tradingview.github.io)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(dir:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker-compose up:*)"
     ],
     "deny": []
   }

@@ -14,24 +14,40 @@ def format_decimal(value):
     return value
 
 def format_order_data(order_data):
-    """Format all numeric values in order data to 2 decimal places"""
+    """Format all numeric values in order data to 2 decimal places and adjust price for market orders"""
     if isinstance(order_data, list):
-        return [
-            {
-                key: format_decimal(value) if isinstance(value, (int, float)) else value
-                for key, value in item.items()
-            }
-            for item in order_data
-        ]
+        formatted_orders = []
+        for item in order_data:
+            formatted_item = {}
+            for key, value in item.items():
+                if isinstance(value, (int, float)):
+                    formatted_item[key] = format_decimal(value)
+                else:
+                    formatted_item[key] = value
+            
+            # Set price to 0 for market orders, keep actual price for limit orders
+            pricetype = formatted_item.get('pricetype', '').upper()
+            if pricetype == 'MARKET':
+                formatted_item['price'] = 0.0
+            
+            formatted_orders.append(formatted_item)
+        return formatted_orders
     return order_data
 
 def format_statistics(stats):
-    """Format all numeric values in statistics to 2 decimal places"""
+    """Format numeric values in statistics - keep counts as integers, prices as decimals"""
     if isinstance(stats, dict):
-        return {
-            key: format_decimal(value) if isinstance(value, (int, float)) else value
-            for key, value in stats.items()
-        }
+        formatted = {}
+        for key, value in stats.items():
+            # Keep order counts as integers
+            if any(count_type in key for count_type in ['total_', 'orders', 'completed', 'open', 'rejected']):
+                formatted[key] = int(value) if isinstance(value, (int, float)) else value
+            # Format other numeric values to 2 decimal places
+            elif isinstance(value, (int, float)):
+                formatted[key] = format_decimal(value)
+            else:
+                formatted[key] = value
+        return formatted
     return stats
 
 def import_broker_module(broker_name: str) -> Optional[Dict[str, Any]]:

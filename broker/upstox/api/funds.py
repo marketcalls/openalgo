@@ -73,7 +73,30 @@ def get_margin_data(auth_token):
         return processed_margin_data
         
     except httpx.HTTPStatusError as e:
-        logger.exception(f"HTTP error occurred while fetching margin data: {e.response.text}")
+        response_text = e.response.text
+        
+        # Check if it's a service hours error (423 Locked)
+        if e.response.status_code == 423:
+            try:
+                error_data = json.loads(response_text)
+                if error_data.get('status') == 'error':
+                    errors = error_data.get('errors', [])
+                    for error in errors:
+                        if error.get('errorCode') == 'UDAPI100072':
+                            # Return default values for service hours error
+                            logger.info("Upstox funds service is outside operating hours (5:30 AM to 12:00 AM IST). Returning default values.")
+                            return {
+                                "availablecash": "0.00",
+                                "collateral": "0.00",
+                                "m2munrealized": "0.00",
+                                "m2mrealized": "0.00",
+                                "utiliseddebits": "0.00"
+                            }
+            except json.JSONDecodeError:
+                pass
+        
+        # Log the full error only if it's not a service hours issue
+        logger.exception(f"HTTP error occurred while fetching margin data: {response_text}")
         return {}
     except (KeyError, TypeError) as e:
         logger.exception(f"Error processing margin data structure: {e}")
