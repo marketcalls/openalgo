@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Add Strategy - OpenAlgo{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-2xl">
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold">Add New Strategy</h1>
+        <p class="text-base-content/70 mt-2">Upload your Python trading strategy</p>
+    </div>
+
+    <!-- Upload Form -->
+    <form method="POST" enctype="multipart/form-data" class="space-y-6">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        
+        <!-- Strategy Name -->
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text">Strategy Name</span>
+                <span class="label-text-alt">Required</span>
+            </label>
+            <input type="text" name="strategy_name" class="input input-bordered" placeholder="e.g., EMA Crossover" required>
+            <label class="label">
+                <span class="label-text-alt">A descriptive name for your strategy</span>
+            </label>
+        </div>
+
+        <!-- File Upload -->
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text">Python Script</span>
+                <span class="label-text-alt">Required</span>
+            </label>
+            <input type="file" name="strategy_file" class="file-input file-input-bordered w-full" accept=".py" required>
+            <label class="label">
+                <span class="label-text-alt">Select your .py strategy file (e.g., ema_crossover.py)</span>
+            </label>
+        </div>
+
+        <!-- Info Box -->
+        <div class="alert alert-info">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <div>
+                <h3 class="font-bold">Strategy Requirements</h3>
+                <div class="text-xs mt-1">
+                    Your Python script should be self-contained with all necessary imports and configuration.
+                    The strategy will run as-is without any environment variables.
+                </div>
+            </div>
+        </div>
+
+        <!-- Strategy Template -->
+        <div class="collapse collapse-arrow bg-base-200">
+            <input type="checkbox">
+            <div class="collapse-title font-medium">
+                View Example Strategy Structure
+            </div>
+            <div class="collapse-content">
+                <pre class="text-xs bg-base-300 p-4 rounded overflow-x-auto"><code>#!/usr/bin/env python
+"""
+Example Trading Strategy
+"""
+from openalgo import api
+import time
+from datetime import datetime
+
+# Configuration
+api_key = 'your-openalgo-api-key'
+symbol = "RELIANCE"
+exchange = "NSE"
+product = "MIS"
+quantity = 1
+
+# Initialize API client
+client = api(api_key=api_key, host='http://127.0.0.1:5000')
+
+def main():
+    print(f"Strategy started at {datetime.now()}")
+    print(f"Trading {symbol} on {exchange}")
+    
+    while True:
+        try:
+            # Your strategy logic here
+            # 1. Fetch market data
+            # 2. Calculate indicators
+            # 3. Generate signals
+            # 4. Place orders
+            
+            print(f"[{datetime.now()}] Running strategy...")
+            time.sleep(60)  # Check every minute
+            
+        except KeyboardInterrupt:
+            print("Strategy stopped by user")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="flex justify-between">
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-ghost">
+                Cancel
+            </a>
+            <button type="submit" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                Upload Strategy
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

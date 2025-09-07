@@ -39,10 +39,47 @@ def get_encryption_key():
 # Initialize Fernet cipher
 fernet = get_encryption_key()
 
-# Define a cache for the auth tokens with a 5-minute TTL (increased from 30 seconds)
-auth_cache = TTLCache(maxsize=1024, ttl=300)
-# Define a separate cache for feed tokens with a 5-minute TTL (increased from 30 seconds)
-feed_token_cache = TTLCache(maxsize=1024, ttl=300)
+# Calculate cache TTL based on session expiry time to minimize DB hits
+def get_session_based_cache_ttl():
+    """Calculate cache TTL based on daily session expiry time in .env"""
+    try:
+        import pytz
+        from datetime import datetime
+        
+        # Get session expiry time from environment (default 3 AM)
+        expiry_time = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+        hour, minute = map(int, expiry_time.split(':'))
+        
+        # Calculate time until next session expiry
+        now_utc = datetime.now(pytz.timezone('UTC'))
+        now_ist = now_utc.astimezone(pytz.timezone('Asia/Kolkata'))
+        
+        # Today's expiry time
+        today_expiry = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        
+        # If we've passed today's expiry, use tomorrow's expiry
+        if now_ist >= today_expiry:
+            from datetime import timedelta
+            today_expiry += timedelta(days=1)
+        
+        # Calculate seconds until expiry
+        time_until_expiry = (today_expiry - now_ist).total_seconds()
+        
+        # Use time until session expiry, with reasonable bounds
+        # Minimum 5 minutes, maximum 24 hours
+        ttl_seconds = max(300, min(time_until_expiry, 24 * 3600))
+        
+        logger.debug(f"Auth cache TTL set to {ttl_seconds} seconds until session expiry at {today_expiry.strftime('%H:%M IST')}")
+        return int(ttl_seconds)
+        
+    except Exception as e:
+        logger.warning(f"Could not calculate session-based cache TTL, using 5-minute default: {e}")
+        return 300  # Fallback to 5 minutes
+
+# Define auth token cache with TTL until session expiry to minimize DB hits
+auth_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+# Define feed token cache with same TTL
+feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
 broker_cache = TTLCache(maxsize=1024, ttl=3000)
 

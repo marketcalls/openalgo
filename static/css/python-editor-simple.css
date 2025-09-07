@@ -1,0 +1,181 @@
+/* Simple Python Editor Styles for OpenAlgo */
+
+.simple-python-editor {
+    border: 1px solid oklch(var(--b3));
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: oklch(var(--b1));
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.5em;
+}
+
+.simple-python-editor.dark {
+    background: #1e1e1e;
+    border-color: #3e3e42;
+}
+
+.simple-python-editor.read-only {
+    background: oklch(var(--b2));
+}
+
+.simple-python-editor .editor-container {
+    display: flex;
+    min-height: 400px;
+    height: 600px;
+    max-height: 80vh;
+    overflow: hidden;
+    position: relative;
+}
+
+.simple-python-editor .line-numbers-wrapper {
+    min-width: 50px;
+    padding: 1rem 0.5rem;
+    background: oklch(var(--b2));
+    border-right: 1px solid oklch(var(--b3));
+    text-align: right;
+    color: oklch(var(--bc) / 0.5);
+    user-select: none;
+    flex-shrink: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.simple-python-editor.dark .line-numbers-wrapper {
+    background: #252526;
+    border-right-color: #3e3e42;
+    color: #858585;
+}
+
+.simple-python-editor .line-number {
+    height: 1.5em;
+    padding-right: 0.5rem;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.simple-python-editor .editor-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: auto;
+}
+
+.simple-python-editor .editor-textarea {
+    width: 100%;
+    min-height: 100%;
+    height: auto;
+    padding: 1rem;
+    margin: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: oklch(var(--bc));
+    font: inherit;
+    line-height: inherit;
+    white-space: pre;
+    word-wrap: normal;
+    overflow-wrap: normal;
+    overflow: visible;
+    resize: none;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+.simple-python-editor.dark .editor-textarea {
+    color: #d4d4d4;
+    caret-color: #007acc;
+}
+
+.simple-python-editor .editor-textarea:focus {
+    outline: none;
+}
+
+.simple-python-editor.read-only .editor-textarea {
+    cursor: default;
+    background: oklch(var(--b2) / 0.5);
+}
+
+/* Scrollbar styling */
+.simple-python-editor .editor-container::-webkit-scrollbar,
+.simple-python-editor .editor-textarea::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.simple-python-editor .editor-container::-webkit-scrollbar-track,
+.simple-python-editor .editor-textarea::-webkit-scrollbar-track {
+    background: oklch(var(--b2));
+}
+
+.simple-python-editor.dark .editor-container::-webkit-scrollbar-track,
+.simple-python-editor.dark .editor-textarea::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.simple-python-editor .editor-container::-webkit-scrollbar-thumb,
+.simple-python-editor .editor-textarea::-webkit-scrollbar-thumb {
+    background: oklch(var(--bc) / 0.3);
+    border-radius: 6px;
+}
+
+.simple-python-editor .editor-container::-webkit-scrollbar-thumb:hover,
+.simple-python-editor .editor-textarea::-webkit-scrollbar-thumb:hover {
+    background: oklch(var(--bc) / 0.5);
+}
+
+.simple-python-editor.dark .editor-container::-webkit-scrollbar-thumb {
+    background: #424242;
+}
+
+.simple-python-editor.dark .editor-container::-webkit-scrollbar-thumb:hover {
+    background: #4f4f4f;
+}
+
+/* Selection */
+.simple-python-editor .editor-textarea::selection {
+    background: oklch(var(--p) / 0.3);
+}
+
+.simple-python-editor.dark .editor-textarea::selection {
+    background: rgba(0, 122, 204, 0.3);
+}
+
+/* Focus state */
+.simple-python-editor:focus-within {
+    border-color: oklch(var(--p));
+    box-shadow: 0 0 0 2px oklch(var(--p) / 0.2);
+}
+
+.simple-python-editor.dark:focus-within {
+    border-color: #007acc;
+    box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+/* Syntax highlighting for Python keywords in comments */
+.simple-python-editor .syntax-hint {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    padding: 0.25rem 0.5rem;
+    background: oklch(var(--b3) / 0.8);
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    color: oklch(var(--bc) / 0.6);
+    pointer-events: none;
+}
+
+/* Mobile responsive */
+@media (max-width: 640px) {
+    .simple-python-editor {
+        font-size: 12px;
+    }
+    
+    .simple-python-editor .line-numbers-wrapper {
+        min-width: 40px;
+        padding: 0.75rem 0.25rem;
+    }
+    
+    .simple-python-editor .editor-textarea {
+        padding: 0.75rem;
+    }
+}

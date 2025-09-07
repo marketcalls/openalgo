@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Python Editor</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.19/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="../static/css/python-editor-simple.css">
+    <style>
+        body {
+            padding: 2rem;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-2xl font-bold mb-4">Python Editor Test</h1>
+        
+        <div class="mb-4">
+            <button onclick="toggleTheme()" class="btn btn-sm">Toggle Theme</button>
+            <button onclick="toggleReadOnly()" class="btn btn-sm">Toggle ReadOnly</button>
+            <button onclick="getValue()" class="btn btn-sm">Get Value</button>
+        </div>
+        
+        <div id="editor-container"></div>
+    </div>
+    
+    <script src="../static/js/python-editor-simple.js"></script>
+    <script>
+        const testCode = `from openalgo import api
+import pandas as pd
+import numpy as np
+import time
+import threading
+from datetime import datetime, timedelta
+
+# Get API key from openalgo portal
+api_key = '0cac7a0c936d0b49cfcd81ac6aad3793fbf26d006f04c6a62a05c8250fd109c5'
+
+# Set the strategy details and trading parameters
+strategy = "EMA Crossover Python"
+symbol = "BHEL"  # OpenAlgo Symbol
+exchange = "NSE"
+product = "MIS"
+quantity = 1
+
+# EMA periods
+fast_period = 5
+slow_period = 10
+
+# Set the API Key
+client = api(api_key=api_key, host='http://127.0.0.1:5000')
+
+def calculate_ema_signals(df):
+    """
+    Calculate EMA crossover signals.
+    """
+    close = df['close']
+    
+    # Calculate EMAs
+    ema_fast = close.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = close.ewm(span=slow_period, adjust=False).mean()
+    
+    # Create crossover signals
+    crossover = pd.Series(False, index=df.index)
+    crossunder = pd.Series(False, index=df.index)
+    
+    # Previous values of EMAs
+    prev_fast = ema_fast.shift(1)
+    prev_slow = ema_slow.shift(1)
+    
+    # Current values of EMAs
+    curr_fast = ema_fast
+    curr_slow = ema_slow
+    
+    # Generate crossover signals
+    crossover = (prev_fast < prev_slow) & (curr_fast > curr_slow)
+    crossunder = (prev_fast > prev_slow) & (curr_fast < curr_slow)
+    
+    return pd.DataFrame({
+        'EMA_Fast': ema_fast,
+        'EMA_Slow': ema_slow,
+        'Crossover': crossover,
+        'Crossunder': crossunder
+    }, index=df.index)`;
+        
+        let editor;
+        let currentTheme = 'dark';
+        
+        // Initialize editor
+        document.addEventListener('DOMContentLoaded', () => {
+            const container = document.getElementById('editor-container');
+            
+            editor = new SimplePythonEditor(container, {
+                value: testCode,
+                readOnly: false,
+                theme: currentTheme,
+                onChange: (value) => {
+                    console.log('Content changed, length:', value.length);
+                }
+            });
+        });
+        
+        function toggleTheme() {
+            currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            editor.setTheme(currentTheme);
+        }
+        
+        function toggleReadOnly() {
+            const isReadOnly = editor.readOnly;
+            editor.setReadOnly(!isReadOnly);
+            console.log('ReadOnly:', !isReadOnly);
+        }
+        
+        function getValue() {
+            const value = editor.getValue();
+            console.log('Editor value:', value);
+            alert('Check console for editor value');
+        }
+    </script>
+</body>
+</html>
