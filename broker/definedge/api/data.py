@@ -34,16 +34,32 @@ def get_quotes(symbol, exchange, auth_token):
         
         logger.info(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
 
+        # Handle index symbols - map to their respective exchanges
+        api_exchange = exchange
+        if exchange == 'NSE_INDEX':
+            api_exchange = 'NSE'
+        elif exchange == 'BSE_INDEX':
+            api_exchange = 'BSE'
+        elif exchange == 'MCX_INDEX':
+            api_exchange = 'MCX'
+
         headers = {
             'Authorization': api_session_key
         }
 
-        # Use the correct DefinedGe quotes endpoint: /quotes/{exchange}/{token}
-        url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{exchange}/{token_id}"
+        # Use the correct Definedge quotes endpoint: /dart/v1/quotes/{exchange}/{token}
+        # According to API docs, the relative URL is /quotes/{exchange}/{token}
+        # But the full path includes /dart/v1
+        url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token_id}"
         
         response = client.get(url, headers=headers)
         
         logger.debug(f"Quotes API Response Status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"Quotes API error: Status {response.status_code}, Response: {response.text}")
+            return {"status": "error", "message": f"API returned status {response.status_code}"}
+        
         logger.debug(f"Quotes API Response: {response.text}")
         
         return response.json()
