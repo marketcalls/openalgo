@@ -27,6 +27,8 @@ For detailed installation instructions, please refer to [INSTALL.md](https://doc
 - **5paisa (XTS)**
 - **AliceBlue**
 - **AngelOne**
+- **Compositedge**
+- **Definedge**
 - **Dhan**
 - **Dhan (Sandbox)**
 - **Firstock**
