@@ -222,16 +222,22 @@ class BrokerData:
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
             
-            # Set start time to 00:00 for the start date
-            from_date = from_date.replace(hour=0, minute=0)
-            
-            # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
-            if to_date.date() == current_time.date():
-                to_date = current_time.replace(hour=15, minute=30)  # Market close time
+            # For intraday data, set specific times
+            if interval != 'D':
+                # Set start time to 09:15 (market open) for the start date
+                from_date = from_date.replace(hour=9, minute=15)
+                
+                # If end_date is today, set the end time to current time
+                current_time = pd.Timestamp.now()
+                if to_date.date() == current_time.date():
+                    to_date = current_time.replace(second=0, microsecond=0)
+                else:
+                    # For past dates, set end time to 15:30 (market close)
+                    to_date = to_date.replace(hour=15, minute=30)
             else:
-                # For past dates, set end time to 15:30 (market close)
-                to_date = to_date.replace(hour=15, minute=30)
+                # For daily data, use 00:00
+                from_date = from_date.replace(hour=0, minute=0)
+                to_date = to_date.replace(hour=0, minute=0)
             
             # Initialize empty list to store DataFrames
             dfs = []
@@ -250,7 +256,9 @@ class BrokerData:
             
             chunk_days = interval_limits.get(interval, 30)
             
-            # Use the timeframe mapping from self.timeframe_map
+            # Map interval to Definedge timeframe
+            # Definedge only accepts 'minute', 'day', or 'tick' as timeframe
+            # For all minute-based intervals, we get 1-minute data and resample
             timeframe = self.timeframe_map.get(interval, 'day')
             
             # Get auth token
@@ -268,6 +276,7 @@ class BrokerData:
                 
                 # Build URL for Definedge historical data API
                 # Format: /sds/history/{segment}/{token}/{timeframe}/{from}/{to}
+                # Definedge only accepts 'minute', 'day', or 'tick' as timeframe
                 # Handle index symbols - NSE_INDEX should be mapped to NSE
                 segment = exchange.upper()
                 if segment == 'NSE_INDEX':
@@ -403,12 +412,10 @@ class BrokerData:
                         current_start = current_end + timedelta(days=1)
                         continue
                     
-                    # For minute intervals, ensure we have the correct interval
+                    # For minute intervals other than 1m, we need to resample
+                    # Definedge returns 1-minute data that we resample to the desired interval
                     if interval != 'D' and timeframe == 'minute' and interval != '1m':
-                        # Resample to the correct interval if needed
-                        # Definedge only supports: 1m, 5m, 15m, 30m, 1h
                         interval_minutes = {
-                            '1m': 1,
                             '5m': 5,
                             '15m': 15,
                             '30m': 30,
@@ -417,8 +424,7 @@ class BrokerData:
                         
                         if interval in interval_minutes:
                             try:
-                                # Only resample if not 1-minute interval
-                                # Set timestamp as index for resampling
+                                # Ensure timestamp is datetime
                                 if not pd.api.types.is_datetime64_any_dtype(chunk_df['timestamp']):
                                     chunk_df['timestamp'] = pd.to_datetime(chunk_df['timestamp'])
                                 
@@ -428,9 +434,15 @@ class BrokerData:
                                 if not chunk_df.empty:
                                     chunk_df = chunk_df.set_index('timestamp')
                                     
-                                    # Resample to the desired interval using 'min' instead of deprecated 'T'
+                                    # Create a custom offset to align with market open at 09:15
+                                    # This ensures 30m candles start at 09:15, not 09:00
+                                    offset_minutes = 15  # Market opens at 09:15, so offset by 15 minutes
+                                    
+                                    # Resample with the offset to align with market hours
                                     resample_rule = f'{interval_minutes[interval]}min'
-                                    resampled = chunk_df.resample(resample_rule)
+                                    # Use offset parameter to shift the bins to start at :15 and :45 for 30m
+                                    # For other intervals, the offset ensures proper market alignment
+                                    resampled = chunk_df.resample(resample_rule, offset=f'{offset_minutes}min')
                                     
                                     chunk_df = pd.DataFrame({
                                         'open': resampled['open'].first(),
@@ -444,25 +456,26 @@ class BrokerData:
                                     chunk_df = chunk_df.reset_index()
                             except Exception as resample_error:
                                 logger.debug(f"Debug - Error during resampling: {str(resample_error)}")
-                                # Continue with original data if resampling fails
+                                # Continue with original 1-minute data if resampling fails
                     
-                    # Convert timestamp to Unix epoch
+                    # Don't convert timestamp to Unix epoch here - keep as datetime for now
+                    # We'll convert it later after combining all chunks, similar to Angel
                     if 'timestamp' in chunk_df.columns:
                         if chunk_df['timestamp'].dtype == 'object':
                             chunk_df['timestamp'] = pd.to_datetime(chunk_df['timestamp'])
                         elif pd.api.types.is_numeric_dtype(chunk_df['timestamp']):
-                            # Already in Unix timestamp format (for tick data)
-                            pass
-                        else:
+                            # Convert Unix timestamp to datetime for consistency
+                            chunk_df['timestamp'] = pd.to_datetime(chunk_df['timestamp'], unit='s')
+                        elif not pd.api.types.is_datetime64_any_dtype(chunk_df['timestamp']):
                             chunk_df['timestamp'] = pd.to_datetime(chunk_df['timestamp'])
-                        
-                        # Convert to Unix timestamp if it's datetime
-                        if pd.api.types.is_datetime64_any_dtype(chunk_df['timestamp']):
-                            chunk_df['timestamp'] = chunk_df['timestamp'].astype('int64') // 10**9
                     
                     if not chunk_df.empty:
+                        # Log the date range of data received
+                        min_ts = chunk_df['timestamp'].min()
+                        max_ts = chunk_df['timestamp'].max()
+                        logger.debug(f"Debug - Chunk data range: {min_ts} to {max_ts}")
+                        logger.debug(f"Debug - Received {len(chunk_df)} candles for chunk {current_start.date()} to {current_end.date()}")
                         dfs.append(chunk_df)
-                        logger.debug(f"Debug - Received {len(chunk_df)} candles for chunk")
                     else:
                         logger.debug(f"Debug - Empty DataFrame after processing chunk")
                     
@@ -485,6 +498,29 @@ class BrokerData:
             df = pd.concat(dfs, ignore_index=True)
             logger.debug(f"Debug - Combined DataFrame shape: {df.shape}")
             
+            # Ensure timestamp is datetime type (it should already be)
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Handle timestamps based on interval type
+            if interval == 'D':
+                # For daily timeframe, ensure timestamps are at midnight
+                df['timestamp'] = pd.to_datetime(df['timestamp']).dt.normalize()
+                # Don't add any offset for daily data - keep at midnight
+                # Convert to Unix epoch (treating as naive timestamp, will be interpreted as UTC)
+                df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+            else:
+                # For intraday intervals (minute data)
+                # Definedge returns timestamps in IST (Indian Standard Time)
+                # We need to localize them as IST and convert to UTC before converting to Unix epoch
+                # This ensures the OpenAlgo client interprets them correctly
+                # Localize as IST (the timestamps from Definedge are in IST)
+                df['timestamp'] = df['timestamp'].dt.tz_localize('Asia/Kolkata')
+                # Convert to UTC for storage as Unix epoch
+                df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
+                # Now convert to Unix epoch (this will be in UTC)
+                df['timestamp'] = df['timestamp'].astype('int64') // 10**9  # Convert to Unix epoch in seconds
+            
             # Ensure numeric columns
             numeric_columns = ['open', 'high', 'low', 'close', 'volume']
             for col in numeric_columns:
@@ -501,10 +537,12 @@ class BrokerData:
             if 'timestamp' in df.columns:
                 df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
-            # Reorder columns to match OpenAlgo format
+            # Reorder columns to match OpenAlgo format (timestamp should be 5th column)
+            # Order: close, high, low, open, timestamp, volume, oi
             df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
             
             logger.debug(f"Debug - Final DataFrame shape: {df.shape}")
+            logger.debug(f"Debug - Timestamp dtype: {df['timestamp'].dtype}")
             logger.info(f"Successfully fetched {len(df)} candles for {symbol}")
             
             return df
