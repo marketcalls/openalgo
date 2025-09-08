@@ -74,7 +74,6 @@ dependencies = [
   "ordered-set==4.1.0",
   "packaging==24.1",
   "pandas==2.2.3",
-  "pandas-ta==0.3.14b0",
   "parso==0.8.4",
   "pillow==11.0.0",
   "platformdirs==4.3.7",
