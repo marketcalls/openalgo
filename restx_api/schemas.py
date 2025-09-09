@@ -19,7 +19,7 @@ class SmartOrderSchema(Schema):
     exchange = fields.Str(required=True)
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
-    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    quantity = fields.Int(required=True, validate=validate.Range(min=0, error="Quantity must be a non-negative integer."))
     position_size = fields.Int(required=True)
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
     product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML", "CNC"]))
