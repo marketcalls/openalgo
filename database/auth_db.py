@@ -242,6 +242,24 @@ def get_feed_token_dbquery(name):
         logger.error(f"Error while querying the database for feed token: {e}")
         return None
 
+def get_user_id(name):
+    """Get the stored user_id (DefinEdge uid) for a user"""
+    try:
+        if not name:
+            logger.debug("get_user_id called with empty/None name")
+            return None
+            
+        auth_obj = Auth.query.filter_by(name=name).first()
+        if auth_obj and not auth_obj.is_revoked:
+            return auth_obj.user_id  # This should return "1272808" for DefinEdge
+        else:
+            if name:
+                logger.warning(f"No valid user_id found for name '{name}'.")
+            return None
+    except Exception as e:
+        logger.error(f"Error while querying the database for user_id: {e}")
+        return None
+
 def upsert_api_key(user_id, api_key):
     """Store both hashed and encrypted API key"""
     # Hash with Argon2 for verification
