@@ -283,6 +283,7 @@ sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow ssh
 sudo ufw allow 80/tcp
+sudo ufw allow 8765/tcp  # WebSocket port
 sudo ufw --force enable
 check_status "Failed to configure firewall"
 
@@ -368,6 +369,10 @@ sudo sed -i "s|http://127.0.0.1:5000|http://$SERVER_IP|g" $BASE_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $BASE_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $BASE_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $BASE_PATH/.env
+
+# Update WebSocket URL for IP-based deployment
+sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='ws://$SERVER_IP:8765'|g" $BASE_PATH/.env
+
 check_status "Failed to configure environment"
 
 # Create systemd service
