@@ -321,8 +321,16 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from Shoonya WebSocket endpoint"""
         self.running = False
         
+        # Clear all subscriptions and reference counts before disconnecting
+        with self.lock:
+            self.subscriptions.clear()
+            self.token_to_symbol.clear()
+            self.ws_subscription_refs.clear()
+            self.logger.info("Cleared all subscriptions and mappings")
+        
         if self.ws_client:
             self.ws_client.stop()
+            self.ws_client = None  # Clear the reference
         
         # Clean up market data cache
         self.market_cache.clear()
@@ -331,7 +339,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.cleanup_zmq()
         
         self.connected = False
-        self.logger.info("Disconnected from Shoonya WebSocket")
+        self.logger.info("Disconnected from Shoonya WebSocket and cleaned up all resources")
 
     def subscribe(self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE, depth_level: int = 5) -> Dict[str, Any]:
         """Subscribe to market data with improved error handling"""
@@ -463,17 +471,21 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         scrip = subscription['scrip']
         
         # Remove subscription
-        del self.subscriptions[correlation_id]
+        if correlation_id in self.subscriptions:
+            del self.subscriptions[correlation_id]
         
         # Clean up reference count if both counts are 0
         if scrip in self.ws_subscription_refs:
             if (self.ws_subscription_refs[scrip]['touchline_count'] <= 0 and 
                 self.ws_subscription_refs[scrip]['depth_count'] <= 0):
                 del self.ws_subscription_refs[scrip]
+                self.logger.debug(f"Removed reference counts for {scrip}")
         
         # Remove token mapping if no other subscriptions use it
-        if not any(sub['token'] == token for sub in self.subscriptions.values()):
-            self.token_to_symbol.pop(token, None)
+        if not any(sub.get('token') == token for sub in self.subscriptions.values()):
+            if token in self.token_to_symbol:
+                del self.token_to_symbol[token]
+                self.logger.debug(f"Removed token mapping for {token}")
             self.market_cache.clear(token)
 
     def _on_open(self, ws):

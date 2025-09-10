@@ -18,6 +18,102 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 from .definedge_mapping import DefinedgeExchangeMapper, DefinedgeCapabilityRegistry
 
+
+class MarketDataCache:
+    """Manages market data caching with thread safety for DefinEdge"""
+    
+    def __init__(self):
+        self._cache = {}
+        self._initialized_tokens = set()
+        self._lock = threading.Lock()
+        self.logger = logging.getLogger("market_cache")
+    
+    def get(self, token: str) -> Dict[str, Any]:
+        """Get cached data for a token"""
+        with self._lock:
+            return self._cache.get(token, {}).copy()
+    
+    def update(self, token: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update cache with new data and return merged result"""
+        with self._lock:
+            cached_data = self._cache.get(token, {})
+            merged_data = self._merge_data(cached_data, data, token)
+            self._cache[token] = merged_data
+            
+            if token not in self._initialized_tokens:
+                self._initialized_tokens.add(token)
+                self._log_cache_initialization(token, data)
+            
+            return merged_data.copy()
+    
+    def clear(self, token: str = None) -> None:
+        """Clear cache for specific token or all tokens"""
+        with self._lock:
+            if token:
+                self._cache.pop(token, None)
+                self._initialized_tokens.discard(token)
+                self.logger.info(f"Cleared cache for token {token}")
+            else:
+                cache_size = len(self._cache)
+                self._cache.clear()
+                self._initialized_tokens.clear()
+                self.logger.info(f"Cleared all cached market data ({cache_size} tokens)")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        with self._lock:
+            return {
+                'total_tokens': len(self._cache),
+                'initialized_tokens': len(self._initialized_tokens),
+                'tokens': list(self._cache.keys())
+            }
+    
+    def _merge_data(self, cached: Dict, new: Dict, token: str) -> Dict:
+        """Smart merge logic for market data - similar to Shoonya"""
+        merged = cached.copy()
+        
+        # Update with new values
+        for key, value in new.items():
+            if self._should_preserve_cached_value(key, value, cached):
+                continue
+            merged[key] = value
+        
+        # Preserve cached values for missing fields (like Shoonya does)
+        for key, value in cached.items():
+            if key not in new:
+                merged[key] = value
+        
+        return merged
+    
+    def _should_preserve_cached_value(self, key: str, new_value: Any, cached: Dict) -> bool:
+        """Determine if cached value should be preserved - same logic as Shoonya"""
+        # Preserve non-zero OHLC values when new value is zero (same as Shoonya line 119-121)
+        # Using raw field names as they come from broker
+        if key in ['o', 'h', 'l', 'c', 'ap'] and self._is_zero_value(new_value):
+            cached_value = cached.get(key)
+            return cached_value is not None and not self._is_zero_value(cached_value)
+        return False
+    
+    def _is_zero_value(self, value: Any) -> bool:
+        """Check if value represents zero - same as Shoonya line 130-132"""
+        return value in [None, '', '0', 0, '0.0', 0.0]
+    
+    def _log_cache_initialization(self, token: str, data: Dict) -> None:
+        """Log cache initialization details - same as Shoonya"""
+        # Use raw field names like Shoonya
+        basic_fields = ['lp', 'o', 'h', 'l', 'c', 'v', 'ap', 'pc', 'ltq', 'ltt', 'tbq', 'tsq']
+        present_fields = sum(1 for field in basic_fields if field in data)
+        completeness = present_fields / len(basic_fields)
+        
+        # Check specifically for OHLC snapshot
+        has_ohlc = any(data.get(f) and not self._is_zero_value(data.get(f)) for f in ['o', 'h', 'l', 'c'])
+        if has_ohlc:
+            self.logger.info(f"📸 OHLC snapshot cached for {token}: o={data.get('o')}, h={data.get('h')}, l={data.get('l')}, c={data.get('c')}")
+        
+        self.logger.info(f"Initializing cache for token {token} - "
+                        f"{present_fields}/{len(basic_fields)} fields present ({completeness:.1%})")
+
+
 class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """DefinEdge-specific implementation of the WebSocket adapter"""
     
@@ -33,6 +129,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self.market_cache = MarketDataCache()  # Initialize market data cache
+        self.token_to_symbol = {}  # Map tokens to symbols for cache management
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -103,30 +201,76 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to DefinEdge WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
+                # Check if we should still be running
+                if not self.running:
+                    self.logger.info("Adapter stopped - aborting connection attempt")
+                    return
+                    
                 self.logger.info(f"Connecting to DefinEdge WebSocket (attempt {self.reconnect_attempts + 1})")
-                if self.ws_client.connect():
+                if self.ws_client and self.ws_client.connect():
                     self.reconnect_attempts = 0  # Reset attempts on successful connection
+                    self.connected = True
                     break
                 else:
                     raise Exception("Connection failed")
                     
             except Exception as e:
                 self.reconnect_attempts += 1
+                
+                # Check again if we should still be running before sleeping
+                if not self.running:
+                    self.logger.info("Adapter stopped during retry - aborting")
+                    return
+                    
                 delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
                 time.sleep(delay)
         
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
+            self.running = False  # Stop the adapter
     
     def disconnect(self) -> None:
-        """Disconnect from DefinEdge WebSocket"""
+        """Disconnect from DefinEdge WebSocket with proper cleanup"""
+        self.logger.info("Starting DefinEdge adapter disconnection...")
+        
+        # First set running flag to False to prevent any reconnection attempts
         self.running = False
+        
+        # Clear all subscriptions before disconnecting
+        with self.lock:
+            subscription_count = len(self.subscriptions)
+            self.subscriptions.clear()
+            self.logger.info(f"Cleared {subscription_count} active subscriptions")
+        
+        # Disconnect WebSocket client
         if hasattr(self, 'ws_client') and self.ws_client:
+            self.logger.info("Disconnecting WebSocket client...")
             self.ws_client.disconnect()
+            self.ws_client = None  # Clear reference
+        
+        # Clean up market data cache
+        if hasattr(self, 'market_cache'):
+            self.market_cache.clear()
+            self.logger.info("Cleared market data cache")
+        
+        # Clean up token mappings
+        if hasattr(self, 'token_to_symbol'):
+            self.token_to_symbol.clear()
+            self.logger.info("Cleared token mappings")
+        
+        # Reset connection state
+        self.connected = False
+        self.reconnect_attempts = 0
             
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
+        # Clean up ZeroMQ resources - IMPORTANT for port release
+        try:
+            self.cleanup_zmq()
+            self.logger.info("ZeroMQ resources cleaned up successfully")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up ZeroMQ: {e}")
+        
+        self.logger.info("DefinEdge adapter disconnection completed")
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -202,13 +346,19 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'tokens': tokens,
                 'is_fallback': is_fallback
             }
+            # Track token to symbol mapping for cache management
+            self.token_to_symbol[token] = (symbol, exchange)
         
         # Subscribe if connected
         if self.connected and self.ws_client:
             try:
                 # Map mode to DefinEdge subscription type
-                if mode in [1, 2]:  # LTP or Quote - use touchline
+                if mode == 1:  # LTP only - use touchline
                     subscription_type = 'tick'
+                elif mode == 2:  # Quote - use touchline for OHLC
+                    # Try touchline first as it should provide OHLC according to API docs
+                    subscription_type = 'tick'
+                    self.logger.info(f"Using touchline subscription for {symbol} Quote mode to get OHLC data")
                 else:  # mode == 3, Depth
                     subscription_type = 'depth'
                 
@@ -261,16 +411,30 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
         
-        # Remove from subscriptions
+        # Remove from subscriptions and clean up cache
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            
+            # Clean up token mapping and cache if no other subscriptions use this token
+            if token in self.token_to_symbol:
+                # Check if any other subscription uses this token
+                token_still_used = any(
+                    sub['token'] == token 
+                    for cid, sub in self.subscriptions.items() 
+                    if cid != correlation_id
+                )
+                if not token_still_used:
+                    del self.token_to_symbol[token]
+                    self.market_cache.clear(token)
         
         # Unsubscribe if connected
         if self.connected and self.ws_client:
             try:
                 # Map mode to DefinEdge subscription type
-                if mode in [1, 2]:  # LTP or Quote
+                if mode == 1:  # LTP only - use touchline
+                    subscription_type = 'tick'
+                elif mode == 2:  # Quote - we subscribed to touchline for OHLC
                     subscription_type = 'tick'
                 else:  # mode == 3, Depth
                     subscription_type = 'depth'
@@ -308,9 +472,9 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Check if authenticated
                     if self.ws_client.is_connected():
                         # Map mode to DefinEdge subscription type
-                        if sub["mode"] in [1, 2]:
+                        if sub["mode"] in [1, 2]:  # LTP or Quote - use touchline
                             subscription_type = 'tick'
-                        else:
+                        else:  # Depth
                             subscription_type = 'depth'
                         
                         self.ws_client.subscribe(subscription_type, sub["tokens"])
@@ -329,9 +493,12 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(f"DefinEdge WebSocket connection closed: {code} - {reason}")
         self.connected = False
         
-        # Attempt to reconnect if we're still running
+        # Only attempt to reconnect if adapter is still running (not manually disconnected)
         if self.running:
+            self.logger.info("Connection lost - will attempt to reconnect")
             threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        else:
+            self.logger.info("Adapter stopped - not attempting reconnection")
     
     def _on_data(self, wsapp, message) -> None:
         """Callback for touchline/tick data from the WebSocket"""
@@ -340,9 +507,34 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # 'tf' for touchline feed, 'tk' for touchline acknowledgement
             
             if message.get('t') == 'tk':
-                # This is subscription acknowledgement, not data
-                self.logger.info(f"Subscription acknowledged for {message.get('e')}|{message.get('tk')}")
-                return
+                # This is subscription acknowledgement with initial OHLC snapshot
+                token = message.get('tk')
+                exchange = message.get('e')
+                self.logger.info(f"📸 Touchline ACK for {exchange}|{token} - Initial snapshot")
+                
+                # Check and log OHLC values in acknowledgment
+                ohlc_values = {
+                    'open': message.get('o'),
+                    'high': message.get('h'), 
+                    'low': message.get('l'),
+                    'close': message.get('c')
+                }
+                
+                # Check if we have non-zero OHLC
+                has_nonzero_ohlc = any(
+                    v not in [None, '', '0', 0] 
+                    for v in ohlc_values.values()
+                )
+                
+                if has_nonzero_ohlc:
+                    self.logger.info(f"✅ OHLC snapshot received: Open={ohlc_values['open']}, High={ohlc_values['high']}, Low={ohlc_values['low']}, Close={ohlc_values['close']}")
+                    # Mark this as initial snapshot for cache
+                    message['_is_snapshot'] = True
+                else:
+                    self.logger.warning(f"⚠️ No OHLC in touchline ACK (market may be closed)")
+                
+                # Always process acknowledgment as it contains initial snapshot
+                # Continue processing - don't return
             
             # Extract symbol and exchange from our subscriptions using token
             token = message.get('tk')
@@ -368,8 +560,12 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
             topic = f"{orig_exchange}_{symbol}_{mode_str}"
             
-            # Normalize the data
-            market_data = self._normalize_market_data(message, mode)
+            # Use cache BEFORE normalization (like Shoonya does)
+            # This preserves raw field names for cache logic
+            cached_data = self.market_cache.update(token, message)
+            
+            # Now normalize the cached data for output
+            market_data = self._normalize_raw_data(cached_data, mode)
             
             # Add metadata
             market_data.update({
@@ -388,6 +584,55 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
     
+    def _publish_for_other_modes(self, token: str, symbol: str, exchange: str, market_data: Dict) -> None:
+        """
+        Publish market data for other subscription modes (Quote/LTP) when depth data is available.
+        This allows Quote mode to get OHLC values from Depth subscriptions.
+        """
+        try:
+            # Check if there are Quote or LTP subscriptions for this token
+            with self.lock:
+                for correlation_id, sub in self.subscriptions.items():
+                    if sub['token'] == token and sub['mode'] in [1, 2]:  # LTP or Quote mode
+                        mode = sub['mode']
+                        mode_str = {1: 'LTP', 2: 'QUOTE'}[mode]
+                        topic = f"{exchange}_{symbol}_{mode_str}"
+                        
+                        # Create mode-specific data
+                        if mode == 1:  # LTP mode - only send LTP
+                            ltp_data = {
+                                'symbol': symbol,
+                                'exchange': exchange,
+                                'mode': 1,
+                                'ltp': market_data.get('ltp', 0),
+                                'timestamp': int(time.time() * 1000)
+                            }
+                            self.publish_market_data(topic, ltp_data)
+                            self.logger.debug(f"Published LTP data from depth for {symbol}")
+                            
+                        elif mode == 2:  # Quote mode - send OHLC + quote data
+                            quote_data = {
+                                'symbol': symbol,
+                                'exchange': exchange,
+                                'mode': 2,
+                                'ltp': market_data.get('ltp', 0),
+                                'open': market_data.get('open', 0),
+                                'high': market_data.get('high', 0),
+                                'low': market_data.get('low', 0),
+                                'close': market_data.get('close', 0),
+                                'volume': market_data.get('volume', 0),
+                                'timestamp': int(time.time() * 1000)
+                            }
+                            
+                            # Log if we're providing OHLC from depth
+                            if any(market_data.get(f) for f in ['open', 'high', 'low', 'close']):
+                                self.logger.info(f"✓ Providing OHLC to Quote mode from Depth data for {symbol}")
+                            
+                            self.publish_market_data(topic, quote_data)
+                            
+        except Exception as e:
+            self.logger.error(f"Error publishing for other modes: {e}")
+    
     def _on_depth_data(self, wsapp, message) -> None:
         """Callback for depth data from the WebSocket"""
         try:
@@ -395,13 +640,36 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # or 'dk' for depth acknowledgement
             
             if message.get('t') == 'dk':
-                # This is subscription acknowledgement, not data
-                self.logger.info(f"Depth subscription acknowledged for {message.get('e')}|{message.get('tk')}")
-                return
+                # This is subscription acknowledgement with initial data
+                self.logger.info(f"Depth subscription acknowledged: {message.get('e')}|{message.get('tk')}")
+                # Check if acknowledgment contains initial OHLC data
+                if any(message.get(f) for f in ['o', 'h', 'l', 'c']):
+                    self.logger.info(f"✓ Depth ACK has OHLC: o={message.get('o')}, h={message.get('h')}, l={message.get('l')}, c={message.get('c')}")
+                    # Process the acknowledgment as initial data
+                else:
+                    return
             
             # Process depth data similar to touchline but with depth fields
             token = message.get('tk')
             exchange = message.get('e')
+            
+            # Debug: Log what OHLC fields are in depth feed
+            if message.get('t') == 'df':
+                ohlc_check = {
+                    'o': message.get('o'),
+                    'h': message.get('h'),
+                    'l': message.get('l'),
+                    'c': message.get('c')
+                }
+                has_ohlc = any(v not in [None, '', '0', 0] for v in ohlc_check.values())
+                if not hasattr(self, '_depth_ohlc_logged') or not self._depth_ohlc_logged.get(f"{exchange}|{token}"):
+                    if not hasattr(self, '_depth_ohlc_logged'):
+                        self._depth_ohlc_logged = {}
+                    self._depth_ohlc_logged[f"{exchange}|{token}"] = True
+                    if has_ohlc:
+                        self.logger.info(f"✓ Depth feed has OHLC for {exchange}|{token}: {ohlc_check}")
+                    else:
+                        self.logger.warning(f"✗ Depth feed has NO OHLC for {exchange}|{token}")
             
             # Find the subscription
             subscription = None
@@ -421,127 +689,154 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             topic = f"{orig_exchange}_{symbol}_DEPTH"
             
-            # Normalize the depth data
-            market_data = self._normalize_depth_data(message)
+            # Use cache BEFORE normalization (like Shoonya)
+            cached_data = self.market_cache.update(token, message)
             
-            # Add metadata
-            market_data.update({
+            # Now normalize the cached data for output
+            market_data = self._normalize_raw_depth_data(cached_data)
+            
+            # Add metadata for depth subscription
+            depth_data = market_data.copy()
+            depth_data.update({
                 'symbol': symbol,
                 'exchange': orig_exchange,
                 'mode': 3,  # Depth mode
                 'timestamp': int(time.time() * 1000)
             })
             
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
+            # Publish to ZeroMQ for depth subscribers
+            self.publish_market_data(topic, depth_data)
+            
+            # IMPORTANT: Also publish OHLC data for any Quote mode subscriptions
+            # This allows Quote mode to get OHLC from Depth data
+            self._publish_for_other_modes(token, symbol, orig_exchange, market_data)
             
         except Exception as e:
             self.logger.error(f"Error processing depth data: {e}", exc_info=True)
     
-    def _normalize_market_data(self, message, mode) -> Dict[str, Any]:
+    def _normalize_raw_data(self, message, mode) -> Dict[str, Any]:
         """
-        Normalize broker-specific data format to a common format
+        Normalize broker-specific data format without converting missing values to 0
         
         Args:
             message: The raw message from the broker
             mode: Subscription mode
             
         Returns:
-            Dict: Normalized market data
+            Dict: Normalized market data (only includes fields that are present)
         """
-        # DefinEdge touchline feed format (from API docs)
-        # All prices should be converted from string to float
+        result = {}
         
         if mode == 1:  # LTP mode
-            return {
-                'ltp': float(message.get('lp', 0)),
-                'ltt': message.get('ft', 0)  # Feed time
-            }
+            # Only include fields that are actually present in the message
+            if 'lp' in message:
+                result['ltp'] = float(message['lp'])
+            if 'ft' in message:
+                result['ltt'] = message['ft']
+                
         elif mode == 2:  # Quote mode
-            return {
-                'ltp': float(message.get('lp', 0)),
-                'ltt': message.get('ft', 0),
-                'volume': int(message.get('v', 0)),
-                'open': float(message.get('o', 0)),
-                'high': float(message.get('h', 0)),
-                'low': float(message.get('l', 0)),
-                'close': float(message.get('c', 0)),
-                'change_percent': float(message.get('pc', 0)),
-                'average_price': float(message.get('ap', 0)),
-                'oi': int(message.get('oi', 0)) if message.get('oi') else 0,
-                'prev_oi': int(message.get('poi', 0)) if message.get('poi') else 0,
-                'total_oi': int(message.get('toi', 0)) if message.get('toi') else 0,
-                'bid': float(message.get('bp1', 0)),
-                'bid_qty': int(message.get('bq1', 0)),
-                'ask': float(message.get('sp1', 0)),
-                'ask_qty': int(message.get('sq1', 0))
-            }
-        else:
-            return {}
+            # Similar to Shoonya, include all fields with safe conversion
+            result['ltp'] = self._safe_float(message.get('lp'))
+            result['ltt'] = message.get('ft')
+            result['volume'] = self._safe_int(message.get('v'))
+            result['open'] = self._safe_float(message.get('o'))
+            result['high'] = self._safe_float(message.get('h'))
+            result['low'] = self._safe_float(message.get('l'))
+            result['close'] = self._safe_float(message.get('c'))
+            result['change_percent'] = self._safe_float(message.get('pc'))
+            result['average_price'] = self._safe_float(message.get('ap'))
+            result['oi'] = self._safe_int(message.get('oi'))
+            result['prev_oi'] = self._safe_int(message.get('poi'))
+            result['total_oi'] = self._safe_int(message.get('toi'))
+            result['bid'] = self._safe_float(message.get('bp1'))
+            result['bid_qty'] = self._safe_int(message.get('bq1'))
+            result['ask'] = self._safe_float(message.get('sp1'))
+            result['ask_qty'] = self._safe_int(message.get('sq1'))
+            
+            # Debug logging for OHLC
+            if any(message.get(f) for f in ['o', 'h', 'l', 'c']):
+                self.logger.debug(f"OHLC in message: o={message.get('o')}, h={message.get('h')}, l={message.get('l')}, c={message.get('c')}")
+                        
+        return result
     
-    def _normalize_depth_data(self, message) -> Dict[str, Any]:
+    def _safe_float(self, value, default=0.0):
+        """Safely convert value to float (similar to Shoonya)"""
+        if value is None or value == '' or value == '-':
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+    
+    def _safe_int(self, value, default=0):
+        """Safely convert value to int (similar to Shoonya)"""
+        if value is None or value == '' or value == '-':
+            return default
+        try:
+            return int(float(value))
+        except (ValueError, TypeError):
+            return default
+    
+    def _normalize_raw_depth_data(self, message) -> Dict[str, Any]:
         """
-        Normalize depth data to common format
+        Normalize depth data using safe conversion (similar to Shoonya)
         
         Args:
             message: Raw depth message from broker
             
         Returns:
-            Dict: Normalized depth data
+            Dict: Normalized depth data with safe defaults
         """
+        # Use safe conversion for all fields like Shoonya does
         result = {
-            'ltp': float(message.get('lp', 0)),
-            'ltt': message.get('ft', 0),
-            'volume': int(message.get('v', 0)),
-            'open': float(message.get('o', 0)),
-            'high': float(message.get('h', 0)),
-            'low': float(message.get('l', 0)),
-            'close': float(message.get('c', 0)),
-            'change_percent': float(message.get('pc', 0)),
-            'average_price': float(message.get('ap', 0)),
-            'ltq': int(message.get('ltq', 0)) if message.get('ltq') else 0,
-            'ltt_time': message.get('ltt', 0),
-            'total_buy_qty': int(message.get('tbq', 0)) if message.get('tbq') else 0,
-            'total_sell_qty': int(message.get('tsq', 0)) if message.get('tsq') else 0,
-            'lower_circuit': float(message.get('lc', 0)) if message.get('lc') else 0,
-            'upper_circuit': float(message.get('uc', 0)) if message.get('uc') else 0,
-            '52w_high': float(message.get('52h', 0)) if message.get('52h') else 0,
-            '52w_low': float(message.get('52l', 0)) if message.get('52l') else 0,
-            'oi': int(message.get('oi', 0)) if message.get('oi') else 0,
-            'prev_oi': int(message.get('poi', 0)) if message.get('poi') else 0,
-            'total_oi': int(message.get('toi', 0)) if message.get('toi') else 0
+            'ltp': self._safe_float(message.get('lp')),
+            'ltt': message.get('ft'),
+            'volume': self._safe_int(message.get('v')),
+            'open': self._safe_float(message.get('o')),
+            'high': self._safe_float(message.get('h')),
+            'low': self._safe_float(message.get('l')),
+            'close': self._safe_float(message.get('c')),
+            'change_percent': self._safe_float(message.get('pc')),
+            'average_price': self._safe_float(message.get('ap')),
+            'ltq': self._safe_int(message.get('ltq')),
+            'ltt_time': message.get('ltt'),
+            'total_buy_qty': self._safe_int(message.get('tbq')),
+            'total_sell_qty': self._safe_int(message.get('tsq')),
+            'lower_circuit': self._safe_float(message.get('lc')),
+            'upper_circuit': self._safe_float(message.get('uc')),
+            '52w_high': self._safe_float(message.get('52h')),
+            '52w_low': self._safe_float(message.get('52l')),
+            'oi': self._safe_int(message.get('oi')),
+            'prev_oi': self._safe_int(message.get('poi')),
+            'total_oi': self._safe_int(message.get('toi'))
         }
         
-        # Add depth data
-        result['depth'] = {
-            'buy': [],
-            'sell': []
-        }
+        # Handle depth data separately (similar to Shoonya)
+        depth_buy = []
+        depth_sell = []
         
         # Extract 5 levels of depth
         for i in range(1, 6):
-            # Buy side
-            bp = message.get(f'bp{i}')
-            bq = message.get(f'bq{i}')
-            bo = message.get(f'bo{i}')
+            # Buy side - always include even if 0
+            buy_level = {
+                'price': self._safe_float(message.get(f'bp{i}')),
+                'quantity': self._safe_int(message.get(f'bq{i}')),
+                'orders': self._safe_int(message.get(f'bo{i}'))
+            }
+            depth_buy.append(buy_level)
             
-            if bp is not None:
-                result['depth']['buy'].append({
-                    'price': float(bp),
-                    'quantity': int(bq) if bq else 0,
-                    'orders': int(bo) if bo else 0
-                })
-            
-            # Sell side
-            sp = message.get(f'sp{i}')
-            sq = message.get(f'sq{i}')
-            so = message.get(f'so{i}')
-            
-            if sp is not None:
-                result['depth']['sell'].append({
-                    'price': float(sp),
-                    'quantity': int(sq) if sq else 0,
-                    'orders': int(so) if so else 0
-                })
+            # Sell side - always include even if 0  
+            sell_level = {
+                'price': self._safe_float(message.get(f'sp{i}')),
+                'quantity': self._safe_int(message.get(f'sq{i}')),
+                'orders': self._safe_int(message.get(f'so{i}'))
+            }
+            depth_sell.append(sell_level)
+        
+        # Always include depth structure
+        result['depth'] = {
+            'buy': depth_buy,
+            'sell': depth_sell
+        }
         
         return result
