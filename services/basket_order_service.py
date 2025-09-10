@@ -94,9 +94,11 @@ def validate_order(order_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     if order_data.get('exchange') not in VALID_EXCHANGES:
         return False, f'Invalid exchange. Must be one of: {", ".join(VALID_EXCHANGES)}'
 
-    # Validate action
-    if order_data.get('action') not in VALID_ACTIONS:
-        return False, f'Invalid action. Must be one of: {", ".join(VALID_ACTIONS)}'
+    # Convert action to uppercase and validate
+    if 'action' in order_data:
+        order_data['action'] = order_data['action'].upper()
+        if order_data['action'] not in VALID_ACTIONS:
+            return False, f'Invalid action. Must be one of: {", ".join(VALID_ACTIONS)} (case insensitive)'
 
     # Validate price type
     if 'pricetype' in order_data and order_data['pricetype'] not in VALID_PRICE_TYPES:
