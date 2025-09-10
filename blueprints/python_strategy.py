@@ -272,8 +272,15 @@ def create_subprocess_args():
         args['startupinfo'].dwFlags |= subprocess.STARTF_USESHOWWINDOW
     else:
         # Unix-like systems (Linux, macOS)
-        args['start_new_session'] = True  # Create new process group
-        args['preexec_fn'] = os.setsid  # Set session ID for better process control
+        # Try to create new session for better process control
+        # But don't use preexec_fn as it can fail in restricted environments
+        try:
+            args['start_new_session'] = True  # Create new process group
+            # Note: Removed preexec_fn = os.setsid as it can cause issues in some environments
+            # start_new_session already creates a new session group which is sufficient
+        except Exception as e:
+            logger.warning(f"Could not set start_new_session: {e}")
+            # Continue without session isolation - process will still work
     
     return args
 
@@ -291,6 +298,22 @@ def start_strategy_process(strategy_id):
         if not file_path.exists():
             return False, f"Strategy file not found: {file_path}"
         
+        # Check file permissions
+        if not IS_WINDOWS:
+            # Check if file is readable
+            if not os.access(file_path, os.R_OK):
+                logger.error(f"Strategy file {file_path} is not readable. Check file permissions.")
+                return False, f"Strategy file is not readable. Run: chmod +r {file_path}"
+            
+            # Check if file is executable (optional but recommended for scripts)
+            if not os.access(file_path, os.X_OK):
+                logger.warning(f"Strategy file {file_path} is not executable. Setting execute permission.")
+                try:
+                    os.chmod(file_path, 0o755)
+                except Exception as e:
+                    logger.warning(f"Could not set execute permission: {e}")
+                    # Continue anyway, Python can still run it
+        
         # Check if master contracts are ready before starting strategy
         contracts_ready, contract_message = check_master_contract_ready()
         if not contracts_ready:
@@ -302,11 +325,29 @@ def start_strategy_process(strategy_id):
             ist_now = get_ist_time()
             log_file = LOGS_DIR / f"{strategy_id}_{ist_now.strftime('%Y%m%d_%H%M%S')}_IST.log"
             
-            # Ensure log directory exists
+            # Ensure log directory exists with proper permissions
             log_file.parent.mkdir(parents=True, exist_ok=True)
+            if not IS_WINDOWS:
+                try:
+                    # Ensure log directory is writable
+                    os.chmod(log_file.parent, 0o755)
+                except:
+                    pass
+            
+            # Check if we can write to log directory
+            if not os.access(log_file.parent, os.W_OK):
+                logger.error(f"Cannot write to log directory {log_file.parent}")
+                return False, f"Log directory is not writable. Check permissions for {log_file.parent}"
             
             # Open log file for writing
-            log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)
+            try:
+                log_handle = open(log_file, 'w', encoding='utf-8', buffering=1)
+            except PermissionError as e:
+                logger.error(f"Permission denied creating log file: {e}")
+                return False, f"Permission denied creating log file. Check directory permissions."
+            except Exception as e:
+                logger.error(f"Error creating log file: {e}")
+                return False, f"Error creating log file: {str(e)}"
             
             # Write header with IST time
             log_handle.write(f"=== Strategy Started at {ist_now.strftime('%Y-%m-%d %H:%M:%S IST')} ===\n")
@@ -333,7 +374,28 @@ def start_strategy_process(strategy_id):
             # Use Python unbuffered mode for real-time output
             cmd = [get_python_executable(), '-u', str(file_path.absolute())]
             
-            process = subprocess.Popen(cmd, **subprocess_args)
+            # Log the command being executed for debugging
+            logger.info(f"Executing command: {' '.join(cmd)}")
+            logger.debug(f"Working directory: {subprocess_args.get('cwd', 'current')}")
+            
+            try:
+                process = subprocess.Popen(cmd, **subprocess_args)
+            except PermissionError as e:
+                log_handle.close()
+                logger.error(f"Permission denied executing strategy: {e}")
+                return False, f"Permission denied. Check file permissions and Python executable access."
+            except OSError as e:
+                log_handle.close()
+                if "preexec_fn" in str(e):
+                    logger.error(f"Process isolation error: {e}")
+                    return False, "Process isolation failed. This is a known issue that has been fixed. Please restart the application."
+                else:
+                    logger.error(f"OS error starting process: {e}")
+                    return False, f"OS error: {str(e)}"
+            except Exception as e:
+                log_handle.close()
+                logger.error(f"Unexpected error starting process: {e}")
+                return False, f"Failed to start process: {str(e)}"
             
             # Store process info
             RUNNING_STRATEGIES[strategy_id] = {
@@ -402,13 +464,23 @@ def stop_strategy_process(strategy_id):
                 else:
                     # Unix-like systems (Linux, macOS)
                     try:
-                        # Try SIGTERM first (graceful shutdown)
-                        os.killpg(os.getpgid(pid), signal.SIGTERM)
-                        process.wait(timeout=5)
+                        # Try to kill process group if it exists
+                        try:
+                            # Try SIGTERM first (graceful shutdown)
+                            os.killpg(os.getpgid(pid), signal.SIGTERM)
+                            process.wait(timeout=5)
+                        except OSError:
+                            # Process might not be in a process group, kill it directly
+                            process.terminate()
+                            process.wait(timeout=5)
                     except (subprocess.TimeoutExpired, ProcessLookupError):
                         try:
                             # Force kill with SIGKILL
-                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                            try:
+                                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                            except OSError:
+                                # Process might not be in a process group, kill it directly
+                                process.kill()
                             process.wait(timeout=2)
                         except ProcessLookupError:
                             pass  # Process already dead
