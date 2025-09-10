@@ -87,9 +87,27 @@ def save_configs():
 
 def ensure_directories():
     """Ensure all required directories exist"""
-    STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Directories initialized on {OS_TYPE}")
+    global STRATEGIES_DIR, LOGS_DIR
+    try:
+        STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Directories initialized on {OS_TYPE}")
+    except PermissionError as e:
+        # If we can't create directories, check if they exist
+        if STRATEGIES_DIR.exists() and LOGS_DIR.exists():
+            logger.warning(f"Directories exist but no write permission: {e}")
+        else:
+            # Try alternative paths in /tmp if main paths fail
+            import tempfile
+            temp_base = Path(tempfile.gettempdir()) / 'openalgo'
+            STRATEGIES_DIR = temp_base / 'strategies' / 'scripts'
+            LOGS_DIR = temp_base / 'log' / 'strategies'
+            STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            logger.warning(f"Using temporary directories due to permission issues: {temp_base}")
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        # Continue anyway, individual operations will handle missing directories
 
 def get_or_create_encryption_key():
     """Get or create encryption key for sensitive data"""
