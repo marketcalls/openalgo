@@ -1,5 +1,5 @@
 # ------------------------------ Builder Stage ------------------------------ #
-FROM python:3.13-bookworm AS builder
+FROM python:3.12-bullseye AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl build-essential && \
@@ -8,18 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY pyproject.toml .
 
-# create isolated virtual-env with uv, then add gunicorn (removed eventlet to fix greenlet errors)
+# create isolated virtual-env with uv, then add gunicorn and eventlet with compatible versions
 RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install gunicorn && \
+    uv pip install gunicorn eventlet==0.35.2 && \
     rm -rf /root/.cache
 # --------------------------------------------------------------------------- #
 
 
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.13-slim-bookworm AS production
+FROM python:3.12-slim-bullseye AS production
 
 # 0 – set timezone to IST (Asia/Kolkata)
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
