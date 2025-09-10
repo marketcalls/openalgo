@@ -4,14 +4,17 @@ echo "[OpenAlgo] Starting up..."
 
 # Try to create directories, but don't fail if they already exist or can't be created
 # This handles both mounted volumes and permission issues
-for dir in db logs log log/strategies strategies strategies/scripts keys; do
+for dir in db log log/strategies strategies strategies/scripts keys; do
     mkdir -p "$dir" 2>/dev/null || true
 done
 
 # Try to set permissions if possible, but continue regardless
 # This will work for local directories but skip for mounted volumes
 if [ -w "." ]; then
-    chmod -R 777 db logs log strategies keys 2>/dev/null || echo "⚠️  Skipping chmod (may be mounted volume or permission restricted)"
+    # Set more permissive permissions for directories
+    chmod -R 755 db log strategies 2>/dev/null || echo "⚠️  Skipping chmod (may be mounted volume or permission restricted)"
+    # Set restrictive permissions for keys directory (only owner can access)
+    chmod 700 keys 2>/dev/null || true
 else
     echo "⚠️  Running with restricted permissions (mounted volume detected)"
 fi
