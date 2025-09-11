@@ -181,7 +181,7 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
-    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol
         Args:
@@ -191,8 +191,8 @@ class BrokerData:
                      Minutes: 1m, 5m, 15m, 30m
                      Hours: 1h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (string in YYYY-MM-DD format OR datetime.date object)
+            end_date: End date (string in YYYY-MM-DD format OR datetime.date object)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi]
         """
@@ -211,9 +211,20 @@ class BrokerData:
             elif(exchange=="BSE_INDEX"):
                 exchange="BSE"
             
+            # Convert dates to string format if they are date objects
+            if hasattr(start_date, 'strftime'):  # Check if it's a date/datetime object
+                start_date_str = start_date.strftime('%Y-%m-%d')
+            else:
+                start_date_str = str(start_date)
+                
+            if hasattr(end_date, 'strftime'):  # Check if it's a date/datetime object
+                end_date_str = end_date.strftime('%Y-%m-%d')
+            else:
+                end_date_str = str(end_date)
+            
             # Convert dates to epoch timestamps
-            start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
-            end_ts = int(datetime.strptime(end_date + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
+            start_ts = int(datetime.strptime(start_date_str + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
+            end_ts = int(datetime.strptime(end_date_str + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
 
             # For daily data, use EODChartData endpoint
             if interval == 'D':
