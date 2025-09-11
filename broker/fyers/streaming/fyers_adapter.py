@@ -157,6 +157,12 @@ class FyersAdapter:
         
         try:
             with self.lock:
+                self.logger.info(f"\n" + "="*60)
+                self.logger.info(f"SUBSCRIBING TO {len(symbols)} SYMBOLS")
+                self.logger.info(f"Data type: {data_type}")
+                self.logger.info(f"Symbols to subscribe: {symbols}")
+                self.logger.info("="*60)
+                
                 # Store callback per symbol to prevent data mixing
                 # Use a unique key for each symbol and data type combination
                 for symbol_info in symbols:
@@ -167,7 +173,7 @@ class FyersAdapter:
                         callback_key = f"{data_type}_{full_symbol}"
                         # Store callback per symbol to ensure proper data routing
                         self.subscription_callbacks[callback_key] = callback
-                        self.logger.debug(f"Stored callback for {callback_key}")
+                        self.logger.info(f"Stored callback for {callback_key}")
                 
                 # Store subscription info for tracking
                 valid_symbols = []
@@ -207,28 +213,65 @@ class FyersAdapter:
                     self.logger.error("No valid HSM tokens generated")
                     return False
                 
-                # Store HSM mappings for reverse lookup
-                # IMPORTANT: Don't overwrite existing mappings, accumulate them
-                for hsm_token, brsymbol in token_mappings.items():
-                    # Map HSM token back to OpenAlgo symbol
-                    # The token_mappings now contains brsymbol format
-                    for full_symbol, sub_info in self.active_subscriptions.items():
-                        expected_brsymbol = f"{sub_info['exchange']}:{sub_info['symbol']}"
-                        # Check if this brsymbol matches
-                        if brsymbol == expected_brsymbol or brsymbol.endswith(sub_info['symbol']):
-                            # Store both forward and reverse mappings
-                            self.symbol_to_hsm[full_symbol] = hsm_token
-                            self.hsm_to_symbol[hsm_token] = full_symbol  # Add reverse mapping
-                            self.logger.info(f"Mapped HSM token: {full_symbol} <-> {hsm_token}")
-                            self.logger.info(f"Current HSM mappings count: {len(self.hsm_to_symbol)}")
-                            break
+                # CRITICAL FIX: Ensure proper HSM token mapping
+                # The tokens are generated in the same order as valid_symbols
+                self.logger.info(f"\nCreating HSM mappings for {len(hsm_tokens)} tokens...")
+                self.logger.info(f"HSM Tokens: {hsm_tokens}")
+                self.logger.info(f"Valid Symbols: {[f'{s['exchange']}:{s['symbol']}' for s in valid_symbols]}")
                 
-                self.logger.info(f"Subscribing to {len(hsm_tokens)} HSM tokens...")
+                # Primary mapping strategy: Map by order (most reliable)
+                # Since convert_openalgo_symbols_to_hsm processes symbols in order
+                for i, hsm_token in enumerate(hsm_tokens):
+                    if i < len(valid_symbols):
+                        symbol_info = valid_symbols[i]
+                        full_symbol = f"{symbol_info['exchange']}:{symbol_info['symbol']}"
+                        
+                        # Store bidirectional mappings
+                        self.symbol_to_hsm[full_symbol] = hsm_token
+                        self.hsm_to_symbol[hsm_token] = full_symbol
+                        
+                        # Get brsymbol for logging
+                        brsymbol = token_mappings.get(hsm_token, "N/A")
+                        self.logger.info(f"✅ Mapped #{i+1}: {full_symbol} <-> {hsm_token}")
+                        self.logger.debug(f"   Brsymbol: {brsymbol}")
                 
-                # Subscribe to HSM WebSocket
+                # Verify all active subscriptions have mappings
+                unmapped_subs = []
+                for full_symbol in self.active_subscriptions:
+                    if full_symbol not in self.symbol_to_hsm:
+                        unmapped_subs.append(full_symbol)
+                        self.logger.warning(f"⚠️ Unmapped subscription: {full_symbol}")
+                
+                # If there are unmapped subscriptions and unused tokens, map them
+                if unmapped_subs:
+                    unused_tokens = [t for t in hsm_tokens if t not in self.hsm_to_symbol]
+                    if unused_tokens:
+                        self.logger.info(f"Attempting to map {len(unmapped_subs)} unmapped subscriptions...")
+                        for i, full_symbol in enumerate(unmapped_subs):
+                            if i < len(unused_tokens):
+                                hsm_token = unused_tokens[i]
+                                self.symbol_to_hsm[full_symbol] = hsm_token
+                                self.hsm_to_symbol[hsm_token] = full_symbol
+                                self.logger.info(f"✅ Recovery mapped: {full_symbol} <-> {hsm_token}")
+                
+                # Final verification
+                self.logger.info(f"\n📊 Mapping Summary:")
+                self.logger.info(f"   Active subscriptions: {len(self.active_subscriptions)}")
+                self.logger.info(f"   HSM tokens generated: {len(hsm_tokens)}")
+                self.logger.info(f"   Mappings created: {len(self.hsm_to_symbol)}")
+                self.logger.info(f"   Forward mappings (symbol->hsm): {self.symbol_to_hsm}")
+                self.logger.info(f"   Reverse mappings (hsm->symbol): {self.hsm_to_symbol}")
+                
+                self.logger.info(f"\nSubscribing to {len(hsm_tokens)} HSM tokens...")
+                for token in hsm_tokens:
+                    self.logger.info(f"  ➡️ {token}")
+                
+                # Subscribe to HSM WebSocket with all tokens at once
                 self.ws_client.subscribe_symbols(hsm_tokens, token_mappings)
                 
-                self.logger.info(f"✅ Subscription sent for {len(symbols)} symbols")
+                self.logger.info(f"\n✅ Successfully sent subscription for {len(hsm_tokens)} HSM tokens")
+                self.logger.info(f"Expected data for {len(self.active_subscriptions)} symbols")
+                self.logger.info("="*60 + "\n")
                 return True
                 
         except Exception as e:
@@ -307,9 +350,12 @@ class FyersAdapter:
                     full_symbol = self.hsm_to_symbol[hsm_token]
                     if full_symbol in self.active_subscriptions:
                         matched_subscription = self.active_subscriptions[full_symbol]
-                        self.logger.info(f"✅ Matched by HSM token: {hsm_token} -> {full_symbol}")
+                        self.logger.debug(f"✅ Matched by HSM token: {hsm_token} -> {full_symbol}")
                 else:
-                    # Fallback to searching through all subscriptions
+                    # Log missing mapping for debugging
+                    self.logger.debug(f"HSM token {hsm_token} not in mappings")
+                    self.logger.debug(f"Current HSM->Symbol mappings: {self.hsm_to_symbol}")
+                    # Try fallback matching
                     for full_symbol, sub_info in self.active_subscriptions.items():
                         if full_symbol in self.symbol_to_hsm and self.symbol_to_hsm[full_symbol] == hsm_token:
                             matched_subscription = sub_info
@@ -377,14 +423,14 @@ class FyersAdapter:
                         self.logger.info(f"✅ Single subscription match: {full_symbol}")
                         break
             
-            # Final check - if still no match, log and return
+            # Final check - if still no match, log detailed debug info and return
             if not matched_subscription:
                 self.logger.warning(f"❌ No HSM token match for data. HSM token: {hsm_token}")
-                self.logger.warning(f"   HSM to Symbol mappings: {self.hsm_to_symbol}")
-                self.logger.warning(f"   Symbol to HSM mappings: {self.symbol_to_hsm}")
-                self.logger.warning(f"   Active subscriptions: {list(self.active_subscriptions.keys())}")
-                self.logger.warning(f"   Fyers symbol: {fyers_data.get('symbol', 'N/A')}")
-                self.logger.warning(f"   Original symbol: {fyers_data.get('original_symbol', 'N/A')}")
+                self.logger.debug(f"   HSM to Symbol mappings: {self.hsm_to_symbol}")
+                self.logger.debug(f"   Symbol to HSM mappings: {self.symbol_to_hsm}")
+                self.logger.debug(f"   Active subscriptions: {list(self.active_subscriptions.keys())}")
+                self.logger.debug(f"   Fyers symbol: {fyers_data.get('symbol', 'N/A')}")
+                self.logger.debug(f"   Original symbol: {fyers_data.get('original_symbol', 'N/A')}")
                 return
             
             """
