@@ -387,13 +387,13 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 1:  # LTP mode
             return {
                 'ltp': message.get('last_traded_price', 0) / 100,  # Divide by 100 for correct price
-                'ltt': message.get('exchange_timestamp', 0)
+                'ltt': message.get('exchange_timestamp', 0) # Fallback to 'exchange_timestamp' since 'ltt' not available in mode 1 
             }
         elif mode == 2:  # Quote mode
             # Extract additional fields based on what's available in the message
             result = {
                 'ltp': message.get('last_traded_price', 0) / 100,  # Divide by 100 for correct price
-                'ltt': message.get('exchange_timestamp', 0),
+                'ltt': message.get('exchange_timestamp', 0), # Fallback to 'exchange_timestamp' since 'ltt' not available in mode 2
                 'volume': message.get('volume_trade_for_the_day', 0),
                 'open': message.get('open_price_of_the_day', 0) / 100,  # Divide by 100 for correct price
                 'high': message.get('high_price_of_the_day', 0) / 100,  # Divide by 100 for correct price
@@ -411,15 +411,22 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Note: OI is intentionally excluded for depth mode as per requirement
             result = {
                 'ltp': message.get('last_traded_price', 0) / 100,  # Divide by 100 for correct price
-                'ltt': message.get('exchange_timestamp', 0),
+                'ltt': message.get('last_traded_timestamp', 0), # 'ltt' data available in mode 3
+                'last_quantity': message.get('last_traded_quantity', 0),
                 'volume': message.get('volume_trade_for_the_day', 0),
-                'open': message.get('open_price', 0) / 100,
-                'high': message.get('high_price', 0) / 100,
-                'low': message.get('low_price', 0) / 100,
-                'close': message.get('close_price', 0) / 100,
+                'average_price': message.get('average_traded_price', 0) / 100,  # Divide by 100 for correct price
+                'open': message.get('open_price_of_the_day', 0) / 100,
+                'high': message.get('high_price_of_the_day', 0) / 100,
+                'low': message.get('low_price_of_the_day', 0) / 100,
+                'close': message.get('closed_price', 0) / 100,
                 'oi': message.get('open_interest', 0),
+                'total_buy_quantity': message.get('total_buy_quantity', 0),
+                'total_sell_quantity': message.get('total_sell_quantity', 0),
                 'upper_circuit': message.get('upper_circuit_limit', 0) / 100,
-                'lower_circuit': message.get('lower_circuit_limit', 0) / 100
+                'lower_circuit': message.get('lower_circuit_limit', 0) / 100,
+                '52W high': message.get('52_week_high_price',0)/100,
+                '52W low': message.get('52_week_low_price',0)/100
+
             }
             
             # Add depth data if available
@@ -515,38 +522,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         'orders': level.get('no of orders', 0)
                     })
         
-        # For MCX, the data might be in a different format, check for best_five_buy/sell_market_data
-        elif 'best_five_buy_market_data' in message and is_buy:
-            depth_data = message.get('best_five_buy_market_data', [])
-            self.logger.info(f"Found {side_label} depth data using best_five_buy_market_data: {len(depth_data)} levels")
-            
-            for level in depth_data:
-                if isinstance(level, dict):
-                    price = level.get('price', 0)
-                    if price > 0:
-                        price = price / 100
-                        
-                    depth.append({
-                        'price': price,
-                        'quantity': level.get('quantity', 0),
-                        'orders': level.get('no of orders', 0)
-                    })
-                    
-        elif 'best_five_sell_market_data' in message and not is_buy:
-            depth_data = message.get('best_five_sell_market_data', [])
-            self.logger.info(f"Found {side_label} depth data using best_five_sell_market_data: {len(depth_data)} levels")
-            
-            for level in depth_data:
-                if isinstance(level, dict):
-                    price = level.get('price', 0)
-                    if price > 0:
-                        price = price / 100
-                        
-                    depth.append({
-                        'price': price,
-                        'quantity': level.get('quantity', 0),
-                        'orders': level.get('no of orders', 0)
-                    })
+        # MCX also follows same format 'best_5_buy_data' and 'best_5_sell_data' Verified, Removed extra elif block'best_five_sell_market_data'
         
         # If no depth data found, return empty levels as fallback
         if not depth:
