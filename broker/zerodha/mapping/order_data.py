@@ -36,7 +36,7 @@ def map_order_data(order_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['tradingsymbol'] = get_oa_symbol(brsymbol=symbol,exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
