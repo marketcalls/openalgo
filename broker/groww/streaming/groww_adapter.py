@@ -270,12 +270,23 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Find matching subscription based on symbol, exchange and mode
                 with self.lock:
                     for cid, sub in self.subscriptions.items():
-                        self.logger.debug(f"Checking {cid}: symbol={sub.get('symbol')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}")
-                        # Match based on symbol, exchange and mode
-                        if (sub['symbol'] == symbol_from_data and 
-                            sub['groww_exchange'] == exchange and 
-                            ((mode == 'ltp' and sub['mode'] in [1, 2]) or
-                             (mode == 'depth' and sub['mode'] == 3))):
+                        self.logger.debug(f"Checking {cid}: symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}")
+                        
+                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX but Groww sends NSE
+                        # Check if this is an index subscription
+                        is_index_match = (mode == 'index' and 
+                                        sub['exchange'] == 'NSE_INDEX' and 
+                                        exchange == 'NSE' and 
+                                        sub['symbol'] == symbol_from_data)
+                        
+                        # Regular match based on symbol, exchange and mode
+                        is_regular_match = (sub['symbol'] == symbol_from_data and 
+                                          sub['groww_exchange'] == exchange and 
+                                          ((mode == 'ltp' and sub['mode'] in [1, 2]) or
+                                           (mode == 'depth' and sub['mode'] == 3) or
+                                           (mode == 'index' and sub['mode'] in [1, 2])))
+                        
+                        if is_index_match or is_regular_match:
                             subscription = sub
                             correlation_id = cid
                             self.logger.info(f"Matched subscription: {cid}")

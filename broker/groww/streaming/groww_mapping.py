@@ -13,7 +13,9 @@ class GrowwExchangeMapper:
         'BFO': {'exchange': 'BSE', 'segment': 'FNO'},
         'MCX': {'exchange': 'MCX', 'segment': 'COMM'},
         'CDS': {'exchange': 'NSE', 'segment': 'CDS'},
-        'BCD': {'exchange': 'BSE', 'segment': 'CDS'}
+        'BCD': {'exchange': 'BSE', 'segment': 'CDS'},
+        'NSE_INDEX': {'exchange': 'NSE', 'segment': 'CASH'},
+        'BSE_INDEX': {'exchange': 'BSE', 'segment': 'CASH'}
     }
     
     @classmethod
@@ -72,7 +74,9 @@ class GrowwCapabilityRegistry:
         'BFO': [5],
         'MCX': [5],
         'CDS': [5],
-        'BCD': [5]
+        'BCD': [5],
+        'NSE_INDEX': [5],
+        'BSE_INDEX': [5]
     }
     
     # Subscription modes supported by Groww

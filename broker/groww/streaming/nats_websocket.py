@@ -532,13 +532,20 @@ class GrowwNATSWebSocket:
         """
         sub_key = f"ltp_{exchange}_{segment}_{token}"
         
+        # Determine mode based on whether it's an index
+        # Check if exchange contains INDEX or if symbol is an index name
+        if 'INDEX' in exchange.upper() or symbol in ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']:
+            mode = 'index'
+        else:
+            mode = 'ltp'
+        
         # Store subscription info
         self.subscriptions[sub_key] = {
             'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
-            'mode': 'ltp'
+            'mode': mode
         }
         
         # Send NATS subscription if connected
