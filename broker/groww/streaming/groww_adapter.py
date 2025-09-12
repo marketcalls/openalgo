@@ -163,9 +163,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             try:
                 if mode in [1, 2]:  # LTP or Quote mode
-                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token)
+                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol)
                 elif mode == 3:  # Depth mode
-                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token)
+                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol)
                     
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
@@ -237,9 +237,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode = sub_info['mode']
             
             if mode in [1, 2]:  # LTP or Quote mode
-                sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token)
+                sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, sub_info['symbol'])
             elif mode == 3:  # Depth mode
-                sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token)
+                sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, sub_info['symbol'])
                 
             self.subscription_keys[correlation_id] = sub_key
             self.logger.info(f"Resubscribed to {sub_info['symbol']}.{sub_info['exchange']}")
@@ -260,18 +260,36 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Data from NATS will have symbol, exchange, and mode fields
             if 'symbol' in data and 'exchange' in data:
                 # This is from our NATS implementation
+                symbol_from_data = data['symbol']  # This contains the actual symbol name now
                 exchange = data['exchange']
                 mode = data.get('mode', 'ltp')
                 
-                # Find matching subscription
+                self.logger.info(f"Looking for subscription: symbol={symbol_from_data}, exchange={exchange}, mode={mode}")
+                self.logger.info(f"Available subscriptions: {list(self.subscriptions.keys())}")
+                
+                # Find matching subscription based on symbol, exchange and mode
                 with self.lock:
                     for cid, sub in self.subscriptions.items():
-                        # Match based on exchange and mode
-                        if (sub['groww_exchange'] == exchange and 
-                            ((mode == 'ltp' and sub['mode'] in [1, 2]) or
-                             (mode == 'depth' and sub['mode'] == 3))):
+                        self.logger.debug(f"Checking {cid}: symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}")
+                        
+                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX but Groww sends NSE
+                        # Check if this is an index subscription
+                        is_index_match = (mode == 'index' and 
+                                        sub['exchange'] == 'NSE_INDEX' and 
+                                        exchange == 'NSE' and 
+                                        sub['symbol'] == symbol_from_data)
+                        
+                        # Regular match based on symbol, exchange and mode
+                        is_regular_match = (sub['symbol'] == symbol_from_data and 
+                                          sub['groww_exchange'] == exchange and 
+                                          ((mode == 'ltp' and sub['mode'] in [1, 2]) or
+                                           (mode == 'depth' and sub['mode'] == 3) or
+                                           (mode == 'index' and sub['mode'] in [1, 2])))
+                        
+                        if is_index_match or is_regular_match:
                             subscription = sub
                             correlation_id = cid
+                            self.logger.info(f"Matched subscription: {cid}")
                             break
             
             # Try to match based on exchange token from protobuf data

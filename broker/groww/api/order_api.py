@@ -447,9 +447,7 @@ def get_trade_book(auth):
             'FNO': SEGMENT_FNO,
             'F&O': SEGMENT_FNO,
             'OPTIONS': SEGMENT_FNO,
-            'FUTURES': SEGMENT_FNO,
-            'CURRENCY': SEGMENT_CURRENCY,
-            'COMMODITY': SEGMENT_COMMODITY
+            'FUTURES': SEGMENT_FNO
         }
         
         # Attempt to fetch trades for each potential order
@@ -1145,12 +1143,28 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     net_qty = '0'
     
     # Check if we received positions data in expected format
-    if positions_data and isinstance(positions_data, list):
-        for position in positions_data:
-            if (position.get('trading_symbol') == tradingsymbol and 
-                position.get('exchange') == map_exchange_type(exchange) and 
-                position.get('product') == product):
-                net_qty = str(position.get('net_quantity', '0'))
+    # Handle both direct list format and dictionary with data field
+    if positions_data:
+        # If it's a dictionary with status and data fields (like Angel's format)
+        if isinstance(positions_data, dict) and positions_data.get('status') == 'success' and positions_data.get('data'):
+            positions_list = positions_data.get('data', [])
+        # If it's already a list
+        elif isinstance(positions_data, list):
+            positions_list = positions_data
+        else:
+            positions_list = []
+            
+        for position in positions_list:
+            # Check for matching position - compare with both tradingsymbol and symbol fields
+            symbol_match = (position.get('tradingsymbol') == tradingsymbol or 
+                          position.get('symbol') == tradingsymbol or
+                          position.get('trading_symbol') == tradingsymbol)
+            exchange_match = position.get('exchange') == map_exchange_type(exchange)
+            product_match = position.get('product') == product
+            
+            if symbol_match and exchange_match and product_match:
+                # Try different field names for net quantity
+                net_qty = str(position.get('net_quantity', position.get('netqty', position.get('quantity', '0'))))
                 break  # Found the position
     
     return net_qty
@@ -1506,7 +1520,11 @@ def place_smartorder_api(data, auth):
         symbol = data.get("symbol")
         exchange = data.get("exchange")
         product = data.get("product")
-        position_size = int(data.get("position_size", "0"))
+        
+        # Parse position_size with detailed logging
+        raw_position_size = data.get("position_size", "0")
+        logger.info(f"Raw position_size from request: '{raw_position_size}' (type: {type(raw_position_size)})")
+        position_size = int(raw_position_size)
 
         # Validate input data
         if not symbol or not exchange or not product:
@@ -1527,56 +1545,78 @@ def place_smartorder_api(data, auth):
             from openalgo.database.token_db import get_br_symbol
             
         # Get current open position for the symbol
-        current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
+        position_str = get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+        logger.info(f"Raw position from get_open_position: '{position_str}' (type: {type(position_str)})")
+        
+        # Ensure proper conversion to integer
+        try:
+            current_position = int(float(position_str)) if position_str and position_str != '0' else 0
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error converting position to int: {e}, using 0")
+            current_position = 0
 
-        logger.info(f"Current Position: {current_position}") 
+        logger.info(f"Current Position (converted to int): {current_position}") 
+        logger.info(f"Target Position Size: {position_size} (type: {type(position_size)})")
         
         # Determine action based on position_size and current_position
+        # This logic matches Angel's implementation exactly
         action = None
         quantity = 0
-
-        # If both position_size and current_position are 0, do nothing
-        if position_size == 0 and current_position == 0 and int(data['quantity'])!=0:
+        
+        logger.info(f"Smart Order Decision: Current Position={current_position}, Target Position={position_size}")
+        
+        # If both position_size and current_position are 0, check if user wants to place a fresh order
+        if position_size == 0 and current_position == 0 and int(data.get('quantity', 0)) != 0:
             action = data['action']
             quantity = data['quantity']
-            #logger.info(f"action : {action}")
-            #logger.info(f"Quantity : {quantity}")
-            res, response, orderid = place_order_api(data,AUTH_TOKEN)
-            #logger.info(f"{res}")
-            #logger.info(f"{response}")
-            
-            return res , response, orderid
+            logger.info(f"No position exists, placing fresh order: {action} {quantity}")
+            res, response, orderid = place_order_api(data, AUTH_TOKEN)
+            return res, response, orderid
             
         elif position_size == current_position:
-            if int(data['quantity'])==0:
+            if int(data.get('quantity', 0)) == 0:
                 response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
             else:
                 response = {"status": "success", "message": "No action needed. Position size matches current position"}
             orderid = None
+            logger.info("Positions already matched. No order will be placed.")
             return res, response, orderid  # res remains None as no API call was made
-   
-   
-
-        if position_size == 0 and current_position>0 :
+        
+        # Close long position
+        if position_size == 0 and current_position > 0:
             action = "SELL"
             quantity = abs(current_position)
-        elif position_size == 0 and current_position<0 :
+            logger.info(f"Closing long position: SELL {quantity} shares")
+        # Close short position
+        elif position_size == 0 and current_position < 0:
             action = "BUY"
             quantity = abs(current_position)
+            logger.info(f"Closing short position: BUY {quantity} shares")
+        # Open new position when no current position exists
         elif current_position == 0:
             action = "BUY" if position_size > 0 else "SELL"
             quantity = abs(position_size)
+            logger.info(f"Opening new position: {action} {quantity} shares")
+        # Adjust existing position
         else:
             if position_size > current_position:
                 action = "BUY"
                 quantity = position_size - current_position
-                logger.info(f"Smart buy quantity: {quantity}")
+                logger.info(f"Increasing position: BUY {quantity} shares (from {current_position} to {position_size})")
             elif position_size < current_position:
                 action = "SELL"
                 quantity = current_position - position_size
-                logger.info(f"Smart sell quantity: {quantity}")
+                logger.info(f"Reducing position: SELL {quantity} shares (from {current_position} to {position_size})")
 
         if action:
+            # Double-check the calculation
+            logger.info(f"=== FINAL SMART ORDER DECISION ===")
+            logger.info(f"Current Position: {current_position}")
+            logger.info(f"Target Position: {position_size}")
+            logger.info(f"Action to take: {action}")
+            logger.info(f"Quantity to {action}: {quantity}")
+            logger.info(f"This will move position from {current_position} to {position_size}")
+            
             # Prepare data for placing the order
             order_data = data.copy()
             order_data["action"] = action
@@ -1584,7 +1624,7 @@ def place_smartorder_api(data, auth):
 
             # Place the order using direct API
             logger.info(f"Final Order Data: {json.dumps(order_data, indent=2)}")
-            logger.info(f"Placing smart order: {action} {quantity} {symbol}")
+            logger.info(f"Placing smart order: {action} {quantity} shares of {symbol}")
             
             # Validate order data before placing
             if not order_data.get('symbol') or not order_data.get('action') or not order_data.get('quantity'):

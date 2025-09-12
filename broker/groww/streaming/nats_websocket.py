@@ -276,6 +276,70 @@ class GrowwNATSWebSocket:
         
         threading.Thread(target=periodic_ping, daemon=True).start()
             
+    def _process_binary_nats_message(self, data: bytes):
+        """Process binary NATS message directly"""
+        try:
+            # Convert to string to find message boundaries
+            text = data.decode('utf-8', errors='ignore')
+            
+            # Log the message type for debugging
+            if len(text) > 0:
+                logger.debug(f"Binary message text preview: {text[:100]}")
+            
+            # Check for different message types
+            if text.startswith('INFO'):
+                # Parse as text for INFO messages
+                messages = self.nats_protocol.parse_message(text)
+                for msg in messages:
+                    self._process_nats_message(msg)
+                    
+            elif text.startswith('MSG'):
+                # This is a market data message with binary payload
+                # Parse the header
+                lines = text.split('\r\n', 1)
+                if len(lines) >= 1:
+                    header = lines[0]
+                    parts = header.split(' ')
+                    
+                    if len(parts) >= 4:
+                        subject = parts[1]
+                        sid = parts[2]
+                        size = int(parts[-1])
+                        
+                        # Find where payload starts (after header and \r\n)
+                        header_bytes = (header + '\r\n').encode('utf-8')
+                        payload_start = len(header_bytes)
+                        payload_end = payload_start + size
+                        
+                        if payload_end <= len(data):
+                            # Extract binary payload
+                            payload = data[payload_start:payload_end]
+                            
+                            # Create MSG dict with binary payload
+                            msg = {
+                                'type': 'MSG',
+                                'subject': subject,
+                                'sid': sid,
+                                'size': size,
+                                'payload': payload  # Keep as bytes
+                            }
+                            
+                            logger.info(f"📊 Binary MSG parsed - Subject: {subject}, SID: {sid}, Size: {size}")
+                            self._process_nats_message(msg)
+                            
+            elif text.startswith('PING') or text.startswith('PONG') or text.startswith('+OK'):
+                # Parse as text for control messages
+                logger.info(f"Control message received: {text.strip()}")
+                messages = self.nats_protocol.parse_message(text)
+                for msg in messages:
+                    self._process_nats_message(msg)
+            else:
+                # Unknown message type
+                logger.warning(f"Unknown binary message type: {text[:50] if len(text) > 50 else text}")
+                    
+        except Exception as e:
+            logger.error(f"Error processing binary NATS message: {e}", exc_info=True)
+    
     def _on_message(self, ws, message):
         """Handle incoming WebSocket message"""
         try:
@@ -284,23 +348,18 @@ class GrowwNATSWebSocket:
                 logger.info(f"📥 Received BINARY message: {len(message)} bytes")
                 # Log first few bytes in hex for debugging
                 logger.info(f"   First 50 bytes (hex): {message[:50].hex() if len(message) > 0 else 'empty'}")
-                message = message.decode('utf-8', errors='ignore')
+                
+                # Parse binary NATS message directly
+                self._process_binary_nats_message(message)
             else:
                 logger.info(f"📥 Received TEXT message: {len(message)} chars")
-            
-            # Log raw message for debugging
-            if message.strip():
-                if message.startswith('MSG'):
-                    logger.info(f"🔔 MARKET DATA MSG received!")
-                logger.info(f"Raw message: {message[:200]}..." if len(message) > 200 else f"Raw message: {message}")
-            
-            # Parse using NATS protocol handler
-            messages = self.nats_protocol.parse_message(message)
-            
-            logger.info(f"Parsed {len(messages)} NATS messages")
-            for msg in messages:
-                logger.info(f"Processing NATS message type: {msg.get('type')}")
-                self._process_nats_message(msg)
+                
+                # Parse text message
+                messages = self.nats_protocol.parse_message(message)
+                logger.info(f"Parsed {len(messages)} NATS messages")
+                for msg in messages:
+                    logger.info(f"Processing NATS message type: {msg.get('type')}")
+                    self._process_nats_message(msg)
             
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
@@ -386,9 +445,14 @@ class GrowwNATSWebSocket:
             logger.info(f"   SID: {sid}")
             logger.info(f"   Payload size: {len(payload)} bytes")
             
-            # Convert payload to bytes if string
+            # Ensure payload is bytes
             if isinstance(payload, str):
-                payload = payload.encode('latin-1')
+                # This shouldn't happen with our new code, but handle it safely
+                logger.warning("Payload is string, converting to bytes")
+                payload = payload.encode('utf-8', errors='ignore')
+            elif not isinstance(payload, bytes):
+                logger.error(f"Unexpected payload type: {type(payload)}")
+                return
             
             # Log payload hex for debugging
             if payload:
@@ -456,7 +520,7 @@ class GrowwNATSWebSocket:
         except Exception as e:
             logger.error(f"Failed to send NATS subscription: {e}")
     
-    def subscribe_ltp(self, exchange: str, segment: str, token: str):
+    def subscribe_ltp(self, exchange: str, segment: str, token: str, symbol: str = None):
         """
         Subscribe to LTP (Last Traded Price) updates
         
@@ -464,16 +528,24 @@ class GrowwNATSWebSocket:
             exchange: Exchange (NSE, BSE, etc.)
             segment: Segment (CASH, FNO, etc.)
             token: Exchange token
+            symbol: Trading symbol (optional, defaults to token)
         """
         sub_key = f"ltp_{exchange}_{segment}_{token}"
         
+        # Determine mode based on whether it's an index
+        # Check if exchange contains INDEX or if symbol is an index name
+        if 'INDEX' in exchange.upper() or symbol in ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']:
+            mode = 'index'
+        else:
+            mode = 'ltp'
+        
         # Store subscription info
         self.subscriptions[sub_key] = {
-            'symbol': f"{token}",  # Will be replaced with actual symbol later
+            'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
-            'mode': 'ltp'
+            'mode': mode
         }
         
         # Send NATS subscription if connected
@@ -482,7 +554,7 @@ class GrowwNATSWebSocket:
         
         return sub_key
         
-    def subscribe_depth(self, exchange: str, segment: str, token: str):
+    def subscribe_depth(self, exchange: str, segment: str, token: str, symbol: str = None):
         """
         Subscribe to market depth updates
         
@@ -490,12 +562,13 @@ class GrowwNATSWebSocket:
             exchange: Exchange (NSE, BSE, etc.)
             segment: Segment (CASH, FNO, etc.)
             token: Exchange token
+            symbol: Trading symbol (optional, defaults to token)
         """
         sub_key = f"depth_{exchange}_{segment}_{token}"
         
         # Store subscription info
         self.subscriptions[sub_key] = {
-            'symbol': f"{token}",  # Will be replaced with actual symbol later
+            'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,

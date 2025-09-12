@@ -36,7 +36,7 @@ def map_order_data(order_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['Trsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['Trsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -170,7 +170,7 @@ def map_trade_data(trade_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol:
-                trade['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                trade['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -189,11 +189,20 @@ def transform_tradebook_data(tradebook_data):
         quantity = int(trade.get('Qty', 0))
         average_price = float(trade.get('Average price', 0.0))
         
+        # Map transaction type from 'B'/'S' to 'BUY'/'SELL'
+        trantype = trade.get('Trantype', '')
+        if trantype == 'B':
+            action = 'BUY'
+        elif trantype == 'S':
+            action = 'SELL'
+        else:
+            action = trantype
+        
         transformed_trade = {
             "symbol": trade.get('Tsym'),
             "exchange": trade.get('Exchange', ''),
             "product": trade.get('Pcode', ''),
-            "action": trade.get('Trantype', ''),
+            "action": action,
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
@@ -235,7 +244,7 @@ def map_position_data(position_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 

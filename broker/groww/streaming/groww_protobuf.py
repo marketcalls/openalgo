@@ -194,7 +194,7 @@ class MiniProtobufParser:
             elif field_num == FIELD_VALUE:
                 result['value'] = self._read_fixed64()
             elif field_num == FIELD_LTP:
-                result['ltp'] = self._read_fixed64()
+                result['ltp'] = self._read_fixed64()  # Price is already in correct format
             else:
                 self._skip_field(wire_type)
                 
@@ -212,9 +212,68 @@ class MiniProtobufParser:
             'sell': []
         }
         
-        # Simplified parsing - actual implementation would need full proto parsing
+        # Parse depth data fields
+        while self.position < end_pos:
+            field_num, wire_type = self._read_tag()
+            if field_num == 0:
+                break
+                
+            if field_num == 1:  # tsInMillis
+                result['timestamp'] = self._read_fixed64()
+            elif field_num == 2:  # Buy levels (repeated)
+                # Parse buy depth level
+                level_data = self._parse_depth_level()
+                if level_data:
+                    result['buy'].append(level_data)
+            elif field_num == 3:  # Sell levels (repeated)
+                # Parse sell depth level
+                level_data = self._parse_depth_level()
+                if level_data:
+                    result['sell'].append(level_data)
+            else:
+                self._skip_field(wire_type)
+                
         self.position = end_pos
         return result
+    
+    def _parse_depth_level(self) -> Dict[str, Any]:
+        """Parse a single depth level"""
+        length = self._read_varint()
+        end_pos = self.position + length
+        
+        level = {
+            'price': 0.0,
+            'quantity': 0,
+            'orders': 0
+        }
+        
+        while self.position < end_pos:
+            field_num, wire_type = self._read_tag()
+            if field_num == 0:
+                break
+                
+            if field_num == 1:  # Order count
+                level['orders'] = self._read_varint()
+            elif field_num == 2:  # Price and quantity (nested message)
+                # Parse price/quantity submessage
+                sub_length = self._read_varint()
+                sub_end = self.position + sub_length
+                
+                while self.position < sub_end:
+                    sub_field, sub_wire = self._read_tag()
+                    if sub_field == 1:  # Price (raw value needs no conversion)
+                        level['price'] = self._read_fixed64()
+                    elif sub_field == 2:  # Quantity
+                        level['quantity'] = int(self._read_fixed64())  # Convert to int
+                    else:
+                        self._skip_field(sub_wire)
+                        
+                self.position = sub_end
+            else:
+                self._skip_field(wire_type)
+                
+        self.position = end_pos
+        return level
     
     def _parse_live_indices(self) -> Dict[str, Any]:
         """Parse live indices message"""
