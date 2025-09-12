@@ -179,7 +179,7 @@ def map_position_data(position_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['tradingsymbol'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
