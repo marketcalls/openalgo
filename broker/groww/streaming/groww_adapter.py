@@ -1,0 +1,495 @@
+import threading
+import json
+import logging
+import time
+from typing import Dict, Any, Optional, List
+
+from database.auth_db import get_auth_token
+from database.token_db import get_token
+
+import sys
+import os
+
+# Add parent directory to path to allow imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+
+from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+from websocket_proxy.mapping import SymbolMapper
+from .groww_mapping import GrowwExchangeMapper, GrowwCapabilityRegistry
+from .nats_websocket import GrowwNATSWebSocket
+
+class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
+    """Groww-specific implementation of the WebSocket adapter"""
+    
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger("groww_websocket")
+        self.ws_client = None
+        self.user_id = None
+        self.broker_name = "groww"
+        self.running = False
+        self.lock = threading.Lock()
+        self.subscription_keys = {}  # Map correlation_id to subscription keys
+    
+    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
+        """
+        Initialize connection with Groww WebSocket API
+        
+        Args:
+            broker_name: Name of the broker (always 'groww' in this case)
+            user_id: Client ID/user ID
+            auth_data: If provided, use these credentials instead of fetching from DB
+        
+        Raises:
+            ValueError: If required authentication tokens are not found
+        """
+        self.user_id = user_id
+        self.broker_name = broker_name
+        
+        # Get tokens from database if not provided
+        if not auth_data:
+            # Fetch authentication token from database
+            auth_token = get_auth_token(user_id)
+            
+            if not auth_token:
+                self.logger.error(f"No authentication token found for user {user_id}")
+                raise ValueError(f"No authentication token found for user {user_id}")
+        else:
+            # Use provided token
+            auth_token = auth_data.get('auth_token')
+            
+            if not auth_token:
+                self.logger.error("Missing required authentication data")
+                raise ValueError("Missing required authentication data")
+        
+        # Create WebSocket client with callbacks
+        self.ws_client = GrowwNATSWebSocket(
+            auth_token=auth_token,
+            on_data=self._on_data,
+            on_error=self._on_error
+        )
+        
+        self.running = True
+        
+    def connect(self) -> None:
+        """Establish connection to Groww WebSocket"""
+        if not self.ws_client:
+            self.logger.error("WebSocket client not initialized. Call initialize() first.")
+            return
+            
+        try:
+            self.logger.info("Connecting to Groww WebSocket")
+            self.ws_client.connect()
+            self.connected = True
+            self.logger.info("Connected to Groww WebSocket successfully")
+            
+            # Resubscribe to existing subscriptions if any
+            with self.lock:
+                for correlation_id, sub_info in self.subscriptions.items():
+                    self._resubscribe(correlation_id, sub_info)
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to connect to Groww WebSocket: {e}")
+            self.connected = False
+            raise
+    
+    def disconnect(self) -> None:
+        """Disconnect from Groww WebSocket"""
+        self.running = False
+        
+        if self.ws_client:
+            try:
+                self.ws_client.disconnect()
+            except Exception as e:
+                self.logger.error(f"Error disconnecting from Groww: {e}")
+                
+        self.connected = False
+            
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
+    
+    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
+        """
+        Subscribe to market data with Groww-specific implementation
+        
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
+            mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
+            depth_level: Market depth level (only 5 supported for Groww)
+            
+        Returns:
+            Dict: Response with status and error message if applicable
+        """
+        # Validate the mode
+        if mode not in [1, 2, 3]:
+            return self._create_error_response("INVALID_MODE", 
+                                              f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+                                              
+        # Groww only supports depth level 5
+        if mode == 3 and depth_level != 5:
+            self.logger.info(f"Groww only supports depth level 5, using 5 instead of {depth_level}")
+            depth_level = 5
+        
+        # Map symbol to token using symbol mapper
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return self._create_error_response("SYMBOL_NOT_FOUND", 
+                                              f"Symbol {symbol} not found for exchange {exchange}")
+            
+        token = token_info['token']
+        brexchange = token_info['brexchange']
+        
+        # Get exchange and segment for Groww
+        groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
+        
+        # Generate unique correlation ID
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        
+        # Store subscription for reconnection
+        with self.lock:
+            self.subscriptions[correlation_id] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'groww_exchange': groww_exchange,
+                'segment': segment,
+                'brexchange': brexchange,
+                'token': token,
+                'mode': mode,
+                'depth_level': depth_level
+            }
+        
+        # Subscribe if connected
+        if self.connected and self.ws_client:
+            try:
+                if mode in [1, 2]:  # LTP or Quote mode
+                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token)
+                elif mode == 3:  # Depth mode
+                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token)
+                    
+                # Store subscription key for unsubscribe
+                self.subscription_keys[correlation_id] = sub_key
+                
+                self.logger.info(f"Subscribed to {symbol}.{exchange} in mode {mode}")
+                
+            except Exception as e:
+                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        
+        return self._create_success_response(
+            f'Subscription requested for {symbol}.{exchange}',
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode,
+            depth_level=depth_level
+        )
+    
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
+        """
+        Unsubscribe from market data
+        
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange code
+            mode: Subscription mode
+            
+        Returns:
+            Dict: Response with status
+        """
+        # Generate correlation ID
+        correlation_id = f"{symbol}_{exchange}_{mode}"
+        
+        # Check if subscribed
+        with self.lock:
+            if correlation_id not in self.subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED", 
+                                                  f"Not subscribed to {symbol}.{exchange}")
+            
+            # Remove from subscriptions
+            del self.subscriptions[correlation_id]
+        
+        # Unsubscribe if we have a subscription key
+        if correlation_id in self.subscription_keys:
+            sub_key = self.subscription_keys[correlation_id]
+            
+            if self.connected and self.ws_client:
+                try:
+                    self.ws_client.unsubscribe(sub_key)
+                    self.logger.info(f"Unsubscribed from {symbol}.{exchange}")
+                except Exception as e:
+                    self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                    
+            del self.subscription_keys[correlation_id]
+        
+        return self._create_success_response(
+            f"Unsubscribed from {symbol}.{exchange}",
+            symbol=symbol,
+            exchange=exchange,
+            mode=mode
+        )
+    
+    def _resubscribe(self, correlation_id: str, sub_info: Dict):
+        """Resubscribe to a symbol after reconnection"""
+        try:
+            groww_exchange = sub_info['groww_exchange']
+            segment = sub_info['segment']
+            token = sub_info['token']
+            mode = sub_info['mode']
+            
+            if mode in [1, 2]:  # LTP or Quote mode
+                sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token)
+            elif mode == 3:  # Depth mode
+                sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token)
+                
+            self.subscription_keys[correlation_id] = sub_key
+            self.logger.info(f"Resubscribed to {sub_info['symbol']}.{sub_info['exchange']}")
+            
+        except Exception as e:
+            self.logger.error(f"Error resubscribing: {e}")
+    
+    def _on_data(self, data: Dict[str, Any]) -> None:
+        """Callback for market data from WebSocket"""
+        try:
+            # Debug log the raw message data to see what we're actually receiving
+            self.logger.info(f"RAW GROWW DATA: Type: {type(data)}, Data: {data}")
+            
+            # Find matching subscription based on the data
+            subscription = None
+            correlation_id = None
+            
+            # Data from NATS will have symbol, exchange, and mode fields
+            if 'symbol' in data and 'exchange' in data:
+                # This is from our NATS implementation
+                exchange = data['exchange']
+                mode = data.get('mode', 'ltp')
+                
+                # Find matching subscription
+                with self.lock:
+                    for cid, sub in self.subscriptions.items():
+                        # Match based on exchange and mode
+                        if (sub['groww_exchange'] == exchange and 
+                            ((mode == 'ltp' and sub['mode'] in [1, 2]) or
+                             (mode == 'depth' and sub['mode'] == 3))):
+                            subscription = sub
+                            correlation_id = cid
+                            break
+            
+            # Try to match based on exchange token from protobuf data
+            elif 'exchange_token' in data or 'token' in data:
+                token = data.get('exchange_token') or data.get('token')
+                segment = data.get('segment', 'CASH')
+                exchange = data.get('exchange', 'NSE')
+                
+                self.logger.info(f"Processing message with token: {token}, segment: {segment}, exchange: {exchange}")
+                
+                # Find matching subscription
+                with self.lock:
+                    for cid, sub in self.subscriptions.items():
+                        if str(sub['token']) == str(token) and sub['segment'] == segment and sub['groww_exchange'] == exchange:
+                            subscription = sub
+                            correlation_id = cid
+                            break
+            
+            if not subscription:
+                self.logger.warning(f"Received data for unsubscribed token/symbol: {data}")
+                return
+            
+            # Extract symbol and exchange from subscription
+            symbol = subscription['symbol']
+            exchange = subscription['exchange']
+            mode = subscription['mode']
+            
+            # Important: Create topic in the same format as Angel
+            # Format: EXCHANGE_SYMBOL_MODE
+            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+            topic = f"{exchange}_{symbol}_{mode_str}"
+            
+            # Normalize the data
+            market_data = self._normalize_market_data(data, mode)
+            
+            # Add metadata
+            market_data.update({
+                'symbol': symbol,
+                'exchange': exchange,
+                'mode': mode,
+                'timestamp': int(time.time() * 1000)
+            })
+            
+            # Log the market data we're sending (similar to Angel)
+            self.logger.info(f"Publishing market data: {market_data}")
+            
+            # Publish to ZeroMQ
+            self.publish_market_data(topic, market_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error processing market data: {e}", exc_info=True)
+    
+    def _on_error(self, error: str) -> None:
+        """Callback for WebSocket errors"""
+        self.logger.error(f"Groww WebSocket error: {error}")
+    
+    def _normalize_market_data(self, message: Dict, mode: int) -> Dict[str, Any]:
+        """
+        Normalize Groww data format to a common format
+        
+        Args:
+            message: The raw message from Groww
+            mode: Subscription mode
+            
+        Returns:
+            Dict: Normalized market data
+        """
+        # Handle data from our NATS/protobuf parser
+        if 'ltp_data' in message:
+            # This is parsed protobuf data from our NATS implementation
+            ltp_data = message['ltp_data']
+            
+            if mode == 1:  # LTP mode
+                return {
+                    'ltp': ltp_data.get('ltp', 0),
+                    'ltt': ltp_data.get('timestamp', int(time.time() * 1000))
+                }
+            elif mode == 2:  # Quote mode
+                return {
+                    'ltp': ltp_data.get('ltp', 0),
+                    'ltt': ltp_data.get('timestamp', int(time.time() * 1000)),
+                    'open': ltp_data.get('open', 0),
+                    'high': ltp_data.get('high', 0),
+                    'low': ltp_data.get('low', 0),
+                    'close': ltp_data.get('close', 0),
+                    'volume': ltp_data.get('volume', 0),
+                    'value': ltp_data.get('value', 0)
+                }
+            else:
+                # Fallback for other modes
+                return {
+                    'ltp': ltp_data.get('ltp', 0),
+                    'ltt': ltp_data.get('timestamp', int(time.time() * 1000)),
+                    'open': ltp_data.get('open', 0),
+                    'high': ltp_data.get('high', 0),
+                    'low': ltp_data.get('low', 0),
+                    'close': ltp_data.get('close', 0),
+                    'volume': ltp_data.get('volume', 0)
+                }
+        
+        # Handle depth data from protobuf
+        if 'depth_data' in message:
+            depth_data = message['depth_data']
+            result = {
+                'ltp': 0,  # Will be filled from ltp_data if available
+                'ltt': depth_data.get('timestamp', int(time.time() * 1000)),
+                'volume': 0,
+                'open': 0,
+                'high': 0,
+                'low': 0,
+                'close': 0
+            }
+            
+            # Add depth data in the same format as Angel
+            result['depth'] = {
+                'buy': [],
+                'sell': []
+            }
+            
+            # Extract buy levels
+            buy_levels = depth_data.get('buy', [])
+            for i in range(5):  # Groww supports 5 levels
+                if i < len(buy_levels):
+                    result['depth']['buy'].append(buy_levels[i])
+                else:
+                    result['depth']['buy'].append({
+                        'price': 0.0,
+                        'quantity': 0,
+                        'orders': 0
+                    })
+            
+            # Extract sell levels
+            sell_levels = depth_data.get('sell', [])
+            for i in range(5):  # Groww supports 5 levels
+                if i < len(sell_levels):
+                    result['depth']['sell'].append(sell_levels[i])
+                else:
+                    result['depth']['sell'].append({
+                        'price': 0.0,
+                        'quantity': 0,
+                        'orders': 0
+                    })
+            
+            return result
+        
+        # Handle index data from protobuf  
+        if 'index_data' in message:
+            index_data = message['index_data']
+            return {
+                'ltp': index_data.get('value', 0),
+                'ltt': index_data.get('timestamp', int(time.time() * 1000))
+            }
+        
+        # Handle legacy formats
+        # Check if it's LTP data
+        if 'ltp' in message:
+            ltp_data = message.get('ltp', {})
+            
+            # Extract values from nested structure if present
+            if isinstance(ltp_data, dict):
+                # Format: {"NSE": {"CASH": {"token": {"tsInMillis": ..., "ltp": ...}}}}
+                for exchange_data in ltp_data.values():
+                    if isinstance(exchange_data, dict):
+                        for segment_data in exchange_data.values():
+                            if isinstance(segment_data, dict):
+                                for token_data in segment_data.values():
+                                    if isinstance(token_data, dict):
+                                        return {
+                                            'ltp': token_data.get('ltp', 0),
+                                            'ltt': token_data.get('tsInMillis', int(time.time() * 1000))
+                                        }
+            else:
+                # Direct format
+                return {
+                    'ltp': ltp_data,
+                    'ltt': message.get('tsInMillis', int(time.time() * 1000))
+                }
+        
+        # Check if it's depth/market depth data
+        if 'buyBook' in message or 'sellBook' in message:
+            result = {
+                'ltp': message.get('ltp', 0),
+                'ltt': message.get('tsInMillis', int(time.time() * 1000)),
+                'depth': {
+                    'buy': [],
+                    'sell': []
+                }
+            }
+            
+            # Extract buy book
+            buy_book = message.get('buyBook', {})
+            for i in range(1, 6):  # Groww uses 1-5 indexing
+                level = buy_book.get(str(i), {})
+                result['depth']['buy'].append({
+                    'price': level.get('price', 0),
+                    'quantity': level.get('qty', 0),
+                    'orders': level.get('orders', 0)
+                })
+            
+            # Extract sell book
+            sell_book = message.get('sellBook', {})
+            for i in range(1, 6):  # Groww uses 1-5 indexing
+                level = sell_book.get(str(i), {})
+                result['depth']['sell'].append({
+                    'price': level.get('price', 0),
+                    'quantity': level.get('qty', 0),
+                    'orders': level.get('orders', 0)
+                })
+            
+            return result
+        
+        # Default format for quote/other data
+        return {
+            'ltp': message.get('ltp', message.get('last_price', 0)),
+            'ltt': message.get('tsInMillis', message.get('timestamp', int(time.time() * 1000))),
+            'volume': message.get('volume', 0),
+            'open': message.get('open', 0),
+            'high': message.get('high', 0),
+            'low': message.get('low', 0),
+            'close': message.get('close', 0)
+        }
