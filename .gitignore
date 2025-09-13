@@ -33,7 +33,13 @@ db/strategy_encryption.key
 # CSV Files (except symbols.csv)
 *.csv
 !symbols.csv
+
+*.png
+*.txt
+*.py
+=======
 !all_symbols.csv
+
 
 # Environments 
 .env 
