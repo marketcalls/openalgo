@@ -140,11 +140,22 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
+
+        # Get instrument type from database
+        instrumenttype = None
+        try:
+            from database.symbol import SymToken
+            sym = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+            if sym:
+                instrumenttype = sym.instrumenttype
+                self.logger.info(f"Retrieved instrumenttype: {instrumenttype} for {symbol}.{exchange}")
+        except Exception as e:
+            self.logger.warning(f"Could not retrieve instrumenttype: {e}")
 
         # For indices, handle token mapping differently
         if 'INDEX' in exchange.upper():
@@ -159,6 +170,15 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Get exchange and segment for Groww
         groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
+
+        # Log token details for debugging F&O
+        if exchange in ['NFO', 'BFO']:
+            self.logger.info(f"F&O Subscription Debug:")
+            self.logger.info(f"  Symbol: {symbol}")
+            self.logger.info(f"  Exchange: {exchange} -> Groww: {groww_exchange}")
+            self.logger.info(f"  Segment: {segment}")
+            self.logger.info(f"  Token from DB: {token}")
+            self.logger.info(f"  Brexchange: {brexchange}")
         
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -180,14 +200,18 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             try:
                 if mode in [1, 2]:  # LTP or Quote mode
-                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol)
+                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol, instrumenttype)
                 elif mode == 3:  # Depth mode
-                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol)
-                    
+                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol, instrumenttype)
+
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
-                
+
                 self.logger.info(f"Subscribed to {symbol}.{exchange} in mode {mode}")
+
+                # Extra logging for F&O
+                if exchange in ['NFO', 'BFO']:
+                    self.logger.info(f"F&O subscription key created: {sub_key}")
                 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")

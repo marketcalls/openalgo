@@ -551,7 +551,7 @@ class GrowwNATSWebSocket:
         except Exception as e:
             logger.error(f"Failed to send NATS subscription: {e}")
     
-    def subscribe_ltp(self, exchange: str, segment: str, token: str, symbol: str = None):
+    def subscribe_ltp(self, exchange: str, segment: str, token: str, symbol: str = None, instrumenttype: str = None):
         """
         Subscribe to LTP (Last Traded Price) updates
 
@@ -560,21 +560,19 @@ class GrowwNATSWebSocket:
             segment: Segment (CASH, FNO, etc.)
             token: Exchange token
             symbol: Trading symbol (optional, defaults to token)
+            instrumenttype: Instrument type from database (optional)
         """
         sub_key = f"ltp_{exchange}_{segment}_{token}"
 
         # Determine mode based on whether it's an index
-        # Check if exchange contains INDEX or if symbol is an index name
-        # Expanded list of index symbols
-        index_symbols = [
-            'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX',
-            'BANKEX', 'NIFTYNXT50', 'NIFTYIT', 'NIFTYPHARMA', 'NIFTYAUTO',
-            'NIFTYBANK', 'NIFTYFIN', 'NIFTYFMCG', 'NIFTYMETAL', 'NIFTYREALTY'
-        ]
+        # IMPORTANT: Only treat as index if exchange contains 'INDEX'
+        # F&O symbols might contain index names but are NOT indices themselves
+        is_index = 'INDEX' in exchange.upper()
 
-        # Check if it's an index based on exchange or symbol
-        is_index = ('INDEX' in exchange.upper() or
-                   (symbol and any(idx in symbol.upper() for idx in index_symbols)))
+        # Additionally check if instrumenttype is INDEX (only in CASH segment)
+        if not is_index and instrumenttype == 'INDEX':
+            is_index = True
+            logger.info(f"Detected index subscription for {symbol} based on instrumenttype=INDEX")
 
         if is_index:
             mode = 'index'
@@ -597,15 +595,16 @@ class GrowwNATSWebSocket:
 
         return sub_key
         
-    def subscribe_depth(self, exchange: str, segment: str, token: str, symbol: str = None):
+    def subscribe_depth(self, exchange: str, segment: str, token: str, symbol: str = None, instrumenttype: str = None):
         """
         Subscribe to market depth updates
-        
+
         Args:
             exchange: Exchange (NSE, BSE, etc.)
             segment: Segment (CASH, FNO, etc.)
             token: Exchange token
             symbol: Trading symbol (optional, defaults to token)
+            instrumenttype: Instrument type from database (optional)
         """
         sub_key = f"depth_{exchange}_{segment}_{token}"
         
