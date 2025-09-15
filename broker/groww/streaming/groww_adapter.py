@@ -96,17 +96,23 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from Groww WebSocket"""
         self.running = False
-        
+
         if self.ws_client:
             try:
                 self.ws_client.disconnect()
             except Exception as e:
                 self.logger.error(f"Error disconnecting from Groww: {e}")
-                
+
+        # Clear all state for clean reconnection
         self.connected = False
-            
+        self.ws_client = None
+        self.subscriptions.clear()
+        self.subscription_keys.clear()
+
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
+
+        self.logger.info("Groww adapter disconnected and state cleared")
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -139,7 +145,18 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
+        # For indices, handle token mapping differently
+        if 'INDEX' in exchange.upper():
+            if exchange == 'NSE_INDEX':
+                # NSE indices use symbol names as tokens (NIFTY, BANKNIFTY, etc.)
+                self.logger.info(f"NSE Index subscription detected, using symbol {symbol} as token instead of {token}")
+                token = symbol
+            elif exchange == 'BSE_INDEX':
+                # BSE indices use numeric tokens (e.g., "14" for SENSEX)
+                # Keep the original token from database
+                self.logger.info(f"BSE Index subscription detected, keeping numeric token {token} for {symbol}")
+
         # Get exchange and segment for Groww
         groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
         
@@ -272,16 +289,16 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     for cid, sub in self.subscriptions.items():
                         self.logger.debug(f"Checking {cid}: symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}")
                         
-                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX but Groww sends NSE
+                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX/BSE_INDEX but Groww sends NSE/BSE
                         # Check if this is an index subscription
-                        is_index_match = (mode == 'index' and 
-                                        sub['exchange'] == 'NSE_INDEX' and 
-                                        exchange == 'NSE' and 
+                        is_index_match = (mode == 'index' and
+                                        ((sub['exchange'] == 'NSE_INDEX' and exchange == 'NSE') or
+                                         (sub['exchange'] == 'BSE_INDEX' and exchange == 'BSE')) and
                                         sub['symbol'] == symbol_from_data)
-                        
+
                         # Regular match based on symbol, exchange and mode
-                        is_regular_match = (sub['symbol'] == symbol_from_data and 
-                                          sub['groww_exchange'] == exchange and 
+                        is_regular_match = (sub['symbol'] == symbol_from_data and
+                                          sub['groww_exchange'] == exchange and
                                           ((mode == 'ltp' and sub['mode'] in [1, 2]) or
                                            (mode == 'depth' and sub['mode'] == 3) or
                                            (mode == 'index' and sub['mode'] in [1, 2])))
@@ -314,6 +331,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Extract symbol and exchange from subscription
             symbol = subscription['symbol']
+            # Always use the subscription's exchange for correct labeling (NSE_INDEX, BSE_INDEX, etc.)
             exchange = subscription['exchange']
             mode = subscription['mode']
             

@@ -51,8 +51,8 @@ class GrowwNATSWebSocket:
         self.subscription_map = {}  # Map subscription keys to topics
         self.nats_sids = {}  # Map our keys to NATS subscription IDs
         
-        # NATS protocol handler
-        self.nats_protocol = groww_nats.NATSProtocol()
+        # NATS protocol handler (will be recreated on each connection)
+        self.nats_protocol = None
         
         # State
         self.running = False
@@ -117,11 +117,14 @@ class GrowwNATSWebSocket:
         if self.connected:
             logger.warning("Already connected")
             return
-        
+
         try:
+            # Create fresh NATS protocol handler for this connection
+            self.nats_protocol = groww_nats.NATSProtocol()
+
             # Generate socket token first
             self._generate_socket_token()
-            
+
             # Start WebSocket connection
             self.running = True
             self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
@@ -270,7 +273,10 @@ class GrowwNATSWebSocket:
                     try:
                         ping_count += 1
                         logger.info(f"\U0001f3d3 Sending PING #{ping_count} to check connection...")
-                        self.ws.send(self.nats_protocol.create_ping())
+                        if self.nats_protocol:
+                            self.ws.send(self.nats_protocol.create_ping())
+                        else:
+                            logger.error("Cannot send PING - NATS protocol handler not initialized")
                     except Exception as e:
                         logger.error(f"Failed to send PING: {e}")
         
@@ -281,11 +287,16 @@ class GrowwNATSWebSocket:
         try:
             # Convert to string to find message boundaries
             text = data.decode('utf-8', errors='ignore')
-            
+
             # Log the message type for debugging
             if len(text) > 0:
                 logger.debug(f"Binary message text preview: {text[:100]}")
-            
+
+            # Ensure NATS protocol handler exists
+            if not self.nats_protocol:
+                logger.error("NATS protocol handler not initialized")
+                return
+
             # Check for different message types
             if text.startswith('INFO'):
                 # Parse as text for INFO messages
@@ -330,7 +341,10 @@ class GrowwNATSWebSocket:
             elif text.startswith('PING') or text.startswith('PONG') or text.startswith('+OK'):
                 # Parse as text for control messages
                 logger.info(f"Control message received: {text.strip()}")
-                messages = self.nats_protocol.parse_message(text)
+                if self.nats_protocol:
+                    messages = self.nats_protocol.parse_message(text)
+                else:
+                    messages = []
                 for msg in messages:
                     self._process_nats_message(msg)
             else:
@@ -353,9 +367,13 @@ class GrowwNATSWebSocket:
                 self._process_binary_nats_message(message)
             else:
                 logger.info(f"📥 Received TEXT message: {len(message)} chars")
-                
+
                 # Parse text message
-                messages = self.nats_protocol.parse_message(message)
+                if self.nats_protocol:
+                    messages = self.nats_protocol.parse_message(message)
+                else:
+                    logger.error("NATS protocol handler not initialized")
+                    messages = []
                 logger.info(f"Parsed {len(messages)} NATS messages")
                 for msg in messages:
                     logger.info(f"Processing NATS message type: {msg.get('type')}")
@@ -399,8 +417,11 @@ class GrowwNATSWebSocket:
                 
         elif msg_type == 'PING':
             # Respond with PONG
-            self.ws.send(self.nats_protocol.create_pong())
-            logger.info("🏓 Received PING from server, sent PONG")
+            if self.nats_protocol:
+                self.ws.send(self.nats_protocol.create_pong())
+                logger.info("🏓 Received PING from server, sent PONG")
+            else:
+                logger.error("Cannot send PONG - NATS protocol handler not initialized")
             
         elif msg_type == 'PONG':
             logger.info("✅ Received PONG from server - Connection alive")
@@ -474,8 +495,14 @@ class GrowwNATSWebSocket:
                         
                         # Add subscription info to market data
                         market_data['symbol'] = sub_info['symbol']
-                        market_data['exchange'] = sub_info['exchange']
+                        # For index mode, exchange might be NSE_INDEX/BSE_INDEX, normalize to NSE/BSE for matching
+                        if sub_info['mode'] == 'index' and '_INDEX' in sub_info['exchange']:
+                            market_data['exchange'] = sub_info['exchange'].replace('_INDEX', '')
+                        else:
+                            market_data['exchange'] = sub_info['exchange']
                         market_data['mode'] = sub_info['mode']
+                        # Also preserve the original exchange for the adapter
+                        market_data['original_exchange'] = sub_info['exchange']
                         
                         logger.info(f"🚀 Sending market data to callback: {market_data}")
                         
@@ -501,6 +528,10 @@ class GrowwNATSWebSocket:
         """Send NATS SUB command for subscription"""
         try:
             # Format topic for Groww
+            if not self.nats_protocol:
+                logger.error("NATS protocol handler not initialized")
+                return
+
             topic = self.nats_protocol.format_topic_for_groww(
                 exchange=sub_info.get('exchange', ''),
                 segment=sub_info.get('segment', ''),
@@ -523,7 +554,7 @@ class GrowwNATSWebSocket:
     def subscribe_ltp(self, exchange: str, segment: str, token: str, symbol: str = None):
         """
         Subscribe to LTP (Last Traded Price) updates
-        
+
         Args:
             exchange: Exchange (NSE, BSE, etc.)
             segment: Segment (CASH, FNO, etc.)
@@ -531,14 +562,26 @@ class GrowwNATSWebSocket:
             symbol: Trading symbol (optional, defaults to token)
         """
         sub_key = f"ltp_{exchange}_{segment}_{token}"
-        
+
         # Determine mode based on whether it's an index
         # Check if exchange contains INDEX or if symbol is an index name
-        if 'INDEX' in exchange.upper() or symbol in ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']:
+        # Expanded list of index symbols
+        index_symbols = [
+            'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX',
+            'BANKEX', 'NIFTYNXT50', 'NIFTYIT', 'NIFTYPHARMA', 'NIFTYAUTO',
+            'NIFTYBANK', 'NIFTYFIN', 'NIFTYFMCG', 'NIFTYMETAL', 'NIFTYREALTY'
+        ]
+
+        # Check if it's an index based on exchange or symbol
+        is_index = ('INDEX' in exchange.upper() or
+                   (symbol and any(idx in symbol.upper() for idx in index_symbols)))
+
+        if is_index:
             mode = 'index'
+            logger.info(f"Detected index subscription for {symbol} on {exchange}")
         else:
             mode = 'ltp'
-        
+
         # Store subscription info
         self.subscriptions[sub_key] = {
             'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
@@ -547,11 +590,11 @@ class GrowwNATSWebSocket:
             'exchange_token': token,
             'mode': mode
         }
-        
+
         # Send NATS subscription if connected
         if self.connected:
             self._send_nats_subscription(sub_key, self.subscriptions[sub_key])
-        
+
         return sub_key
         
     def subscribe_depth(self, exchange: str, segment: str, token: str, symbol: str = None):
@@ -612,20 +655,27 @@ class GrowwNATSWebSocket:
     def disconnect(self):
         """Disconnect from WebSocket"""
         self.running = False
-        
+
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
-        
+
         if self.ws_thread:
             self.ws_thread.join(timeout=5)
-        
+
+        # Clear all state for clean reconnection
         self.connected = False
         self.authenticated = False
-        
-        logger.info("Disconnected from Groww WebSocket")
+        self.subscriptions.clear()
+        self.nats_sids.clear()
+        self.subscription_map.clear()
+        self.server_nonce = None
+        self.socket_token = None
+        self.subscription_id = None
+
+        logger.info("Disconnected from Groww WebSocket and cleared state")
         
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""
