@@ -227,9 +227,10 @@ class GrowwNATSWebSocket:
             headers = {
                 "Authorization": f"Bearer {self.socket_token}",
                 "X-Subscription-Id": self.subscription_id,
-                "User-Agent": "growwapi-python-client/0.0.8",  # Match official SDK
-                "X-Client-Id": "growwapi",
-                "X-API-Version": "1.0"
+                "User-Agent": "Python/3.10 nats.py/2.10.18",  # Match official NATS client
+                "X-Client-Id": "nats-py",
+                "X-API-Version": "1.0",
+                "Sec-WebSocket-Protocol": "nats"  # Declare NATS protocol
             }
             
             self.ws = websocket.WebSocketApp(
@@ -396,16 +397,28 @@ class GrowwNATSWebSocket:
                     # Extract subject from MSG line
                     if '/ld/eq/' in msg_text:
                         logger.info(f"📥 Market data message received: {msg_size} bytes")
-                        # Check specifically for exchange
-                        if '/ld/eq/nse/' in msg_text:
-                            logger.info(f"   ✅ NSE message detected")
-                        elif '/ld/eq/bse/' in msg_text:
-                            logger.info(f"   🔴 BSE message detected!")
+                        # Check specifically for exchange and type
+                        if '/ld/eq/nse/price' in msg_text:
+                            logger.info(f"   ✅ NSE LTP message detected")
+                        elif '/ld/eq/nse/book' in msg_text:
+                            logger.info(f"   ✅ NSE DEPTH message detected")
+                        elif '/ld/eq/bse/price' in msg_text:
+                            logger.info(f"   🔴 BSE LTP message detected!")
+                        elif '/ld/eq/bse/book' in msg_text:
+                            logger.info(f"   🔴 BSE DEPTH message detected!")
                         logger.info(f"   First 100 chars: {msg_text[:100]}")
                     # Also check for any BSE-related content
                     elif 'bse' in msg_text.lower() or '532540' in msg_text:
                         logger.info(f"⚠️ Possible BSE-related message: {msg_size} bytes")
                         logger.info(f"   Content preview: {msg_text[:200]}")
+                    # Check for F&O content
+                    elif '/ld/fo/' in msg_text or 'FNO' in msg_text or '53892' in msg_text:
+                        logger.info(f"📈 Possible F&O message detected: {msg_size} bytes")
+                        logger.info(f"   Content preview: {msg_text[:200]}")
+                        if '/ld/fo/nse/book' in msg_text:
+                            logger.info(f"   ✅ NFO DEPTH message confirmed!")
+                        elif '/ld/fo/nse/price' in msg_text:
+                            logger.info(f"   ✅ NFO LTP message confirmed!")
                     # Log ANY message if we're monitoring BSE
                     elif hasattr(self, 'monitoring_bse') and self.monitoring_bse:
                         logger.info(f"🔍 Message after BSE sub: {msg_size} bytes, starts with: {msg_text[:30]}")
@@ -678,6 +691,13 @@ class GrowwNATSWebSocket:
                 # Set flag to monitor messages
                 self.monitoring_bse = True
 
+            # Special logging for F&O subscriptions
+            if segment.upper() == 'FNO':
+                logger.info(f"📈 F&O LTP subscription sent for {symbol}")
+                logger.info(f"   Exchange: {exchange}, Segment: {segment}")
+                logger.info(f"   Topic subscribed: /ld/fo/{exchange.lower()}/price.{token}")
+                self.monitoring_fo = True
+
         return sub_key
         
     def subscribe_depth(self, exchange: str, segment: str, token: str, symbol: str = None, instrumenttype: str = None):
@@ -692,20 +712,51 @@ class GrowwNATSWebSocket:
             instrumenttype: Instrument type from database (optional)
         """
         sub_key = f"depth_{exchange}_{segment}_{token}"
-        
+
+        # Determine mode based on instrument type
+        if instrumenttype == 'INDEX' or 'INDEX' in exchange.upper():
+            mode = 'index_depth'  # Try index depth endpoint
+            logger.info(f"📊 INDEX depth subscription for {symbol} - trying /ld/indices/.../book.{token}")
+        else:
+            mode = 'depth'  # Regular depth
+
+        # Enhanced logging for BSE depth subscriptions
+        if 'BSE' in exchange.upper():
+            logger.info(f"🔴 BSE DEPTH Subscription Request:")
+            logger.info(f"   Exchange: {exchange}")
+            logger.info(f"   Segment: {segment}")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Symbol: {symbol}")
+            logger.info(f"   InstrumentType: {instrumenttype}")
+
         # Store subscription info
         self.subscriptions[sub_key] = {
             'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
-            'mode': 'depth'
+            'mode': mode,  # Use the determined mode (depth or index_depth)
+            'instrumenttype': instrumenttype  # Store instrumenttype
         }
-        
+
         # Send NATS subscription if connected
         if self.connected:
             self._send_nats_subscription(sub_key, self.subscriptions[sub_key])
-        
+
+            # Special logging for BSE depth subscriptions
+            if 'BSE' in exchange.upper():
+                logger.info(f"🔴 BSE DEPTH subscription sent for {symbol}, waiting for depth data MSG...")
+                logger.info(f"   Subscription key: {sub_key}")
+                logger.info(f"   Active SIDs: {list(self.nats_sids.keys())}")
+
+            # Special logging for F&O subscriptions
+            if segment.upper() == 'FNO':
+                logger.info(f"📈 F&O DEPTH subscription sent for {symbol}")
+                logger.info(f"   Exchange: {exchange}, Segment: {segment}")
+                logger.info(f"   Topic subscribed: {self.subscriptions[sub_key]}")
+                logger.info(f"   Monitoring for F&O depth messages...")
+                self.monitoring_fo = True
+
         return sub_key
         
     

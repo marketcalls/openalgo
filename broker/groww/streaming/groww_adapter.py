@@ -202,7 +202,26 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if mode in [1, 2]:  # LTP or Quote mode
                     sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol, instrumenttype)
                 elif mode == 3:  # Depth mode
+                    # Enhanced logging for index depth
+                    if instrumenttype == 'INDEX' or 'INDEX' in exchange:
+                        self.logger.info(f"📊 Trying INDEX DEPTH subscription for {symbol}")
+                        self.logger.info(f"   Will attempt: /ld/indices/{groww_exchange.lower()}/book.{token}")
+
+                    # Enhanced logging for BSE depth subscriptions
+                    if 'BSE' in groww_exchange:
+                        self.logger.info(f"🔴 Creating BSE DEPTH subscription:")
+                        self.logger.info(f"   Exchange: {groww_exchange}")
+                        self.logger.info(f"   Segment: {segment}")
+                        self.logger.info(f"   Token: {token}")
+                        self.logger.info(f"   Symbol: {symbol}")
+
+                    # Subscribe to depth for all types (including indices to test)
                     sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol, instrumenttype)
+
+                    if 'BSE' in groww_exchange:
+                        self.logger.info(f"🔴 BSE DEPTH subscription key: {sub_key}")
+                    elif instrumenttype == 'INDEX':
+                        self.logger.info(f"📊 INDEX DEPTH subscription key: {sub_key}")
 
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
@@ -291,20 +310,31 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, data: Dict[str, Any]) -> None:
         """Callback for market data from WebSocket"""
         try:
+            # Enhanced logging for BSE depth data
+            is_bse_depth = False
+            if 'depth_data' in data and 'exchange' in data and 'BSE' in data.get('exchange', ''):
+                is_bse_depth = True
+                self.logger.info(f"🔴 BSE DEPTH DATA RECEIVED!")
+                self.logger.info(f"   Depth data: {data.get('depth_data', {})}")
+
             # Debug log the raw message data to see what we're actually receiving
-            self.logger.info(f"RAW GROWW DATA: Type: {type(data)}, Data: {data}")
+            self.logger.info(f"RAW GROWW DATA{' (BSE DEPTH)' if is_bse_depth else ''}: Type: {type(data)}, Data: {data}")
             
             # Find matching subscription based on the data
             subscription = None
             correlation_id = None
-            
+
             # Data from NATS will have symbol, exchange, and mode fields
             if 'symbol' in data and 'exchange' in data:
                 # This is from our NATS implementation
                 symbol_from_data = data['symbol']  # This contains the actual symbol name now
                 exchange = data['exchange']
                 mode = data.get('mode', 'ltp')
-                
+
+                # Special logging for BSE depth
+                if 'BSE' in exchange and mode == 'depth':
+                    self.logger.info(f"🔴 BSE DEPTH: Looking for subscription")
+
                 self.logger.info(f"Looking for subscription: symbol={symbol_from_data}, exchange={exchange}, mode={mode}")
                 self.logger.info(f"Available subscriptions: {list(self.subscriptions.keys())}")
                 
@@ -315,7 +345,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         
                         # For index subscriptions, the OpenAlgo exchange is NSE_INDEX/BSE_INDEX but Groww sends NSE/BSE
                         # Check if this is an index subscription
-                        is_index_match = (mode == 'index' and
+                        is_index_match = ((mode == 'index' or mode == 'index_depth') and
                                         ((sub['exchange'] == 'NSE_INDEX' and exchange == 'NSE') or
                                          (sub['exchange'] == 'BSE_INDEX' and exchange == 'BSE')) and
                                         sub['symbol'] == symbol_from_data)
@@ -325,7 +355,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                           sub['groww_exchange'] == exchange and
                                           ((mode == 'ltp' and sub['mode'] in [1, 2]) or
                                            (mode == 'depth' and sub['mode'] == 3) or
-                                           (mode == 'index' and sub['mode'] in [1, 2])))
+                                           (mode == 'index' and sub['mode'] in [1, 2]) or
+                                           (mode == 'index_depth' and sub['mode'] == 3)))
                         
                         if is_index_match or is_regular_match:
                             subscription = sub
@@ -350,6 +381,11 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             break
             
             if not subscription:
+                # Enhanced logging for BSE depth debugging
+                if 'BSE' in str(data) and 'depth' in str(data).lower():
+                    self.logger.error(f"🔴 BSE DEPTH DATA RECEIVED BUT NO SUBSCRIPTION FOUND!")
+                    self.logger.error(f"   Data: {data}")
+                    self.logger.error(f"   Active subscriptions: {self.subscriptions}")
                 self.logger.warning(f"Received data for unsubscribed token/symbol: {data}")
                 return
             
@@ -375,6 +411,13 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'timestamp': int(time.time() * 1000)
             })
             
+            # Enhanced logging for BSE depth
+            if 'BSE' in exchange and mode == 3:
+                self.logger.info(f"🔴 Publishing BSE DEPTH data for {symbol}")
+                if 'depth' in market_data:
+                    self.logger.info(f"   Buy levels: {len(market_data['depth'].get('buy', []))}")
+                    self.logger.info(f"   Sell levels: {len(market_data['depth'].get('sell', []))}")
+
             # Log the market data we're sending (similar to Angel)
             self.logger.info(f"Publishing market data: {market_data}")
             

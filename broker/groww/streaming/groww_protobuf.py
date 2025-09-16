@@ -205,7 +205,15 @@ class MiniProtobufParser:
         """Parse market depth message"""
         length = self._read_varint()
         end_pos = self.position + length
-        
+
+        # Log depth message size for BSE vs NSE debugging
+        total_size = len(self.data)
+        logger.info(f"📊 Parsing depth message: inner length={length} bytes, total message={total_size} bytes")
+        if total_size == 501:
+            logger.info("🔴 BSE depth message detected (501 bytes)")
+        elif total_size == 499:
+            logger.info("✅ NSE depth message detected (499 bytes)")
+
         result = {
             'timestamp': 0,
             'buy': [],
@@ -225,12 +233,15 @@ class MiniProtobufParser:
                 level_data = self._parse_depth_level()
                 if level_data:
                     result['buy'].append(level_data)
+                    logger.debug(f"Added buy level: {level_data}")
             elif field_num == 3:  # Sell levels (repeated)
                 # Parse sell depth level
                 level_data = self._parse_depth_level()
                 if level_data:
                     result['sell'].append(level_data)
+                    logger.debug(f"Added sell level: {level_data}")
             else:
+                logger.debug(f"Unknown field {field_num} in depth message, skipping")
                 self._skip_field(wire_type)
                 
         self.position = end_pos
@@ -331,7 +342,19 @@ def parse_groww_market_data(data: bytes) -> Dict[str, Any]:
     Returns:
         Parsed market data
     """
-    logger.info(f"Parsing protobuf data: {len(data)} bytes")
+    data_len = len(data)
+    logger.info(f"Parsing protobuf data: {data_len} bytes")
+
+    # Special logging for BSE data (501 bytes) vs NSE (499 bytes)
+    if data_len == 501:
+        logger.info("🔴 Potential BSE message detected (501 bytes)")
+    elif data_len == 499:
+        logger.info("✅ Potential NSE message detected (499 bytes)")
+
+    # For BSE depth messages, check if there's an extra field
+    if data_len == 501:
+        logger.debug(f"BSE message - Last 10 bytes (hex): {data[-10:].hex()}")
+
     logger.debug(f"First 50 bytes (hex): {data[:50].hex() if len(data) > 50 else data.hex()}")
 
     parser = MiniProtobufParser()

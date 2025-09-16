@@ -70,15 +70,19 @@ class NATSProtocol:
         Returns:
             NATS CONNECT command
         """
+        # Match the official Python NATS client identification exactly
+        # The official nats.py library uses these parameters
         connect_opts = {
             "verbose": False,
             "pedantic": False,
             "tls_required": True,
             "jwt": jwt,
             "protocol": 1,
-            "version": "2.10.0",  # Updated to match modern NATS client
+            "version": "2.10.18",  # Latest nats.py version used by SDK
             "lang": "python3",
-            "name": "growwapi-python-client"  # Match official SDK client name
+            "name": "nats.py",  # Official NATS Python client name
+            "headers": True,  # Enable headers support
+            "no_responders": True  # Enable no responders detection
         }
         
         if nkey:
@@ -364,7 +368,7 @@ class NATSProtocol:
             exchange: Exchange (NSE, BSE)
             segment: Segment (CASH, FNO)
             token: Exchange token
-            mode: Subscription mode (ltp, depth, index)
+            mode: Subscription mode (ltp, depth, index, index_depth)
 
         Returns:
             Formatted NATS subject
@@ -375,13 +379,19 @@ class NATSProtocol:
         # Log for debugging
         logger.info(f"Formatting topic - Exchange: {exchange}, Segment: {segment}, Token: {token}, Mode: {mode}")
 
-        # Handle index mode first
-        if mode == "index":
+        # Handle index modes
+        if mode == "index" or mode == "index_ltp":
             # Format: /ld/indices/nse/price.{token}
             # Exchange should be NSE or BSE (not NSE_INDEX or BSE_INDEX)
             clean_exchange = exchange.replace('_INDEX', '').lower()
             topic = f"/ld/indices/{clean_exchange}/price.{token}"
-            logger.info(f"Index topic generated: {topic}")
+            logger.info(f"Index LTP topic generated: {topic}")
+            return topic
+        elif mode == "index_depth":
+            # Try depth format for indices: /ld/indices/nse/book.{token}
+            clean_exchange = exchange.replace('_INDEX', '').lower()
+            topic = f"/ld/indices/{clean_exchange}/book.{token}"
+            logger.info(f"Index DEPTH topic generated (experimental): {topic}")
             return topic
 
         # Determine segment prefix based on segment
