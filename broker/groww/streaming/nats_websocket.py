@@ -711,14 +711,13 @@ class GrowwNATSWebSocket:
             symbol: Trading symbol (optional, defaults to token)
             instrumenttype: Instrument type from database (optional)
         """
-        sub_key = f"depth_{exchange}_{segment}_{token}"
-
-        # Determine mode based on instrument type
+        # Check if this is an index - indices don't have depth, only LTP
         if instrumenttype == 'INDEX' or 'INDEX' in exchange.upper():
-            mode = 'index_depth'  # Try index depth endpoint
-            logger.info(f"📊 INDEX depth subscription for {symbol} - trying /ld/indices/.../book.{token}")
-        else:
-            mode = 'depth'  # Regular depth
+            logger.warning(f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription.")
+            # Redirect to LTP subscription for indices
+            return self.subscribe_ltp(exchange, segment, token, symbol, instrumenttype)
+
+        sub_key = f"depth_{exchange}_{segment}_{token}"
 
         # Enhanced logging for BSE depth subscriptions
         if 'BSE' in exchange.upper():
@@ -735,7 +734,7 @@ class GrowwNATSWebSocket:
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
-            'mode': mode,  # Use the determined mode (depth or index_depth)
+            'mode': 'depth',  # Regular depth mode
             'instrumenttype': instrumenttype  # Store instrumenttype
         }
 

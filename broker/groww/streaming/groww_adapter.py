@@ -200,28 +200,31 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             try:
                 if mode in [1, 2]:  # LTP or Quote mode
+                    if mode == 2:
+                        self.logger.info(f"📈 QUOTE subscription for {symbol} - Note: Groww only provides LTP, OHLCV will be 0")
                     sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol, instrumenttype)
                 elif mode == 3:  # Depth mode
-                    # Enhanced logging for index depth
+                    # Check if this is an index - indices don't have depth data
                     if instrumenttype == 'INDEX' or 'INDEX' in exchange:
-                        self.logger.info(f"📊 Trying INDEX DEPTH subscription for {symbol}")
-                        self.logger.info(f"   Will attempt: /ld/indices/{groww_exchange.lower()}/book.{token}")
+                        self.logger.warning(f"⚠️ Indices don't have depth data. Converting to LTP subscription for {symbol}")
+                        # Subscribe to LTP instead for indices
+                        sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol, instrumenttype)
+                        # Update the mode in subscription info for proper matching
+                        self.subscriptions[correlation_id]['mode'] = 1  # Change to LTP mode
+                    else:
+                        # Enhanced logging for BSE depth subscriptions
+                        if 'BSE' in groww_exchange:
+                            self.logger.info(f"🔴 Creating BSE DEPTH subscription:")
+                            self.logger.info(f"   Exchange: {groww_exchange}")
+                            self.logger.info(f"   Segment: {segment}")
+                            self.logger.info(f"   Token: {token}")
+                            self.logger.info(f"   Symbol: {symbol}")
 
-                    # Enhanced logging for BSE depth subscriptions
-                    if 'BSE' in groww_exchange:
-                        self.logger.info(f"🔴 Creating BSE DEPTH subscription:")
-                        self.logger.info(f"   Exchange: {groww_exchange}")
-                        self.logger.info(f"   Segment: {segment}")
-                        self.logger.info(f"   Token: {token}")
-                        self.logger.info(f"   Symbol: {symbol}")
+                        # Subscribe to depth for non-index instruments
+                        sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol, instrumenttype)
 
-                    # Subscribe to depth for all types (including indices to test)
-                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol, instrumenttype)
-
-                    if 'BSE' in groww_exchange:
-                        self.logger.info(f"🔴 BSE DEPTH subscription key: {sub_key}")
-                    elif instrumenttype == 'INDEX':
-                        self.logger.info(f"📊 INDEX DEPTH subscription key: {sub_key}")
+                        if 'BSE' in groww_exchange:
+                            self.logger.info(f"🔴 BSE DEPTH subscription key: {sub_key}")
 
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
@@ -453,16 +456,29 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     'ltt': ltp_data.get('timestamp', int(time.time() * 1000))
                 }
             elif mode == 2:  # Quote mode
-                return {
+                # Groww doesn't provide proper quote data, only LTP
+                # Only include fields that have actual data
+                quote_data = {
                     'ltp': ltp_data.get('ltp', 0),
-                    'ltt': ltp_data.get('timestamp', int(time.time() * 1000)),
-                    'open': ltp_data.get('open', 0),
-                    'high': ltp_data.get('high', 0),
-                    'low': ltp_data.get('low', 0),
-                    'close': ltp_data.get('close', 0),
-                    'volume': ltp_data.get('volume', 0),
-                    'value': ltp_data.get('value', 0)
+                    'ltt': ltp_data.get('timestamp', int(time.time() * 1000))
                 }
+
+                # Only add OHLCV fields if they have non-zero values from Groww
+                # (Groww sometimes sends these as 0, we don't include them)
+                if ltp_data.get('open') and ltp_data.get('open') != 0:
+                    quote_data['open'] = ltp_data.get('open')
+                if ltp_data.get('high') and ltp_data.get('high') != 0:
+                    quote_data['high'] = ltp_data.get('high')
+                if ltp_data.get('low') and ltp_data.get('low') != 0:
+                    quote_data['low'] = ltp_data.get('low')
+                if ltp_data.get('close') and ltp_data.get('close') != 0:
+                    quote_data['close'] = ltp_data.get('close')
+                if ltp_data.get('volume') and ltp_data.get('volume') != 0:
+                    quote_data['volume'] = ltp_data.get('volume')
+                if ltp_data.get('value') and ltp_data.get('value') != 0:
+                    quote_data['value'] = ltp_data.get('value')
+
+                return quote_data
             else:
                 # Fallback for other modes
                 return {
