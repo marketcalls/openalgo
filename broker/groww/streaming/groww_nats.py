@@ -359,35 +359,52 @@ class NATSProtocol:
     def format_topic_for_groww(self, exchange: str, segment: str, token: str, mode: str) -> str:
         """
         Format subscription topic for Groww
-        
+
         Args:
             exchange: Exchange (NSE, BSE)
             segment: Segment (CASH, FNO)
             token: Exchange token
-            mode: Subscription mode (ltp, depth)
-        
+            mode: Subscription mode (ltp, depth, index)
+
         Returns:
             Formatted NATS subject
         """
         exchange = exchange.upper()
         segment = segment.upper()
-        
+
+        # Log for debugging
+        logger.info(f"Formatting topic - Exchange: {exchange}, Segment: {segment}, Token: {token}, Mode: {mode}")
+
+        # Handle index mode first
+        if mode == "index":
+            # Format: /ld/indices/nse/price.{token}
+            # Exchange should be NSE or BSE (not NSE_INDEX or BSE_INDEX)
+            clean_exchange = exchange.replace('_INDEX', '').lower()
+            topic = f"/ld/indices/{clean_exchange}/price.{token}"
+            logger.info(f"Index topic generated: {topic}")
+            return topic
+
+        # Determine segment prefix based on segment
         if segment == "CASH":
             seg_prefix = "eq"
         elif segment == "FNO":
             seg_prefix = "fo"
+        elif segment == "COMM":
+            seg_prefix = "comm"
+        elif segment == "CDS":
+            seg_prefix = "cds"
         else:
             seg_prefix = segment.lower()
-        
+
         if mode == "ltp":
             # Format: /ld/eq/nse/price.{token}
-            return f"/ld/{seg_prefix}/{exchange.lower()}/price.{token}"
+            topic = f"/ld/{seg_prefix}/{exchange.lower()}/price.{token}"
         elif mode == "depth":
             # Format: /ld/eq/nse/book.{token}
-            return f"/ld/{seg_prefix}/{exchange.lower()}/book.{token}"
-        elif mode == "index":
-            # Format: /ld/indices/nse/price.{token}
-            return f"/ld/indices/{exchange.lower()}/price.{token}"
+            topic = f"/ld/{seg_prefix}/{exchange.lower()}/book.{token}"
         else:
             # Default to price
-            return f"/ld/{seg_prefix}/{exchange.lower()}/price.{token}"
+            topic = f"/ld/{seg_prefix}/{exchange.lower()}/price.{token}"
+
+        logger.info(f"Topic generated: {topic}")
+        return topic

@@ -324,12 +324,29 @@ class MiniProtobufParser:
 def parse_groww_market_data(data: bytes) -> Dict[str, Any]:
     """
     Convenience function to parse Groww market data
-    
+
     Args:
         data: Binary protobuf data
-        
+
     Returns:
         Parsed market data
     """
+    logger.info(f"Parsing protobuf data: {len(data)} bytes")
+    logger.debug(f"First 50 bytes (hex): {data[:50].hex() if len(data) > 50 else data.hex()}")
+
     parser = MiniProtobufParser()
-    return parser.parse_market_data(data)
+    result = parser.parse_market_data(data)
+
+    # Log what was parsed
+    if result:
+        logger.info(f"Successfully parsed protobuf data: {result.keys()}")
+        if 'ltp_data' in result:
+            logger.info(f"LTP data found: {result['ltp_data']}")
+        if 'index_data' in result:
+            logger.info(f"Index data found: {result['index_data']}")
+        if 'depth_data' in result:
+            logger.info(f"Depth data found: {result['depth_data']}")
+    else:
+        logger.warning("No data parsed from protobuf")
+
+    return result

@@ -96,17 +96,23 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from Groww WebSocket"""
         self.running = False
-        
+
         if self.ws_client:
             try:
                 self.ws_client.disconnect()
             except Exception as e:
                 self.logger.error(f"Error disconnecting from Groww: {e}")
-                
+
+        # Clear all state for clean reconnection
         self.connected = False
-            
+        self.ws_client = None
+        self.subscriptions.clear()
+        self.subscription_keys.clear()
+
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
+
+        self.logger.info("Groww adapter disconnected and state cleared")
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -134,14 +140,45 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
+        # Get instrument type from database
+        instrumenttype = None
+        try:
+            from database.symbol import SymToken
+            sym = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+            if sym:
+                instrumenttype = sym.instrumenttype
+                self.logger.info(f"Retrieved instrumenttype: {instrumenttype} for {symbol}.{exchange}")
+        except Exception as e:
+            self.logger.warning(f"Could not retrieve instrumenttype: {e}")
+
+        # For indices, handle token mapping differently
+        if 'INDEX' in exchange.upper():
+            if exchange == 'NSE_INDEX':
+                # NSE indices use symbol names as tokens (NIFTY, BANKNIFTY, etc.)
+                self.logger.info(f"NSE Index subscription detected, using symbol {symbol} as token instead of {token}")
+                token = symbol
+            elif exchange == 'BSE_INDEX':
+                # BSE indices use numeric tokens (e.g., "14" for SENSEX)
+                # Keep the original token from database
+                self.logger.info(f"BSE Index subscription detected, keeping numeric token {token} for {symbol}")
+
         # Get exchange and segment for Groww
         groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
+
+        # Log token details for debugging F&O
+        if exchange in ['NFO', 'BFO']:
+            self.logger.info(f"F&O Subscription Debug:")
+            self.logger.info(f"  Symbol: {symbol}")
+            self.logger.info(f"  Exchange: {exchange} -> Groww: {groww_exchange}")
+            self.logger.info(f"  Segment: {segment}")
+            self.logger.info(f"  Token from DB: {token}")
+            self.logger.info(f"  Brexchange: {brexchange}")
         
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -163,14 +200,18 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             try:
                 if mode in [1, 2]:  # LTP or Quote mode
-                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol)
+                    sub_key = self.ws_client.subscribe_ltp(groww_exchange, segment, token, symbol, instrumenttype)
                 elif mode == 3:  # Depth mode
-                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol)
-                    
+                    sub_key = self.ws_client.subscribe_depth(groww_exchange, segment, token, symbol, instrumenttype)
+
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
-                
+
                 self.logger.info(f"Subscribed to {symbol}.{exchange} in mode {mode}")
+
+                # Extra logging for F&O
+                if exchange in ['NFO', 'BFO']:
+                    self.logger.info(f"F&O subscription key created: {sub_key}")
                 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
@@ -272,16 +313,16 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     for cid, sub in self.subscriptions.items():
                         self.logger.debug(f"Checking {cid}: symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}")
                         
-                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX but Groww sends NSE
+                        # For index subscriptions, the OpenAlgo exchange is NSE_INDEX/BSE_INDEX but Groww sends NSE/BSE
                         # Check if this is an index subscription
-                        is_index_match = (mode == 'index' and 
-                                        sub['exchange'] == 'NSE_INDEX' and 
-                                        exchange == 'NSE' and 
+                        is_index_match = (mode == 'index' and
+                                        ((sub['exchange'] == 'NSE_INDEX' and exchange == 'NSE') or
+                                         (sub['exchange'] == 'BSE_INDEX' and exchange == 'BSE')) and
                                         sub['symbol'] == symbol_from_data)
-                        
+
                         # Regular match based on symbol, exchange and mode
-                        is_regular_match = (sub['symbol'] == symbol_from_data and 
-                                          sub['groww_exchange'] == exchange and 
+                        is_regular_match = (sub['symbol'] == symbol_from_data and
+                                          sub['groww_exchange'] == exchange and
                                           ((mode == 'ltp' and sub['mode'] in [1, 2]) or
                                            (mode == 'depth' and sub['mode'] == 3) or
                                            (mode == 'index' and sub['mode'] in [1, 2])))
@@ -314,6 +355,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             # Extract symbol and exchange from subscription
             symbol = subscription['symbol']
+            # Always use the subscription's exchange for correct labeling (NSE_INDEX, BSE_INDEX, etc.)
             exchange = subscription['exchange']
             mode = subscription['mode']
             
