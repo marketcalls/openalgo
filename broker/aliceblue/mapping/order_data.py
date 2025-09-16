@@ -143,15 +143,25 @@ def transform_order_data(orders):
 def map_trade_data(trade_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - trade_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified trade_data with updated 'tradingsymbol' and 'product' fields.
     """
+    # Log the raw tradebook response
+    logger.info(f"Raw tradebook response type: {type(trade_data)}")
+    if trade_data:
+        if isinstance(trade_data, list) and len(trade_data) > 0:
+            logger.info(f"First trade in raw response: {trade_data[0]}")
+            # Log all available fields in first trade
+            logger.info(f"Available fields in first trade: {list(trade_data[0].keys()) if trade_data[0] else 'No fields'}")
+        elif isinstance(trade_data, dict):
+            logger.info(f"Raw response is dict: {trade_data}")
+
     if isinstance(trade_data, dict):
-        if trade_data['stat'] == 'Not_Ok' :
+        if trade_data.get('stat') == 'Not_Ok':
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
@@ -159,8 +169,9 @@ def map_trade_data(trade_data):
             trade_data = {}
     else:
         trade_data = trade_data
-        
-    # logger.info(f"{trade_data}")
+
+    # Log the data being processed
+    logger.info(f"Number of trades to process: {len(trade_data) if trade_data else 0}")
 
     if trade_data:
         for trade in trade_data:
@@ -180,14 +191,16 @@ def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
 
-        # Check if the necessary keys exist in the order
-        # if 'Qty' not in trade or 'Average price' not in trade:
-        #     logger.error("Error: Missing required keys in the order. Skipping this item.")
-        #     continue
-
         # Ensure quantity and average price are converted to the correct types
         quantity = int(trade.get('Qty', 0))
-        average_price = float(trade.get('Average price', 0.0))
+        # AliceBlue uses 'AvgPrice' field (no space) for average price in tradebook
+        average_price = float(trade.get('AvgPrice', 0.0))
+
+        # Log if we got the price
+        if average_price > 0:
+            logger.debug(f"Got average price: {average_price} for qty: {quantity}")
+        else:
+            logger.warning(f"Zero or missing AvgPrice. Raw value: {trade.get('AvgPrice')}")
         
         # Map transaction type from 'B'/'S' to 'BUY'/'SELL'
         trantype = trade.get('Trantype', '')
