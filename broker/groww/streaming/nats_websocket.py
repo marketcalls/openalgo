@@ -102,7 +102,14 @@ class GrowwNATSWebSocket:
                 nkey=nkey,
                 sig=sig
             )
-            
+
+            # Log CONNECT details for debugging
+            logger.info(f"CONNECT details:")
+            logger.info(f"  JWT Token length: {len(self.socket_token) if self.socket_token else 0}")
+            logger.info(f"  Has nkey: {bool(nkey)}")
+            logger.info(f"  Has signature: {bool(sig)}")
+            logger.debug(f"  CONNECT command: {connect_cmd[:200]}...")  # Log first 200 chars
+
             self.ws.send(connect_cmd)
             logger.info(f"Sent NATS CONNECT with{'out' if not sig else ''} signature")
             
@@ -219,7 +226,10 @@ class GrowwNATSWebSocket:
             # Try with socket token first, fallback to auth token
             headers = {
                 "Authorization": f"Bearer {self.socket_token}",
-                "X-Subscription-Id": self.subscription_id
+                "X-Subscription-Id": self.subscription_id,
+                "User-Agent": "growwapi-python-client/0.0.8",  # Match official SDK
+                "X-Client-Id": "growwapi",
+                "X-API-Version": "1.0"
             }
             
             self.ws = websocket.WebSocketApp(
@@ -299,44 +309,60 @@ class GrowwNATSWebSocket:
 
             # Check for different message types
             if text.startswith('INFO'):
+                # Log INFO size for debugging
+                logger.info(f"Processing INFO message, total size: {len(data)} bytes")
                 # Parse as text for INFO messages
                 messages = self.nats_protocol.parse_message(text)
                 for msg in messages:
                     self._process_nats_message(msg)
                     
-            elif text.startswith('MSG'):
+            elif 'MSG' in text[:50]:  # Check for MSG in first 50 chars
                 # This is a market data message with binary payload
-                # Parse the header
-                lines = text.split('\r\n', 1)
-                if len(lines) >= 1:
-                    header = lines[0]
-                    parts = header.split(' ')
-                    
-                    if len(parts) >= 4:
-                        subject = parts[1]
-                        sid = parts[2]
-                        size = int(parts[-1])
-                        
-                        # Find where payload starts (after header and \r\n)
-                        header_bytes = (header + '\r\n').encode('utf-8')
-                        payload_start = len(header_bytes)
-                        payload_end = payload_start + size
-                        
-                        if payload_end <= len(data):
-                            # Extract binary payload
-                            payload = data[payload_start:payload_end]
-                            
-                            # Create MSG dict with binary payload
-                            msg = {
-                                'type': 'MSG',
-                                'subject': subject,
-                                'sid': sid,
-                                'size': size,
-                                'payload': payload  # Keep as bytes
-                            }
-                            
-                            logger.info(f"📊 Binary MSG parsed - Subject: {subject}, SID: {sid}, Size: {size}")
-                            self._process_nats_message(msg)
+                # Find where MSG starts
+                msg_index = text.find('MSG')
+                if msg_index >= 0:
+                    # Extract from MSG onwards
+                    msg_text = text[msg_index:]
+                    # Parse the header
+                    lines = msg_text.split('\r\n', 1)
+                    if len(lines) >= 1:
+                        header = lines[0]
+                        parts = header.split(' ')
+
+                        if len(parts) >= 4:
+                            subject = parts[1]
+                            sid = parts[2]
+                            size = int(parts[-1])
+
+                            # Enhanced logging for BSE messages
+                            if 'bse' in subject.lower():
+                                logger.info(f"🔴 BSE MSG detected - Subject: {subject}, SID: {sid}, Size: {size}")
+
+                            # Calculate where payload starts in the original binary data
+                            # We need to find where the header ends in the original data
+                            header_end_marker = b'\r\n'
+                            header_start = data.find(b'MSG')
+                            if header_start >= 0:
+                                header_end = data.find(header_end_marker, header_start)
+                                if header_end >= 0:
+                                    payload_start = header_end + 2  # +2 for \r\n
+                                    payload_end = payload_start + size
+
+                                    if payload_end <= len(data):
+                                        # Extract binary payload
+                                        payload = data[payload_start:payload_end]
+
+                                        # Create MSG dict with binary payload
+                                        msg = {
+                                            'type': 'MSG',
+                                            'subject': subject,
+                                            'sid': sid,
+                                            'size': size,
+                                            'payload': payload  # Keep as bytes
+                                        }
+
+                                        logger.info(f"📊 Binary MSG parsed - Subject: {subject}, SID: {sid}, Size: {size}")
+                                        self._process_nats_message(msg)
                             
             elif text.startswith('PING') or text.startswith('PONG') or text.startswith('+OK'):
                 # Parse as text for control messages
@@ -359,10 +385,38 @@ class GrowwNATSWebSocket:
         try:
             # Handle both string and bytes messages
             if isinstance(message, bytes):
-                logger.info(f"📥 Received BINARY message: {len(message)} bytes")
-                # Log first few bytes in hex for debugging
-                logger.info(f"   First 50 bytes (hex): {message[:50].hex() if len(message) > 0 else 'empty'}")
-                
+                # Log size for debugging BSE vs NSE differences
+                msg_size = len(message)
+
+                # Decode to check content
+                msg_text = message.decode('utf-8', errors='ignore')
+
+                # Enhanced debugging for ALL messages to find BSE
+                if 'MSG' in msg_text:
+                    # Extract subject from MSG line
+                    if '/ld/eq/' in msg_text:
+                        logger.info(f"📥 Market data message received: {msg_size} bytes")
+                        # Check specifically for exchange
+                        if '/ld/eq/nse/' in msg_text:
+                            logger.info(f"   ✅ NSE message detected")
+                        elif '/ld/eq/bse/' in msg_text:
+                            logger.info(f"   🔴 BSE message detected!")
+                        logger.info(f"   First 100 chars: {msg_text[:100]}")
+                    # Also check for any BSE-related content
+                    elif 'bse' in msg_text.lower() or '532540' in msg_text:
+                        logger.info(f"⚠️ Possible BSE-related message: {msg_size} bytes")
+                        logger.info(f"   Content preview: {msg_text[:200]}")
+                    # Log ANY message if we're monitoring BSE
+                    elif hasattr(self, 'monitoring_bse') and self.monitoring_bse:
+                        logger.info(f"🔍 Message after BSE sub: {msg_size} bytes, starts with: {msg_text[:30]}")
+                else:
+                    # Log INFO messages specially
+                    if msg_text.startswith('INFO'):
+                        logger.info(f"📥 Received INFO message: {msg_size} bytes (BSE=501, NSE=499 expected)")
+                    else:
+                        logger.info(f"📥 Received BINARY message: {msg_size} bytes")
+                    logger.info(f"   First 50 bytes (hex): {message[:50].hex() if len(message) > 0 else 'empty'}")
+
                 # Parse binary NATS message directly
                 self._process_binary_nats_message(message)
             else:
@@ -460,12 +514,15 @@ class GrowwNATSWebSocket:
             subject = msg.get('subject', '')
             payload = msg.get('payload', b'')
             sid = msg.get('sid')
-            
-            logger.info(f"📈 Market Data MSG Details:")
+
+            # Enhanced logging for BSE
+            is_bse = 'bse' in subject.lower()
+
+            logger.info(f"📈 Market Data MSG Details{' (BSE)' if is_bse else ''}:")
             logger.info(f"   Subject: {subject}")
             logger.info(f"   SID: {sid}")
             logger.info(f"   Payload size: {len(payload)} bytes")
-            
+
             # Ensure payload is bytes
             if isinstance(payload, str):
                 # This shouldn't happen with our new code, but handle it safely
@@ -474,15 +531,15 @@ class GrowwNATSWebSocket:
             elif not isinstance(payload, bytes):
                 logger.error(f"Unexpected payload type: {type(payload)}")
                 return
-            
+
             # Log payload hex for debugging
             if payload:
                 logger.info(f"   Payload (hex): {payload[:50].hex()}..." if len(payload) > 50 else f"   Payload (hex): {payload.hex()}")
-            
+
             # Try to parse as protobuf
-            logger.info(f"Parsing protobuf data...")
+            logger.info(f"Parsing protobuf data{' for BSE' if is_bse else ''}...")
             market_data = groww_protobuf.parse_groww_market_data(payload)
-            logger.info(f"✅ Parsed market data: {market_data}")
+            logger.info(f"✅ Parsed market data{' (BSE)' if is_bse else ''}: {market_data}")
             
             # Find matching subscription
             found_subscription = False
@@ -542,11 +599,20 @@ class GrowwNATSWebSocket:
             # Create and send SUB command
             sid, sub_cmd = self.nats_protocol.create_subscribe(topic)
             self.ws.send(sub_cmd)
-            
+
             # Store SID mapping
             self.nats_sids[sub_key] = sid
-            
+
             logger.info(f"Sent NATS SUB for {topic} with SID {sid}")
+
+            # Send a PING to flush ALL subscriptions (similar to official SDK's flush)
+            # This ensures the server processes the subscription before continuing
+            logger.info(f"Sending PING to flush subscription")
+            self.ws.send(self.nats_protocol.create_ping())
+
+            # Wait briefly for PONG to ensure subscription is processed
+            import time
+            time.sleep(0.1)  # 100ms wait similar to flush timeout
             
         except Exception as e:
             logger.error(f"Failed to send NATS subscription: {e}")
@@ -563,6 +629,15 @@ class GrowwNATSWebSocket:
             instrumenttype: Instrument type from database (optional)
         """
         sub_key = f"ltp_{exchange}_{segment}_{token}"
+
+        # Enhanced logging for BSE subscriptions
+        if 'BSE' in exchange.upper():
+            logger.info(f"🔴 BSE LTP Subscription Request:")
+            logger.info(f"   Exchange: {exchange}")
+            logger.info(f"   Segment: {segment}")
+            logger.info(f"   Token: {token}")
+            logger.info(f"   Symbol: {symbol}")
+            logger.info(f"   InstrumentType: {instrumenttype}")
 
         # Determine mode based on whether it's an index
         # IMPORTANT: Only treat as index if exchange contains 'INDEX'
@@ -586,12 +661,22 @@ class GrowwNATSWebSocket:
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
-            'mode': mode
+            'mode': mode,
+            'instrumenttype': instrumenttype  # Store instrumenttype for later use
         }
 
         # Send NATS subscription if connected
         if self.connected:
             self._send_nats_subscription(sub_key, self.subscriptions[sub_key])
+
+            # Special logging for BSE subscriptions
+            if 'BSE' in exchange.upper():
+                logger.info(f"🔴 BSE subscription sent for {symbol}, waiting for market data MSG...")
+                logger.info(f"   Subscription key: {sub_key}")
+                logger.info(f"   Active SIDs: {list(self.nats_sids.keys())}")
+                logger.warning(f"⚠️ NOTE: Monitoring ALL messages after BSE subscription...")
+                # Set flag to monitor messages
+                self.monitoring_bse = True
 
         return sub_key
         

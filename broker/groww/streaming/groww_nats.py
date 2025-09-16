@@ -76,9 +76,9 @@ class NATSProtocol:
             "tls_required": True,
             "jwt": jwt,
             "protocol": 1,
-            "version": "2.0.0",
-            "lang": "python",
-            "name": "openalgo-groww"
+            "version": "2.10.0",  # Updated to match modern NATS client
+            "lang": "python3",
+            "name": "growwapi-python-client"  # Match official SDK client name
         }
         
         if nkey:
