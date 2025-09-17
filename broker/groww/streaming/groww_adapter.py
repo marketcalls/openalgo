@@ -154,63 +154,42 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.subscriptions.clear()
             self.subscription_keys.clear()
 
-            # CRITICAL: Use the comprehensive WebSocket client cleanup method
-            if self.ws_client and hasattr(self.ws_client, 'unsubscribe_all_and_disconnect'):
-                self.logger.info("🔧 Performing complete WebSocket client cleanup...")
-                try:
-                    # Use the comprehensive cleanup method
-                    self.ws_client.unsubscribe_all_and_disconnect()
-                    self.logger.info("✅ WebSocket client completely cleaned up and disconnected")
-                except Exception as e:
-                    self.logger.error(f"❌ Error during WebSocket client cleanup: {e}")
-                    # Fallback to manual cleanup
+            # CRITICAL: Call the disconnect method to properly close everything
+            self.logger.info("🔌 Calling disconnect() to terminate Groww connection completely...")
+            try:
+                self.disconnect()
+                self.logger.info("✅ Successfully disconnected from Groww server")
+            except Exception as e:
+                self.logger.error(f"❌ Error during disconnect: {e}")
+                # Force cleanup even if disconnect fails
+                self.running = False
+                self.connected = False
+                if self.ws_client:
                     try:
                         self.ws_client.disconnect()
-                        self.logger.info("✅ Fallback disconnect completed")
-                    except Exception as e2:
-                        self.logger.error(f"❌ Fallback disconnect also failed: {e2}")
-
-            elif self.ws_client:
-                # Fallback for older client without the new method
-                self.logger.info("🔧 Using fallback WebSocket client cleanup...")
-                try:
-                    self.ws_client.disconnect()
-                    self.logger.info("✅ Fallback WebSocket client cleanup completed")
-                except Exception as e:
-                    self.logger.error(f"❌ Fallback cleanup error: {e}")
+                    except:
+                        pass
+                    self.ws_client = None
+                self.cleanup_zmq()
 
             # Reset message counter for next session
             if hasattr(self, '_message_count'):
                 self._message_count = 0
 
-            # Force ZMQ cleanup to stop publishing
-            self.logger.info("🔧 Force ZMQ cleanup to stop data publishing...")
-            try:
-                if hasattr(self, 'socket') and self.socket:
-                    # Send empty message to clear any queued messages
-                    try:
-                        self.socket.send_multipart([b"CLEARANCE", b"{}"], zmq.NOBLOCK)
-                    except:
-                        pass
-
-                # Short delay to let cleanup complete
-                import time
-                time.sleep(0.5)
-
-            except Exception as e:
-                self.logger.warning(f"⚠️ ZMQ cleanup warning: {e}")
-
             self.logger.info(f"📊 Unsubscribe all complete: {unsubscribed_count} success, {failed_count} failed")
-            self.logger.info("✅ Backend data flow should now be completely stopped")
+            self.logger.info("✅ All subscriptions cleared and disconnected from Groww server")
+            self.logger.info("✅ ZMQ resources cleaned up - no more data will be published")
 
             return self._create_success_response(
-                f"Unsubscribed from {unsubscribed_count} subscriptions, backend stopped",
+                f"Unsubscribed from {unsubscribed_count} subscriptions and disconnected from server",
                 total_processed=len(subscriptions_copy),
                 successful_count=unsubscribed_count,
                 failed_count=failed_count,
                 successful=unsubscribed_list,
                 failed=failed_list if failed_list else None,
-                backend_cleared=True
+                backend_cleared=True,
+                server_disconnected=True,
+                zmq_cleaned=True
             )
 
         except Exception as e:
@@ -223,15 +202,6 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
 
         try:
-            # First, unsubscribe from all active subscriptions
-            if self.subscriptions:
-                self.logger.info("📤 Unsubscribing from all active subscriptions before disconnect...")
-                unsubscribe_result = self.unsubscribe_all()
-                if unsubscribe_result.get('status') == 'success':
-                    self.logger.info(f"✅ Successfully cleaned up {unsubscribe_result.get('successful_count', 0)} subscriptions")
-                else:
-                    self.logger.warning("⚠️ Some subscriptions may not have been cleaned up properly")
-
             # Disconnect WebSocket client
             if self.ws_client:
                 try:

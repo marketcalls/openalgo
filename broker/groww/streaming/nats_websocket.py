@@ -220,9 +220,14 @@ class GrowwNATSWebSocket:
     def _run_websocket(self):
         """Run WebSocket in thread"""
         try:
+            # Check if we should even start
+            if not self.running:
+                logger.info("WebSocket thread not starting - running flag is False")
+                return
+
             # Create SSL context
             ssl_context = ssl.create_default_context(cafile=certifi.where())
-            
+
             # Try with socket token first, fallback to auth token
             headers = {
                 "Authorization": f"Bearer {self.socket_token}",
@@ -232,7 +237,7 @@ class GrowwNATSWebSocket:
                 "X-API-Version": "1.0",
                 "Sec-WebSocket-Protocol": "nats"  # Declare NATS protocol
             }
-            
+
             self.ws = websocket.WebSocketApp(
                 self.ws_url,
                 on_open=self._on_open,
@@ -241,17 +246,20 @@ class GrowwNATSWebSocket:
                 on_close=self._on_close,
                 header=headers
             )
-            
-            # Run with SSL
+
+            # Run with SSL - this will block until connection closes
             self.ws.run_forever(
                 sslopt={"cert_reqs": ssl.CERT_REQUIRED, "ssl_context": ssl_context},
                 ping_interval=30,
                 ping_timeout=10
             )
-            
+
+            logger.info("WebSocket run_forever() has exited")
+
         except Exception as e:
             logger.error(f"WebSocket thread error: {e}")
-            self.on_error(str(e))
+            if self.running:  # Only report error if we're supposed to be running
+                self.on_error(str(e))
             
     def _on_open(self, ws):
         """Handle WebSocket open"""
@@ -278,9 +286,9 @@ class GrowwNATSWebSocket:
         def periodic_ping():
             import time
             ping_count = 0
-            while self.connected:
+            while self.connected and self.running:  # Check both connected and running flags
                 time.sleep(10)  # Send PING every 10 seconds
-                if self.connected and self.ws:
+                if self.connected and self.running and self.ws:
                     try:
                         ping_count += 1
                         logger.info(f"\U0001f3d3 Sending PING #{ping_count} to check connection...")
@@ -290,7 +298,9 @@ class GrowwNATSWebSocket:
                             logger.error("Cannot send PING - NATS protocol handler not initialized")
                     except Exception as e:
                         logger.error(f"Failed to send PING: {e}")
-        
+                        break  # Exit on error
+            logger.info("🛑 Ping thread exiting")
+
         threading.Thread(target=periodic_ping, daemon=True).start()
             
     def _process_binary_nats_message(self, data: bytes):
@@ -511,8 +521,8 @@ class GrowwNATSWebSocket:
         logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
         self.connected = False
         self.authenticated = False
-        
-        # Attempt reconnection if still running
+
+        # Only attempt reconnection if still running (not manually disconnected)
         if self.running:
             logger.info("Attempting to reconnect...")
             time.sleep(5)
@@ -520,6 +530,8 @@ class GrowwNATSWebSocket:
                 self._run_websocket()
             except Exception as e:
                 logger.error(f"Reconnection failed: {e}")
+        else:
+            logger.info("WebSocket closed gracefully - not reconnecting as running=False")
             
     def _process_market_data_msg(self, msg: Dict[str, Any]):
         """Process MSG containing market data"""
@@ -894,10 +906,14 @@ class GrowwNATSWebSocket:
     def disconnect(self):
         """Disconnect from WebSocket with enhanced cleanup"""
         logger.info("🔌 Disconnecting from Groww WebSocket...")
+
+        # Set disconnect flags first (similar to Angel's approach)
         self.running = False
+        self.connected = False  # Set this immediately to stop ping thread
+        self.authenticated = False  # Reset authentication status
 
         # Send NATS cleanup commands before closing if still connected
-        if self.connected and self.ws and self.nats_protocol:
+        if self.ws and self.nats_protocol:
             try:
                 logger.info("📡 Sending final UNSUB commands to server...")
                 # Send UNSUB commands for any remaining subscriptions
@@ -910,15 +926,18 @@ class GrowwNATSWebSocket:
 
                 # Brief delay for server to process
                 import time
-                time.sleep(0.5)
+                time.sleep(0.2)  # Shorter delay
             except Exception as e:
                 logger.warning(f"Final cleanup warning: {e}")
 
         if self.ws:
             try:
                 logger.info("🔗 Closing WebSocket connection...")
+                # Force close the WebSocket connection
+                self.ws.keep_running = False  # Tell WebSocketApp to stop
                 self.ws.close()
                 logger.info("✅ WebSocket closed")
+                self.ws = None  # Clear the WebSocket reference
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
 
