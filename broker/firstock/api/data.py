@@ -226,12 +226,12 @@ class BrokerData:
             logger.error(f"Error fetching market depth: {e}")
             return {"status": "error", "message": str(e)}
 
-    def get_history_chunked(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str, max_days: int = None) -> pd.DataFrame:
+    def get_history_chunked(self, symbol: str, exchange: str, interval: str, start_date, end_date, max_days: int = None) -> pd.DataFrame:
         """
         Get historical data for given symbol using chunked loading for periods longer than max_days.
         This is especially useful for 1-minute data which Firstock provides for 10 years but limits to 30 days per request.
         Optimized for Jupyter notebooks with better timeout handling.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
@@ -239,16 +239,31 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
             max_days: Maximum days per chunk (default: auto-determined based on interval)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
-            # Convert dates to datetime objects
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Convert dates to datetime objects - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Auto-determine optimal chunk size based on interval if not specified
             # Smaller chunks for Jupyter notebooks to avoid timeouts
@@ -357,24 +372,39 @@ class BrokerData:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise Exception(f"Error fetching chunked historical data: {str(e)}")
 
-    def get_history_intraday_chunks(self, symbol: str, exchange: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history_intraday_chunks(self, symbol: str, exchange: str, start_date, end_date) -> pd.DataFrame:
         """
         Special handler for 1-minute data that chunks by hours within each day to avoid timeouts.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical 1-minute data
         """
         try:
             logger.info(f"Using intraday chunking for 1m data from {start_date} to {end_date}")
-            
-            # Convert dates
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Convert dates - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             all_data = []
             current_date = start_dt
@@ -465,13 +495,13 @@ class BrokerData:
             logger.error(f"Error in get_history_intraday_chunks: {e}")
             raise Exception(f"Error fetching 1m historical data: {str(e)}")
 
-    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol using new Firstock API
-        
+
         Automatically switches to chunked loading for large date ranges to prevent timeouts.
         This ensures compatibility with existing code while handling large requests efficiently.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
@@ -479,15 +509,30 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
-            # Convert dates to datetime objects for validation
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Convert dates to datetime objects for validation - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Calculate date range in days
             date_range_days = (end_dt - start_dt).days + 1
@@ -581,7 +626,7 @@ class BrokerData:
             logger.error(f"Error in get_history: {str(e)}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-    def _get_single_history_chunk(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def _get_single_history_chunk(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol using new Firstock API
         Args:
@@ -591,18 +636,33 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
-            # Convert dates to datetime objects
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Convert dates to datetime objects - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Check if date range exceeds 30 days and warn user
             total_days = (end_dt - start_dt).days + 1
