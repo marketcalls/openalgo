@@ -556,13 +556,15 @@ class GrowwNATSWebSocket:
             
             # Find matching subscription
             found_subscription = False
+
+            # First try to match by SID
             for sub_key, sub_info in self.subscriptions.items():
                 if sub_key in self.nats_sids:
                     sub_sid = self.nats_sids[sub_key]
-                    if sub_sid == sid:
+                    if str(sub_sid) == str(sid):
                         found_subscription = True
-                        logger.info(f"✅ Matched subscription: {sub_key}")
-                        
+                        logger.info(f"✅ Matched subscription by SID: {sub_key}")
+
                         # Add subscription info to market data
                         market_data['symbol'] = sub_info['symbol']
                         # For index mode, exchange might be NSE_INDEX/BSE_INDEX, normalize to NSE/BSE for matching
@@ -570,8 +572,17 @@ class GrowwNATSWebSocket:
                             market_data['exchange'] = sub_info['exchange'].replace('_INDEX', '')
                         else:
                             market_data['exchange'] = sub_info['exchange']
-                        market_data['mode'] = sub_info['mode']
-                        # Also preserve the original exchange for the adapter
+
+                        # CRITICAL FIX: Use numeric mode for proper adapter processing
+                        if 'numeric_mode' in sub_info:
+                            market_data['mode'] = sub_info['numeric_mode']
+                        else:
+                            # Fallback mapping from string to numeric mode
+                            mode_mapping = {'ltp': 1, 'quote': 2, 'depth': 3, 'index': 1}
+                            market_data['mode'] = mode_mapping.get(sub_info['mode'], 1)
+
+                        # Also preserve string mode and original exchange for debugging
+                        market_data['string_mode'] = sub_info['mode']
                         market_data['original_exchange'] = sub_info['exchange']
                         
                         logger.info(f"🚀 Sending market data to callback: {market_data}")
@@ -580,19 +591,64 @@ class GrowwNATSWebSocket:
                         if self.on_data:
                             self.on_data(market_data)
                         break
-            
+
+            # If not found by SID, try to match by subject pattern as fallback
+            if not found_subscription:
+                # Extract token from subject (e.g., /ld/eq/nse/price.1594 -> 1594)
+                if '.' in subject:
+                    token = subject.split('.')[-1]
+                    mode_type = 'ltp' if 'price' in subject else 'depth' if 'book' in subject else None
+
+                    # Try to find matching subscription by token and mode
+                    for sub_key, sub_info in self.subscriptions.items():
+                        if str(sub_info.get('exchange_token')) == token:
+                            # Check if mode matches
+                            if (mode_type == 'ltp' and sub_info['mode'] in ['ltp', 'index']) or \
+                               (mode_type == 'depth' and sub_info['mode'] == 'depth'):
+                                found_subscription = True
+                                logger.info(f"✅ Matched subscription by token pattern: {sub_key}")
+
+                                # Update the SID mapping for future use
+                                self.nats_sids[sub_key] = str(sid)
+
+                                # Add subscription info to market data
+                                market_data['symbol'] = sub_info['symbol']
+                                if sub_info['mode'] == 'index' and '_INDEX' in sub_info['exchange']:
+                                    market_data['exchange'] = sub_info['exchange'].replace('_INDEX', '')
+                                else:
+                                    market_data['exchange'] = sub_info['exchange']
+
+                                if 'numeric_mode' in sub_info:
+                                    market_data['mode'] = sub_info['numeric_mode']
+                                else:
+                                    mode_mapping = {'ltp': 1, 'quote': 2, 'depth': 3, 'index': 1}
+                                    market_data['mode'] = mode_mapping.get(sub_info['mode'], 1)
+
+                                market_data['string_mode'] = sub_info['mode']
+                                market_data['original_exchange'] = sub_info['exchange']
+
+                                logger.info(f"🚀 Sending market data to callback: {market_data}")
+
+                                if self.on_data:
+                                    self.on_data(market_data)
+                                break
+
             if not found_subscription:
                 logger.warning(f"⚠️ No matching subscription found for SID: {sid}")
                 logger.info(f"   Active SIDs: {self.nats_sids}")
+                logger.info(f"   Subject: {subject}")
                         
         except Exception as e:
             logger.error(f"Error processing market data: {e}", exc_info=True)
     
     def _resubscribe_all(self):
         """Resubscribe to all pending subscriptions"""
+        # Clear old SIDs as they are no longer valid after reconnection/re-auth
+        logger.info(f"Clearing old SIDs and resubscribing to {len(self.subscriptions)} subscriptions")
+        self.nats_sids.clear()
+
         for sub_key, sub_info in self.subscriptions.items():
-            if sub_key not in self.nats_sids:
-                self._send_nats_subscription(sub_key, sub_info)
+            self._send_nats_subscription(sub_key, sub_info)
     
     def _send_nats_subscription(self, sub_key: str, sub_info: Dict):
         """Send NATS SUB command for subscription"""
@@ -617,6 +673,7 @@ class GrowwNATSWebSocket:
             self.nats_sids[sub_key] = sid
 
             logger.info(f"Sent NATS SUB for {topic} with SID {sid}")
+            logger.info(f"Current nats_sids mapping: {self.nats_sids}")
 
             # Send a PING to flush ALL subscriptions (similar to official SDK's flush)
             # This ensures the server processes the subscription before continuing
@@ -668,13 +725,15 @@ class GrowwNATSWebSocket:
         else:
             mode = 'ltp'
 
-        # Store subscription info
+        # Store subscription info - CRITICAL FIX: Set correct mode for LTP
+        mode = 'ltp'  # This function is for LTP subscriptions
         self.subscriptions[sub_key] = {
             'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
             'mode': mode,
+            'numeric_mode': 1,  # Add numeric mode for adapter compatibility
             'instrumenttype': instrumenttype  # Store instrumenttype for later use
         }
 
@@ -728,13 +787,14 @@ class GrowwNATSWebSocket:
             logger.info(f"   Symbol: {symbol}")
             logger.info(f"   InstrumentType: {instrumenttype}")
 
-        # Store subscription info
+        # Store subscription info - CRITICAL FIX: Add numeric mode for depth
         self.subscriptions[sub_key] = {
             'symbol': symbol if symbol else f"{token}",  # Use actual symbol if provided
             'exchange': exchange,
             'segment': segment,
             'exchange_token': token,
             'mode': 'depth',  # Regular depth mode
+            'numeric_mode': 3,  # Add numeric mode for adapter compatibility
             'instrumenttype': instrumenttype  # Store instrumenttype
         }
 
@@ -786,18 +846,87 @@ class GrowwNATSWebSocket:
             logger.info(f"Unsubscribed from {subscription_key}")
     
             
+    def unsubscribe_all_and_disconnect(self):
+        """
+        Unsubscribe from all subscriptions and disconnect completely from server
+        """
+        logger.info("🧹 Starting complete unsubscribe and disconnect sequence...")
+
+        # Step 1: Unsubscribe from all active subscriptions
+        unsubscribed_count = 0
+        if self.subscriptions:
+            logger.info(f"📤 Unsubscribing from {len(self.subscriptions)} active subscriptions...")
+
+            for sub_key in list(self.subscriptions.keys()):
+                try:
+                    self.unsubscribe(sub_key)
+                    unsubscribed_count += 1
+                except Exception as e:
+                    logger.error(f"Error unsubscribing {sub_key}: {e}")
+
+            logger.info(f"✅ Unsubscribed from {unsubscribed_count} subscriptions")
+
+        # Step 2: Send additional NATS cleanup commands
+        if self.connected and self.ws and self.nats_protocol:
+            try:
+                # Send NATS UNSUB for any remaining SIDs
+                logger.info("🔧 Sending cleanup UNSUB commands to server...")
+                for i in range(1, 50):  # Clear up to 50 possible SIDs
+                    try:
+                        unsub_cmd = self.nats_protocol.create_unsubscribe(str(i))
+                        self.ws.send(unsub_cmd)
+                    except:
+                        break
+
+                # Give server time to process unsubscribes
+                import time
+                time.sleep(1)
+
+                logger.info("✅ Server cleanup commands sent")
+            except Exception as e:
+                logger.warning(f"⚠️ Server cleanup warning: {e}")
+
+        # Step 3: Disconnect WebSocket
+        self.disconnect()
+
+        logger.info("🏁 Complete unsubscribe and disconnect sequence finished")
+
     def disconnect(self):
-        """Disconnect from WebSocket"""
+        """Disconnect from WebSocket with enhanced cleanup"""
+        logger.info("🔌 Disconnecting from Groww WebSocket...")
         self.running = False
+
+        # Send NATS cleanup commands before closing if still connected
+        if self.connected and self.ws and self.nats_protocol:
+            try:
+                logger.info("📡 Sending final UNSUB commands to server...")
+                # Send UNSUB commands for any remaining subscriptions
+                for sid in list(self.nats_sids.values()):
+                    try:
+                        unsub_cmd = self.nats_protocol.create_unsubscribe(str(sid))
+                        self.ws.send(unsub_cmd)
+                    except:
+                        pass
+
+                # Brief delay for server to process
+                import time
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"Final cleanup warning: {e}")
 
         if self.ws:
             try:
+                logger.info("🔗 Closing WebSocket connection...")
                 self.ws.close()
+                logger.info("✅ WebSocket closed")
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
 
         if self.ws_thread:
+            logger.info("⏳ Waiting for WebSocket thread to finish...")
             self.ws_thread.join(timeout=5)
+            if self.ws_thread.is_alive():
+                logger.warning("⚠️ WebSocket thread did not finish gracefully")
 
         # Clear all state for clean reconnection
         self.connected = False
@@ -807,6 +936,11 @@ class GrowwNATSWebSocket:
         self.subscription_map.clear()
         self.server_nonce = None
         self.socket_token = None
+        self.nkey_seed = None
+        self.ws = None
+        self.ws_thread = None
+
+        logger.info("✅ Groww WebSocket disconnected and all resources cleared")
         self.subscription_id = None
 
         logger.info("Disconnected from Groww WebSocket and cleared state")
