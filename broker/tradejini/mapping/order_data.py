@@ -528,8 +528,13 @@ def map_portfolio_data(portfolio_data):
     - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
     """
     # Check if 'portfolio_data' is a list
-    if not portfolio_data or not isinstance(portfolio_data, list):
-        logger.warning("No data available or incorrect data format.")
+    if not isinstance(portfolio_data, list):
+        logger.warning("Portfolio data is not a list.")
+        return []
+
+    # Handle empty list gracefully - it's not an error
+    if len(portfolio_data) == 0:
+        logger.debug("No portfolio data available (empty list)")
         return []
 
     # Iterate over the portfolio_data list and process each entry
@@ -560,9 +565,19 @@ def calculate_portfolio_statistics(holdings_data):
     totalprofitandloss = 0
     totalpnlpercentage = 0
 
-    # Check if the data is valid or contains an error
-    if not holdings_data or not isinstance(holdings_data, list):
-        logger.error("Error: Invalid or missing holdings data.")
+    # Check if the data is valid
+    if not isinstance(holdings_data, list):
+        logger.error("Error: Holdings data is not a list.")
+        return {
+            'totalholdingvalue': totalholdingvalue,
+            'totalinvvalue': totalinvvalue,
+            'totalprofitandloss': totalprofitandloss,
+            'totalpnlpercentage': totalpnlpercentage
+        }
+
+    # Handle empty list gracefully - it's not an error
+    if len(holdings_data) == 0:
+        logger.debug("No holdings to calculate statistics for (empty list)")
         return {
             'totalholdingvalue': totalholdingvalue,
             'totalinvvalue': totalinvvalue,
@@ -657,9 +672,14 @@ def transform_holdings_data(holdings_data):
         }
     """
     try:
-        logger = logging.getLogger(__name__)
+        # Handle empty list case gracefully - it's not an error
+        if isinstance(holdings_data, list) and len(holdings_data) == 0:
+            logger.debug("No holdings to transform (empty list)")
+            # Return empty list for service layer
+            return []
+
         logger.debug(f"Transforming {len(holdings_data) if isinstance(holdings_data, list) else 0} holdings records")
-        
+
         # Initialize statistics
         statistics = {
             'totalholdingvalue': 0.0,
@@ -667,13 +687,14 @@ def transform_holdings_data(holdings_data):
             'totalprofitandloss': 0.0,
             'totalpnlpercentage': 0.0
         }
-        
+
         # Transform individual holdings
         transformed_holdings = []
-        
+
         if not isinstance(holdings_data, list):
             logger.error("Holdings data is not a list")
-            return {"status": "error", "message": "Invalid holdings data format"}
+            # Return empty list for consistency
+            return []
             
         for holding in holdings_data:
             try:
@@ -683,12 +704,14 @@ def transform_holdings_data(holdings_data):
                     
                 # Get symbol details from the sym object
                 sym = holding.get('sym', {})
-                
+
                 # Skip if we don't have basic required data
-                if not sym or not sym.get('tradSymbol'):
+                # Check both tradSymbol and tradSymbol (different capitalizations)
+                trade_symbol = sym.get('tradSymbol') or sym.get('tradSymbol') or sym.get('symbol', '')
+                if not sym or not trade_symbol:
                     logger.warning(f"Missing symbol data in holding: {holding}")
                     continue
-                
+
                 # Get quantity - use saleable quantity if available, otherwise use total quantity
                 quantity = float(holding.get('saleableQty', holding.get('qty', 0)))
                 avg_price = float(holding.get('avgPrice', 0))
@@ -718,7 +741,7 @@ def transform_holdings_data(holdings_data):
                     "pnlpercent": round(pnl_percent, 2),
                     "product": product,
                     "quantity": int(quantity),
-                    "symbol": sym.get('tradSymbol', '').strip(),
+                    "symbol": trade_symbol.strip(),
                     # Additional fields that might be useful
                     "avgprice": round(avg_price, 2),
                     "ltp": round(ltp, 2),
@@ -744,15 +767,11 @@ def transform_holdings_data(holdings_data):
         # Round all statistics to 2 decimal places
         for key in statistics:
             statistics[key] = round(statistics[key], 2)
-        
-        return {
-            "status": "success",
-            "data": {
-                "holdings": transformed_holdings,
-                "statistics": statistics
-            }
-        }
+
+        # Return just the holdings list - service layer handles statistics separately
+        return transformed_holdings
         
     except Exception as e:
         logger.error(f"Error in transform_holdings_data: {str(e)}", exc_info=True)
-        return {"status": "error", "message": f"Failed to transform holdings: {str(e)}"}
+        # Return empty list on error for consistency
+        return []

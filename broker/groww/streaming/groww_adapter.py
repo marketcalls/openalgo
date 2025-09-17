@@ -2,6 +2,7 @@ import threading
 import json
 import logging
 import time
+import zmq
 from typing import Dict, Any, Optional, List
 
 from database.auth_db import get_auth_token
@@ -93,26 +94,141 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = False
             raise
     
+    def unsubscribe_all(self) -> Dict[str, Any]:
+        """
+        Unsubscribe from all active subscriptions with proper cleanup
+
+        Returns:
+            Dict: Response with status and details
+        """
+        try:
+            if not self.subscriptions:
+                return self._create_success_response("No active subscriptions to unsubscribe")
+
+            unsubscribed_count = 0
+            failed_count = 0
+            unsubscribed_list = []
+            failed_list = []
+
+            self.logger.info(f"🧹 Unsubscribing from {len(self.subscriptions)} active subscriptions...")
+
+            # Create a copy of subscriptions to iterate over
+            subscriptions_copy = self.subscriptions.copy()
+
+            for correlation_id, sub_info in subscriptions_copy.items():
+                try:
+                    symbol = sub_info['symbol']
+                    exchange = sub_info['exchange']
+                    mode = sub_info['mode']
+
+                    # Unsubscribe from the symbol
+                    response = self.unsubscribe(symbol, exchange, mode)
+
+                    if response.get('status') == 'success':
+                        unsubscribed_count += 1
+                        unsubscribed_list.append({
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'mode': mode
+                        })
+                        self.logger.debug(f"✅ Unsubscribed: {exchange}:{symbol} mode {mode}")
+                    else:
+                        failed_count += 1
+                        failed_list.append({
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'mode': mode,
+                            'error': response.get('message', 'Unknown error')
+                        })
+                        self.logger.warning(f"❌ Failed to unsubscribe: {exchange}:{symbol} mode {mode}")
+
+                except Exception as e:
+                    failed_count += 1
+                    failed_list.append({
+                        'correlation_id': correlation_id,
+                        'error': str(e)
+                    })
+                    self.logger.error(f"Error unsubscribing from {correlation_id}: {e}")
+
+            # Force clear all remaining subscriptions and keys
+            self.subscriptions.clear()
+            self.subscription_keys.clear()
+
+            # CRITICAL: Call the disconnect method to properly close everything
+            self.logger.info("🔌 Calling disconnect() to terminate Groww connection completely...")
+            try:
+                self.disconnect()
+                self.logger.info("✅ Successfully disconnected from Groww server")
+            except Exception as e:
+                self.logger.error(f"❌ Error during disconnect: {e}")
+                # Force cleanup even if disconnect fails
+                self.running = False
+                self.connected = False
+                if self.ws_client:
+                    try:
+                        self.ws_client.disconnect()
+                    except:
+                        pass
+                    self.ws_client = None
+                self.cleanup_zmq()
+
+            # Reset message counter for next session
+            if hasattr(self, '_message_count'):
+                self._message_count = 0
+
+            self.logger.info(f"📊 Unsubscribe all complete: {unsubscribed_count} success, {failed_count} failed")
+            self.logger.info("✅ All subscriptions cleared and disconnected from Groww server")
+            self.logger.info("✅ ZMQ resources cleaned up - no more data will be published")
+
+            return self._create_success_response(
+                f"Unsubscribed from {unsubscribed_count} subscriptions and disconnected from server",
+                total_processed=len(subscriptions_copy),
+                successful_count=unsubscribed_count,
+                failed_count=failed_count,
+                successful=unsubscribed_list,
+                failed=failed_list if failed_list else None,
+                backend_cleared=True,
+                server_disconnected=True,
+                zmq_cleaned=True
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error in unsubscribe_all: {e}")
+            return self._create_error_response("UNSUBSCRIBE_ALL_ERROR", str(e))
+
     def disconnect(self) -> None:
-        """Disconnect from Groww WebSocket"""
+        """Disconnect from Groww WebSocket with proper cleanup"""
+        self.logger.info("🔌 Starting Groww adapter disconnect sequence...")
         self.running = False
 
-        if self.ws_client:
-            try:
-                self.ws_client.disconnect()
-            except Exception as e:
-                self.logger.error(f"Error disconnecting from Groww: {e}")
+        try:
+            # Disconnect WebSocket client
+            if self.ws_client:
+                try:
+                    self.ws_client.disconnect()
+                    self.logger.info("🔗 WebSocket client disconnected")
+                except Exception as e:
+                    self.logger.error(f"Error disconnecting WebSocket client: {e}")
 
-        # Clear all state for clean reconnection
-        self.connected = False
-        self.ws_client = None
-        self.subscriptions.clear()
-        self.subscription_keys.clear()
+            # Clear all state for clean reconnection
+            self.connected = False
+            self.ws_client = None
+            self.subscriptions.clear()
+            self.subscription_keys.clear()
 
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
+            # Clean up ZeroMQ resources
+            self.cleanup_zmq()
 
-        self.logger.info("Groww adapter disconnected and state cleared")
+            self.logger.info("✅ Groww adapter disconnected and state cleared")
+
+        except Exception as e:
+            self.logger.error(f"❌ Error during disconnect: {e}")
+            # Force cleanup even if there were errors
+            self.connected = False
+            self.ws_client = None
+            self.subscriptions.clear()
+            self.subscription_keys.clear()
+            self.cleanup_zmq()
     
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
@@ -229,7 +345,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
 
-                self.logger.info(f"Subscribed to {symbol}.{exchange} in mode {mode}")
+                mode_name = {1: 'LTP', 2: 'Quote', 3: 'Depth'}.get(mode, str(mode))
+                self.logger.info(f"✅ Subscribed to {symbol}.{exchange} in {mode_name} mode (key: {sub_key})")
+
+                # Special logging for LTP subscriptions to debug subscribe all issue
+                if mode == 1:
+                    self.logger.info(f"🔥 LTP SUBSCRIPTION CONFIRMED: {exchange}:{symbol} - data should start flowing")
 
                 # Extra logging for F&O
                 if exchange in ['NFO', 'BFO']:
@@ -239,8 +360,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
         
+        mode_name = {1: 'LTP', 2: 'Quote', 3: 'Depth'}.get(mode, str(mode))
         return self._create_success_response(
-            f'Subscription requested for {symbol}.{exchange}',
+            f'Successfully subscribed to {symbol}.{exchange} in {mode_name} mode',
             symbol=symbol,
             exchange=exchange,
             mode=mode,
@@ -321,7 +443,20 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(f"   Depth data: {data.get('depth_data', {})}")
 
             # Debug log the raw message data to see what we're actually receiving
-            self.logger.info(f"RAW GROWW DATA{' (BSE DEPTH)' if is_bse_depth else ''}: Type: {type(data)}, Data: {data}")
+            self.logger.debug(f"RAW GROWW DATA{' (BSE DEPTH)' if is_bse_depth else ''}: Type: {type(data)}, Data: {data}")
+
+            # Add data validation to ensure we have the minimum required fields
+            if not isinstance(data, dict):
+                self.logger.error(f"Invalid data type received: {type(data)}")
+                return
+
+            # Ensure we have either market data or subscription info
+            has_market_data = any(key in data for key in ['ltp_data', 'depth_data', 'index_data'])
+            has_subscription_info = all(key in data for key in ['symbol', 'exchange'])
+
+            if not (has_market_data or has_subscription_info):
+                self.logger.warning(f"Received data without market data or subscription info: {data}")
+                return
             
             # Find matching subscription based on the data
             subscription = None
@@ -333,6 +468,14 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 symbol_from_data = data['symbol']  # This contains the actual symbol name now
                 exchange = data['exchange']
                 mode = data.get('mode', 'ltp')
+
+                # Handle both numeric and string mode values
+                if isinstance(mode, int):
+                    # Convert numeric mode to string
+                    mode = {1: 'ltp', 2: 'quote', 3: 'depth'}.get(mode, 'ltp')
+                elif isinstance(mode, str) and mode.isdigit():
+                    # Convert string numeric to string mode
+                    mode = {1: 'ltp', 2: 'quote', 3: 'depth'}.get(int(mode), 'ltp')
 
                 # Special logging for BSE depth
                 if 'BSE' in exchange and mode == 'depth':
@@ -354,8 +497,10 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                         sub['symbol'] == symbol_from_data)
 
                         # Regular match based on symbol, exchange and mode
+                        # CRITICAL: Match with the original exchange, not groww_exchange
+                        # Data from NATS has exchange='NSE' which should match sub['exchange']='NSE'
                         is_regular_match = (sub['symbol'] == symbol_from_data and
-                                          sub['groww_exchange'] == exchange and
+                                          sub['exchange'] == exchange and
                                           ((mode == 'ltp' and sub['mode'] in [1, 2]) or
                                            (mode == 'depth' and sub['mode'] == 3) or
                                            (mode == 'index' and sub['mode'] in [1, 2]) or
@@ -396,24 +541,100 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             symbol = subscription['symbol']
             # Always use the subscription's exchange for correct labeling (NSE_INDEX, BSE_INDEX, etc.)
             exchange = subscription['exchange']
-            mode = subscription['mode']
-            
-            # Important: Create topic in the same format as Angel
-            # Format: EXCHANGE_SYMBOL_MODE
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+            subscription_mode = subscription['mode']
+
+            # CRITICAL FIX: Like Angel, use the actual data mode from the message if available
+            # This ensures proper mode handling for all data types
+            actual_mode = data.get('mode', subscription_mode)
+
+            # If we have ltp_data, it's always LTP mode (mode 1)
+            if 'ltp_data' in data:
+                actual_mode = 1
+            elif 'depth_data' in data:
+                actual_mode = 3
+            elif subscription_mode == 2:  # Quote mode
+                actual_mode = 2
+
+            # Important: Create topic in the same format as Angel using ACTUAL mode
+            # Format: EXCHANGE_SYMBOL_MODE (without broker name, like Angel does)
+            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[actual_mode]
             topic = f"{exchange}_{symbol}_{mode_str}"
-            
-            # Normalize the data
-            market_data = self._normalize_market_data(data, mode)
-            
-            # Add metadata
+
+            # Normalize the data using actual mode
+            market_data = self._normalize_market_data(data, actual_mode)
+
+            # Add metadata - ensure all required fields for frontend
             market_data.update({
                 'symbol': symbol,
                 'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)
+                'mode': actual_mode,  # Use actual mode, not subscription mode
+                'timestamp': int(time.time() * 1000),
+                'broker': 'groww',  # Add broker identifier
+                'topic': topic,      # Add topic for debugging
+                'subscription_mode': subscription_mode  # Keep original subscription mode for reference
             })
-            
+
+            # Add mode-specific enhancements for frontend compatibility
+            if actual_mode == 1:  # LTP mode
+                # Ensure we have a valid LTP value - CRITICAL for frontend display
+                if 'ltp' not in market_data or market_data['ltp'] is None or market_data['ltp'] == 0:
+                    # Try to get LTP from different possible fields
+                    ltp_value = (
+                        market_data.get('ltp') or
+                        market_data.get('last_price') or
+                        market_data.get('last_traded_price') or
+                        data.get('ltp_data', {}).get('ltp') if 'ltp_data' in data else None or
+                        data.get('ltp') or
+                        0.0
+                    )
+                    market_data['ltp'] = float(ltp_value) if ltp_value else 0.0
+
+                    if market_data['ltp'] == 0:
+                        self.logger.warning(f"⚠️ NO VALID LTP DATA for {symbol}, check data source")
+                    else:
+                        self.logger.info(f"📈 LTP recovered for {symbol}: {market_data['ltp']}")
+
+                # Ensure LTP timestamp
+                if 'ltt' not in market_data:
+                    market_data['ltt'] = int(time.time() * 1000)
+
+                # Log LTP data for debugging subscribe all issue
+                self.logger.info(f"🔍 LTP MODE: {exchange}:{symbol} = ₹{market_data['ltp']} at {market_data.get('ltt')}")
+
+            elif actual_mode == 2:  # Quote mode
+                # Ensure all quote fields are present for frontend
+                quote_fields = ['open', 'high', 'low', 'close', 'volume', 'ltp']
+                for field in quote_fields:
+                    if field not in market_data:
+                        market_data[field] = 0.0 if field != 'volume' else 0
+
+                # Ensure LTP is also available in quote mode
+                if 'ltp' not in market_data or market_data['ltp'] is None:
+                    ltp_value = (
+                        data.get('ltp_data', {}).get('ltp') if 'ltp_data' in data else None or
+                        data.get('ltp') or
+                        0.0
+                    )
+                    market_data['ltp'] = float(ltp_value) if ltp_value else 0.0
+
+                # Log Quote data
+                self.logger.info(f"🔍 QUOTE MODE: {exchange}:{symbol} = ₹{market_data['ltp']} (Vol: {market_data.get('volume', 0)})")
+
+            elif actual_mode == 3:  # Depth mode
+                # Ensure depth structure is complete
+                if 'depth' not in market_data:
+                    market_data['depth'] = {'buy': [], 'sell': []}
+                    self.logger.warning(f"No depth data for {symbol}, creating empty structure")
+
+                # Also ensure LTP is available in depth mode
+                if 'ltp' not in market_data:
+                    market_data['ltp'] = 0.0
+
+                # Log Depth data
+                buy_levels = len(market_data['depth'].get('buy', []))
+                sell_levels = len(market_data['depth'].get('sell', []))
+                self.logger.info(f"🔍 DEPTH MODE: {exchange}:{symbol} = {buy_levels}B/{sell_levels}S levels")
+
             # Enhanced logging for BSE depth
             if 'BSE' in exchange and mode == 3:
                 self.logger.info(f"🔴 Publishing BSE DEPTH data for {symbol}")
@@ -421,11 +642,30 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.info(f"   Buy levels: {len(market_data['depth'].get('buy', []))}")
                     self.logger.info(f"   Sell levels: {len(market_data['depth'].get('sell', []))}")
 
-            # Log the market data we're sending (similar to Angel)
-            self.logger.info(f"Publishing market data: {market_data}")
-            
+            # Periodic logging instead of every message (reduces noise) - but more frequent for debugging
+            if not hasattr(self, '_message_count'):
+                self._message_count = 0
+            self._message_count += 1
+
+            # More frequent logging for debugging LTP issue
+            if self._message_count <= 20 or self._message_count % 25 == 0:
+                mode_name = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[actual_mode]
+                ltp_info = f"LTP: ₹{market_data.get('ltp', 'N/A')}" if actual_mode in [1, 2] else f"Depth: {len(market_data.get('depth', {}).get('buy', []))}B/{len(market_data.get('depth', {}).get('sell', []))}S"
+                self.logger.info(f"📈 Publishing #{self._message_count}: {topic} ({mode_name}) -> {ltp_info}")
+
+            # CRITICAL: Always log LTP mode data to debug subscribe all issue
+            if actual_mode == 1:
+                self.logger.info(f"🚨 LTP PUBLISH: {topic} -> ₹{market_data.get('ltp')} (Message #{self._message_count})")
+
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
+
+            # Log successful publication for debugging data flow issues
+            self.logger.debug(f"✅ ZMQ Published: {topic} with {len(str(market_data))} bytes")
+
+            # Verify publication by checking if we can access the data
+            if actual_mode == 1 and market_data.get('ltp', 0) > 0:
+                self.logger.info(f"✅ LTP DATA VERIFIED: {exchange}:{symbol} = ₹{market_data['ltp']} published successfully")
             
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
