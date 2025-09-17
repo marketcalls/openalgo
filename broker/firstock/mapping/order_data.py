@@ -277,15 +277,15 @@ def transform_tradebook_data(trades):
 def map_portfolio_data(portfolio_data):
     """
     Processes and modifies portfolio data based on Firstock's format.
-    
+
     Parameters:
     - portfolio_data: Response from Firstock's holdings API containing status and data fields
-    
+
     Returns:
     - List of mapped holdings in OpenAlgo format
     """
     logger.info(f"Raw portfolio data: {json.dumps(portfolio_data, indent=2)}")
-    
+
     # If it's a list, data is already mapped
     if isinstance(portfolio_data, list):
         return portfolio_data
@@ -300,69 +300,50 @@ def map_portfolio_data(portfolio_data):
         logger.info("Invalid portfolio data format")
         return []
 
+    # Don't deduplicate - show all holdings as returned by Firstock (both NSE and BSE)
     mapped_holdings = []
     for holding in holdings:
-        # Process both NSE and BSE entries
-        exchange_entries = holding.get('exchangeTradingSymbol', [])
-        
-        # Get NSE entry first, fallback to BSE if NSE not found
-        nse_entries = [exch for exch in exchange_entries if exch.get('exchange') == 'NSE']
-        bse_entries = [exch for exch in exchange_entries if exch.get('exchange') == 'BSE']
-        
-        trading_entry = nse_entries[0] if nse_entries else (bse_entries[0] if bse_entries else None)
-        if not trading_entry:
-            continue
+        # Handle simple exchange/tradingSymbol structure (new Firstock format)
+        if 'exchange' in holding and 'tradingSymbol' in holding:
+            mapped_holding = {}
 
-        mapped_holding = {}
-        
-        # Map exchange trading fields
-        mapped_holding['exch'] = trading_entry.get('exchange', '')
-        mapped_holding['token'] = trading_entry.get('token', '')
-        mapped_holding['trading_symbol'] = trading_entry.get('tradingSymbol', '').replace('-EQ', '')  # Remove -EQ suffix
-        mapped_holding['price_precision'] = int(trading_entry.get('pricePrecision', '2'))
-        mapped_holding['tick_size'] = float(trading_entry.get('tickSize', '0.05'))
-        mapped_holding['lot_size'] = int(trading_entry.get('lotSize', '1'))
-        
-        # Get OpenAlgo symbol from token
-        symbol_from_db = get_symbol(trading_entry.get('token'), trading_entry.get('exchange'))
-        if symbol_from_db:
-            mapped_holding['tsym'] = symbol_from_db
-        else:
-            logger.info(f"Symbol not found for token {trading_entry.get('token')} and exchange {trading_entry.get('exchange')}.")
-            mapped_holding['tsym'] = mapped_holding['trading_symbol']
+            # Map exchange trading fields
+            mapped_holding['exch'] = holding.get('exchange', '')
+            mapped_holding['token'] = holding.get('token', '')
+            mapped_holding['trading_symbol'] = holding.get('tradingSymbol', '').replace('-EQ', '')  # Remove -EQ suffix
+            mapped_holding['tsym'] = holding.get('tradingSymbol', '').replace('-EQ', '')  # Also set tsym
+            mapped_holding['price_precision'] = int(holding.get('pricePrecision', '2'))
+            mapped_holding['tick_size'] = float(holding.get('tickSize', '0.05'))
+            mapped_holding['lot_size'] = int(holding.get('lotSize', '1'))
 
-        # Map holding fields
-        lot_size = mapped_holding['lot_size']
-        
-        # For DISHTV, set quantity to 2 if it matches the token
-        if trading_entry.get('token') == '14537':  # DISHTV NSE token
-            mapped_holding['holdqty'] = '2'
+            # Get OpenAlgo symbol from token
+            if holding.get('token'):
+                symbol_from_db = get_symbol(holding.get('token'), holding.get('exchange'))
+                if symbol_from_db:
+                    mapped_holding['tsym'] = symbol_from_db
+                else:
+                    logger.info(f"Symbol not found for token {holding.get('token')} and exchange {holding.get('exchange')}.")
+                    mapped_holding['tsym'] = mapped_holding['trading_symbol']
+            else:
+                mapped_holding['tsym'] = mapped_holding['trading_symbol']
+
+            # Map holding fields - set default values for now
+            lot_size = mapped_holding['lot_size']
+
+            # Firstock holdings API only provides symbol info, no quantity or price data
+            # Setting minimal defaults to maintain API contract
+            mapped_holding['holdqty'] = '0'  # No quantity data available
             mapped_holding['btstqty'] = '0'
             mapped_holding['usedqty'] = '0'
             mapped_holding['trade_qty'] = '0'
-        else:
-            mapped_holding['holdqty'] = str(int(float(holding.get('holdQuantity', '0'))))
-            mapped_holding['btstqty'] = str(int(float(holding.get('BTSTQuantity', '0'))))
-            mapped_holding['usedqty'] = str(int(float(holding.get('usedQuantity', '0'))))
-            mapped_holding['trade_qty'] = str(int(float(holding.get('tradeQuantity', '0'))))
-            
-        mapped_holding['sell_amount'] = str(float(holding.get('sellAmount', '0.000000')))
-        
-        # Handle prices
-        mapped_holding['upldprc'] = "{:.2f}".format(float(holding.get('uploadPrice', '0.00')))
-        mapped_holding['s_prdt_ali'] = 'CNC'  # Default to CNC for holdings
-        
-        # Add current market price from LTP
-        mapped_holding['cur_price'] = "{:.2f}".format(float(trading_entry.get('ltp', '10.60')))  # Default LTP for DISHTV
-        
-        # Calculate total quantity
-        total_qty = (int(float(mapped_holding['holdqty'])) + 
-                    int(float(mapped_holding['btstqty'])) + 
-                    int(float(mapped_holding['trade_qty'])) - 
-                    int(float(mapped_holding['usedqty'])))
-                    
-        # Add all holdings with upload price
-        if float(mapped_holding['upldprc']) > 0:
+            mapped_holding['sell_amount'] = '0.000000'
+
+            # No price data available from Firstock holdings API
+            mapped_holding['upldprc'] = "0.00"  # No average price data
+            mapped_holding['s_prdt_ali'] = 'CNC'  # Default to CNC for holdings
+            mapped_holding['cur_price'] = "0.00"  # No current price data
+
+            # Add the holding
             mapped_holdings.append(mapped_holding)
         
     return mapped_holdings
@@ -419,10 +400,10 @@ def calculate_portfolio_statistics(holdings_data):
 def transform_holdings_data(holdings):
     """
     Transform holdings data to match OpenAlgo format.
-    
+
     Parameters:
     - holdings: List of holdings from map_portfolio_data
-    
+
     Returns:
     - List of transformed holdings in the format expected by holdings.html
     """
@@ -430,10 +411,10 @@ def transform_holdings_data(holdings):
     if not holdings:
         return []
 
-    # First map the Firstock response to intermediate format
-    mapped_holdings = map_portfolio_data(holdings)
-    logger.info(f"Mapped holdings: {mapped_holdings}")
-    
+    # Holdings are already mapped from map_portfolio_data
+    mapped_holdings = holdings
+    logger.info(f"Processing holdings: {mapped_holdings}")
+
     # Transform to final format
     transformed_holdings = []
     for holding in mapped_holdings:
@@ -449,19 +430,21 @@ def transform_holdings_data(holdings):
         cur_price = float(holding.get('cur_price', 0.00))
         sell_amount = float(holding.get('sell_amount', 0.00))
 
-        # Calculate P&L
+        # Calculate P&L (will be 0 if no quantity/price data available)
         inv_value = total_qty * upld_price
         cur_value = total_qty * cur_price if cur_price > 0 else total_qty * upld_price
         pnl = cur_value - inv_value + sell_amount
         pnl_percent = (pnl / inv_value * 100) if inv_value > 0 else 0.0
 
+        # Note: Firstock holdings API only provides symbol info
+        # Quantity and P&L will be 0 due to API limitations
         transformed_holding = {
             "symbol": holding.get("tsym", ""),
             "exchange": holding.get("exch", ""),
-            "quantity": total_qty,
+            "quantity": total_qty,  # Will be 0 for Firstock
             "product": holding.get("s_prdt_ali", "CNC"),
-            "pnl": round(pnl, 2),
-            "pnlpercent": round(pnl_percent, 2)
+            "pnl": round(pnl, 2),  # Will be 0 for Firstock
+            "pnlpercent": round(pnl_percent, 2)  # Will be 0 for Firstock
         }
         transformed_holdings.append(transformed_holding)
 
