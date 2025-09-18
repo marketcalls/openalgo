@@ -182,13 +182,14 @@ def map_trade_data(trade_data):
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
-                if order['trnsTp'] == 'B':
-                    order['trnsTp'] = 'BUY'
-                elif order['trnsTp'] == 'S':
-                    order['trnsTp'] = 'SELL'
-                    
             else:
                 logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+
+            # Map transaction type regardless of symbol lookup result
+            if order['trnsTp'] == 'B':
+                order['trnsTp'] = 'BUY'
+            elif order['trnsTp'] == 'S':
+                order['trnsTp'] = 'SELL'
     logger.info(f"{trade_data}")           
     return trade_data
 
@@ -232,7 +233,7 @@ def transform_positions_data(positions_data):
             transformed_position["average_price"] = round(float(position['buyAmt'])/float(position['flBuyQty']),2)
         elif transformed_position['quantity'] < 0:
             transformed_position["average_price"] = round(float(position['sellAmt'])/float(position['flSellQty']),2)
-            
+
         transformed_data.append(transformed_position)
     return transformed_data
 
