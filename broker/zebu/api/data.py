@@ -183,8 +183,20 @@ class BrokerData:
             token = get_token(symbol, exchange)
             
             # Convert dates to epoch timestamps
-            start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
-            end_ts = int(datetime.strptime(end_date + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
+            # Handle both string and date object inputs
+            if isinstance(start_date, str):
+                start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
+            else:
+                # If it's a date object, combine with time
+                start_dt = datetime.combine(start_date, datetime.min.time())
+                start_ts = int(start_dt.timestamp())
+
+            if isinstance(end_date, str):
+                end_ts = int(datetime.strptime(end_date + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
+            else:
+                # If it's a date object, combine with end of day time
+                end_dt = datetime.combine(end_date, datetime.max.time().replace(microsecond=0))
+                end_ts = int(end_dt.timestamp())
 
             # For daily data, use EODChartData endpoint
             if interval == 'D':
@@ -288,7 +300,7 @@ class BrokerData:
                                 logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
-                                logger.info("Added today's data from quotes", )
+                                logger.info("Added today's data from quotes")
                         except Exception as e:
                             logger.info(f"Error fetching today's data from quotes: {e}")
                 else:

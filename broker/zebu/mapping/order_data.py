@@ -197,6 +197,12 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+        # Parse the timestamp from Zebu format "HH:MM:SS DD-MM-YYYY" to just "HH:MM:SS"
+        timestamp = trade.get('norentm', '')
+        if timestamp and ' ' in timestamp:
+            # Extract just the time part (HH:MM:SS) from "HH:MM:SS DD-MM-YYYY"
+            timestamp = timestamp.split(' ')[0]
+
         transformed_trade = {
             "symbol": trade.get('tsym', ''),
             "exchange": trade.get('exch', ''),
@@ -206,7 +212,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get('avgprc', 0.0),
             "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
             "orderid": trade.get('norenordno', ''),
-            "timestamp": trade.get('norentm', '')
+            "timestamp": timestamp  # Now just "HH:MM:SS"
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -258,12 +264,36 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        # Get position values
+        netqty = float(position.get('netqty', 0))
+
+        # Skip closed positions (quantity = 0)
+        if netqty == 0:
+            continue
+
+        netavgprc = float(position.get('netavgprc', 0.0))
+        lp = float(position.get('lp', 0.0))  # Last Price from Zebu
+
+        # Calculate PnL only if there's an open position
+        if lp > 0:
+            if netqty > 0:
+                # Long position
+                pnl = (lp - netavgprc) * netqty
+            else:
+                # Short position
+                pnl = (netavgprc - lp) * abs(netqty)
+        else:
+            # No LTP available
+            pnl = 0.0
+
         transformed_position = {
             "symbol": position.get('tsym', ''),
             "exchange": position.get('exch', ''),
             "product": position.get('prd', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('netavgprc', 0.0),
+            "quantity": netqty,
+            "average_price": netavgprc,
+            "ltp": lp,
+            "pnl": pnl
         }
         transformed_data.append(transformed_position)
     return transformed_data
