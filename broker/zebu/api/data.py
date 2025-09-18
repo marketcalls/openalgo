@@ -74,10 +74,17 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
-            
+
+            # Convert OpenAlgo exchange to broker exchange for API calls
+            api_exchange = exchange
+            if exchange == "NSE_INDEX":
+                api_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                api_exchange = "BSE"
+
             payload = {
                 "uid": os.getenv('BROKER_API_KEY'),
-                "exch": exchange,
+                "exch": api_exchange,
                 "token": token
             }
             
@@ -115,10 +122,17 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
-            
+
+            # Convert OpenAlgo exchange to broker exchange for API calls
+            api_exchange = exchange
+            if exchange == "NSE_INDEX":
+                api_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                api_exchange = "BSE"
+
             payload = {
                 "uid": os.getenv('BROKER_API_KEY'),
-                "exch": exchange,
+                "exch": api_exchange,
                 "token": token
             }
             
