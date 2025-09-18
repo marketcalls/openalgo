@@ -86,7 +86,8 @@ class KotakWebSocket:
                             'low': float(msg.get('lo', 0)),
                             'ltp': float(msg.get('ltp', 0)),
                             'prev_close': float(msg.get('c', 0)),
-                            'volume': float(msg.get('v', 0))
+                            'volume': float(msg.get('v', 0)),
+                            'oi': int(msg.get('oi', 0))
                         }
                         self.ws.close()
         except Exception as e:
@@ -139,14 +140,14 @@ class BrokerData:
             return ws.last_quote or {
                 'bid': 0, 'ask': 0, 'open': 0,
                 'high': 0, 'low': 0, 'ltp': 0,
-                'prev_close': 0, 'volume': 0
+                'prev_close': 0, 'volume': 0, 'oi': 0
             }
         except Exception as e:
             logger.error(f"Error in get_quotes: {e}")
             return {
                 'bid': 0, 'ask': 0, 'open': 0,
                 'high': 0, 'low': 0, 'ltp': 0,
-                'prev_close': 0, 'volume': 0
+                'prev_close': 0, 'volume': 0, 'oi': 0
             }
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -170,15 +171,7 @@ class BrokerData:
                 'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'totalbuyqty': 0,
-                'totalsellqty': 0,
-                'ltp': 0,
-                'ltq': 0,
-                'volume': 0,
-                'open': 0,
-                'high': 0,
-                'low': 0,
-                'prev_close': 0,
-                'oi': 0
+                'totalsellqty': 0
             }
 
             return ws.last_depth or default_depth
@@ -189,15 +182,7 @@ class BrokerData:
                 'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
                 'totalbuyqty': 0,
-                'totalsellqty': 0,
-                'ltp': 0,
-                'ltq': 0,
-                'volume': 0,
-                'open': 0,
-                'high': 0,
-                'low': 0,
-                'prev_close': 0,
-                'oi': 0
+                'totalsellqty': 0
             }
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
