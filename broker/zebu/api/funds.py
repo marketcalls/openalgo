@@ -1,17 +1,15 @@
 import os
-import http.client
+import httpx
 import json
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Zebu's API using the provided auth token."""
-    
-    # Zebu API endpoint for fetching margin data
-    url = "go.mynt.in"
-    
+    """Fetch margin data from Zebu's API using the provided auth token with httpx connection pooling."""
+
     # Fetch UserID and AccountID from environment variables
     userid = os.getenv('BROKER_API_KEY')
     actid = userid  # Assuming AccountID is the same as UserID
@@ -25,23 +23,22 @@ def get_margin_data(auth_token):
     # Prepare the jData payload with the authentication token (jKey)
     payload = "jData=" + json.dumps(data) + "&jKey=" + auth_token
 
-    # Initialize HTTP connection
-    conn = http.client.HTTPSConnection(url)
+    # Get the shared httpx client
+    client = get_httpx_client()
 
-    # Set headers
+    # Set headers - should be form-urlencoded, not json
     headers = {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
 
-    # Send the POST request to Zebu's API
-    conn.request("POST", "/NorenWClientTP/Limits", payload, headers)
+    # Zebu API endpoint URL
+    url = "https://go.mynt.in/NorenWClientTP/Limits"
 
-    # Get the response
-    res = conn.getresponse()
-    data = res.read()
+    # Send the POST request to Zebu's API using httpx
+    response = client.post(url, content=payload, headers=headers)
 
     # Parse the response
-    margin_data = json.loads(data.decode("utf-8"))
+    margin_data = json.loads(response.text)
 
     logger.info(f"Margin Data: {margin_data}")
 

@@ -266,16 +266,11 @@ def transform_positions_data(positions_data):
     for position in positions_data:
         # Get position values
         netqty = float(position.get('netqty', 0))
-
-        # Skip closed positions (quantity = 0)
-        if netqty == 0:
-            continue
-
         netavgprc = float(position.get('netavgprc', 0.0))
         lp = float(position.get('lp', 0.0))  # Last Price from Zebu
 
         # Calculate PnL only if there's an open position
-        if lp > 0:
+        if netqty != 0 and lp > 0:
             if netqty > 0:
                 # Long position
                 pnl = (lp - netavgprc) * netqty
@@ -283,8 +278,9 @@ def transform_positions_data(positions_data):
                 # Short position
                 pnl = (netavgprc - lp) * abs(netqty)
         else:
-            # No LTP available
+            # No position or no LTP available
             pnl = 0.0
+            lp = 0.0 if netqty == 0 else lp  # Set LTP to 0 if position is closed
 
         transformed_position = {
             "symbol": position.get('tsym', ''),
