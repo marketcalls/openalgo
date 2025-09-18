@@ -135,6 +135,9 @@ def process_zebu_nse_data(output_path):
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
 
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
+
     # Add missing columns to ensure DataFrame matches the database structure
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
 
@@ -154,7 +157,8 @@ def process_zebu_nse_data(output_path):
 
     # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
     df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
-    df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
+    # Broker exchange should always be NSE for Zebu API calls
+    df['brexchange'] = 'NSE'
 
     # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
     df['expiry'] = ''  # No expiry for these instruments
@@ -170,6 +174,20 @@ def process_zebu_nse_data(output_path):
     # Reorder the columns to match the database structure
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
+
+    # Map common NSE index symbols to OpenAlgo format
+    nse_index_mapping = {
+        'NIFTY INDEX': 'NIFTY',
+        'NIFTY BANK': 'BANKNIFTY',
+        'NIFTY FIN SERVICE': 'FINNIFTY',
+        'NIFTY MIDCAP SELECT': 'MIDCPNIFTY',
+        'NIFTY NEXT 50': 'NIFTYNXT50',
+        'INDIA VIX': 'INDIAVIX'
+    }
+
+    # Apply the mapping only to NSE_INDEX symbols
+    df_filtered.loc[df_filtered['exchange'] == 'NSE_INDEX', 'symbol'] = \
+        df_filtered.loc[df_filtered['exchange'] == 'NSE_INDEX', 'symbol'].replace(nse_index_mapping)
 
     # Return the processed DataFrame
     return df_filtered
@@ -189,6 +207,9 @@ def process_zebu_nfo_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -256,6 +277,9 @@ def process_zebu_cds_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'precision', 'multiplier', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -325,6 +349,9 @@ def process_zebu_mcx_data(output_path):
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'gngd', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
 
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
+
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
     df['strike'] = df['strike'].fillna('-1')  # Fill strike with -1 if missing
@@ -382,7 +409,7 @@ def process_zebu_mcx_data(output_path):
 def process_zebu_bse_data(output_path):
     """
     Processes the Zebu BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
+    Ensures that the instrument type is always 'EQ' (no BSE index symbols available from Zebu).
     """
     logger.info("Processing Zebu BSE Data")
     file_path = f'{output_path}/BSE_symbols.txt'
@@ -396,6 +423,9 @@ def process_zebu_bse_data(output_path):
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
 
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
+
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
@@ -407,7 +437,7 @@ def process_zebu_bse_data(output_path):
     # Update the 'symbol' column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Set Exchange: 'BSE' for all rows
+    # Set Exchange: 'BSE' for all rows (no BSE index symbols from Zebu)
     df['exchange'] = 'BSE'
     df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
@@ -415,7 +445,7 @@ def process_zebu_bse_data(output_path):
     df['expiry'] = ''  # No expiry for these instruments
     df['strike'] = -1  # Default to -1 for strike price
 
-    # Ensure the instrument type is always 'EQ'
+    # Ensure the instrument type is always 'EQ' since no BSE indices are provided
     df['instrumenttype'] = 'EQ'
 
     # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
@@ -442,6 +472,9 @@ def process_zebu_bfo_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
