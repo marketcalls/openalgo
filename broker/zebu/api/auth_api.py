@@ -1,7 +1,8 @@
-import requests
+import httpx
 import hashlib
 import json
 import os
+from utils.httpx_client import get_httpx_client
 
 def sha256_hash(text):
     """Generate SHA256 hash."""
@@ -9,7 +10,7 @@ def sha256_hash(text):
 
 def authenticate_broker(userid, password, totp_code):
     """
-    Authenticate with Zebu and return the auth token.
+    Authenticate with Zebu and return the auth token using httpx with connection pooling.
     """
     # Get the Zebu API key and other credentials from environment variables
     api_secretkey = os.getenv('BROKER_API_SECRET')
@@ -17,6 +18,9 @@ def authenticate_broker(userid, password, totp_code):
     imei = '1234567890abcdef' # Default IMEI if not provided
 
     try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+
         # Zebu API login URL
         url = "https://go.mynt.in/NorenWClientTP/QuickAuth"
 
@@ -40,8 +44,11 @@ def authenticate_broker(userid, password, totp_code):
             'Content-Type': 'application/x-www-form-urlencoded'
         }
 
-        # Send the POST request to Zebu's API
-        response = requests.post(url, data=payload_str, headers=headers)
+        # Send the POST request to Zebu's API using httpx client
+        response = client.post(url, content=payload_str, headers=headers)
+
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
 
         # Handle the response
         if response.status_code == 200:

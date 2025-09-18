@@ -1,5 +1,5 @@
 import os
-import requests
+import httpx
 import zipfile
 import io
 import pandas as pd
@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -85,7 +86,7 @@ zebu_urls = {
 
 def download_and_unzip_zebu_data(output_path):
     """
-    Downloads and unzips the Zebu text files to the tmp folder.
+    Downloads and unzips the Zebu text files to the tmp folder using httpx with connection pooling.
     """
     logger.info("Downloading and Unzipping Zebu Data")
 
@@ -95,15 +96,18 @@ def download_and_unzip_zebu_data(output_path):
 
     downloaded_files = []
 
+    # Get the shared httpx client
+    client = get_httpx_client()
+
     # Iterate through the Zebu URLs and download/unzip files
     for key, url in zebu_urls.items():
         try:
-            # Send GET request to download the zip file
-            response = requests.get(url, timeout=10)
-            
+            # Send GET request to download the zip file using httpx client
+            response = client.get(url, timeout=10.0)
+
             if response.status_code == 200:
                 logger.info(f"Successfully downloaded {key} from {url}")
-                
+
                 # Use in-memory file to handle the downloaded zip file
                 z = zipfile.ZipFile(io.BytesIO(response.content))
                 z.extractall(output_path)

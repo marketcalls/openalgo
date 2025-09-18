@@ -1,9 +1,10 @@
-import http.client
+import httpx
 import json
 import os
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.zebu.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,14 +24,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
 
-    conn = http.client.HTTPSConnection("go.mynt.in")
-    headers = {'Content-Type': 'application/json'}
+    # Get the shared httpx client
+    client = get_httpx_client()
 
-    conn.request(method, endpoint, payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    return json.loads(data.decode("utf-8"))
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    url = f"https://go.mynt.in{endpoint}"
+
+    response = client.request(method, url, content=payload, headers=headers)
+    data = response.text
+
+    return json.loads(data)
 
 def get_order_book(auth):
     return get_api_response("/NorenWClientTP/OrderBook",auth,method="POST")
@@ -71,16 +74,22 @@ def place_order_api(data,auth):
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
-    headers = {'Content-Type': 'application/json'}
+    newdata = transform_data(data, token)
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
     logger.info(f"{payload}")
-    conn = http.client.HTTPSConnection("go.mynt.in")
-    conn.request("POST", "/NorenWClientTP/PlaceOrder", payload, headers)
-    res = conn.getresponse()
-    response_data = json.loads(res.read().decode("utf-8"))
+
+    # Get the shared httpx client
+    client = get_httpx_client()
+    url = "https://go.mynt.in/NorenWClientTP/PlaceOrder"
+
+    res = client.post(url, content=payload, headers=headers)
+    # Add status attribute for compatibility with existing code
+    res.status = res.status_code
+    response_data = json.loads(res.text)
+
     if response_data['stat'] == "Ok":
         orderid = response_data['norenordno']
     else:
@@ -235,29 +244,27 @@ def cancel_order(orderid,auth):
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
     data = {"uid": api_key, "norenordno": orderid}
-    
 
     payload = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
     # Set up the request headers
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
-    
+    # Get the shared httpx client
+    client = get_httpx_client()
+    url = "https://go.mynt.in/NorenWClientTP/CancelOrder"
 
-    
-    # Establish the connection and send the request
-    conn = http.client.HTTPSConnection("go.mynt.in")  # Adjust the URL as necessary
-    conn.request("POST", "/NorenWClientTP/CancelOrder", payload, headers)
-    res = conn.getresponse()
-    data = json.loads(res.read().decode("utf-8"))
+    # Send the request using httpx
+    res = client.post(url, content=payload, headers=headers)
+    data = json.loads(res.text)
     logger.info(f"{data}")
-    
+
     # Check if the request was successful
     if data.get("stat")=='Ok':
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status
+        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, res.status_code
 
 
 def modify_order(data,auth):
@@ -271,20 +278,26 @@ def modify_order(data,auth):
     data["apikey"] = api_key
 
     transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
-    # Set up the request headers
-    headers = {'Content-Type': 'application/json'}
+
+    logger.info(f"Modify Order Request Data: {transformed_data}")
+
+    # Set up the request headers - should be form-urlencoded, not json
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
+    # Get the shared httpx client
+    client = get_httpx_client()
+    url = "https://go.mynt.in/NorenWClientTP/ModifyOrder"
 
-    conn = http.client.HTTPSConnection("go.mynt.in")
-    conn.request("POST", "/NorenWClientTP/ModifyOrder", payload, headers)
-    res = conn.getresponse()
-    response = json.loads(res.read().decode("utf-8"))
+    res = client.post(url, content=payload, headers=headers)
+    response = json.loads(res.text)
+
+    logger.info(f"Modify Order Response: {response}")
 
     if response.get("stat")=='Ok':
         return {"status": "success", "orderid": data["orderid"]}, 200
     else:
-        return {"status": "error", "message": response.get("emsg", "Failed to modify order")}, res.status
+        return {"status": "error", "message": response.get("emsg", "Failed to modify order")}, res.status_code
 
 
 
