@@ -24,7 +24,7 @@ from .firstock_websocket import FirstockWebSocket
 
 class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Firstock-specific implementation of the WebSocket adapter"""
-    
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("firstock_websocket")
@@ -35,6 +35,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         # Snapshot management for value retention (similar to Shoonya implementation)
         self.market_snapshots = {}  # {token: snapshot_data} - retains previous values
+        self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -152,35 +153,52 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
         Subscribe to market data with Firstock-specific implementation
-        
+
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE')
             exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
             mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth (Firstock always provides full data)
             depth_level: Market depth level (Firstock provides 5-level depth)
-            
+
         Returns:
             Dict: Response with status and error message if applicable
         """
+        self.logger.info(f"[SUBSCRIBE] Request for {symbol}.{exchange} mode={mode}")
+
         # Firstock provides full market data including depth in a single feed
         # Mode parameter is maintained for API consistency but all data is provided
-        
+
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
         # Create subscription token in Firstock format (EXCHANGE:TOKEN)
         subscription_token = f"{brexchange}:{token}"
-        
-        # Generate unique correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-        
-        # Store subscription for reconnection
+
+        # Generate a unique correlation_id for each subscription
+        # This allows multiple clients to subscribe to the same symbol
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
+        correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
+
+        # Check if we need to subscribe to WebSocket
+        base_correlation_id = f"{symbol}_{exchange}_{mode}"
+        already_ws_subscribed = any(
+            cid.startswith(base_correlation_id)
+            for cid in self.subscriptions.keys()
+        )
+
+        if already_ws_subscribed:
+            self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
+        else:
+            self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
+
+        # Always store the subscription (each client gets their own entry)
         with self.lock:
             self.subscriptions[correlation_id] = {
                 'symbol': symbol,
@@ -191,22 +209,31 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'mode': mode,
                 'depth_level': depth_level
             }
-        
-        # Subscribe if connected
+
+        # Subscribe via WebSocket (reference counting will handle duplicates)
         if self.ws_client and self.ws_client.is_connected():
-            try:
-                # Create token list for Firstock WebSocket client
-                token_list = [{
-                    "exchangeType": brexchange,
-                    "tokens": [token]
-                }]
-                
-                self.ws_client.subscribe(correlation_id, mode, token_list)
-                self.logger.info(f"Subscribed to {symbol}.{exchange} with token {subscription_token}")
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
-        
+            # Check if we need to send WebSocket subscription
+            if self._should_ws_subscribe(subscription_token, mode):
+                try:
+                    # Create token list for Firstock WebSocket client
+                    token_list = [{
+                        "exchangeType": brexchange,
+                        "tokens": [token]
+                    }]
+
+                    self.ws_client.subscribe(correlation_id, mode, token_list)
+                    self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {subscription_token}")
+                except Exception as e:
+                    self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                    return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            else:
+                self.logger.info(f"[SUBSCRIBE] WebSocket already has active subscription for {subscription_token}")
+        else:
+            self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {symbol}.{exchange}")
+
+        # Log current subscription state
+        self.logger.info(f"[SUBSCRIBE] Total active subscriptions: {len(self.subscriptions)}")
+
         # Return success
         return self._create_success_response(
             'Subscription requested',
@@ -219,50 +246,66 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """
         Unsubscribe from market data
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange code
             mode: Subscription mode
-            
+
         Returns:
             Dict: Response with status
         """
         # Map symbol to token
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
         # Create subscription token in Firstock format
         subscription_token = f"{brexchange}:{token}"
-        
-        # Generate correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-        
-        # Remove from subscriptions
+
+        # Find base correlation ID pattern
+        base_correlation_id = f"{symbol}_{exchange}_{mode}"
+
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
-        
-        # Unsubscribe if connected
-        if self.ws_client and self.ws_client.is_connected():
-            try:
-                # Create token list for Firstock WebSocket client
-                token_list = [{
-                    "exchangeType": brexchange,
-                    "tokens": [token]
-                }]
-                
-                self.ws_client.unsubscribe(correlation_id, mode, token_list)
-                self.logger.info(f"Unsubscribed from {symbol}.{exchange}")
-            except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
-                return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
-        
+            # Find the first matching subscription for this client
+            matching_subscriptions = [
+                (cid, sub) for cid, sub in self.subscriptions.items()
+                if cid.startswith(base_correlation_id)
+            ]
+
+            if not matching_subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED",
+                                                  f"Not subscribed to {symbol}.{exchange}")
+
+            # Remove the first matching subscription
+            correlation_id, subscription = matching_subscriptions[0]
+
+            # Check if this is the last subscription for this symbol/exchange/mode
+            is_last = len(matching_subscriptions) == 1
+
+            # Remove the subscription
+            del self.subscriptions[correlation_id]
+
+            # Only unsubscribe from WebSocket if this was the last subscription
+            if is_last and self._should_ws_unsubscribe(subscription_token, mode):
+                # Unsubscribe if connected
+                if self.ws_client and self.ws_client.is_connected():
+                    try:
+                        # Create token list for Firstock WebSocket client
+                        token_list = [{
+                            "exchangeType": brexchange,
+                            "tokens": [token]
+                        }]
+
+                        self.ws_client.unsubscribe(correlation_id, mode, token_list)
+                        self.logger.info(f"WebSocket unsubscribed from {symbol}.{exchange}")
+                    except Exception as e:
+                        self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}",
             symbol=symbol,
@@ -276,19 +319,111 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = True
         
         # Resubscribe to existing subscriptions if reconnecting
+        self._resubscribe_all()
+
+    def _resubscribe_all(self) -> None:
+        """Resubscribe to all existing subscriptions after reconnection"""
         with self.lock:
+            # Reset reference counts
+            self.ws_subscription_refs = {}
+
+            # Group subscriptions by unique token and mode
+            unique_subscriptions = {}
+
             for correlation_id, sub in self.subscriptions.items():
+                subscription_key = f"{sub['subscription_token']}_{sub['mode']}"
+
+                if subscription_key not in unique_subscriptions:
+                    unique_subscriptions[subscription_key] = {
+                        'brexchange': sub['brexchange'],
+                        'token': sub['token'],
+                        'mode': sub['mode'],
+                        'subscription_token': sub['subscription_token'],
+                        'count': 1
+                    }
+                else:
+                    unique_subscriptions[subscription_key]['count'] += 1
+
+                # Update reference counts
+                if sub['subscription_token'] not in self.ws_subscription_refs:
+                    self.ws_subscription_refs[sub['subscription_token']] = {}
+
+                mode_key = f"mode_{sub['mode']}"
+                if mode_key not in self.ws_subscription_refs[sub['subscription_token']]:
+                    self.ws_subscription_refs[sub['subscription_token']][mode_key] = 0
+                self.ws_subscription_refs[sub['subscription_token']][mode_key] += 1
+
+            # Resubscribe unique subscriptions
+            for sub_key, sub_info in unique_subscriptions.items():
                 try:
                     # Create token list for resubscription
                     token_list = [{
-                        "exchangeType": sub['brexchange'],
-                        "tokens": [sub['token']]
+                        "exchangeType": sub_info['brexchange'],
+                        "tokens": [sub_info['token']]
                     }]
-                    
-                    self.ws_client.subscribe(correlation_id, sub['mode'], token_list)
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+
+                    # Use any correlation_id for WebSocket subscription
+                    temp_correlation_id = f"resubscribe_{sub_key}"
+                    self.ws_client.subscribe(temp_correlation_id, sub_info['mode'], token_list)
+                    self.logger.info(f"Resubscribed to {sub_info['subscription_token']} with {sub_info['count']} client subscriptions")
                 except Exception as e:
-                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+                    self.logger.error(f"Error resubscribing to {sub_info['subscription_token']}: {e}")
+
+    def _should_ws_subscribe(self, subscription_token: str, mode: int) -> bool:
+        """
+        Check if we should send WebSocket subscription using reference counting
+
+        Args:
+            subscription_token: Exchange:Token identifier
+            mode: Subscription mode
+
+        Returns:
+            bool: True if we need to subscribe, False if already subscribed
+        """
+        if subscription_token not in self.ws_subscription_refs:
+            self.ws_subscription_refs[subscription_token] = {}
+
+        mode_key = f"mode_{mode}"
+
+        if mode_key not in self.ws_subscription_refs[subscription_token]:
+            self.ws_subscription_refs[subscription_token][mode_key] = 1
+            return True
+        else:
+            self.ws_subscription_refs[subscription_token][mode_key] += 1
+            self.logger.info(f"Additional subscription for {subscription_token} mode {mode}, count: {self.ws_subscription_refs[subscription_token][mode_key]}")
+            return False
+
+    def _should_ws_unsubscribe(self, subscription_token: str, mode: int) -> bool:
+        """
+        Check if we should send WebSocket unsubscription using reference counting
+
+        Args:
+            subscription_token: Exchange:Token identifier
+            mode: Subscription mode
+
+        Returns:
+            bool: True if we should unsubscribe, False if other clients still subscribed
+        """
+        if subscription_token not in self.ws_subscription_refs:
+            return True
+
+        mode_key = f"mode_{mode}"
+
+        if mode_key in self.ws_subscription_refs[subscription_token]:
+            self.ws_subscription_refs[subscription_token][mode_key] -= 1
+
+            if self.ws_subscription_refs[subscription_token][mode_key] <= 0:
+                # Remove mode key if count is 0
+                del self.ws_subscription_refs[subscription_token][mode_key]
+
+                # Clean up token entry if no modes left
+                if not self.ws_subscription_refs[subscription_token]:
+                    del self.ws_subscription_refs[subscription_token]
+
+                return True
+            return False
+
+        return True
     
     def _on_error(self, ws, error) -> None:
         """Callback for WebSocket errors"""
