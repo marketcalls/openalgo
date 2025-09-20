@@ -145,8 +145,8 @@ def map_trade_data(trade_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
-    if trade_data['data'] is None:
+        # Check if 'data' is None or doesn't have 'data' key
+    if not trade_data or 'data' not in trade_data or trade_data['data'] is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
