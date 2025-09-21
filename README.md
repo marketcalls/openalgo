@@ -27,6 +27,8 @@ For detailed installation instructions, please refer to [INSTALL.md](https://doc
 - **5paisa (XTS)**
 - **AliceBlue**
 - **AngelOne**
+- **Compositedge**
+- **Definedge**
 - **Dhan**
 - **Dhan (Sandbox)**
 - **Firstock**
@@ -281,7 +283,7 @@ For detailed documentation on OpenAlgo, including setup guides, API references, 
 ### Minimum Hardware Requirements
 
 To run OpenAlgo we recommend:
-- 0.5GB RAM (with 2GB of Swap Memory)
+- 2GB RAM or 0.5GB RAM with 2GB of Swap Memory
 - 1GB disk space
 - 1vCPU
 

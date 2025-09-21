@@ -16,10 +16,10 @@ def transform_data(data,token):
         "actid": userid,
         "exch": data["exchange"],
         "tsym": symbol,
-        "qty": data["quantity"],
-        "prc": data.get("price", "0"),
-        "trgprc":  data.get("trigger_price", "0"),
-        "dscqty": data.get("disclosed_quantity", "0"),
+        "qty": str(data["quantity"]),  # Convert to string for Shoonya API
+        "prc": str(data.get("price", "0")),  # Ensure price is string
+        "trgprc": str(data.get("trigger_price", "0")),  # Ensure trigger_price is string
+        "dscqty": str(data.get("disclosed_quantity", "0")),  # Ensure disclosed_quantity is string
         "prd": map_product_type(data["product"]),
         "trantype": 'B' if data["action"] == "BUY" else 'S',
         "prctyp": map_order_type(data["pricetype"]),
@@ -40,13 +40,13 @@ def transform_modify_order_data(data, token):
         "exch": data["exchange"],
         "norenordno": data["orderid"],
         "prctyp": map_order_type(data["pricetype"]),
-        "prc": data["price"],
-        "qty": data["quantity"],
+        "prc": str(data["price"]),  # Ensure price is string
+        "qty": str(data["quantity"]),  # Ensure quantity is string
         "tsym": data["symbol"],
         "ret": "DAY",
         "mkt_protection": "0",
-        "trdprc": data.get("trigger_price", "0"),
-        "dscqty": data.get("disclosed_quantity", "0"),
+        "trdprc": str(data.get("trigger_price", "0")),  # Ensure trigger_price is string
+        "dscqty": str(data.get("disclosed_quantity", "0")),  # Ensure disclosed_quantity is string
         "uid": data["apikey"]
     }
 

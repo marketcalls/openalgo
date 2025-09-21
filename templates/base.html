@@ -159,6 +159,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('python_strategy_bp.index') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('python_strategy_bp.') }}">
+                            Python Strategies
+                        </a>
+                    </li>
+                    <li>
                         <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
                            class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
                             Tradingview

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Save Strategy</title>
+    <meta name="csrf-token" content="test-token">
+</head>
+<body>
+    <h1>Test Save Strategy</h1>
+    <button onclick="testSave()">Test Save</button>
+    <div id="result"></div>
+
+    <script>
+    // Get CSRF token
+    function getCSRFToken() {
+        const token = document.querySelector('meta[name="csrf-token"]');
+        if (token) {
+            return token.getAttribute('content');
+        }
+        // Fallback: try to get from cookie
+        const cookieValue = document.cookie
+            .split('; ')
+            .find(row => row.startsWith('csrf_token='));
+        return cookieValue ? cookieValue.split('=')[1] : '';
+    }
+
+    async function testSave() {
+        const testContent = `# Test strategy
+import time
+
+def main():
+    print("Test strategy")
+    time.sleep(1)
+
+if __name__ == "__main__":
+    main()
+`;
+        
+        console.log('CSRF Token:', getCSRFToken());
+        console.log('Sending content:', testContent);
+        
+        try {
+            // You'll need to replace this with an actual strategy_id
+            const response = await fetch('/python/save/test_strategy_id', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCSRFToken()
+                },
+                body: JSON.stringify({ content: testContent })
+            });
+            
+            console.log('Response status:', response.status);
+            console.log('Response headers:', response.headers);
+            
+            const data = await response.json();
+            console.log('Response data:', data);
+            
+            document.getElementById('result').innerHTML = `
+                <p>Status: ${response.status}</p>
+                <p>Success: ${data.success}</p>
+                <p>Message: ${data.message}</p>
+            `;
+        } catch (error) {
+            console.error('Error:', error);
+            document.getElementById('result').innerHTML = `<p>Error: ${error.message}</p>`;
+        }
+    }
+    </script>
+</body>
+</html>

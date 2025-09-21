@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block title %}Strategy Logs - OpenAlgo{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="mb-6">
+        <div class="flex items-center gap-4">
+            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-ghost btn-circle">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7a1 1 0 010-1.414l7-7" />
+                </svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold">Strategy Logs</h1>
+                <p class="text-base-content/60 text-sm">Strategy ID: {{ strategy_id }}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Log Files List -->
+        <div class="lg:col-span-3">
+            <div class="card bg-base-100 shadow-xl h-full">
+                <div class="card-body">
+                    <h2 class="card-title text-base mb-4">Log Files</h2>
+                    
+                    {% if log_files %}
+                    <div class="space-y-2 max-h-[600px] overflow-y-auto">
+                        {% for log in log_files %}
+                        <a href="{{ url_for('python_strategy_bp.view_logs', strategy_id=strategy_id, latest=1) }}" 
+                           class="block p-3 rounded-lg hover:bg-base-200 transition-colors border border-base-200">
+                            <div class="font-medium text-sm truncate">{{ log.name|replace(strategy_id + '_', '')|replace('.log', '') }}</div>
+                            <div class="flex justify-between items-center mt-1">
+                                <div class="text-xs text-base-content/60">
+                                    {{ log.modified.strftime('%Y-%m-%d %H:%M IST') }}
+                                </div>
+                                <div class="badge badge-sm badge-ghost">
+                                    {{ (log.size / 1024)|round(2) }} KB
+                                </div>
+                            </div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center py-8">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-base-content/30 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <p class="text-sm text-base-content/60">No log files available</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Log Content -->
+        <div class="lg:col-span-9">
+            <div class="card bg-base-100 shadow-xl h-full">
+                <div class="card-body">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="card-title text-base">Log Content</h2>
+                        {% if log_content %}
+                        <div class="flex gap-2">
+                            <button onclick="openClearModal()" class="btn btn-sm btn-ghost">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Clear
+                            </button>
+                            <button onclick="refreshLog()" class="btn btn-sm btn-ghost">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Refresh
+                            </button>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="auto_scroll" class="checkbox checkbox-sm checkbox-primary" checked>
+                                <span class="text-sm">Auto-scroll</span>
+                            </label>
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    {% if log_content %}
+                    <div class="mockup-code max-h-[600px] overflow-auto" id="log_container">
+                        <pre class="text-xs"><code>{{ log_content }}</code></pre>
+                    </div>
+                    {% else %}
+                    <div class="flex flex-col items-center justify-center py-16">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <h3 class="text-lg font-medium mb-2">No Log Selected</h3>
+                        <p class="text-base-content/60 text-sm">Select a log file from the list to view its content</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Row -->
+    {% if log_content %}
+    <div class="mt-6">
+        <div class="stats shadow w-full">
+            <div class="stat">
+                <div class="stat-title">Total Lines</div>
+                <div class="stat-value text-primary">{{ log_content.count('\n') + 1 }}</div>
+            </div>
+            
+            <div class="stat">
+                <div class="stat-title">File Size</div>
+                <div class="stat-value text-secondary">{{ (log_content|length / 1024)|round(2) }} KB</div>
+            </div>
+            
+            <div class="stat">
+                <div class="stat-title">Last Updated</div>
+                <div class="stat-value text-accent text-lg">{{ log_files[0].modified.strftime('%H:%M:%S IST') if log_files else 'N/A' }}</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Clear Logs Confirmation Modal -->
+<dialog id="clear_logs_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Clear Log Files</h3>
+        <p class="py-4">Are you sure you want to clear all log files for strategy "<span class="font-medium">{{ strategy_id }}</span>"?</p>
+        <div class="bg-warning/20 border border-warning rounded-lg p-3 mb-4">
+            <div class="flex items-start gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-warning mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <div class="text-sm">
+                    <p class="font-medium text-warning">This action cannot be undone</p>
+                    <p class="text-warning/80 mt-1">All historical logs will be deleted. Active logs for running strategies will be truncated.</p>
+                </div>
+            </div>
+        </div>
+        <div class="modal-action">
+            <button onclick="clear_logs_modal.close()" class="btn">Cancel</button>
+            <button onclick="confirmClearLogs()" class="btn btn-error">Clear All Logs</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<style>
+    /* Custom scrollbar for log container */
+    #log_container::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    
+    #log_container::-webkit-scrollbar-track {
+        background: var(--b2);
+        border-radius: 4px;
+    }
+    
+    #log_container::-webkit-scrollbar-thumb {
+        background: var(--bc);
+        opacity: 0.3;
+        border-radius: 4px;
+    }
+    
+    #log_container::-webkit-scrollbar-thumb:hover {
+        opacity: 0.5;
+    }
+
+    /* Highlight patterns in logs */
+    #log_container .error { color: #ef4444; }
+    #log_container .warning { color: #f59e0b; }
+    #log_container .success { color: #10b981; }
+    #log_container .info { color: #3b82f6; }
+</style>
+
+<script>
+// Auto-scroll to bottom if enabled
+function scrollToBottom() {
+    const autoScroll = document.getElementById('auto_scroll');
+    const container = document.getElementById('log_container');
+    
+    if (autoScroll && autoScroll.checked && container) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+// Refresh log content
+function refreshLog() {
+    location.reload();
+}
+
+// Get CSRF token
+function getCSRFToken() {
+    const token = document.querySelector('meta[name="csrf-token"]');
+    return token ? token.getAttribute('content') : '';
+}
+
+// Open clear logs modal
+function openClearModal() {
+    clear_logs_modal.showModal();
+}
+
+// Confirm and clear log files
+async function confirmClearLogs() {
+    clear_logs_modal.close();
+    
+    try {
+        const response = await fetch(`/python/logs/{{ strategy_id }}/clear`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(`${data.message}`, 'success');
+            // Refresh the page to show updated log list
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(data.message || 'Failed to clear logs', 'error');
+        }
+    } catch (error) {
+        console.error('Clear logs error:', error);
+        showToast('Failed to clear logs', 'error');
+    }
+}
+
+// Initial scroll
+document.addEventListener('DOMContentLoaded', () => {
+    scrollToBottom();
+    
+    // Highlight patterns in log
+    const container = document.getElementById('log_container');
+    if (container) {
+        let content = container.innerHTML;
+        
+        // Highlight error patterns
+        content = content.replace(/error|ERROR|Error/g, '<span class="error">$&</span>');
+        content = content.replace(/warning|WARNING|Warning/g, '<span class="warning">$&</span>');
+        content = content.replace(/success|SUCCESS|Success/g, '<span class="success">$&</span>');
+        content = content.replace(/info|INFO|Info/g, '<span class="info">$&</span>');
+        
+        // Don't update if no matches to avoid breaking pre formatting
+        if (content !== container.innerHTML) {
+            // container.innerHTML = content;
+        }
+    }
+});
+
+// Auto-refresh every 5 seconds if log content is shown
+{% if log_content %}
+setInterval(() => {
+    const autoScroll = document.getElementById('auto_scroll');
+    if (autoScroll && autoScroll.checked) {
+        // Could implement AJAX refresh here
+    }
+}, 5000);
+{% endif %}
+</script>
+{% endblock %}

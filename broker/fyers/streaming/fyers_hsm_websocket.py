@@ -209,15 +209,18 @@ class FyersHSMWebSocket:
         Returns:
             Binary subscription message
         """
+        self.logger.info(f"Creating subscription message for {len(hsm_symbols)} symbols")
+        
         # Create scrips data
         scrips_data = bytearray()
         scrips_data.append(len(hsm_symbols) >> 8 & 0xFF)
         scrips_data.append(len(hsm_symbols) & 0xFF)
         
-        for symbol in hsm_symbols:
+        for i, symbol in enumerate(hsm_symbols, 1):
             symbol_bytes = str(symbol).encode("ascii")
             scrips_data.append(len(symbol_bytes))
             scrips_data.extend(symbol_bytes)
+            self.logger.debug(f"  Symbol {i}/{len(hsm_symbols)}: {symbol} ({len(symbol_bytes)} bytes)")
         
         # Build complete message
         data_len = 6 + len(scrips_data)
@@ -262,7 +265,7 @@ class FyersHSMWebSocket:
                     
             elif msg_type == 6:
                 # Data feed message
-                self.logger.info(f"Received data feed message (type 6): {len(data)} bytes")
+                self.logger.debug(f"Received data feed message (type 6): {len(data)} bytes")
                 self._parse_data_feed(data)
                 
             elif msg_type == 13:
@@ -295,7 +298,7 @@ class FyersHSMWebSocket:
                 
             # Get scrip count
             scrip_count = struct.unpack("!H", data[7:9])[0]
-            self.logger.info(f"Data feed contains {scrip_count} scrips")
+            self.logger.debug(f"Data feed contains {scrip_count} scrips")
             offset = 9
             
             for i in range(scrip_count):
@@ -307,7 +310,7 @@ class FyersHSMWebSocket:
                 data_type = struct.unpack("B", data[offset:offset + 1])[0]
                 offset += 1
                 
-                self.logger.info(f"Processing scrip {i+1}/{scrip_count}, data_type: {data_type}")
+                self.logger.debug(f"Processing scrip {i+1}/{scrip_count}, data_type: {data_type}")
                 
                 if data_type == 83:  # Snapshot data feed
                     offset = self._parse_snapshot_data(data, offset)
@@ -808,14 +811,17 @@ class FyersHSMWebSocket:
         
         if symbol_mappings:
             self.symbol_mappings.update(symbol_mappings)
+            self.logger.info(f"Updated symbol mappings. Total mappings: {len(self.symbol_mappings)}")
         
         # Create and send subscription message
         sub_msg = self._create_subscription_message(hsm_symbols, channel=11)
         self.ws.send(sub_msg, opcode=websocket.ABNF.OPCODE_BINARY)
         
-        self.logger.info(f"Subscribed to {len(hsm_symbols)} HSM symbols")
-        for symbol in hsm_symbols:
-            self.logger.debug(f"  -> {symbol}")
+        self.logger.info(f"\n✅ Sent subscription request for {len(hsm_symbols)} HSM symbols")
+        for i, symbol in enumerate(hsm_symbols, 1):
+            mapped_symbol = symbol_mappings.get(symbol, 'Unknown') if symbol_mappings else 'N/A'
+            self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
+        self.logger.info(f"Total active subscriptions in HSM: {len(hsm_symbols)}")
     
     def is_connected(self) -> bool:
         """Check if connected and authenticated"""

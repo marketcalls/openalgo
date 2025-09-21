@@ -137,14 +137,19 @@ def place_order_api(data, auth):
         # Parse the response
         if response_data.get('s') == 'ok':
             orderid = response_data['id']
+            logger.info(f"Order placed successfully. Order ID: {orderid}")
         elif response_data.get('s') == 'error':
             orderid = response_data.get('id')
             if not orderid:
                 orderid = None
-            logger.warning(f"Order placement failed: {response_data.get('message', 'Unknown error')}")
+            error_msg = response_data.get('message', 'Unknown error')
+            logger.warning(f"Order placement failed: {error_msg}")
+            logger.debug(f"Failed order payload: {json.dumps(payload, indent=2)}")
+            logger.debug(f"Failed order response: {json.dumps(response_data, indent=2)}")
         else:
             orderid = None
             logger.warning(f"Unexpected response format: {response_data}")
+            logger.debug(f"Unexpected response payload: {json.dumps(payload, indent=2)}")
             
         return response, response_data, orderid
         

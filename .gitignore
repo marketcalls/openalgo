@@ -27,6 +27,9 @@ config.ini
 checkpoint.txt
 checkpoints.json
 
+# Strategy encryption key
+db/strategy_encryption.key
+
 # CSV Files (except symbols.csv)
 *.csv
 !symbols.csv

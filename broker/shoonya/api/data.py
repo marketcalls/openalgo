@@ -103,13 +103,14 @@ class BrokerData:
             # Return simplified quote data
             return {
                 'bid': float(response.get('bp1', 0)),
-                'ask': float(response.get('sp1', 0)), 
+                'ask': float(response.get('sp1', 0)),
                 'open': float(response.get('o', 0)),
                 'high': float(response.get('h', 0)),
                 'low': float(response.get('l', 0)),
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
-                'volume': int(response.get('v', 0))
+                'volume': int(response.get('v', 0)),
+                'oi': int(response.get('oi', 0))
             }
             
         except Exception as e:
@@ -210,8 +211,23 @@ class BrokerData:
                 exchange="BSE"
             
             # Convert dates to epoch timestamps
-            start_ts = int(datetime.strptime(start_date + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
-            end_ts = int(datetime.strptime(end_date + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
+            # Handle both string and datetime.date inputs
+            if isinstance(start_date, datetime):
+                start_date_str = start_date.strftime('%Y-%m-%d')
+            elif hasattr(start_date, 'strftime'):  # datetime.date object
+                start_date_str = start_date.strftime('%Y-%m-%d')
+            else:
+                start_date_str = str(start_date)
+
+            if isinstance(end_date, datetime):
+                end_date_str = end_date.strftime('%Y-%m-%d')
+            elif hasattr(end_date, 'strftime'):  # datetime.date object
+                end_date_str = end_date.strftime('%Y-%m-%d')
+            else:
+                end_date_str = str(end_date)
+
+            start_ts = int(datetime.strptime(start_date_str + " 00:00:00", '%Y-%m-%d %H:%M:%S').timestamp())
+            end_ts = int(datetime.strptime(end_date_str + " 23:59:59", '%Y-%m-%d %H:%M:%S').timestamp())
 
             # For daily data, use EODChartData endpoint
             if interval == 'D':
@@ -262,7 +278,8 @@ class BrokerData:
                             'high': float(candle.get('inth', 0)),
                             'low': float(candle.get('intl', 0)),
                             'close': float(candle.get('intc', 0)),
-                            'volume': float(candle.get('intv', 0))
+                            'volume': float(candle.get('intv', 0)),
+                            'oi': float(candle.get('oi', 0))
                         })
                     else:
                         # Skip candles with all zero values
@@ -280,7 +297,8 @@ class BrokerData:
                             'high': float(candle.get('inth', 0)),
                             'low': float(candle.get('intl', 0)),
                             'close': float(candle.get('intc', 0)),
-                            'volume': float(candle.get('intv', 0))
+                            'volume': float(candle.get('intv', 0)),
+                            'oi': float(candle.get('oi', 0))
                         })
                 except (KeyError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {{e}}, Candle: {candle}")
@@ -288,7 +306,7 @@ class BrokerData:
 
             df = pd.DataFrame(data)
             if df.empty:
-                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
 
             # For daily data, append today's data from quotes if it's missing
             if interval == 'D':
@@ -313,7 +331,8 @@ class BrokerData:
                                     'high': float(quotes_response.get('h', 0)),
                                     'low': float(quotes_response.get('l', 0)),
                                     'close': float(quotes_response.get('lp', 0)),  # Use LTP as close
-                                    'volume': float(quotes_response.get('v', 0))
+                                    'volume': float(quotes_response.get('v', 0)),
+                                    'oi': float(quotes_response.get('oi', 0))
                                 }
                                 logger.info(f"Today's quote data: {today_data}")
                                 # Append today's data

@@ -2,7 +2,7 @@ from flask import Blueprint, request, redirect, url_for, render_template, sessio
 from limiter import limiter  # Import the limiter instance
 from extensions import socketio
 import os
-from database.auth_db import upsert_auth
+from database.auth_db import upsert_auth, auth_cache, feed_token_cache
 from database.user_db import authenticate_user, User, db_session, find_user_by_username, find_user_by_email  # Import the function
 from database.settings_db import get_smtp_settings, set_smtp_settings
 from utils.email_utils import send_test_email, send_password_reset_email
@@ -430,6 +430,24 @@ def debug_smtp():
 def logout():
     if session.get('logged_in'):
         username = session['user']
+        
+        # Clear cache entries before database update to prevent stale data access
+        cache_key_auth = f"auth-{username}"
+        cache_key_feed = f"feed-{username}"
+        if cache_key_auth in auth_cache:
+            del auth_cache[cache_key_auth]
+            logger.info(f"Cleared auth cache for user: {username}")
+        if cache_key_feed in feed_token_cache:
+            del feed_token_cache[cache_key_feed]
+            logger.info(f"Cleared feed token cache for user: {username}")
+            
+        # Clear symbol cache on logout
+        try:
+            from database.master_contract_cache_hook import clear_cache_on_logout
+            clear_cache_on_logout()
+            logger.info("Cleared symbol cache on logout")
+        except Exception as cache_error:
+            logger.error(f"Error clearing symbol cache on logout: {cache_error}")
         
         #writing to database      
         inserted_id = upsert_auth(username, "", "", revoke=True)

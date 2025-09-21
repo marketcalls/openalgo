@@ -903,19 +903,21 @@ class BrokerData:
             # Get the AliceBlue resolution format
             aliceblue_timeframe = self.timeframe_map[timeframe]
             
-            # Get credentials - user_id is BROKER_API_KEY, auth token is session_id
+            # Get credentials - AliceBlue historical API uses user_id in Bearer token
             from utils.config import get_broker_api_key, get_broker_api_secret
-            
-            user_id = get_broker_api_key()  # This is the user_id for AliceBlue
-            session_id = self.session_id
-            
-            if not user_id or not session_id:
-                logger.error(f"Missing credentials for historical data - user_id: {'Yes' if user_id else 'No'}, session_id: {'Yes' if session_id else 'No'}")
+
+            # IMPORTANT: AliceBlue historical API uses user_id (BROKER_API_KEY), not client_id!
+            # This is different from other APIs which use BROKER_API_SECRET
+            user_id = get_broker_api_key()  # This should be '1412368' in your case
+            auth_token = self.session_id  # This is the session token from login
+
+            if not user_id or not auth_token:
+                logger.error(f"Missing credentials for historical data - user_id: {'Yes' if user_id else 'No'}, auth_token: {'Yes' if auth_token else 'No'}")
                 return pd.DataFrame()
-            
-            # Use the same authentication as other AliceBlue APIs (order_api.py pattern)
+
+            # Historical API uses different auth format: Bearer {user_id} {session_token}
             headers = {
-                'Authorization': f'Bearer {get_broker_api_secret()} {session_id}',
+                'Authorization': f'Bearer {user_id} {auth_token}',
                 'Content-Type': 'application/json'
             }
             
@@ -993,9 +995,20 @@ class BrokerData:
             
             start_ms = convert_to_unix_ms(start_date, is_end_date=False)
             end_ms = convert_to_unix_ms(end_date, is_end_date=True)
-            
+
             # Log the conversion for debugging
             logger.info(f"Date conversion - Start: {start_date} -> {start_ms}, End: {end_date} -> {end_ms}")
+
+            # Validate that dates are not in the future
+            current_time_ms = int(time.time() * 1000)
+            if int(start_ms) > current_time_ms:
+                logger.error(f"Start date {start_date} is in the future. Historical data is only available for past dates.")
+                return pd.DataFrame()
+
+            # If end date is in future, cap it to current time
+            if int(end_ms) > current_time_ms:
+                logger.warning(f"End date {end_date} is in the future. Capping to current time.")
+                end_ms = str(current_time_ms)
             
             # Ensure start and end times are different and valid
             if start_ms == end_ms:
@@ -1055,27 +1068,63 @@ class BrokerData:
             df = pd.DataFrame(data['result'])
             
             # Rename columns to standard format
+            # Use 'timestamp' instead of 'datetime' to match Angel and other brokers
             df = df.rename(columns={
-                'time': 'datetime',
+                'time': 'timestamp',
                 'open': 'open',
                 'high': 'high',
                 'low': 'low',
                 'close': 'close',
                 'volume': 'volume'
             })
-            
+
             # Ensure DataFrame has required columns
-            if not all(col in df.columns for col in ['datetime', 'open', 'high', 'low', 'close', 'volume']):
+            if not all(col in df.columns for col in ['timestamp', 'open', 'high', 'low', 'close', 'volume']):
                 logger.error(f"Missing required columns in historical data response")
                 return pd.DataFrame()
-            
+
             # Convert time column to datetime
             # AliceBlue returns time as string in format 'YYYY-MM-DD HH:MM:SS'
-            df['datetime'] = pd.to_datetime(df['datetime'])
-            
-            # Return only required columns in the correct order
-            df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-            
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # Handle different timeframes
+            if timeframe == 'D':
+                # For daily data, normalize to date only (no time component)
+                # Set time to midnight to represent the date
+                df['timestamp'] = df['timestamp'].dt.normalize()
+
+                # Add IST offset (5:30 hours) for proper Unix timestamp conversion
+                # This ensures the date is correctly represented
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+            else:
+                # For intraday data, adjust timestamps to represent the start of the candle
+                # AliceBlue provides end-of-candle timestamps (XX:XX:59), we need start (XX:XX:00)
+                df['timestamp'] = df['timestamp'].dt.floor('min')
+
+            # AliceBlue timestamps are in IST - need to localize them
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+
+            # Localize to IST (AliceBlue provides IST timestamps without timezone info)
+            df['timestamp'] = df['timestamp'].dt.tz_localize(ist)
+
+            # Convert timestamp to Unix epoch (seconds since 1970)
+            # This will correctly handle the IST timezone
+            df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+
+            # Ensure numeric columns are properly typed
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
+
+            # Sort by timestamp and remove any duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+
+            # Add OI column with zeros (AliceBlue doesn't provide OI in historical data)
+            df['oi'] = 0
+
+            # Return columns in the order matching Angel broker format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+
             return df
             
         except Exception as e:

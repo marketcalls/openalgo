@@ -112,19 +112,39 @@ class BrokerData:
         # Simply return the date string as the API expects YYYY-MM-DD format
         return date_str
 
-    def _convert_timestamp_to_ist(self, timestamp: int) -> int:
+    def _convert_timestamp_to_ist(self, timestamp: int, is_daily: bool = False) -> int:
         """Convert UTC timestamp to IST timestamp"""
-        # Convert to datetime in UTC
-        utc_dt = datetime.utcfromtimestamp(timestamp)
-        # Add IST offset (+5:30)
-        ist_dt = utc_dt + timedelta(hours=5, minutes=30)
-        # Return new timestamp
-        return int(ist_dt.timestamp())
+        if is_daily:
+            # For daily data, we want to show just the date
+            # The Dhan API returns timestamps at UTC midnight
+            # We need to adjust to show the correct IST date
+            utc_dt = datetime.utcfromtimestamp(timestamp)
+            # Add IST offset to get the correct IST date
+            ist_dt = utc_dt + timedelta(hours=5, minutes=30)
+            # Create timestamp for start of that IST day (00:00:00)
+            # This will be 18:30 UTC of previous day
+            start_of_day = datetime(ist_dt.year, ist_dt.month, ist_dt.day)
+            # Return timestamp without timezone conversion (pandas will handle display)
+            return int(start_of_day.timestamp() + 19800)  # Add 5:30 hours in seconds
+        else:
+            # For intraday data, convert to IST
+            utc_dt = datetime.utcfromtimestamp(timestamp)
+            # Add IST offset (+5:30)
+            ist_dt = utc_dt + timedelta(hours=5, minutes=30)
+            return int(ist_dt.timestamp())
 
-    def _get_intraday_chunks(self, start_date: str, end_date: str) -> list:
+    def _get_intraday_chunks(self, start_date, end_date) -> list:
         """Split date range into 5-day chunks for intraday data"""
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
+        # Handle both string and datetime.date objects
+        if isinstance(start_date, str):
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start = datetime.combine(start_date, datetime.min.time())
+        
+        if isinstance(end_date, str):
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end = datetime.combine(end_date, datetime.min.time())
         chunks = []
         
         while start < end:
@@ -202,15 +222,27 @@ class BrokerData:
         
         raise Exception(f"Unsupported exchange: {exchange}")
 
-    def _is_trading_day(self, date_str: str) -> bool:
+    def _is_trading_day(self, date_str) -> bool:
         """Check if the given date is a trading day (not weekend)"""
-        date = datetime.strptime(date_str, "%Y-%m-%d")
+        # Handle both string and datetime.date objects
+        if isinstance(date_str, str):
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+        else:
+            date = datetime.combine(date_str, datetime.min.time())
         return date.weekday() < 5  # 0-4 are Monday to Friday
 
-    def _adjust_dates(self, start_date: str, end_date: str) -> tuple:
+    def _adjust_dates(self, start_date, end_date) -> tuple:
         """Adjust dates to nearest trading days"""
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
+        # Handle both string and datetime.date objects
+        if isinstance(start_date, str):
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start = datetime.combine(start_date, datetime.min.time())
+        
+        if isinstance(end_date, str):
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end = datetime.combine(end_date, datetime.min.time())
         
         # If start date is weekend, move to next Monday
         while start.weekday() >= 5:
@@ -234,7 +266,7 @@ class BrokerData:
         # The API will handle the full day's data automatically
         return date_str, date_str
 
-    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol
         Args:
@@ -255,6 +287,12 @@ class BrokerData:
                 supported = list(self.timeframe_map.keys())
                 raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
 
+            # Convert datetime.date to string if needed
+            if not isinstance(start_date, str):
+                start_date = start_date.strftime("%Y-%m-%d")
+            if not isinstance(end_date, str):
+                end_date = end_date.strftime("%Y-%m-%d")
+                
             # Adjust dates for trading days
             start_date, end_date = self._adjust_dates(start_date, end_date)
             
@@ -265,7 +303,10 @@ class BrokerData:
 
             # If start and end dates are same, increase end date by one day
             if start_date == end_date:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                if isinstance(end_date, str):
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                else:
+                    end_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
                 end_date = end_dt.strftime("%Y-%m-%d")
                 logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
 
@@ -291,7 +332,10 @@ class BrokerData:
                 # Convert dates to UTC for API request
                 utc_start_date = self._convert_date_to_utc(start_date)
                 # For end date, add one day to include the end date in results
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                if isinstance(end_date, str):
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                else:
+                    end_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
                 utc_end_date = self._convert_date_to_utc(end_dt.strftime("%Y-%m-%d"))
                 
                 request_data = {
@@ -322,8 +366,8 @@ class BrokerData:
                 openinterest = response.get('open_interest', [])
 
                 for i in range(len(timestamps)):
-                    # Convert UTC timestamp to IST
-                    ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
+                    # Convert UTC timestamp to IST with proper daily formatting
+                    ist_timestamp = self._convert_timestamp_to_ist(timestamps[i], is_daily=True)
                     all_candles.append({
                         'timestamp': ist_timestamp,
                         'open': float(opens[i]) if opens[i] else 0,
@@ -337,7 +381,13 @@ class BrokerData:
                 # For intraday data
                 endpoint = "/v2/charts/intraday"
                 
-                if start_date == (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"):
+                # Handle both string and datetime.date objects
+                if isinstance(end_date, str):
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                else:
+                    end_dt = datetime.combine(end_date, datetime.min.time())
+                    
+                if start_date == (end_dt - timedelta(days=1)).strftime("%Y-%m-%d"):
                     # For same day intraday data, use exact time range in IST
                     from_time = start_date
                     to_time = end_date  # This will be the next day as adjusted above
@@ -443,14 +493,18 @@ class BrokerData:
                         # Get today's data from quotes API
                         quotes = self.get_quotes(symbol, exchange)
                         if quotes and quotes.get('ltp', 0) > 0:  # Only add if we got valid data
+                            # Create today's timestamp at start of day (00:00:00) for consistency
+                            today_dt = datetime.strptime(today, "%Y-%m-%d")
+                            today_dt = today_dt.replace(hour=0, minute=0, second=0)
+                            # Add IST offset (5:30 hours = 19800 seconds) to match historical data format
                             today_candle = {
-                                'timestamp': int(datetime.strptime(today + " 15:30:00", "%Y-%m-%d %H:%M:%S").timestamp()),
+                                'timestamp': int(today_dt.timestamp() + 19800),  # Add 5:30 hours in seconds
                                 'open': float(quotes.get('open', 0)),
                                 'high': float(quotes.get('high', 0)),
                                 'low': float(quotes.get('low', 0)),
                                 'close': float(quotes.get('ltp', 0)),  # Use LTP as current close
                                 'volume': int(quotes.get('volume', 0)),
-                                'oi': int(quotes.get('open_interest', 0))
+                                'oi': int(quotes.get('oi', 0))  # Changed from 'open_interest' to 'oi'
                             }
                             all_candles.append(today_candle)
                     except Exception as e:

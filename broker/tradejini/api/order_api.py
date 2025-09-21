@@ -1,6 +1,8 @@
 import httpx
 import json
 import os
+import logging
+import traceback
 from database.auth_db import get_auth_token
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from ..mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
@@ -166,8 +168,8 @@ def get_order_book(auth):
                 try:
                     # Get OpenAlgo symbol using symbol and exchange
                     openalgo_symbol = get_oa_symbol(
-                        symbol=order['sym']['id'],
-                        exchange=order['sym']['exch']
+                        order['sym']['id'],
+                        order['sym']['exch']
                     )
                     #print(f"[DEBUG] get_order_book - OpenAlgo symbol lookup for symbol {order['sym']['sym']}: {openalgo_symbol}")
                     
@@ -294,8 +296,8 @@ def get_trade_book(auth):
                 openalgo_symbol = None
                 try:
                     openalgo_symbol = get_oa_symbol(
-                        symbol=symbol.get('id', ''),
-                        exchange=symbol.get('exch', '')
+                        symbol.get('id', ''),
+                        symbol.get('exch', '')
                     )
                 except Exception as e:
                     logger.warning(f"get_trade_book - Symbol lookup failed: {str(e)}")
@@ -569,8 +571,8 @@ def get_holdings(auth):
         )
         
         # Log the complete response for debugging
-        logger.info(f"Complete API Response: {response}")
-        logger.info(f"Response type: {type(response)}")
+        logger.debug(f"Complete API Response: {response}")
+        logger.debug(f"Response type: {type(response)}")
         
         # If response is a dictionary, log all its keys and values
         if isinstance(response, dict):
@@ -599,18 +601,8 @@ def get_holdings(auth):
             # Handle 'no-data' response
             if status == 'no-data' and 'No Data Available' in msg:
                 logger.info("No holdings data available in the account")
-                return {
-                    "status": "success",
-                    "data": {
-                        "holdings": [],
-                        "statistics": {
-                            "totalholdingvalue": 0,
-                            "totalinvvalue": 0,
-                            "totalpnlpercentage": 0,
-                            "totalprofitandloss": 0
-                        }
-                    }
-                }
+                # Return empty list for service layer to process
+                return []
                 
             if status in ['Ok', 'ok']:
                 holdings_data = response.get('d', response.get('data', {}))
@@ -618,26 +610,15 @@ def get_holdings(auth):
                 # If holdings data is a string like 'No Holdings'
                 if isinstance(holdings_data, str) and 'No Holdings' in holdings_data:
                     logger.info("No holdings found in the account")
-                    return {
-                        "status": "success",
-                        "data": {
-                            "holdings": [],
-                            "statistics": {
-                                "totalholdingvalue": 0,
-                                "totalinvvalue": 0,
-                                "totalpnlpercentage": 0,
-                                "totalprofitandloss": 0
-                            }
-                        }
-                    }
+                    # Return empty list for service layer to process
+                    return []
                 
                 # If we have a dictionary with holdings
                 if isinstance(holdings_data, dict):
                     holdings_list = holdings_data.get('holdings', [])
-                    if isinstance(holdings_list, list):
-                        logger.debug(f"Found {len(holdings_list)} holdings")
-                        from ..mapping.order_data import transform_holdings_data
-                        return transform_holdings_data(holdings_list)
+                    logger.debug(f"Found {len(holdings_list)} holdings")
+                    # Return the raw list for service layer to process
+                    return holdings_list
             
             # If we get here, there was an error or unexpected format
             error_msg = response.get('message', 'Unknown error in API response')
@@ -652,18 +633,8 @@ def get_holdings(auth):
         elif isinstance(response, str):
             if 'No Holdings' in response:
                 logger.info("No holdings found in the account (string response)")
-                return {
-                    "status": "success",
-                    "data": {
-                        "holdings": [],
-                        "statistics": {
-                            "totalholdingvalue": 0,
-                            "totalinvvalue": 0,
-                            "totalpnlpercentage": 0,
-                            "totalprofitandloss": 0
-                        }
-                    }
-                }
+                # Return empty list for service layer to process
+                return []
             return {
                 "status": "error",
                 "message": f"Unexpected string response from API: {response}",

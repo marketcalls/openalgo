@@ -305,7 +305,8 @@ def process_fyers_nfo_csv(path):
     df['name'] = df['Symbol Details']
 
     # Convert 'Expiry date' from Unix timestamp to datetime
-    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+    # First convert string to numeric to avoid FutureWarning
+    df['expiry'] = pd.to_datetime(pd.to_numeric(df['Expiry date'], errors='coerce'), unit='s')
 
     # Format the datetime object to the desired format '15-APR-24'
     df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
@@ -352,7 +353,8 @@ def process_fyers_cds_csv(path):
     df['name'] = df['Symbol Details']
 
     # Convert 'Expiry date' from Unix timestamp to datetime
-    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+    # First convert string to numeric to avoid FutureWarning
+    df['expiry'] = pd.to_datetime(pd.to_numeric(df['Expiry date'], errors='coerce'), unit='s')
 
     # Format the datetime object to the desired format '15-APR-24'
     df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
@@ -399,7 +401,8 @@ def process_fyers_bfo_csv(path):
     df['name'] = df['Symbol Details']
 
     # Convert 'Expiry date' from Unix timestamp to datetime
-    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+    # First convert string to numeric to avoid FutureWarning
+    df['expiry'] = pd.to_datetime(pd.to_numeric(df['Expiry date'], errors='coerce'), unit='s')
 
     # Format the datetime object to the desired format '15-APR-24'
     df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()
@@ -445,7 +448,8 @@ def process_fyers_mcx_csv(path):
     df['name'] = df['Symbol Details']
 
     # Convert 'Expiry date' from Unix timestamp to datetime
-    df['expiry'] = pd.to_datetime(df['Expiry date'], unit='s')
+    # First convert string to numeric to avoid FutureWarning
+    df['expiry'] = pd.to_datetime(pd.to_numeric(df['Expiry date'], errors='coerce'), unit='s')
 
     # Format the datetime object to the desired format '15-APR-24'
     df['expiry'] = df['expiry'].dt.strftime('%d-%b-%y').str.upper()

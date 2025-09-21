@@ -160,7 +160,9 @@ class FyersTokenConverter:
             Tuple of (hsm_tokens, token_to_symbol_mapping, invalid_symbols)
         """
         try:
-            self.logger.info(f"Converting brsymbols to HSM tokens: {brsymbols}")
+            self.logger.info(f"Converting {len(brsymbols)} brsymbols to HSM tokens")
+            self.logger.info(f"Brsymbols to convert: {brsymbols}")
+            self.logger.info(f"Data type: {data_type}")
             
             hsm_tokens = []
             token_mappings = {}
@@ -169,7 +171,7 @@ class FyersTokenConverter:
             # Process ALL symbols with API conversion to get proper fytokens for live data
             # This ensures both NSE and non-NSE symbols get live data feeds
             if brsymbols:
-                self.logger.info(f"Processing all symbols with API conversion for live data: {brsymbols}")
+                self.logger.info(f"Processing all {len(brsymbols)} symbols with Fyers API conversion")
                 try:
                     # Call Fyers API to get fytokens for all symbols
                     data = {"symbols": brsymbols}
@@ -190,18 +192,23 @@ class FyersTokenConverter:
                         valid_symbols = response_data.get("validSymbol", {})
                         api_invalid = response_data.get("invalidSymbol", [])
                         
+                        self.logger.info(f"API returned {len(valid_symbols)} valid symbols, {len(api_invalid)} invalid symbols")
+                        
                         # Process valid symbols with API tokens
                         for symbol, fytoken in valid_symbols.items():
                             hsm_token = self._convert_to_hsm_token(symbol, fytoken, data_type)
                             if hsm_token:
                                 hsm_tokens.append(hsm_token)
                                 token_mappings[hsm_token] = symbol
-                                self.logger.info(f"API conversion: {symbol} -> {hsm_token} (fytoken: {fytoken})")
+                                self.logger.info(f"✅ Converted: {symbol} -> {hsm_token} (fytoken: {fytoken})")
                             else:
                                 invalid_symbols.append(symbol)
+                                self.logger.warning(f"❌ Failed to convert: {symbol} with fytoken: {fytoken}")
                         
                         # Add API invalid symbols
-                        invalid_symbols.extend(api_invalid)
+                        if api_invalid:
+                            invalid_symbols.extend(api_invalid)
+                            self.logger.warning(f"API invalid symbols: {api_invalid}")
                     else:
                         error_msg = response_data.get('message', 'Unknown API error')
                         self.logger.error(f"Fyers API error: {error_msg}")
@@ -220,6 +227,9 @@ class FyersTokenConverter:
                 hsm_tokens.extend(fallback_tokens)
                 token_mappings.update(fallback_mappings)
                 invalid_symbols.extend(fallback_invalid)
+            
+            self.logger.info(f"Conversion complete: {len(hsm_tokens)} HSM tokens generated")
+            self.logger.info(f"HSM tokens: {hsm_tokens}")
             
             return hsm_tokens, token_mappings, invalid_symbols
                 

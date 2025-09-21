@@ -1,0 +1,24 @@
+# Strategy configuration file (contains user-specific data)
+strategy_configs.json
+
+# Environment variables (contains sensitive data)
+strategy_env.json
+.secure_env
+
+# Uploaded strategy scripts
+scripts/*.py
+
+# Keep example strategies
+!examples/
+!examples/*.py
+
+# Ignore any backup files
+*.bak
+*.backup
+*~
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

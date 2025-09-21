@@ -1,0 +1,900 @@
+{% extends "base.html" %}
+
+{% block title %}Python Strategies - OpenAlgo{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold">Python Strategies</h1>
+            <p class="text-base-content/70 mt-2">Manage and schedule your trading strategies</p>
+        </div>
+        <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            Add Strategy
+        </a>
+    </div>
+
+    <!-- Status Summary with IST Time -->
+    <div class="stats shadow w-full mb-8">
+        <div class="stat">
+            <div class="stat-figure text-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="stat-title">Total Strategies</div>
+            <div class="stat-value">{{ strategies|length }}</div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-figure text-success">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <div class="stat-title">Running</div>
+            <div class="stat-value text-success">{{ strategies|selectattr('is_running')|list|length }}</div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-figure text-info">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="stat-title">Scheduled</div>
+            <div class="stat-value text-info">{{ strategies|selectattr('is_scheduled')|list|length }}</div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-figure text-warning">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+            </div>
+            <div class="stat-title">Master Contract</div>
+            <div class="stat-value text-sm" id="contract-status">
+                <span class="badge badge-warning">Checking...</span>
+            </div>
+            <div class="stat-actions">
+                <button onclick="checkContracts()" class="btn btn-xs btn-outline" id="check-contracts-btn">Check & Start</button>
+            </div>
+        </div>
+        
+        <div class="stat">
+            <div class="stat-figure text-accent">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="stat-title">Current Time (IST)</div>
+            <div class="stat-value text-accent text-lg">{{ current_ist_time|default('--:--:-- IST') }}</div>
+        </div>
+    </div>
+
+    <!-- Strategy Cards -->
+    {% if strategies %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+        {% for strategy in strategies %}
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <!-- Header with Status -->
+                <div class="flex justify-between items-start">
+                    <h2 class="card-title">{{ strategy.name }}</h2>
+                    <div class="flex gap-2">
+                        {% if strategy.is_error %}
+                            {% if 'master contract' in strategy.error_message|lower %}
+                            <span class="badge badge-warning">Waiting</span>
+                            {% else %}
+                            <span class="badge badge-error">Error</span>
+                            {% endif %}
+                        {% elif strategy.is_running %}
+                        <span class="badge badge-success">Running</span>
+                        {% else %}
+                        <span class="badge badge-ghost">Stopped</span>
+                        {% endif %}
+                        
+                        {% if strategy.is_scheduled %}
+                        <span class="badge badge-info">Scheduled</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Strategy Info -->
+                <div class="space-y-2 text-sm mt-4">
+                    <div class="flex justify-between">
+                        <span class="font-semibold">File:</span>
+                        <span class="text-base-content/70">{{ strategy.file }}</span>
+                    </div>
+                    
+                    {% if strategy.pid %}
+                    <div class="flex justify-between">
+                        <span class="font-semibold">PID:</span>
+                        <span class="text-base-content/70">{{ strategy.pid }}</span>
+                    </div>
+                    {% endif %}
+                    
+                    {% if strategy.is_scheduled %}
+                    <div class="flex justify-between">
+                        <span class="font-semibold">Schedule:</span>
+                        <span class="text-base-content/70">{{ strategy.schedule_start }} IST{% if strategy.schedule_stop %} - {{ strategy.schedule_stop }} IST{% endif %}</span>
+                    </div>
+                    {% if strategy.schedule_days %}
+                    <div class="flex justify-between">
+                        <span class="font-semibold">Days:</span>
+                        <span class="text-base-content/70">{{ strategy.schedule_days|join(', ')|upper }}</span>
+                    </div>
+                    {% endif %}
+                    {% endif %}
+                    
+                    {% if strategy.last_started %}
+                    <div class="flex justify-between">
+                        <span class="font-semibold">Last Started:</span>
+                        <span class="text-base-content/70 text-xs">{{ strategy.last_started }}</span>
+                    </div>
+                    {% endif %}
+                    
+                    {% if strategy.last_stopped %}
+                    <div class="flex justify-between">
+                        <span class="font-semibold">Last Stopped:</span>
+                        <span class="text-base-content/70 text-xs">{{ strategy.last_stopped }}</span>
+                    </div>
+                    {% endif %}
+                    
+                    {% if strategy.is_error %}
+                    <div class="{% if 'master contract' in strategy.error_message|lower %}bg-warning/20 border border-warning{% else %}bg-error/20 border border-error{% endif %} rounded-lg p-3 mt-2">
+                        <div class="flex items-start gap-2">
+                            {% if 'master contract' in strategy.error_message|lower %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-warning mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div class="text-xs">
+                                <p class="font-semibold text-warning">Waiting for Master Contracts</p>
+                                <p class="text-warning/80 mt-1">Strategy will start automatically once master contracts are downloaded</p>
+                                {% if strategy.error_time %}
+                                <p class="text-warning/60 mt-1">Since: {{ strategy.error_time }}</p>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-error mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div class="text-xs">
+                                <p class="font-semibold text-error">Error occurred</p>
+                                <p class="text-error/80 mt-1">{{ strategy.error_message }}</p>
+                                {% if strategy.error_time %}
+                                <p class="text-error/60 mt-1">At: {{ strategy.error_time }}</p>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="card-actions justify-between mt-4">
+                    <!-- Primary Action Buttons -->
+                    <div class="flex items-center gap-2">
+                    {% if strategy.is_error %}
+                        {% if 'master contract' not in strategy.error_message|lower %}
+                        <button onclick="clearErrorState('{{ strategy.id }}')" class="btn btn-sm btn-warning">
+                            Clear Error
+                        </button>
+                        <button onclick="startStrategy('{{ strategy.id }}')" class="btn btn-sm btn-success" title="Try to restart after clearing error">
+                            Restart
+                        </button>
+                        {% endif %}
+                    {% elif strategy.is_running %}
+                    <button onclick="stopStrategy('{{ strategy.id }}')" class="btn btn-sm btn-error">
+                        Stop
+                    </button>
+                    {% else %}
+                    <button onclick="startStrategy('{{ strategy.id }}')" class="btn btn-sm btn-success">
+                        Start
+                    </button>
+                    {% endif %}
+                    
+                    {% if strategy.is_scheduled %}
+                    <button onclick="unscheduleStrategy('{{ strategy.id }}', '{{ strategy.name }}')" 
+                            class="btn btn-sm btn-warning {% if strategy.is_running %}btn-disabled{% endif %}"
+                            {% if strategy.is_running %}disabled title="Cannot modify schedule while strategy is running"{% endif %}>
+                        Unschedule
+                    </button>
+                    {% else %}
+                    <button onclick="openScheduleModal('{{ strategy.id }}', '{{ strategy.name }}')" 
+                            class="btn btn-sm btn-info {% if strategy.is_running %}btn-disabled{% endif %}"
+                            {% if strategy.is_running %}disabled title="Cannot modify schedule while strategy is running"{% endif %}>
+                        Schedule
+                    </button>
+                    {% endif %}
+                    </div>
+                    
+                    <!-- Icon Buttons -->
+                    <div class="flex items-center gap-1">
+                    <a href="{{ url_for('python_strategy_bp.view_logs', strategy_id=strategy.id, latest=1) }}" class="btn btn-sm btn-ghost btn-square" title="View Logs">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                    </a>
+                    
+                    <a href="{{ url_for('python_strategy_bp.edit_strategy', strategy_id=strategy.id) }}" class="btn btn-sm btn-ghost btn-square" title="{% if strategy.is_running %}View{% else %}Edit{% endif %}">
+                        {% if strategy.is_running %}
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        {% else %}
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        {% endif %}
+                    </a>
+                    
+                    <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy.id) }}" class="btn btn-sm btn-ghost btn-square" title="Export">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                    </a>
+                    
+                    <button onclick="openEnvModal('{{ strategy.id }}', '{{ strategy.name }}')" 
+                            class="btn btn-sm btn-ghost btn-square" 
+                            title="Environment Variables{% if strategy.is_running %} (Read-only while running){% endif %}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+                    
+                    {% if not strategy.is_running %}
+                    <button onclick="deleteStrategy('{{ strategy.id }}', '{{ strategy.name }}')" class="btn btn-sm btn-ghost btn-square text-error" title="Delete Strategy">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
+                    {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <!-- Empty State -->
+    <div class="text-center py-16">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+        <h3 class="mt-4 text-lg font-medium">No strategies uploaded</h3>
+        <p class="mt-2 text-base-content/70">Get started by uploading your first Python strategy</p>
+        <div class="mt-6">
+            <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn btn-primary">
+                Add Your First Strategy
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Delete Confirmation Modal -->
+<dialog id="delete_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Delete Strategy</h3>
+        <p class="py-4">Are you sure you want to delete "<span id="delete_strategy_name"></span>"?</p>
+        <p class="text-sm text-warning">This action cannot be undone.</p>
+        <input type="hidden" id="delete_strategy_id">
+        <div class="modal-action">
+            <button onclick="delete_modal.close()" class="btn">Cancel</button>
+            <button onclick="confirmDelete()" class="btn btn-error">Delete</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<!-- Unschedule Confirmation Modal -->
+<dialog id="unschedule_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Remove Schedule</h3>
+        <p class="py-4">Remove schedule for "<span id="unschedule_strategy_name"></span>"?</p>
+        <p class="text-sm text-base-content/60">The strategy will no longer run automatically at scheduled times.</p>
+        <input type="hidden" id="unschedule_strategy_id">
+        <div class="modal-action">
+            <button onclick="unschedule_modal.close()" class="btn">Cancel</button>
+            <button onclick="confirmUnschedule()" class="btn btn-warning">Remove Schedule</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<!-- Schedule Modal -->
+<dialog id="schedule_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Schedule Strategy: <span id="modal_strategy_name"></span></h3>
+        
+        <form id="schedule_form">
+            <input type="hidden" id="schedule_strategy_id">
+            
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text">Start Time (IST)</span>
+                </label>
+                <input type="time" id="start_time" class="input input-bordered" required>
+                <label class="label">
+                    <span class="label-text-alt">Enter time in Indian Standard Time (IST)</span>
+                </label>
+            </div>
+            
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text">Stop Time (IST) - Optional</span>
+                </label>
+                <input type="time" id="stop_time" class="input input-bordered">
+                <label class="label">
+                    <span class="label-text-alt">Leave empty to run indefinitely</span>
+                </label>
+            </div>
+            
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text">Days to Run</span>
+                </label>
+                <div class="grid grid-cols-3 gap-2">
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="mon" class="checkbox checkbox-primary" checked>
+                        <span>Monday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="tue" class="checkbox checkbox-primary" checked>
+                        <span>Tuesday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="wed" class="checkbox checkbox-primary" checked>
+                        <span>Wednesday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="thu" class="checkbox checkbox-primary" checked>
+                        <span>Thursday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="fri" class="checkbox checkbox-primary" checked>
+                        <span>Friday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="sat" class="checkbox checkbox-primary">
+                        <span>Saturday</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="days" value="sun" class="checkbox checkbox-primary">
+                        <span>Sunday</span>
+                    </label>
+                </div>
+            </div>
+            
+            <div class="modal-action">
+                <button type="button" onclick="schedule_modal.close()" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Schedule</button>
+            </div>
+        </form>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<!-- Environment Variables Modal -->
+<dialog id="env_modal" class="modal">
+    <div class="modal-box max-w-4xl">
+        <h3 class="font-bold text-lg mb-4">Environment Variables: <span id="env_strategy_name"></span></h3>
+        <input type="hidden" id="env_strategy_id">
+        
+        <!-- Regular Variables -->
+        <div class="mb-6">
+            <div class="flex justify-between items-center mb-3">
+                <h4 class="font-semibold">Regular Variables</h4>
+                <button onclick="addEnvVariable('regular')" class="btn btn-sm btn-primary">Add Variable</button>
+            </div>
+            <div id="regular_vars" class="space-y-2">
+                <!-- Regular variables will be loaded here -->
+            </div>
+        </div>
+        
+        <!-- Secure Variables -->
+        <div class="mb-6">
+            <div class="flex justify-between items-center mb-3">
+                <h4 class="font-semibold">Secure Variables</h4>
+                <span class="text-xs text-base-content/60">Encrypted storage for API keys, passwords</span>
+                <button onclick="addEnvVariable('secure')" class="btn btn-sm btn-secondary">Add Secure Variable</button>
+            </div>
+            <div id="secure_vars" class="space-y-2">
+                <!-- Secure variables will be loaded here -->
+            </div>
+        </div>
+        
+        <div class="modal-action">
+            <button onclick="env_modal.close()" class="btn">Cancel</button>
+            <button onclick="saveEnvironmentVariables()" class="btn btn-primary">Save Variables</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<script>
+// Get CSRF token
+function getCSRFToken() {
+    const token = document.querySelector('meta[name="csrf-token"]');
+    return token ? token.getAttribute('content') : '';
+}
+
+// Start strategy
+async function startStrategy(strategyId) {
+    try {
+        const response = await fetch(`/python/start/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        showToast('Failed to start strategy', 'error');
+    }
+}
+
+// Stop strategy
+async function stopStrategy(strategyId) {
+    try {
+        const response = await fetch(`/python/stop/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        showToast('Failed to stop strategy', 'error');
+    }
+}
+
+// Delete strategy - open modal
+function deleteStrategy(strategyId, strategyName) {
+    document.getElementById('delete_strategy_id').value = strategyId;
+    document.getElementById('delete_strategy_name').textContent = strategyName;
+    delete_modal.showModal();
+}
+
+// Confirm delete action
+async function confirmDelete() {
+    const strategyId = document.getElementById('delete_strategy_id').value;
+    delete_modal.close();
+    
+    try {
+        const response = await fetch(`/python/delete/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        showToast('Failed to delete strategy', 'error');
+    }
+}
+
+// Open schedule modal
+function openScheduleModal(strategyId, strategyName) {
+    document.getElementById('schedule_strategy_id').value = strategyId;
+    document.getElementById('modal_strategy_name').textContent = strategyName;
+    schedule_modal.showModal();
+}
+
+// Handle schedule form
+document.getElementById('schedule_form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const strategyId = document.getElementById('schedule_strategy_id').value;
+    const startTime = document.getElementById('start_time').value;
+    const stopTime = document.getElementById('stop_time').value;
+    
+    // Get selected days
+    const days = [];
+    document.querySelectorAll('input[name="days"]:checked').forEach(cb => {
+        days.push(cb.value);
+    });
+    
+    if (days.length === 0) {
+        showToast('Please select at least one day', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/python/schedule/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                start_time: startTime,
+                stop_time: stopTime || null,
+                days: days
+            })
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            schedule_modal.close();
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            if (data.error_code === 'STRATEGY_RUNNING') {
+                showToast('Cannot modify schedule while strategy is running', 'warning');
+            } else {
+                showToast(data.message, 'error');
+            }
+        }
+    } catch (error) {
+        showToast('Failed to schedule strategy', 'error');
+    }
+});
+
+// Unschedule strategy - open modal
+function unscheduleStrategy(strategyId, strategyName) {
+    document.getElementById('unschedule_strategy_id').value = strategyId;
+    document.getElementById('unschedule_strategy_name').textContent = strategyName || 'this strategy';
+    unschedule_modal.showModal();
+}
+
+// Confirm unschedule action
+async function confirmUnschedule() {
+    const strategyId = document.getElementById('unschedule_strategy_id').value;
+    unschedule_modal.close();
+    
+    try {
+        const response = await fetch(`/python/unschedule/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            if (data.error_code === 'STRATEGY_RUNNING') {
+                showToast('Cannot modify schedule while strategy is running', 'warning');
+            } else {
+                showToast(data.message, 'error');
+            }
+        }
+    } catch (error) {
+        showToast('Failed to unschedule strategy', 'error');
+    }
+}
+
+// Open environment variables modal
+async function openEnvModal(strategyId, strategyName) {
+    document.getElementById('env_strategy_id').value = strategyId;
+    document.getElementById('env_strategy_name').textContent = strategyName;
+    
+    // Load existing environment variables
+    await loadEnvironmentVariables(strategyId);
+    
+    env_modal.showModal();
+}
+
+// Load environment variables for a strategy
+async function loadEnvironmentVariables(strategyId) {
+    try {
+        const response = await fetch(`/python/env/${strategyId}`);
+        const data = await response.json();
+        
+        // Clear existing variables
+        document.getElementById('regular_vars').innerHTML = '';
+        document.getElementById('secure_vars').innerHTML = '';
+        
+        if (data.success) {
+            // Load regular variables
+            if (data.regular_vars) {
+                for (const [key, value] of Object.entries(data.regular_vars)) {
+                    addEnvVariableRow('regular', key, value, data.read_only);
+                }
+            }
+            
+            // Load secure variables (keys only, values are encrypted)
+            if (data.secure_vars) {
+                for (const key of data.secure_vars) {
+                    // Add a special placeholder to indicate existing secure variable
+                    addEnvVariableRow('secure', key, '••••••••', data.read_only, true);
+                }
+            }
+            
+            // Update UI based on read-only state
+            updateEnvModalForReadOnly(data.read_only, data.is_running);
+        }
+    } catch (error) {
+        console.error('Failed to load environment variables:', error);
+    }
+}
+
+// Add environment variable row
+function addEnvVariable(type) {
+    addEnvVariableRow(type, '', '', false);
+}
+
+function addEnvVariableRow(type, key = '', value = '', readOnly = false, isExisting = false) {
+    const container = document.getElementById(`${type}_vars`);
+    const div = document.createElement('div');
+    div.className = 'flex gap-2 items-center';
+    
+    const isSecure = type === 'secure';
+    const placeholder = isSecure ? 'API_KEY, SECRET_KEY, etc.' : 'DEBUG, LOG_LEVEL, etc.';
+    const valueType = isSecure ? 'password' : 'text';
+    const valuePlaceholder = isSecure ? 'Enter sensitive value' : 'Enter value';
+    const disabledAttr = readOnly ? 'disabled' : '';
+    const inputClass = readOnly ? 'input input-sm input-bordered flex-1 input-disabled' : 'input input-sm input-bordered flex-1';
+    
+    // Mark existing secure variables so we don't overwrite them with empty values
+    const existingDataAttr = isExisting && isSecure ? 'data-existing-secure="true"' : '';
+    
+    div.innerHTML = `
+        <input type="text" placeholder="${placeholder}" value="${key}" 
+               class="${inputClass}" data-env-key ${disabledAttr}>
+        <input type="${valueType}" placeholder="${valuePlaceholder}" value="${value}" 
+               class="${inputClass}" data-env-value ${disabledAttr} ${existingDataAttr}>
+        <button onclick="this.parentElement.remove()" class="btn btn-sm btn-ghost text-error" ${disabledAttr}>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+        </button>
+    `;
+    
+    container.appendChild(div);
+}
+
+// Update modal UI for read-only state
+function updateEnvModalForReadOnly(readOnly, isRunning) {
+    // Update modal title
+    const modalTitle = document.querySelector('#env_modal h3');
+    const strategyName = document.getElementById('env_strategy_name').textContent;
+    if (readOnly) {
+        modalTitle.innerHTML = `Environment Variables: <span>${strategyName}</span> <span class="badge badge-warning badge-sm ml-2">Read-Only</span>`;
+    }
+    
+    // Disable/enable add buttons
+    const addButtons = document.querySelectorAll('#env_modal button[onclick*="addEnvVariable"]');
+    addButtons.forEach(btn => {
+        if (readOnly) {
+            btn.disabled = true;
+            btn.classList.add('btn-disabled');
+        } else {
+            btn.disabled = false;
+            btn.classList.remove('btn-disabled');
+        }
+    });
+    
+    // Update save button
+    const saveButton = document.querySelector('button[onclick="saveEnvironmentVariables()"]');
+    if (readOnly) {
+        saveButton.disabled = true;
+        saveButton.classList.add('btn-disabled');
+        saveButton.textContent = 'Read-Only Mode';
+    } else {
+        saveButton.disabled = false;
+        saveButton.classList.remove('btn-disabled');
+        saveButton.textContent = 'Save Variables';
+    }
+    
+    // Add warning message if read-only
+    let warningDiv = document.getElementById('env_readonly_warning');
+    if (readOnly && !warningDiv) {
+        warningDiv = document.createElement('div');
+        warningDiv.id = 'env_readonly_warning';
+        warningDiv.className = 'bg-warning/20 border border-warning rounded-lg p-3 mb-4';
+        warningDiv.innerHTML = `
+            <div class="flex items-start gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-warning mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <div class="text-sm">
+                    <p class="font-medium text-warning">Strategy is currently running</p>
+                    <p class="text-warning/80 mt-1">Environment variables cannot be modified while the strategy is active. Stop the strategy to make changes.</p>
+                </div>
+            </div>
+        `;
+        // Insert after the hidden input
+        const hiddenInput = document.getElementById('env_strategy_id');
+        hiddenInput.parentNode.insertBefore(warningDiv, hiddenInput.nextSibling);
+    } else if (!readOnly && warningDiv) {
+        warningDiv.remove();
+    }
+}
+
+// Save environment variables
+async function saveEnvironmentVariables() {
+    const strategyId = document.getElementById('env_strategy_id').value;
+    
+    // Collect regular variables
+    const regularVars = {};
+    document.querySelectorAll('#regular_vars > div').forEach(row => {
+        const key = row.querySelector('[data-env-key]').value.trim();
+        const value = row.querySelector('[data-env-value]').value.trim();
+        if (key) {
+            regularVars[key] = value;
+        }
+    });
+    
+    // Collect secure variables
+    const secureVars = {};
+    document.querySelectorAll('#secure_vars > div').forEach(row => {
+        const key = row.querySelector('[data-env-key]').value.trim();
+        const valueInput = row.querySelector('[data-env-value]');
+        const value = valueInput.value.trim();
+        
+        // Only include if there's a key and either:
+        // 1. It's a new variable with a value, or
+        // 2. It's an existing variable that has been modified (not the placeholder)
+        if (key) {
+            const isExisting = valueInput.getAttribute('data-existing-secure') === 'true';
+            if (!isExisting || (isExisting && value !== '••••••••')) {
+                // Only send if it's new or has been modified
+                if (value && value !== '••••••••') {
+                    secureVars[key] = value;
+                }
+            }
+        }
+    });
+    
+    try {
+        const response = await fetch(`/python/env/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                regular_vars: regularVars,
+                secure_vars: secureVars
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Environment variables saved successfully', 'success');
+            env_modal.close();
+        } else {
+            if (data.error_code === 'STRATEGY_RUNNING') {
+                showToast('Cannot modify environment variables while strategy is running', 'warning');
+            } else {
+                showToast(data.message || 'Failed to save environment variables', 'error');
+            }
+        }
+    } catch (error) {
+        showToast('Failed to save environment variables', 'error');
+        console.error('Save error:', error);
+    }
+}
+
+// Clear error state for a strategy
+async function clearErrorState(strategyId) {
+    try {
+        const response = await fetch(`/python/clear-error/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        showToast('Failed to clear error state', 'error');
+    }
+}
+
+// Check master contracts and start pending strategies
+async function checkContracts() {
+    const button = document.getElementById('check-contracts-btn');
+    const originalText = button.textContent;
+    
+    button.disabled = true;
+    button.textContent = 'Checking...';
+    
+    try {
+        const response = await fetch('/python/check-contracts', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            // Refresh status after check
+            updateContractStatus();
+            setTimeout(() => location.reload(), 2000);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        showToast('Failed to check contracts', 'error');
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
+// Update master contract status display
+async function updateContractStatus() {
+    try {
+        const response = await fetch('/python/status');
+        const data = await response.json();
+        
+        const statusElement = document.getElementById('contract-status');
+        if (data.master_contracts_ready) {
+            statusElement.innerHTML = '<span class="badge badge-success">Ready</span>';
+        } else {
+            statusElement.innerHTML = '<span class="badge badge-error">Not Ready</span>';
+        }
+    } catch (error) {
+        console.error('Failed to update contract status:', error);
+    }
+}
+
+// Initialize contract status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updateContractStatus();
+});
+
+// Auto-refresh status every 10 seconds
+setInterval(async () => {
+    try {
+        const response = await fetch('/python/status');
+        const data = await response.json();
+        // Update contract status without full reload
+        updateContractStatus();
+    } catch (error) {
+        console.error('Failed to fetch status');
+    }
+}, 10000);
+</script>
+{% endblock %}

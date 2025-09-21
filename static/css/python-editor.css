@@ -1,0 +1,224 @@
+/* Python Editor Styles for OpenAlgo */
+
+.python-editor {
+    display: flex;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    border: 1px solid oklch(var(--b3));
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: oklch(var(--b1));
+    min-height: 400px;
+    max-height: 80vh;
+}
+
+.python-editor.dark {
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
+
+.python-editor.read-only {
+    background: oklch(var(--b2));
+}
+
+.python-editor .line-numbers {
+    min-width: 50px;
+    padding: 1rem 0.5rem;
+    background: oklch(var(--b2));
+    border-right: 1px solid oklch(var(--b3));
+    text-align: right;
+    color: oklch(var(--bc) / 0.5);
+    user-select: none;
+    overflow-y: hidden;
+    flex-shrink: 0;
+}
+
+.python-editor.dark .line-numbers {
+    background: #252526;
+    border-right-color: #3e3e42;
+    color: #858585;
+}
+
+.python-editor .line-numbers div {
+    height: 1.5em;
+    padding-right: 0.5rem;
+}
+
+.python-editor .editor-content {
+    flex: 1;
+    position: relative;
+    overflow: auto;
+}
+
+.python-editor .editor-textarea,
+.python-editor .code-display {
+    padding: 1rem;
+    margin: 0;
+    font: inherit;
+    line-height: inherit;
+    white-space: pre;
+    word-wrap: normal;
+    overflow-wrap: normal;
+}
+
+.python-editor .editor-textarea {
+    position: relative;
+    width: 100%;
+    min-height: 100%;
+    color: oklch(var(--bc));
+    background: transparent;
+    caret-color: oklch(var(--p));
+    resize: none;
+    border: none;
+    outline: none;
+    z-index: 1;
+}
+
+.python-editor.dark .editor-textarea {
+    color: #d4d4d4;
+    caret-color: #007acc;
+}
+
+.python-editor .code-display {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+    overflow: hidden;
+    mix-blend-mode: multiply;
+}
+
+.python-editor.dark .code-display {
+    mix-blend-mode: screen;
+}
+
+.python-editor .code-display code {
+    font: inherit;
+    color: transparent;
+}
+
+/* Syntax highlighting */
+.python-editor .keyword {
+    color: oklch(var(--p));
+    font-weight: 600;
+}
+
+.python-editor.dark .keyword {
+    color: #569cd6;
+}
+
+.python-editor .string {
+    color: oklch(var(--s));
+}
+
+.python-editor.dark .string {
+    color: #ce9178;
+}
+
+.python-editor .comment {
+    color: oklch(var(--bc) / 0.5);
+    font-style: italic;
+}
+
+.python-editor.dark .comment {
+    color: #6a9955;
+}
+
+.python-editor .number {
+    color: oklch(var(--a));
+}
+
+.python-editor.dark .number {
+    color: #b5cea8;
+}
+
+.python-editor .function {
+    color: oklch(var(--in));
+}
+
+.python-editor.dark .function {
+    color: #dcdcaa;
+}
+
+.python-editor .builtin {
+    color: oklch(var(--wa));
+}
+
+.python-editor.dark .builtin {
+    color: #4ec9b0;
+}
+
+.python-editor .decorator {
+    color: oklch(var(--er));
+}
+
+.python-editor.dark .decorator {
+    color: #c586c0;
+}
+
+/* Scrollbar styling */
+.python-editor .editor-content::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.python-editor .editor-content::-webkit-scrollbar-track {
+    background: oklch(var(--b2));
+}
+
+.python-editor.dark .editor-content::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.python-editor .editor-content::-webkit-scrollbar-thumb {
+    background: oklch(var(--bc) / 0.3);
+    border-radius: 6px;
+}
+
+.python-editor .editor-content::-webkit-scrollbar-thumb:hover {
+    background: oklch(var(--bc) / 0.5);
+}
+
+.python-editor.dark .editor-content::-webkit-scrollbar-thumb {
+    background: #424242;
+}
+
+.python-editor.dark .editor-content::-webkit-scrollbar-thumb:hover {
+    background: #4f4f4f;
+}
+
+/* Selection highlighting */
+.python-editor .editor-textarea::selection {
+    background: oklch(var(--p) / 0.3);
+}
+
+.python-editor.dark .editor-textarea::selection {
+    background: rgba(0, 122, 204, 0.3);
+}
+
+/* Focus state */
+.python-editor:focus-within {
+    border-color: oklch(var(--p));
+    box-shadow: 0 0 0 2px oklch(var(--p) / 0.2);
+}
+
+/* Mobile responsive */
+@media (max-width: 640px) {
+    .python-editor {
+        font-size: 12px;
+    }
+    
+    .python-editor .line-numbers {
+        min-width: 40px;
+        padding: 0.75rem 0.25rem;
+    }
+    
+    .python-editor .editor-textarea,
+    .python-editor .code-display {
+        padding: 0.75rem;
+    }
+}

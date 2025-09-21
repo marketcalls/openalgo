@@ -79,7 +79,7 @@ generate_hex() {
 validate_broker() {
     local broker=$1
 
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
 
     if [[ $valid_brokers == *"$broker"* ]]; then
         return 0
@@ -134,9 +134,95 @@ handle_existing() {
     return 0
 }
 
+# Function to check and configure swap memory
+check_and_configure_swap() {
+    # Get total RAM in MB
+    TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    TOTAL_RAM_MB=$((TOTAL_RAM_KB / 1024))
+    TOTAL_RAM_GB=$((TOTAL_RAM_MB / 1024))
+    
+    log_message "System RAM: ${TOTAL_RAM_MB}MB (${TOTAL_RAM_GB}GB)" "$BLUE"
+    
+    # Check if RAM is less than 2GB
+    if [ $TOTAL_RAM_MB -lt 2048 ]; then
+        log_message "System has less than 2GB RAM. Checking swap configuration..." "$YELLOW"
+        
+        # Check current swap
+        SWAP_TOTAL=$(free -m | grep Swap | awk '{print $2}')
+        log_message "Current swap: ${SWAP_TOTAL}MB" "$BLUE"
+        
+        if [ $SWAP_TOTAL -lt 3072 ]; then
+            log_message "Insufficient swap memory. Creating 3GB swap file..." "$YELLOW"
+            
+            # Check available disk space
+            AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')
+            REQUIRED_SPACE=3145728  # 3GB in KB
+            
+            if [ $AVAILABLE_SPACE -lt $REQUIRED_SPACE ]; then
+                log_message "Error: Not enough disk space for swap file" "$RED"
+                log_message "Available: ${AVAILABLE_SPACE}KB, Required: ${REQUIRED_SPACE}KB" "$RED"
+                exit 1
+            fi
+            
+            # Create swap file
+            log_message "Creating 3GB swap file at /swapfile..." "$BLUE"
+            sudo fallocate -l 3G /swapfile
+            if [ $? -ne 0 ]; then
+                # Fallback to dd if fallocate fails
+                log_message "fallocate failed, using dd instead..." "$YELLOW"
+                sudo dd if=/dev/zero of=/swapfile bs=1M count=3072 status=progress
+            fi
+            check_status "Failed to create swap file"
+            
+            # Set permissions
+            sudo chmod 600 /swapfile
+            check_status "Failed to set swap file permissions"
+            
+            # Setup swap
+            sudo mkswap /swapfile
+            check_status "Failed to setup swap"
+            
+            # Enable swap
+            sudo swapon /swapfile
+            check_status "Failed to enable swap"
+            
+            # Make swap permanent
+            if ! grep -q "/swapfile" /etc/fstab; then
+                echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+                log_message "Swap file added to /etc/fstab for persistence" "$GREEN"
+            fi
+            
+            # Verify swap is active
+            NEW_SWAP=$(free -m | grep Swap | awk '{print $2}')
+            log_message "Swap configured successfully. Total swap: ${NEW_SWAP}MB" "$GREEN"
+            
+            # Configure swappiness for better performance
+            sudo sysctl vm.swappiness=10
+            echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
+            log_message "Swappiness set to 10 for better performance" "$GREEN"
+        else
+            log_message "Sufficient swap already exists: ${SWAP_TOTAL}MB" "$GREEN"
+        fi
+    else
+        log_message "System has sufficient RAM (${TOTAL_RAM_GB}GB)" "$GREEN"
+        
+        # Still check swap for optimal performance
+        SWAP_TOTAL=$(free -m | grep Swap | awk '{print $2}')
+        if [ $SWAP_TOTAL -eq 0 ]; then
+            log_message "No swap configured. Consider adding swap for optimal performance." "$YELLOW"
+        else
+            log_message "Swap configured: ${SWAP_TOTAL}MB" "$GREEN"
+        fi
+    fi
+}
+
 # Start logging
 log_message "Starting OpenAlgo installation log at: $LOG_FILE" "$BLUE"
 log_message "----------------------------------------" "$BLUE"
+
+# Check system requirements (RAM and swap)
+log_message "Checking system requirements..." "$BLUE"
+check_and_configure_swap
 
 # Check timezone before proceeding with installation
 check_timezone
@@ -170,7 +256,7 @@ done
 # Get broker name
 while true; do
 
-    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
+    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
 
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -309,6 +395,10 @@ sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+
+# Update WebSocket URL for production
+sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
+
 check_status "Failed to configure environment file"
 
 # Check and handle existing Nginx configuration
@@ -517,8 +607,15 @@ sudo chmod -R 755 $BASE_PATH
 # Create and set permissions for required directories
 sudo mkdir -p $OPENALGO_PATH/db
 sudo mkdir -p $OPENALGO_PATH/tmp
+# Create directories for Python strategy feature
+sudo mkdir -p $OPENALGO_PATH/strategies/scripts
+sudo mkdir -p $OPENALGO_PATH/log/strategies
+sudo mkdir -p $OPENALGO_PATH/keys
+# Set ownership and permissions
 sudo chown -R www-data:www-data $OPENALGO_PATH
 sudo chmod -R 755 $OPENALGO_PATH
+# Set more restrictive permissions for sensitive directories
+sudo chmod 700 $OPENALGO_PATH/keys
 
 # Remove existing socket file if it exists
 [ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE

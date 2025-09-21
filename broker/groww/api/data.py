@@ -6,6 +6,7 @@ import pandas as pd
 import httpx
 from typing import Dict, List, Any, Union, Optional
 import time
+import traceback
 from utils.httpx_client import get_httpx_client
 
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -1606,7 +1607,11 @@ class BrokerData:
             
             # Extract depth info
             depth_data = payload.get('depth', {})
-            
+
+            # Handle case where depth_data is None
+            if depth_data is None:
+                depth_data = {}
+
             # Process buy side (bids)
             for level in depth_data.get('buy', []):
                 if len(bids) < 5:  # Limit to 5 levels
