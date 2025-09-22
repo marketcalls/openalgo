@@ -116,7 +116,7 @@ class MarketDataCache:
 
 class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """DefinEdge-specific implementation of the WebSocket adapter"""
-    
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("definedge_websocket")
@@ -131,6 +131,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.market_cache = MarketDataCache()  # Initialize market data cache
         self.token_to_symbol = {}  # Map tokens to symbols for cache management
+        self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -275,42 +276,44 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
         Subscribe to market data with DefinEdge-specific implementation
-        
+
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE')
             exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
             mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
             depth_level: Market depth level (5 for DefinEdge)
-            
+
         Returns:
             Dict: Response with status and error message if applicable
         """
+        self.logger.info(f"[SUBSCRIBE] Request for {symbol}.{exchange} mode={mode}")
+
         # Validate the mode
         if mode not in [1, 2, 3]:
-            return self._create_error_response("INVALID_MODE", 
+            return self._create_error_response("INVALID_MODE",
                                               f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
-                                              
+
         # If depth mode, check if supported depth level
         if mode == 3 and depth_level not in [5]:
-            return self._create_error_response("INVALID_DEPTH", 
+            return self._create_error_response("INVALID_DEPTH",
                                               f"Invalid depth level {depth_level}. Must be 5")
-        
+
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
         # Map exchange to DefinEdge format
         definedge_exchange = DefinedgeExchangeMapper.get_exchange_code(brexchange)
-        
+
         # Check if the requested depth level is supported for this exchange
         is_fallback = False
         actual_depth = depth_level
-        
+
         if mode == 3:  # Depth mode
             if not DefinedgeCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 # If requested depth is not supported, use the highest available
@@ -318,20 +321,38 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     exchange, depth_level
                 )
                 is_fallback = True
-                
+
                 self.logger.info(
                     f"Depth level {depth_level} not supported for {exchange}, "
                     f"using {actual_depth} instead"
                 )
-        
+
         # Create token list for DefinEdge API
         tokens = [(definedge_exchange, token)]
-        
-        # Generate unique correlation ID that includes mode to prevent overwriting
-        correlation_id = f"{symbol}_{exchange}_{mode}"
+
+        # Generate a unique correlation_id for each subscription
+        # This allows multiple clients to subscribe to the same symbol
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
+        correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
         if mode == 3:
-            correlation_id = f"{correlation_id}_{depth_level}"
-        
+            correlation_id = f"{symbol}_{exchange}_{mode}_{depth_level}_{unique_id}"
+
+        # Check if we need to subscribe to WebSocket
+        base_correlation_id = f"{symbol}_{exchange}_{mode}"
+        if mode == 3:
+            base_correlation_id = f"{symbol}_{exchange}_{mode}_{depth_level}"
+
+        already_ws_subscribed = any(
+            cid.startswith(base_correlation_id)
+            for cid in self.subscriptions.keys()
+        )
+
+        if already_ws_subscribed:
+            self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
+        else:
+            self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
+
         # Store subscription for reconnection
         with self.lock:
             self.subscriptions[correlation_id] = {
@@ -348,28 +369,38 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Track token to symbol mapping for cache management
             self.token_to_symbol[token] = (symbol, exchange)
-        
-        # Subscribe if connected
+
+        # Subscribe via WebSocket (reference counting will handle duplicates)
         if self.connected and self.ws_client:
             try:
                 # Map mode to DefinEdge subscription type
                 if mode == 1:  # LTP only - use touchline
                     subscription_type = 'tick'
                 elif mode == 2:  # Quote - use touchline for OHLC
-                    # Try touchline first as it should provide OHLC according to API docs
                     subscription_type = 'tick'
                     self.logger.info(f"Using touchline subscription for {symbol} Quote mode to get OHLC data")
                 else:  # mode == 3, Depth
                     subscription_type = 'depth'
-                
-                success = self.ws_client.subscribe(subscription_type, tokens)
-                if not success:
-                    return self._create_error_response("SUBSCRIPTION_ERROR", "Failed to subscribe")
-                    
+
+                # Use reference counting to avoid duplicate WebSocket subscriptions
+                scrip = f"{definedge_exchange}|{token}"
+                if self._should_ws_subscribe(scrip, subscription_type):
+                    success = self.ws_client.subscribe(subscription_type, tokens)
+                    if not success:
+                        return self._create_error_response("SUBSCRIPTION_ERROR", "Failed to subscribe")
+                    self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {scrip}")
+                else:
+                    self.logger.info(f"[SUBSCRIBE] WebSocket already has active subscription for {scrip}")
+
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
-        
+        else:
+            self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {symbol}.{exchange}")
+
+        # Log current subscription state
+        self.logger.info(f"[SUBSCRIBE] Total active subscriptions: {len(self.subscriptions)}")
+
         # Return success with capability info
         return self._create_success_response(
             'Subscription requested' if not is_fallback else f"Using depth level {actual_depth} instead of requested {depth_level}",
@@ -384,69 +415,80 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
         """
         Unsubscribe from market data
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange code
             mode: Subscription mode
-            
+
         Returns:
             Dict: Response with status
         """
         # Map symbol to token
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
+            return self._create_error_response("SYMBOL_NOT_FOUND",
                                               f"Symbol {symbol} not found for exchange {exchange}")
-            
+
         token = token_info['token']
         brexchange = token_info['brexchange']
-        
+
         # Map exchange to DefinEdge format
         definedge_exchange = DefinedgeExchangeMapper.get_exchange_code(brexchange)
-        
+
         # Create token list for DefinEdge API
         tokens = [(definedge_exchange, token)]
-        
-        # Generate correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-        
-        # Remove from subscriptions and clean up cache
+
+        # Find base correlation ID pattern
+        base_correlation_id = f"{symbol}_{exchange}_{mode}"
+
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
-            
+            # Find the first matching subscription for this client
+            matching_subscriptions = [
+                (cid, sub) for cid, sub in self.subscriptions.items()
+                if cid.startswith(base_correlation_id)
+            ]
+
+            if not matching_subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED",
+                                                  f"Not subscribed to {symbol}.{exchange}")
+
+            # Remove the first matching subscription
+            correlation_id, subscription = matching_subscriptions[0]
+
+            # Check if this is the last subscription for this symbol/exchange/mode
+            is_last = len(matching_subscriptions) == 1
+
+            # Remove the subscription
+            del self.subscriptions[correlation_id]
+
             # Clean up token mapping and cache if no other subscriptions use this token
-            if token in self.token_to_symbol:
-                # Check if any other subscription uses this token
-                token_still_used = any(
-                    sub['token'] == token 
-                    for cid, sub in self.subscriptions.items() 
-                    if cid != correlation_id
-                )
-                if not token_still_used:
-                    del self.token_to_symbol[token]
-                    self.market_cache.clear(token)
-        
-        # Unsubscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                # Map mode to DefinEdge subscription type
-                if mode == 1:  # LTP only - use touchline
-                    subscription_type = 'tick'
-                elif mode == 2:  # Quote - we subscribed to touchline for OHLC
-                    subscription_type = 'tick'
-                else:  # mode == 3, Depth
-                    subscription_type = 'depth'
-                
-                success = self.ws_client.unsubscribe(subscription_type, tokens)
-                if not success:
-                    return self._create_error_response("UNSUBSCRIPTION_ERROR", "Failed to unsubscribe")
-                    
-            except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
-                return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
-        
+            if not any(sub['token'] == token for sub in self.subscriptions.values()):
+                self.token_to_symbol.pop(token, None)
+                self.market_cache.clear(token)
+
+            # Only unsubscribe from WebSocket if this was the last subscription
+            if is_last:
+                scrip = f"{definedge_exchange}|{token}"
+                if self._should_ws_unsubscribe(scrip, subscription['mode']):
+                    # Unsubscribe if connected
+                    if self.connected and self.ws_client:
+                        try:
+                            # Map mode to DefinEdge subscription type
+                            if subscription['mode'] == 1:  # LTP only - use touchline
+                                subscription_type = 'tick'
+                            elif subscription['mode'] == 2:  # Quote - we subscribed to touchline for OHLC
+                                subscription_type = 'tick'
+                            else:  # mode == 3, Depth
+                                subscription_type = 'depth'
+
+                            success = self.ws_client.unsubscribe(subscription_type, tokens)
+                            if not success:
+                                self.logger.warning(f"Failed to unsubscribe WebSocket for {symbol}.{exchange}")
+
+                        except Exception as e:
+                            self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}",
             symbol=symbol,
@@ -467,22 +509,46 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _resubscribe_all(self) -> None:
         """Resubscribe to all existing subscriptions after reconnection"""
         with self.lock:
+            # Reset reference counts
+            self.ws_subscription_refs = {}
+
+            # Collect unique scrips for each subscription type
+            tick_scrips = set()
+            depth_scrips = set()
+
             for correlation_id, sub in self.subscriptions.items():
-                try:
-                    # Check if authenticated
-                    if self.ws_client.is_connected():
-                        # Map mode to DefinEdge subscription type
-                        if sub["mode"] in [1, 2]:  # LTP or Quote - use touchline
-                            subscription_type = 'tick'
-                        else:  # Depth
-                            subscription_type = 'depth'
-                        
-                        self.ws_client.subscribe(subscription_type, sub["tokens"])
-                        self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                    else:
-                        self.logger.warning(f"Cannot resubscribe to {sub['symbol']}.{sub['exchange']} - not authenticated")
-                except Exception as e:
-                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+                definedge_exchange = sub['definedge_exchange']
+                token = sub['token']
+                scrip = f"{definedge_exchange}|{token}"
+                mode = sub['mode']
+
+                # Initialize reference count
+                if scrip not in self.ws_subscription_refs:
+                    self.ws_subscription_refs[scrip] = {'tick_count': 0, 'depth_count': 0}
+
+                if mode in [1, 2]:  # LTP or Quote
+                    if scrip not in tick_scrips:
+                        tick_scrips.add((definedge_exchange, token))
+                    self.ws_subscription_refs[scrip]['tick_count'] += 1
+                elif mode == 3:  # Depth
+                    if scrip not in depth_scrips:
+                        depth_scrips.add((definedge_exchange, token))
+                    self.ws_subscription_refs[scrip]['depth_count'] += 1
+
+            # Resubscribe in batches
+            try:
+                if self.ws_client.is_connected():
+                    if tick_scrips:
+                        self.ws_client.subscribe('tick', list(tick_scrips))
+                        self.logger.info(f"Resubscribed to {len(tick_scrips)} tick scrips with total {sum(self.ws_subscription_refs[f'{e}|{t}']['tick_count'] for e, t in tick_scrips)} subscriptions")
+
+                    if depth_scrips:
+                        self.ws_client.subscribe('depth', list(depth_scrips))
+                        self.logger.info(f"Resubscribed to {len(depth_scrips)} depth scrips with total {sum(self.ws_subscription_refs[f'{e}|{t}']['depth_count'] for e, t in depth_scrips)} subscriptions")
+                else:
+                    self.logger.warning("Cannot resubscribe - not authenticated")
+            except Exception as e:
+                self.logger.error(f"Error during resubscription: {e}")
     
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
@@ -777,6 +843,74 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except (ValueError, TypeError):
             return default
     
+    def _should_ws_subscribe(self, scrip: str, subscription_type: str) -> bool:
+        """
+        Check if we should send WebSocket subscription using reference counting
+
+        Args:
+            scrip: Exchange|Token identifier
+            subscription_type: 'tick' or 'depth'
+
+        Returns:
+            bool: True if we need to subscribe, False if already subscribed
+        """
+        if scrip not in self.ws_subscription_refs:
+            self.ws_subscription_refs[scrip] = {'tick_count': 0, 'depth_count': 0}
+
+        if subscription_type == 'tick':
+            if self.ws_subscription_refs[scrip]['tick_count'] == 0:
+                self.ws_subscription_refs[scrip]['tick_count'] = 1
+                return True
+            else:
+                self.ws_subscription_refs[scrip]['tick_count'] += 1
+                self.logger.info(f"Additional tick subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['tick_count']}")
+                return False
+        elif subscription_type == 'depth':
+            if self.ws_subscription_refs[scrip]['depth_count'] == 0:
+                self.ws_subscription_refs[scrip]['depth_count'] = 1
+                return True
+            else:
+                self.ws_subscription_refs[scrip]['depth_count'] += 1
+                self.logger.info(f"Additional depth subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['depth_count']}")
+                return False
+
+        return True
+
+    def _should_ws_unsubscribe(self, scrip: str, mode: int) -> bool:
+        """
+        Check if we should send WebSocket unsubscription using reference counting
+
+        Args:
+            scrip: Exchange|Token identifier
+            mode: Subscription mode (1=LTP, 2=Quote, 3=Depth)
+
+        Returns:
+            bool: True if we should unsubscribe, False if other clients still subscribed
+        """
+        if scrip not in self.ws_subscription_refs:
+            return True
+
+        if mode in [1, 2]:  # tick subscription
+            self.ws_subscription_refs[scrip]['tick_count'] -= 1
+            if self.ws_subscription_refs[scrip]['tick_count'] <= 0:
+                self.ws_subscription_refs[scrip]['tick_count'] = 0
+                # Clean up if both counts are 0
+                if self.ws_subscription_refs[scrip]['depth_count'] == 0:
+                    del self.ws_subscription_refs[scrip]
+                return True
+            return False
+        elif mode == 3:  # depth subscription
+            self.ws_subscription_refs[scrip]['depth_count'] -= 1
+            if self.ws_subscription_refs[scrip]['depth_count'] <= 0:
+                self.ws_subscription_refs[scrip]['depth_count'] = 0
+                # Clean up if both counts are 0
+                if self.ws_subscription_refs[scrip]['tick_count'] == 0:
+                    del self.ws_subscription_refs[scrip]
+                return True
+            return False
+
+        return True
+
     def _normalize_raw_depth_data(self, message) -> Dict[str, Any]:
         """
         Normalize depth data using safe conversion (similar to Shoonya)
