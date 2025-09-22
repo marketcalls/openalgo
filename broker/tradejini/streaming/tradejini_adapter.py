@@ -367,65 +367,80 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = str(parts[0])  # Ensure token is string
             brexchange = parts[1]
 
-            # Find the subscription that matches this token
-            subscription = None
+            # Find ALL subscriptions that match this token
+            matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
                     # Compare both as strings to ensure match
                     if str(sub['token']) == token and sub['brexchange'] == brexchange:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
 
-            if not subscription:
+            if not matching_subscriptions:
                 self.logger.info(f"Received data for unsubscribed token: {token} on {brexchange}. Active subscriptions: {list(self.subscriptions.keys())}")
                 return
 
-            # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
+            # Process data for each matching subscription (different modes for same symbol)
+            for subscription in matching_subscriptions:
+                # Create topic for ZeroMQ
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                subscription_mode = subscription['mode']
 
-            # For Tradejini, L1 messages are quotes, L5 messages include depth
-            # We'll use the subscription mode to determine the correct topic
-            subscription_mode = subscription['mode']
+                # Determine which data to send based on message type and subscription mode
+                # L1 messages contain both LTP and Quote data
+                # L5 messages contain depth data
+                should_publish = False
 
-            # Map subscription mode to topic string
-            if subscription_mode == 1:
-                mode_str = 'LTP'
-                actual_mode = 1
-            elif subscription_mode == 2:
-                mode_str = 'QUOTE'
-                actual_mode = 2
-            elif subscription_mode == 3:
-                mode_str = 'DEPTH'
-                actual_mode = 3
-            else:
-                self.logger.warning(f"Unknown subscription mode: {subscription_mode}")
-                return
+                if msg_type == 'L1':
+                    # L1 data can be used for both LTP and Quote modes
+                    if subscription_mode in [1, 2]:  # LTP or Quote
+                        should_publish = True
+                elif msg_type == 'L5' or msg_type == 'L2':
+                    # L5/L2 data is for depth mode
+                    if subscription_mode == 3:  # Depth
+                        should_publish = True
 
-            # Topic format: EXCHANGE_SYMBOL_MODE (like Angel adapter)
-            topic = f"{exchange}_{symbol}_{mode_str}"
+                if not should_publish:
+                    continue
 
-            # Normalize the data based on subscription mode
-            market_data = self._normalize_market_data(message, actual_mode)
+                # Map subscription mode to topic string
+                if subscription_mode == 1:
+                    mode_str = 'LTP'
+                    actual_mode = 1
+                elif subscription_mode == 2:
+                    mode_str = 'QUOTE'
+                    actual_mode = 2
+                elif subscription_mode == 3:
+                    mode_str = 'DEPTH'
+                    actual_mode = 3
+                else:
+                    self.logger.warning(f"Unknown subscription mode: {subscription_mode}")
+                    continue
 
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': subscription_mode,
-                'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-            })
+                # Topic format: EXCHANGE_SYMBOL_MODE (like Angel adapter)
+                topic = f"{exchange}_{symbol}_{mode_str}"
 
-            # Log the market data we're sending
-            self.logger.info(f"Publishing to topic '{topic}': {market_data}")
+                # Normalize the data based on subscription mode
+                market_data = self._normalize_market_data(message, actual_mode)
 
-            # Publish to ZeroMQ
-            try:
-                self.publish_market_data(topic, market_data)
-                # Debug: Log that we've sent the data
-                self.logger.debug(f"Data published successfully to ZeroMQ on port {self.zmq_port}")
-            except Exception as zmq_error:
-                self.logger.error(f"Failed to publish to ZeroMQ: {zmq_error}")
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': subscription_mode,
+                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
+                })
+
+                # Log the market data we're sending
+                self.logger.info(f"Publishing to topic '{topic}': {market_data}")
+
+                # Publish to ZeroMQ
+                try:
+                    self.publish_market_data(topic, market_data)
+                    # Debug: Log that we've sent the data
+                    self.logger.debug(f"Data published successfully to ZeroMQ on port {self.zmq_port}")
+                except Exception as zmq_error:
+                    self.logger.error(f"Failed to publish to ZeroMQ: {zmq_error}")
 
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
@@ -442,20 +457,9 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Dict: Normalized market data
         """
         if mode == 1:  # LTP mode
-            # Convert ltt string to timestamp if it's a string
-            ltt = message.get('ltt', '')
-            if isinstance(ltt, str) and ltt:
-                # Convert datetime string to timestamp
-                from datetime import datetime
-                try:
-                    dt = datetime.strptime(ltt, '%Y-%m-%d %H:%M:%S')
-                    ltt = int(dt.timestamp() * 1000)  # Convert to milliseconds
-                except:
-                    ltt = 0
-
             return {
                 'ltp': message.get('ltp', 0),
-                'ltt': ltt
+                'ltt': message.get('ltt', '')  # Keep as string like depth mode
             }
         elif mode == 2:  # Quote mode
             result = {
