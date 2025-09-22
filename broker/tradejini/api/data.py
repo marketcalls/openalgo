@@ -256,7 +256,7 @@ class BrokerData:
         """Format quote data from Tradejini to OpenAlgo standard format"""
         try:
             logger.debug(f"Formatting quote data for {symbol}")
-            
+
             # Extract values with defaults - matching OpenAlgo format
             ltp = float(quote_data.get('ltp', 0))
             open_price = float(quote_data.get('open', 0))
@@ -264,11 +264,12 @@ class BrokerData:
             low = float(quote_data.get('low', 0))
             prev_close = float(quote_data.get('close', 0))  # Use 'close' as prev_close
             volume = int(quote_data.get('vol', 0) or 0)
-            
+            oi = int(quote_data.get('OI', 0) or 0)  # Add Open Interest
+
             # Get bid/ask data
             bid = float(quote_data.get('bidPrice', 0))
             ask = float(quote_data.get('askPrice', 0))
-            
+
             # Format the quote to match OpenAlgo response exactly
             formatted_quote = {
                 'ask': ask,
@@ -278,12 +279,13 @@ class BrokerData:
                 'ltp': ltp,
                 'open': open_price,
                 'prev_close': prev_close,
-                'volume': volume
+                'volume': volume,
+                'oi': oi  # Include OI in the response
             }
-            
-            logger.debug(f"Formatted quote for {symbol}: LTP={ltp}, Volume={volume}")
+
+            logger.debug(f"Formatted quote for {symbol}: LTP={ltp}, Volume={volume}, OI={oi}")
             return formatted_quote
-            
+
         except Exception as e:
             logger.error(f"Error formatting quote data: {str(e)}", exc_info=True)
             # Return minimal valid quote data in OpenAlgo format
@@ -295,7 +297,8 @@ class BrokerData:
                 'ltp': 0.0,
                 'open': 0.0,
                 'prev_close': 0.0,
-                'volume': 0
+                'volume': 0,
+                'oi': 0  # Include OI with default value
             }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
