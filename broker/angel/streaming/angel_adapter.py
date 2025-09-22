@@ -304,11 +304,11 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for market data from the WebSocket"""
         try:
             # Debug log the raw message data to see what we're actually receiving
-            self.logger.info(f"RAW ANGEL DATA: Type: {type(message)}, Data: {message}")
+            self.logger.debug(f"RAW ANGEL DATA: Type: {type(message)}, Data: {message}")
             
             # Check if we're getting binary data as per Angel's documentation
             if isinstance(message, bytes) or isinstance(message, bytearray):
-                self.logger.info(f"Received binary data of length: {len(message)}")
+                self.logger.debug(f"Received binary data of length: {len(message)}")
                 # We need to parse the binary data according to Angel's format
                 # For now, we'll log what we have and exit early
                 return
@@ -322,7 +322,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = message.get('token')
             exchange_type = message.get('exchange_type')
             
-            self.logger.info(f"Processing message with token: {token}, exchange_type: {exchange_type}")
+            self.logger.debug(f"Processing message with token: {token}, exchange_type: {exchange_type}")
             
             # Find the subscription that matches this token
             subscription = None
@@ -358,7 +358,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'timestamp': int(time.time() * 1000)  # Current timestamp in ms
             })
             # Log the market data we're sendingAdd commentMore actions
-            self.logger.info(f"Publishing market data: {market_data}")
+            self.logger.debug(f"Publishing market data: {market_data}")
             
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
@@ -465,7 +465,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         best_5_key = 'best_5_buy_data' if is_buy else 'best_5_sell_data'
         if best_5_key in message and isinstance(message[best_5_key], list):
             depth_data = message.get(best_5_key, [])
-            self.logger.info(f"Found {side_label} depth data using {best_5_key}: {len(depth_data)} levels")
+            self.logger.debug(f"Found {side_label} depth data using {best_5_key}: {len(depth_data)} levels")
             
             for level in depth_data:
                 if isinstance(level, dict):
@@ -483,7 +483,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Then check for depth_20 data
         elif 'depth_20_buy_data' in message and is_buy:
             depth_data = message.get('depth_20_buy_data', [])
-            self.logger.info(f"Found {side_label} depth data using depth_20_buy_data: {len(depth_data)} levels")
+            self.logger.debug(f"Found {side_label} depth data using depth_20_buy_data: {len(depth_data)} levels")
             
             for level in depth_data:
                 if isinstance(level, dict):
@@ -500,7 +500,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     
         elif 'depth_20_sell_data' in message and not is_buy:
             depth_data = message.get('depth_20_sell_data', [])
-            self.logger.info(f"Found {side_label} depth data using depth_20_sell_data: {len(depth_data)} levels")
+            self.logger.debug(f"Found {side_label} depth data using depth_20_sell_data: {len(depth_data)} levels")
             
             for level in depth_data:
                 if isinstance(level, dict):
@@ -518,7 +518,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # For MCX, the data might be in a different format, check for best_five_buy/sell_market_data
         elif 'best_five_buy_market_data' in message and is_buy:
             depth_data = message.get('best_five_buy_market_data', [])
-            self.logger.info(f"Found {side_label} depth data using best_five_buy_market_data: {len(depth_data)} levels")
+            self.logger.debug(f"Found {side_label} depth data using best_five_buy_market_data: {len(depth_data)} levels")
             
             for level in depth_data:
                 if isinstance(level, dict):
@@ -534,7 +534,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     
         elif 'best_five_sell_market_data' in message and not is_buy:
             depth_data = message.get('best_five_sell_market_data', [])
-            self.logger.info(f"Found {side_label} depth data using best_five_sell_market_data: {len(depth_data)} levels")
+            self.logger.debug(f"Found {side_label} depth data using best_five_sell_market_data: {len(depth_data)} levels")
             
             for level in depth_data:
                 if isinstance(level, dict):
@@ -559,8 +559,8 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 })
         else:
             # Log the depth data being returned for debugging
-            self.logger.info(f"{side_label} depth data found: {len(depth)} levels")
+            self.logger.debug(f"{side_label} depth data found: {len(depth)} levels")
             if depth and depth[0]['price'] > 0:
-                self.logger.info(f"{side_label} depth first level: Price={depth[0]['price']}, Qty={depth[0]['quantity']}")
+                self.logger.debug(f"{side_label} depth first level: Price={depth[0]['price']}, Qty={depth[0]['quantity']}")
             
         return depth
