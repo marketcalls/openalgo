@@ -237,7 +237,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}_{actual_depth}"
         
-        self.logger.debug(f"Subscribing to {symbol}.{exchange} in mode {mode} (requested depth {depth_level} -> actual depth {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
+        self.logger.info(f"Subscribing to {symbol}.{exchange} in mode {mode} (requested depth {depth_level} -> actual depth {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
         #self.logger.info(f"Will use {'20-depth' if actual_depth == 20 and mode == 3 else '5-depth'} connection")
         
         # Subscribe based on depth level
@@ -379,6 +379,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     del self.subscriptions[correlation_id]
         
         if removed:
+            self.logger.info(f"Unubscribing to {symbol}.{exchange} in mode {mode}")
             return self._create_success_response(
                 f"Unsubscribed from {symbol}.{exchange}",
                 symbol=symbol,
