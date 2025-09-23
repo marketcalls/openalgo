@@ -34,7 +34,8 @@
       "Bash(taskkill:*)",
       "Bash(copy:*)",
       "Bash(npm run build:css:*)",
-      "Read(//d/openalgo/**)"
+      "Read(//d/openalgo/**)",
+      "Bash(netstat:*)"
     ],
     "deny": []
   }

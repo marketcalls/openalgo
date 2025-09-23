@@ -236,7 +236,17 @@ def broadcast():
         if not config.get('broadcast_enabled', True):
             return jsonify({'status': 'error', 'message': 'Broadcast is disabled'}), 403
 
-        success_count, fail_count = run_async(telegram_bot_service.broadcast_message(message, filters))
+        # Use the bot's event loop for broadcast
+        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
+            # Schedule the coroutine in the bot's event loop
+            future = asyncio.run_coroutine_threadsafe(
+                telegram_bot_service.broadcast_message(message, filters),
+                telegram_bot_service.bot_loop
+            )
+            success_count, fail_count = future.result(timeout=30)  # Wait up to 30 seconds
+        else:
+            # Fallback to creating new event loop
+            success_count, fail_count = run_async(telegram_bot_service.broadcast_message(message, filters))
 
         return jsonify({
             'status': 'success',
@@ -270,14 +280,13 @@ def unlink_user(telegram_id):
 @telegram_bp.route('/test-message', methods=['POST'])
 @check_session_validity
 def send_test_message():
-    """Send a test message to the current user"""
+    """Send a test message to the current user or first available user"""
     try:
         username = session.get('user')
         if not username:
             return jsonify({'status': 'error', 'message': 'User not found'}), 404
 
-        # For test message, we don't require linking - just send to any user who has started the bot
-        # Get all telegram users to find if this user has a telegram account
+        # Get all telegram users
         all_users = get_all_telegram_users()
 
         # Try to find user by openalgo_username
@@ -287,15 +296,29 @@ def send_test_message():
                 telegram_user = user
                 break
 
-        if not telegram_user:
+        # If no linked user found, try to send to the first available user (for admin testing)
+        if not telegram_user and all_users:
+            telegram_user = all_users[0]  # Use first available user for testing
+            message = f"🔔 Test Message from OpenAlgo (Admin: {username})\n\nYour Telegram integration is working correctly!"
+        elif telegram_user:
+            message = "🔔 Test Message from OpenAlgo\n\nYour Telegram integration is working correctly!"
+        else:
             return jsonify({
                 'status': 'error',
-                'message': 'Your account is not linked to Telegram. Please use /start in the Telegram bot first.'
+                'message': 'No Telegram users found. Please ensure at least one user has started the bot with /start'
             }), 404
 
-        message = "🔔 Test Message from OpenAlgo\n\nYour Telegram integration is working correctly!"
-
-        success = run_async(telegram_bot_service.send_notification(telegram_user['telegram_id'], message))
+        # Use the bot's event loop for sending notification
+        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
+            # Schedule the coroutine in the bot's event loop
+            future = asyncio.run_coroutine_threadsafe(
+                telegram_bot_service.send_notification(telegram_user['telegram_id'], message),
+                telegram_bot_service.bot_loop
+            )
+            success = future.result(timeout=10)  # Wait up to 10 seconds
+        else:
+            # Fallback to creating new event loop
+            success = run_async(telegram_bot_service.send_notification(telegram_user['telegram_id'], message))
 
         if success:
             return jsonify({'status': 'success', 'message': 'Test message sent'})
@@ -347,15 +370,17 @@ def send_message():
         # Log who sent the message for audit trail
         logger.info(f"User {username} sending message to Telegram ID {telegram_id}")
 
-        # Send message asynchronously
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        success = loop.run_until_complete(
-            telegram_bot_service.send_notification(telegram_id, message)
-        )
-
-        loop.close()
+        # Use the bot's event loop for sending notification
+        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
+            # Schedule the coroutine in the bot's event loop
+            future = asyncio.run_coroutine_threadsafe(
+                telegram_bot_service.send_notification(telegram_id, message),
+                telegram_bot_service.bot_loop
+            )
+            success = future.result(timeout=10)  # Wait up to 10 seconds
+        else:
+            # Fallback to creating new event loop
+            success = run_async(telegram_bot_service.send_notification(telegram_id, message))
 
         if success:
             logger.info(f"Message sent to Telegram ID {telegram_id}")

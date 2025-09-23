@@ -1199,6 +1199,68 @@ class TelegramBotService:
 
             await handler(fake_update, context)
 
+    async def send_notification(self, telegram_id: int, message: str) -> bool:
+        """Send a notification to a specific Telegram user."""
+        try:
+            if not self.application:
+                logger.error("Bot not initialized")
+                return False
+
+            await self.application.bot.send_message(
+                chat_id=telegram_id,
+                text=message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"Notification sent to {telegram_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending notification to {telegram_id}: {str(e)}")
+            return False
+
+    async def broadcast_message(self, message: str, filters: Dict = None) -> Tuple[int, int]:
+        """Broadcast a message to all or filtered users."""
+        try:
+            if not self.application:
+                logger.error("Bot not initialized for broadcast")
+                return 0, 0
+
+            # Get all telegram users
+            users = get_all_telegram_users()
+
+            # Apply filters if provided
+            if filters:
+                # Filter users based on criteria
+                if filters.get('notifications_enabled') is not None:
+                    users = [u for u in users if u.get('notifications_enabled') == filters['notifications_enabled']]
+                if filters.get('openalgo_username'):
+                    users = [u for u in users if u.get('openalgo_username') == filters['openalgo_username']]
+
+            success_count = 0
+            fail_count = 0
+
+            for user in users:
+                try:
+                    telegram_id = user.get('telegram_id')
+                    if telegram_id:
+                        await self.application.bot.send_message(
+                            chat_id=telegram_id,
+                            text=message,
+                            parse_mode='Markdown'
+                        )
+                        success_count += 1
+                        # Add small delay to avoid rate limits
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}")
+                    fail_count += 1
+
+            logger.info(f"Broadcast complete: {success_count} success, {fail_count} failed")
+            return success_count, fail_count
+
+        except Exception as e:
+            logger.error(f"Error in broadcast: {str(e)}")
+            return 0, 0
+
 
 # Create global instance
 telegram_bot_service = TelegramBotService()

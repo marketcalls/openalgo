@@ -292,7 +292,8 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 const response = await fetchWithCSRF('/telegram/test-message', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'}
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
                 });
 
                 const data = await response.json();
@@ -336,7 +337,10 @@ function showBroadcastModal() {
         `This will be sent to ${activeCount} active users (${userCount} total users)`;
 
     // Show modal
-    broadcast_modal.showModal();
+    const modal = document.getElementById('broadcast_modal');
+    if (modal) {
+        modal.showModal();
+    }
 }
 
 // Confirm and send broadcast
@@ -345,7 +349,10 @@ async function confirmBroadcast() {
     const message = broadcastMessage.value.trim();
     const broadcastBtn = document.getElementById('broadcastBtn');
 
-    broadcast_modal.close();
+    const modal = document.getElementById('broadcast_modal');
+    if (modal) {
+        modal.close();
+    }
 
     broadcastBtn.disabled = true;
     broadcastBtn.innerHTML = '<span class="loading loading-spinner"></span> Broadcasting...';
@@ -371,6 +378,6 @@ async function confirmBroadcast() {
         broadcastBtn.disabled = false;
         broadcastBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" /></svg>Send Broadcast';
     }
-});
+}
 </script>
 {% endblock %}
