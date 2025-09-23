@@ -68,7 +68,7 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
     positions_data = get_positions(auth)
 
-    logger.info(f"{positions_data}")
+    logger.debug(f"{positions_data}")
 
     net_qty = '0'
 
@@ -113,7 +113,7 @@ def place_order_api(data,auth):
         "quantity": newdata['quantity']
     })
 
-    logger.info(f"{payload}")
+    logger.debug(f"{payload}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
