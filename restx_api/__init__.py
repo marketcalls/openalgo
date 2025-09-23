@@ -30,6 +30,7 @@ from .search import api as search_ns
 from .expiry import api as expiry_ns
 from .analyzer import api as analyzer_ns
 from .ping import api as ping_ns
+from .telegram_bot import api as telegram_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -57,3 +58,4 @@ api.add_namespace(search_ns, path='/search')
 api.add_namespace(expiry_ns, path='/expiry')
 api.add_namespace(analyzer_ns, path='/analyzer')
 api.add_namespace(ping_ns, path='/ping')
+api.add_namespace(telegram_ns, path='/telegram')

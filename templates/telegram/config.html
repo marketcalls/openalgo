@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto p-4 max-w-4xl">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Telegram Bot Configuration</h1>
+        <a href="{{ url_for('telegram_bp.index') }}" class="btn btn-ghost">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+            Back
+        </a>
+    </div>
+
+    <!-- Configuration Form -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Bot Settings</h2>
+
+            <!-- Bot Token -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text font-semibold">Bot Token</span>
+                    <span class="label-text-alt">Get from @BotFather on Telegram</span>
+                </label>
+                <input type="password" id="botToken"
+                       class="input input-bordered"
+                       placeholder="Enter your bot token"
+                       value="{{ config.bot_token or '' }}">
+                <label class="label">
+                    <span class="label-text-alt text-info">Keep this secret! Never share your bot token.</span>
+                </label>
+            </div>
+
+
+            <!-- Broadcast Settings -->
+            <div class="form-control mb-4">
+                <label class="label cursor-pointer">
+                    <span class="label-text font-semibold">Enable Broadcast</span>
+                    <input type="checkbox" id="broadcastEnabled"
+                           class="toggle toggle-primary"
+                           {% if config.broadcast_enabled %}checked{% endif %}>
+                </label>
+                <label class="label">
+                    <span class="label-text-alt">Allow sending messages to all users</span>
+                </label>
+            </div>
+
+            <!-- Rate Limiting -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text font-semibold">Rate Limit (per minute)</span>
+                </label>
+                <input type="number" id="rateLimit"
+                       class="input input-bordered"
+                       min="1" max="120"
+                       value="{{ config.rate_limit_per_minute or 30 }}">
+                <label class="label">
+                    <span class="label-text-alt">Maximum commands per user per minute</span>
+                </label>
+            </div>
+
+            <!-- Save Button and Documentation -->
+            <div class="card-actions justify-between">
+                <a href="https://docs.openalgo.in/trading-platform/telegram" target="_blank"
+                   class="btn btn-outline btn-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+                    </svg>
+                    View Documentation
+                </a>
+                <button id="saveConfigBtn" class="btn btn-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z" />
+                    </svg>
+                    Save Configuration
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help Section -->
+    <div class="card bg-base-200 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Quick Setup Guide</h2>
+
+            <div class="alert alert-info mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                    <p class="font-semibold">Need detailed instructions?</p>
+                    <p>Visit our complete <a href="https://docs.openalgo.in/trading-platform/telegram" target="_blank" class="link link-primary font-semibold">Telegram Bot Setup Guide</a> for step-by-step instructions with screenshots.</p>
+                </div>
+            </div>
+
+            <div class="prose max-w-none">
+                <h3>Quick Steps:</h3>
+                <ol>
+                    <li>Get a bot token from <strong>@BotFather</strong> on Telegram</li>
+                    <li>Paste the token above and click "Save Configuration"</li>
+                    <li>Start the bot from the dashboard</li>
+                    <li>Open your bot in Telegram and send <code>/start</code></li>
+                    <li>Link your account: <code>/link YOUR_API_KEY YOUR_HOST_URL</code></li>
+                </ol>
+
+                <h3>Bot Commands Available:</h3>
+                <div class="mockup-code">
+                    <pre data-prefix="#"><code>Account Management</code></pre>
+                    <pre data-prefix="$"><code>/start - Initialize bot</code></pre>
+                    <pre data-prefix="$"><code>/link &lt;api_key&gt; &lt;host_url&gt; - Link account</code></pre>
+                    <pre data-prefix="$"><code>/unlink - Unlink account</code></pre>
+                    <pre data-prefix="$"><code>/status - Check connection</code></pre>
+
+                    <pre data-prefix="#"><code>Trading Information</code></pre>
+                    <pre data-prefix="$"><code>/menu - Interactive menu</code></pre>
+                    <pre data-prefix="$"><code>/orderbook - View orders</code></pre>
+                    <pre data-prefix="$"><code>/tradebook - View trades</code></pre>
+                    <pre data-prefix="$"><code>/positions - Open positions</code></pre>
+                    <pre data-prefix="$"><code>/holdings - View holdings</code></pre>
+                    <pre data-prefix="$"><code>/funds - Account funds</code></pre>
+                    <pre data-prefix="$"><code>/pnl - P&L summary</code></pre>
+
+                    <pre data-prefix="#"><code>Market Data</code></pre>
+                    <pre data-prefix="$"><code>/quote RELIANCE - Get NSE quote</code></pre>
+                    <pre data-prefix="$"><code>/quote NIFTY NSE_INDEX - Index quote</code></pre>
+
+                    <pre data-prefix="#"><code>Charts (default: 5m intraday)</code></pre>
+                    <pre data-prefix="$"><code>/chart RELIANCE - 5min chart</code></pre>
+                    <pre data-prefix="$"><code>/chart RELIANCE NSE daily - Daily chart</code></pre>
+                    <pre data-prefix="$"><code>/chart RELIANCE NSE intraday 15m 10 - Custom</code></pre>
+                    <pre data-prefix="$"><code>/chart RELIANCE NSE both - Both charts</code></pre>
+
+                    <pre data-prefix="$"><code>/help - Show all commands</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Save configuration
+    const saveConfigBtn = document.getElementById('saveConfigBtn');
+    saveConfigBtn.addEventListener('click', async function() {
+        saveConfigBtn.disabled = true;
+        saveConfigBtn.innerHTML = '<span class="loading loading-spinner"></span> Saving...';
+
+        const configData = {
+            token: document.getElementById('botToken').value,
+            broadcast_enabled: document.getElementById('broadcastEnabled').checked,
+            rate_limit_per_minute: parseInt(document.getElementById('rateLimit').value)
+        };
+
+        try {
+            const response = await fetchWithCSRF('/telegram/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(configData)
+            });
+
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                showToast('Configuration saved successfully', 'success');
+                setTimeout(() => {
+                    window.location.href = '{{ url_for("telegram_bp.index") }}';
+                }, 1500);
+            } else {
+                showToast(data.message || 'Failed to save configuration', 'error');
+                saveConfigBtn.disabled = false;
+                saveConfigBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z" /></svg>Save Configuration';
+            }
+        } catch (error) {
+            showToast('Error saving configuration', 'error');
+            saveConfigBtn.disabled = false;
+            saveConfigBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z" /></svg>Save Configuration';
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -171,13 +171,13 @@
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('chartink_bp.index') }}" 
+                        <a href="{{ url_for('chartink_bp.index') }}"
                            class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
                             Chartink
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('strategy_bp.index') }}" 
+                        <a href="{{ url_for('strategy_bp.index') }}"
                            class="{{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
                             Strategy
                         </a>
@@ -190,13 +190,19 @@
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('api_key_bp.manage_api_key') }}" 
+                        <a href="{{ url_for('api_key_bp.manage_api_key') }}"
                            class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
                             API Key
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('log_bp.view_logs') }}" 
+                        <a href="{{ url_for('telegram_bp.index') }}"
+                           class="{{ 'active' if request.endpoint.startswith('telegram_bp.') }}">
+                            Telegram Bot
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('log_bp.view_logs') }}"
                            class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
                             Logs
                         </a>

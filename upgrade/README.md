@@ -1,6 +1,51 @@
-# OpenAlgo v1.1.1 Upgrade Notice
+# OpenAlgo Upgrade Guide
 
-## For Existing Users
+## Running Migrations
+
+All migration scripts support the `uv run` command (recommended) or standard Python execution:
+
+```bash
+# Using uv (recommended)
+uv run upgrade/<migration_script>.py
+
+# Using Python directly
+python upgrade/<migration_script>.py
+```
+
+## Latest Migrations
+
+### Telegram Bot Integration (v1.0.0)
+**New Feature** - Telegram bot for read-only trading data access
+
+#### How to Apply
+```bash
+# Navigate to openalgo directory
+cd openalgo
+
+# Apply the migration (creates tables)
+uv run upgrade/migrate_telegram_bot.py
+
+# Check migration status
+uv run upgrade/migrate_telegram_bot.py --status
+
+# Rollback if needed
+uv run upgrade/migrate_telegram_bot.py --downgrade
+```
+
+#### What It Does
+- Creates 5 new tables for Telegram functionality
+- Adds user linking between Telegram and OpenAlgo
+- Enables read-only access to trading data via Telegram
+- Provides analytics and command tracking
+
+#### After Migration
+1. Access Telegram Bot from Profile menu (top-right dropdown)
+2. Configure bot token from @BotFather
+3. Start bot and link your account
+
+---
+
+## Python Strategy Management (v1.1.1)
 
 ### Do You Need Any Migration?
 
@@ -11,6 +56,9 @@
 Simply pull the latest code:
 ```bash
 git pull origin main
+
+# If using uv, sync dependencies
+uv sync
 ```
 
 That's it! You're ready to use the new Python Strategy Management feature.

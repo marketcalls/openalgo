@@ -35,6 +35,9 @@ from blueprints.master_contract_status import master_contract_status_bp  # Impor
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
+from blueprints.telegram import telegram_bp  # Import the telegram blueprint
+from services.telegram_bot_service import telegram_bot_service
+from database.telegram_db import get_bot_config
 
 from restx_api import api_v1_bp, api
 
@@ -160,6 +163,7 @@ def create_app():
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
+    app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -173,6 +177,42 @@ def create_app():
         
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
+
+        # Auto-start Telegram bot if it was active
+        try:
+            import asyncio
+            bot_config = get_bot_config()
+            if bot_config.get('is_active') and bot_config.get('bot_token'):
+                logger.info("Auto-starting Telegram bot...")
+
+                # Create a new event loop for the async operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                # Initialize the bot
+                success, message = loop.run_until_complete(
+                    telegram_bot_service.initialize_bot(
+                        token=bot_config['bot_token']
+                    )
+                )
+
+                if success:
+                    # Start the bot
+                    success, message = loop.run_until_complete(
+                        telegram_bot_service.start_bot()
+                    )
+
+                    if success:
+                        logger.info(f"Telegram bot auto-started successfully: {message}")
+                    else:
+                        logger.error(f"Failed to auto-start Telegram bot: {message}")
+                else:
+                    logger.error(f"Failed to initialize Telegram bot: {message}")
+
+                loop.close()
+
+        except Exception as e:
+            logger.error(f"Error auto-starting Telegram bot: {str(e)}")
 
     @app.before_request
     def check_session_expiry():
