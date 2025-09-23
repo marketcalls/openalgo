@@ -99,7 +99,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error("Missing required authentication data")
                     raise ValueError("Missing required authentication data")
         
-        self.logger.info(f"Using Dhan credentials - Client ID: {client_id}")
+        self.logger.debug(f"Using Dhan credentials - Client ID: {client_id}")
         
         # Store the client_id for later use
         self.client_id = client_id
@@ -142,11 +142,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return
         
         # Connect to 5-depth endpoint
-        self.logger.info("Connecting to Dhan 5-depth WebSocket...")
+        self.logger.debug("Connecting to Dhan 5-depth WebSocket...")
         self.ws_client_5depth.connect()
         
         # Connect to 20-depth endpoint
-        self.logger.info("Connecting to Dhan 20-depth WebSocket...")
+        self.logger.debug("Connecting to Dhan 20-depth WebSocket...")
         self.ws_client_20depth.connect()
     
     def disconnect(self) -> None:
@@ -184,7 +184,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                               f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
         
         # Map symbol to token
-        self.logger.info(f"Looking up token for {symbol}.{exchange}")
+        self.logger.debug(f"Looking up token for {symbol}.{exchange}")
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
             self.logger.error(f"Token lookup failed for {symbol}.{exchange}")
@@ -193,11 +193,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         token = token_info['token']
         brexchange = token_info['brexchange']
-        self.logger.info(f"Token found: {token}, brexchange: {brexchange}")
+        self.logger.debug(f"Token found: {token}, brexchange: {brexchange}")
         
         # Get Dhan exchange code
         dhan_exchange = DhanExchangeMapper.get_dhan_exchange(exchange)
-        self.logger.info(f"Dhan exchange mapping: {exchange} -> {dhan_exchange}")
+        self.logger.debug(f"Dhan exchange mapping: {exchange} -> {dhan_exchange}")
         if not dhan_exchange:
             return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
                                               f"Exchange {exchange} not supported")
@@ -211,11 +211,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if depth_level == 20:
                 actual_depth = 5
                 is_fallback = True
-                self.logger.info(f"Using 5-level depth for {exchange} instead of requested 20-level depth")
+                self.logger.debug(f"Using 5-level depth for {exchange} instead of requested 20-level depth")
             elif not DhanCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 actual_depth = DhanCapabilityRegistry.get_fallback_depth_level(exchange, depth_level)
                 is_fallback = True
-                self.logger.info(
+                self.logger.debug(
                     f"Depth level {depth_level} not supported for {exchange}, "
                     f"using {actual_depth} instead"
                 )
@@ -238,7 +238,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         correlation_id = f"{symbol}_{exchange}_{mode}_{actual_depth}"
         
         self.logger.info(f"Subscribing to {symbol}.{exchange} in mode {mode} (requested depth {depth_level} -> actual depth {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
-        self.logger.info(f"Will use {'20-depth' if actual_depth == 20 and mode == 3 else '5-depth'} connection")
+        #self.logger.info(f"Will use {'20-depth' if actual_depth == 20 and mode == 3 else '5-depth'} connection")
         
         # Subscribe based on depth level
         if actual_depth == 20 and mode == 3:
@@ -379,6 +379,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     del self.subscriptions[correlation_id]
         
         if removed:
+            self.logger.info(f"Unubscribing to {symbol}.{exchange} in mode {mode}")
             return self._create_success_response(
                 f"Unsubscribed from {symbol}.{exchange}",
                 symbol=symbol,
@@ -386,13 +387,61 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 mode=mode
             )
         else:
-            return self._create_error_response("NOT_SUBSCRIBED", 
+            return self._create_error_response("NOT_SUBSCRIBED",
                                               f"Not subscribed to {symbol}.{exchange}")
-    
+
+    def unsubscribe_all(self) -> Dict[str, Any]:
+        """
+        Unsubscribe from all subscriptions and disconnect from WebSocket
+
+        Returns:
+            Dict: Response with status
+        """
+        unsubscribed_count = 0
+
+        with self.lock:
+            # Count total subscriptions before clearing
+            unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
+
+            # Clear all subscriptions
+            self.subscriptions_5depth.clear()
+            self.subscriptions_20depth.clear()
+            self.subscriptions.clear()
+
+            # Clear fallback tracking
+            self.depth_20_timeouts.clear()
+            self.depth_20_data_received.clear()
+            self.depth_20_fallbacks.clear()
+            self.depth_20_accumulator.clear()
+
+        # Disconnect from WebSocket servers
+        if self.ws_client_5depth:
+            try:
+                self.ws_client_5depth.disconnect()
+                self.logger.debug("Disconnected from Dhan 5-depth WebSocket")
+            except Exception as e:
+                self.logger.error(f"Error disconnecting 5-depth WebSocket: {e}")
+
+        if self.ws_client_20depth:
+            try:
+                self.ws_client_20depth.disconnect()
+                self.logger.debug("Disconnected from Dhan 20-depth WebSocket")
+            except Exception as e:
+                self.logger.error(f"Error disconnecting 20-depth WebSocket: {e}")
+
+        # Clean up ZeroMQ resources
+        self.cleanup_zmq()
+        self.logger.info(f"Dhan adapter disconnected and cleaned up after unsubscribing {unsubscribed_count} instruments")
+
+        return self._create_success_response(
+            f"Unsubscribed from {unsubscribed_count} instruments and disconnected",
+            unsubscribed_count=unsubscribed_count
+        )
+
     # Callbacks for 5-depth connection
     def _on_open_5depth(self, ws):
         """Handle 5-depth connection open"""
-        self.logger.info("Connected to Dhan 5-depth WebSocket")
+        self.logger.debug("Connected to Dhan 5-depth WebSocket")
         self.connected = True
         
         # Resubscribe to existing subscriptions
@@ -408,7 +457,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for dhan_mode, instruments in instruments_by_mode.items():
                 try:
                     self.ws_client_5depth.subscribe(instruments, dhan_mode)
-                    self.logger.info(f"Resubscribed to {len(instruments)} instruments in {dhan_mode} mode")
+                    self.logger.debug(f"Resubscribed to {len(instruments)} instruments in {dhan_mode} mode")
                 except Exception as e:
                     self.logger.error(f"Error resubscribing: {e}")
     
@@ -418,7 +467,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def _on_close_5depth(self, ws):
         """Handle 5-depth connection close"""
-        self.logger.info("Dhan 5-depth WebSocket connection closed")
+        self.logger.debug("Dhan 5-depth WebSocket connection closed")
         self.connected = False
     
     def _on_data_5depth(self, ws, data):
@@ -438,7 +487,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     
                     if (sub['token'] == security_id and expected_segment == exchange_segment):
                         subscription = sub
-                        self.logger.info(f"Exact match found: {sub['symbol']}.{sub['exchange']}")
+                        self.logger.debug(f"Exact match found: {sub['symbol']}.{sub['exchange']}")
                         break
                 
                 # If no exact match, try token-only match (for flexibility)
@@ -447,11 +496,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         if sub['token'] == security_id:
                             subscription = sub
                             expected_segment = DhanExchangeMapper.get_segment_from_exchange(sub['exchange'])
-                            self.logger.info(f"Token-only match found: {sub['symbol']}.{sub['exchange']} (expected segment {expected_segment}, got {exchange_segment})")
+                            self.logger.debug(f"Token-only match found: {sub['symbol']}.{sub['exchange']} (expected segment {expected_segment}, got {exchange_segment})")
                             break
             
             if not subscription:
-                self.logger.warning(f"Received data for unsubscribed token: {security_id}, segment: {exchange_segment}")
+                #self.logger.warning(f"Received data for unsubscribed token: {security_id}, segment: {exchange_segment}")
                 return
             
             # Get symbol and exchange from subscription
@@ -481,7 +530,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Callbacks for 20-depth connection
     def _on_open_20depth(self, ws):
         """Handle 20-depth connection open"""
-        self.logger.info("Connected to Dhan 20-depth WebSocket")
+        self.logger.debug("Connected to Dhan 20-depth WebSocket")
         
         # Resubscribe to existing subscriptions
         with self.lock:
@@ -490,7 +539,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if instruments:
                 try:
                     self.ws_client_20depth.subscribe(instruments, '20_DEPTH')
-                    self.logger.info(f"Resubscribed to {len(instruments)} instruments for 20-depth")
+                    self.logger.debug(f"Resubscribed to {len(instruments)} instruments for 20-depth")
                 except Exception as e:
                     self.logger.error(f"Error resubscribing to 20-depth: {e}")
     
@@ -500,7 +549,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     
     def _on_close_20depth(self, ws):
         """Handle 20-depth connection close"""
-        self.logger.info("Dhan 20-depth WebSocket connection closed")
+        self.logger.debug("Dhan 20-depth WebSocket connection closed")
     
     def _on_data_20depth(self, ws, data):
         """Handle data from 20-depth connection"""
@@ -640,14 +689,14 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if getattr(self, 'running', False) and (self.fallback_monitor_thread is None or not self.fallback_monitor_thread.is_alive()):
             self.fallback_monitor_thread = threading.Thread(target=self._fallback_monitor_loop, daemon=True)
             self.fallback_monitor_thread.start()
-            self.logger.info("Started fallback monitor thread")
+            self.logger.debug("Started fallback monitor thread")
     
     def stop_fallback_monitor(self):
         """Stop the fallback monitoring thread"""
         self.running = False
         if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
             self.fallback_monitor_thread.join(timeout=2)
-            self.logger.info("Stopped fallback monitor thread")
+            self.logger.debug("Stopped fallback monitor thread")
     
     def _fallback_monitor_loop(self):
         """Monitor 20-depth subscriptions and fallback to 5-depth if no data received"""
@@ -726,7 +775,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self.ws_client_5depth and self.ws_client_5depth.connected:
                 try:
                     self.ws_client_5depth.subscribe([subscription['instrument']], 'FULL')
-                    self.logger.info(f"Successfully subscribed to 5-depth for {symbol}.{exchange}")
+                    self.logger.debug(f"Successfully subscribed to 5-depth for {symbol}.{exchange}")
                 except Exception as e:
                     self.logger.error(f"Error subscribing to 5-depth for fallback {symbol}.{exchange}: {e}")
             

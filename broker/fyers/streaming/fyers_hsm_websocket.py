@@ -76,7 +76,7 @@ class FyersHSMWebSocket:
         if not self.hsm_key:
             raise ValueError("Failed to extract HSM key from access token")
             
-        self.logger.info(f"HSM key extracted: {self.hsm_key[:20]}...")
+        self.logger.debug(f"HSM key extracted: {self.hsm_key[:20]}...")
         
         # WebSocket connection
         self.ws = None
@@ -209,7 +209,7 @@ class FyersHSMWebSocket:
         Returns:
             Binary subscription message
         """
-        self.logger.info(f"Creating subscription message for {len(hsm_symbols)} symbols")
+        #self.logger.info(f"Creating subscription message for {len(hsm_symbols)} symbols")
         
         # Create scrips data
         scrips_data = bytearray()
@@ -270,14 +270,14 @@ class FyersHSMWebSocket:
                 
             elif msg_type == 13:
                 # Master data (usually large message on connect)
-                self.logger.info(f"Received master data: {len(data)} bytes")
+                self.logger.debug(f"Received master data: {len(data)} bytes")
                 
             elif msg_type == 4:
                 # Subscription acknowledgment
-                self.logger.info("Subscription acknowledged")
+                self.logger.debug("Subscription acknowledged")
                 
             else:
-                self.logger.info(f"Received message type: {msg_type}, length: {len(data)} bytes")
+                self.logger.debug(f"Received message type: {msg_type}, length: {len(data)} bytes")
                 
         except Exception as e:
             self.logger.error(f"Error parsing binary message: {e}")
@@ -355,7 +355,7 @@ class FyersHSMWebSocket:
             
             # Store mapping
             self.subscriptions[topic_id] = topic_name
-            self.logger.info(f"Mapped topic_id {topic_id} -> {topic_name}")
+            self.logger.debug(f"Mapped topic_id {topic_id} -> {topic_name}")
             
             # Parse based on topic type
             if topic_name.startswith("sf|"):
@@ -426,7 +426,7 @@ class FyersHSMWebSocket:
             # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 scrip_data["original_symbol"] = self.symbol_mappings[topic_name]
-                self.logger.info(f"Symbol mapping: {topic_name} -> {self.symbol_mappings[topic_name]}")
+                self.logger.debug(f"Symbol mapping: {topic_name} -> {self.symbol_mappings[topic_name]}")
             else:
                 self.logger.warning(f"No symbol mapping found for topic_name: {topic_name}")
             
@@ -438,10 +438,10 @@ class FyersHSMWebSocket:
             
             # Send to callback
             if self.on_message_callback:
-                self.logger.info(f"Sending scrip data to callback: {scrip_data.get('symbol', 'Unknown')} LTP={scrip_data.get('ltp', 'N/A')}")
+                self.logger.debug(f"Sending scrip data to callback: {scrip_data.get('symbol', 'Unknown')} LTP={scrip_data.get('ltp', 'N/A')}")
                 # Debug: Log all available fields in HSM data
-                self.logger.info(f"Complete HSM scrip_data fields: {list(scrip_data.keys())}")
-                self.logger.info(f"OHLC values: open={scrip_data.get('open_price', 'N/A')}, high={scrip_data.get('high_price', 'N/A')}, low={scrip_data.get('low_price', 'N/A')}, close={scrip_data.get('prev_close_price', 'N/A')}")
+                self.logger.debug(f"Complete HSM scrip_data fields: {list(scrip_data.keys())}")
+                self.logger.debug(f"OHLC values: open={scrip_data.get('open_price', 'N/A')}, high={scrip_data.get('high_price', 'N/A')}, low={scrip_data.get('low_price', 'N/A')}, close={scrip_data.get('prev_close_price', 'N/A')}")
                 self.on_message_callback(scrip_data)
             else:
                 self.logger.warning(f"No callback set for scrip data: {scrip_data.get('symbol', 'Unknown')}")
@@ -556,9 +556,9 @@ class FyersHSMWebSocket:
             self.depth_data[topic_id] = depth_data
             
             # Log depth data for debugging
-            self.logger.info(f"Parsed depth data: {depth_data.get('symbol', 'Unknown')}")
-            self.logger.info(f"Depth fields: bid_price1={depth_data.get('bid_price1', 'N/A')}, ask_price1={depth_data.get('ask_price1', 'N/A')}")
-            self.logger.info(f"Multiplier={multiplier}, Precision={precision}")
+            #self.logger.info(f"Parsed depth data: {depth_data.get('symbol', 'Unknown')}")
+            self.logger.debug(f"Depth fields: bid_price1={depth_data.get('bid_price1', 'N/A')}, ask_price1={depth_data.get('ask_price1', 'N/A')}")
+            #self.logger.info(f"Multiplier={multiplier}, Precision={precision}")
             
             # Send to callback
             if self.on_message_callback:
@@ -614,7 +614,7 @@ class FyersHSMWebSocket:
                                 if self.on_message_callback:
                                     update_data = self.scrips_data[topic_id].copy()
                                     update_data["update_type"] = "live"
-                                    self.logger.info(f"Sending live update: {update_data.get('symbol', 'Unknown')} LTP={update_data.get('ltp', 'N/A')}")
+                                    self.logger.debug(f"Sending live update: {update_data.get('symbol', 'Unknown')} LTP={update_data.get('ltp', 'N/A')}")
                                     self.on_message_callback(update_data)
                 
                 elif topic_name.startswith("if|") and topic_id in self.index_data:
@@ -655,7 +655,7 @@ class FyersHSMWebSocket:
                                 if self.on_message_callback:
                                     update_data = self.depth_data[topic_id].copy()
                                     update_data["update_type"] = "live"
-                                    self.logger.info(f"Sending live depth update: {update_data.get('symbol', 'Unknown')}")
+                                    self.logger.debug(f"Sending live depth update: {update_data.get('symbol', 'Unknown')}")
                                     self.on_message_callback(update_data)
             else:
                 # Skip unknown data
@@ -676,12 +676,12 @@ class FyersHSMWebSocket:
     def _on_ws_open(self, ws):
         """Handle WebSocket open event"""
         self.connected = True
-        self.logger.info("HSM WebSocket connected")
+        #self.logger.info("HSM WebSocket connected")
         
         # Send authentication message
         auth_msg = self._create_auth_message()
         ws.send(auth_msg, opcode=websocket.ABNF.OPCODE_BINARY)
-        self.logger.info(f"Sent HSM authentication ({len(auth_msg)} bytes)")
+        #self.logger.info(f"Sent HSM authentication ({len(auth_msg)} bytes)")
     
     def _on_ws_message(self, ws, message):
         """Handle WebSocket message event"""
@@ -700,7 +700,7 @@ class FyersHSMWebSocket:
         """Handle WebSocket close event"""
         self.connected = False
         self.authenticated = False
-        self.logger.info(f"HSM WebSocket closed: {close_msg} ({close_status_code})")
+        #self.logger.info(f"HSM WebSocket closed: {close_msg} ({close_status_code})")
         if self.on_close_callback:
             self.on_close_callback()
     
@@ -766,7 +766,7 @@ class FyersHSMWebSocket:
             if self.ws:
                 try:
                     self.ws.close()
-                    self.logger.info("WebSocket connection closed")
+                    #self.logger.info("WebSocket connection closed")
                 except Exception as e:
                     self.logger.error(f"Error closing WebSocket: {e}")
                 finally:
@@ -779,7 +779,7 @@ class FyersHSMWebSocket:
                     if self.ws_thread.is_alive():
                         self.logger.warning("WebSocket thread did not terminate within 5 seconds")
                     else:
-                        self.logger.info("WebSocket thread terminated successfully")
+                        self.logger.debug("WebSocket thread terminated successfully")
                 except Exception as e:
                     self.logger.error(f"Error waiting for WebSocket thread: {e}")
                 finally:
@@ -788,7 +788,7 @@ class FyersHSMWebSocket:
             # Reset connection parameters
             self.hsm_key = None
             
-            self.logger.info("HSM WebSocket disconnect and cleanup completed")
+            #self.logger.info("HSM WebSocket disconnect and cleanup completed")
             
         except Exception as e:
             self.logger.error(f"Error during HSM WebSocket disconnect: {e}")
@@ -811,17 +811,17 @@ class FyersHSMWebSocket:
         
         if symbol_mappings:
             self.symbol_mappings.update(symbol_mappings)
-            self.logger.info(f"Updated symbol mappings. Total mappings: {len(self.symbol_mappings)}")
+            self.logger.debug(f"Updated symbol mappings. Total mappings: {len(self.symbol_mappings)}")
         
         # Create and send subscription message
         sub_msg = self._create_subscription_message(hsm_symbols, channel=11)
         self.ws.send(sub_msg, opcode=websocket.ABNF.OPCODE_BINARY)
         
-        self.logger.info(f"\n✅ Sent subscription request for {len(hsm_symbols)} HSM symbols")
+        #self.logger.info(f"\n✅ Sent subscription request for {len(hsm_symbols)} HSM symbols")
         for i, symbol in enumerate(hsm_symbols, 1):
             mapped_symbol = symbol_mappings.get(symbol, 'Unknown') if symbol_mappings else 'N/A'
-            self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
-        self.logger.info(f"Total active subscriptions in HSM: {len(hsm_symbols)}")
+            #self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
+        self.logger.debug(f"Total active subscriptions in HSM: {len(hsm_symbols)}")
     
     def is_connected(self) -> bool:
         """Check if connected and authenticated"""
@@ -833,7 +833,7 @@ class FyersHSMWebSocket:
         """
         try:
             if hasattr(self, 'logger'):
-                self.logger.info("FyersHSMWebSocket destructor called")
+                self.logger.debug("FyersHSMWebSocket destructor called")
             self.disconnect()
         except Exception as e:
             # Fallback logging if self.logger is not available
@@ -875,7 +875,7 @@ class FyersHSMWebSocket:
             if hasattr(self, 'ws_thread'):
                 self.ws_thread = None
                 
-            print("HSM WebSocket force cleanup completed")
+            #print("HSM WebSocket force cleanup completed")
             
         except:
             pass  # Suppress all errors in force cleanup
