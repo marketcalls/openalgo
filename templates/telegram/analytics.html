@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto p-4">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Telegram Bot Analytics</h1>
+        <a href="{{ url_for('telegram_bp.index') }}" class="btn btn-ghost">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Overview Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-title">Total Users</div>
+                <div class="stat-value text-primary">{{ analytics.total_users }}</div>
+                <div class="stat-desc">Registered users</div>
+            </div>
+        </div>
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-title">Active Users</div>
+                <div class="stat-value text-secondary">{{ analytics.active_users }}</div>
+                <div class="stat-desc">With notifications</div>
+            </div>
+        </div>
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-title">Commands (7d)</div>
+                <div class="stat-value text-accent">{{ analytics.stats_7d.total_commands }}</div>
+                <div class="stat-desc">Last 7 days</div>
+            </div>
+        </div>
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-title">Commands (30d)</div>
+                <div class="stat-value text-info">{{ analytics.stats_30d.total_commands }}</div>
+                <div class="stat-desc">Last 30 days</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <!-- Command Distribution Chart -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Command Distribution (7 days)</h2>
+                <canvas id="commandChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Activity Comparison Chart -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Activity Comparison</h2>
+                <canvas id="activityChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Command Details Table -->
+    <div class="card bg-base-100 shadow-xl mb-6">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Command Usage Details</h2>
+            <div class="tabs tabs-boxed mb-4">
+                <a class="tab tab-active" onclick="showPeriod('7d')">Last 7 Days</a>
+                <a class="tab" onclick="showPeriod('30d')">Last 30 Days</a>
+            </div>
+
+            <div id="stats_7d" class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Command</th>
+                            <th>Count</th>
+                            <th>Percentage</th>
+                            <th>Avg per Day</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for command, count in analytics.stats_7d.commands_by_type.items() %}
+                        <tr>
+                            <td class="font-semibold">/{{ command }}</td>
+                            <td>{{ count }}</td>
+                            <td>
+                                <div class="flex items-center gap-2">
+                                    <progress class="progress progress-primary w-20"
+                                             value="{{ (count / analytics.stats_7d.total_commands * 100) if analytics.stats_7d.total_commands > 0 else 0 }}"
+                                             max="100"></progress>
+                                    <span>{{ "%.1f"|format((count / analytics.stats_7d.total_commands * 100) if analytics.stats_7d.total_commands > 0 else 0) }}%</span>
+                                </div>
+                            </td>
+                            <td>{{ "%.1f"|format(count / 7) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="stats_30d" class="overflow-x-auto" style="display: none;">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Command</th>
+                            <th>Count</th>
+                            <th>Percentage</th>
+                            <th>Avg per Day</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for command, count in analytics.stats_30d.commands_by_type.items() %}
+                        <tr>
+                            <td class="font-semibold">/{{ command }}</td>
+                            <td>{{ count }}</td>
+                            <td>
+                                <div class="flex items-center gap-2">
+                                    <progress class="progress progress-primary w-20"
+                                             value="{{ (count / analytics.stats_30d.total_commands * 100) if analytics.stats_30d.total_commands > 0 else 0 }}"
+                                             max="100"></progress>
+                                    <span>{{ "%.1f"|format((count / analytics.stats_30d.total_commands * 100) if analytics.stats_30d.total_commands > 0 else 0) }}%</span>
+                                </div>
+                            </td>
+                            <td>{{ "%.1f"|format(count / 30) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Activity Analysis -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Most Active Users -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title text-xl mb-4">Most Active Users (30 days)</h2>
+                {% if analytics.stats_30d.top_users %}
+                <div class="overflow-x-auto">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>User</th>
+                                <th>Commands</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for username, count in analytics.stats_30d.top_users[:5] %}
+                            <tr>
+                                <td>
+                                    {% if loop.index == 1 %}
+                                    🥇
+                                    {% elif loop.index == 2 %}
+                                    🥈
+                                    {% elif loop.index == 3 %}
+                                    🥉
+                                    {% else %}
+                                    {{ loop.index }}
+                                    {% endif %}
+                                </td>
+                                <td>@{{ username or 'Unknown' }}</td>
+                                <td>
+                                    <span class="badge badge-primary">{{ count }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-gray-500">No activity data available</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- User Engagement -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title text-xl mb-4">User Engagement</h2>
+                <div class="space-y-4">
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Active Rate (7d)</span>
+                            <span class="font-semibold">
+                                {{ "%.1f"|format((analytics.stats_7d.active_users / analytics.total_users * 100) if analytics.total_users > 0 else 0) }}%
+                            </span>
+                        </div>
+                        <progress class="progress progress-success w-full"
+                                 value="{{ (analytics.stats_7d.active_users / analytics.total_users * 100) if analytics.total_users > 0 else 0 }}"
+                                 max="100"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <span>Active Rate (30d)</span>
+                            <span class="font-semibold">
+                                {{ "%.1f"|format((analytics.stats_30d.active_users / analytics.total_users * 100) if analytics.total_users > 0 else 0) }}%
+                            </span>
+                        </div>
+                        <progress class="progress progress-info w-full"
+                                 value="{{ (analytics.stats_30d.active_users / analytics.total_users * 100) if analytics.total_users > 0 else 0 }}"
+                                 max="100"></progress>
+                    </div>
+                    <div class="divider"></div>
+                    <div class="stats stats-vertical w-full">
+                        <div class="stat">
+                            <div class="stat-title">Avg Commands/User (7d)</div>
+                            <div class="stat-value text-lg">
+                                {{ "%.1f"|format(analytics.stats_7d.total_commands / analytics.stats_7d.active_users) if analytics.stats_7d.active_users > 0 else 0 }}
+                            </div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-title">Avg Commands/User (30d)</div>
+                            <div class="stat-value text-lg">
+                                {{ "%.1f"|format(analytics.stats_30d.total_commands / analytics.stats_30d.active_users) if analytics.stats_30d.active_users > 0 else 0 }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Command Distribution Chart
+const commandCtx = document.getElementById('commandChart').getContext('2d');
+const commandData = {
+    labels: [{% for cmd in analytics.stats_7d.commands_by_type.keys() %}'{{ cmd }}'{% if not loop.last %},{% endif %}{% endfor %}],
+    datasets: [{
+        label: 'Commands',
+        data: [{% for count in analytics.stats_7d.commands_by_type.values() %}{{ count }}{% if not loop.last %},{% endif %}{% endfor %}],
+        backgroundColor: [
+            'rgba(255, 99, 132, 0.8)',
+            'rgba(54, 162, 235, 0.8)',
+            'rgba(255, 206, 86, 0.8)',
+            'rgba(75, 192, 192, 0.8)',
+            'rgba(153, 102, 255, 0.8)',
+            'rgba(255, 159, 64, 0.8)'
+        ],
+        borderWidth: 1
+    }]
+};
+
+new Chart(commandCtx, {
+    type: 'doughnut',
+    data: commandData,
+    options: {
+        responsive: true,
+        plugins: {
+            legend: {
+                position: 'bottom',
+            }
+        }
+    }
+});
+
+// Activity Comparison Chart
+const activityCtx = document.getElementById('activityChart').getContext('2d');
+const activityData = {
+    labels: ['Total Commands', 'Active Users'],
+    datasets: [{
+        label: '7 Days',
+        data: [{{ analytics.stats_7d.total_commands }}, {{ analytics.stats_7d.active_users }}],
+        backgroundColor: 'rgba(54, 162, 235, 0.8)',
+    }, {
+        label: '30 Days',
+        data: [{{ analytics.stats_30d.total_commands }}, {{ analytics.stats_30d.active_users }}],
+        backgroundColor: 'rgba(255, 99, 132, 0.8)',
+    }]
+};
+
+new Chart(activityCtx, {
+    type: 'bar',
+    data: activityData,
+    options: {
+        responsive: true,
+        scales: {
+            y: {
+                beginAtZero: true
+            }
+        }
+    }
+});
+
+// Tab switching function
+function showPeriod(period) {
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => tab.classList.remove('tab-active'));
+
+    if (period === '7d') {
+        tabs[0].classList.add('tab-active');
+        document.getElementById('stats_7d').style.display = 'block';
+        document.getElementById('stats_30d').style.display = 'none';
+    } else {
+        tabs[1].classList.add('tab-active');
+        document.getElementById('stats_7d').style.display = 'none';
+        document.getElementById('stats_30d').style.display = 'block';
+    }
+}
+</script>
+{% endblock %}

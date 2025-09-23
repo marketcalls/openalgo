@@ -26,7 +26,16 @@
       "Bash(dir:*)",
       "Bash(docker-compose:*)",
       "Bash(docker-compose build:*)",
-      "Bash(docker-compose up:*)"
+      "Bash(docker-compose up:*)",
+      "Bash(uv pip show:*)",
+      "Bash(tasklist)",
+      "Bash(findstr:*)",
+      "Bash(uv pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(copy:*)",
+      "Bash(npm run build:css:*)",
+      "Read(//d/openalgo/**)",
+      "Bash(netstat:*)"
     ],
     "deny": []
   }

@@ -3214,6 +3214,11 @@ details.collapse summary::-webkit-details-marker {
   border-radius: var(--rounded-box, 1rem);
   background-color: currentColor;
 }
+.progress-primary::-moz-progress-bar {
+  border-radius: var(--rounded-box, 1rem);
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-p,oklch(var(--p)/var(--tw-bg-opacity)));
+}
 .progress-info::-moz-progress-bar {
   border-radius: var(--rounded-box, 1rem);
   --tw-bg-opacity: 1;
@@ -3247,6 +3252,9 @@ details.collapse summary::-webkit-details-marker {
   background-position-x: 15%;
   animation: progress-loading 5s ease-in-out infinite;
 }
+.progress-primary:indeterminate {
+  --progress-color: var(--fallback-p,oklch(var(--p)/1));
+}
 .progress-info:indeterminate {
   --progress-color: var(--fallback-in,oklch(var(--in)/1));
 }
@@ -3266,6 +3274,10 @@ details.collapse summary::-webkit-details-marker {
 .progress::-webkit-progress-value {
   border-radius: var(--rounded-box, 1rem);
   background-color: currentColor;
+}
+.progress-primary::-webkit-progress-value {
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-p,oklch(var(--p)/var(--tw-bg-opacity)));
 }
 .progress-info::-webkit-progress-value {
   --tw-bg-opacity: 1;
@@ -3769,6 +3781,18 @@ details.collapse summary::-webkit-details-marker {
   box-shadow: calc(var(--handleoffset) / 2) 0 0 2px var(--tglbg) inset,
         calc(var(--handleoffset) / -2) 0 0 2px var(--tglbg) inset,
         0 0 0 2px var(--tglbg) inset;
+}
+.toggle-primary:focus-visible {
+  outline-color: var(--fallback-p,oklch(var(--p)/1));
+}
+.toggle-primary:checked,
+    .toggle-primary[aria-checked="true"] {
+  border-color: var(--fallback-p,oklch(var(--p)/var(--tw-border-opacity)));
+  --tw-border-opacity: 0.1;
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-p,oklch(var(--p)/var(--tw-bg-opacity)));
+  --tw-text-opacity: 1;
+  color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
 }
 .toggle:disabled {
   cursor: not-allowed;
@@ -5026,8 +5050,14 @@ code[class*="language-"] {
 .h-20 {
   height: 5rem;
 }
+.h-24 {
+  height: 6rem;
+}
 .h-3 {
   height: 0.75rem;
+}
+.h-32 {
+  height: 8rem;
 }
 .h-4 {
   height: 1rem;
@@ -5157,6 +5187,9 @@ code[class*="language-"] {
 }
 .max-w-md {
   max-width: 28rem;
+}
+.max-w-none {
+  max-width: none;
 }
 .max-w-sm {
   max-width: 24rem;

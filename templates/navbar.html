@@ -52,13 +52,13 @@
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('strategy_bp.index') }}" 
+                <a href="{{ url_for('strategy_bp.index') }}"
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
                     Strategy
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('analyzer_bp.analyzer') }}" 
+                <a href="{{ url_for('analyzer_bp.analyzer') }}"
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
                     API Analyzer
                 </a>
@@ -125,6 +125,14 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                         </svg>
                         API Key
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('telegram_bp.index') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        </svg>
+                        Telegram Bot
                     </a>
                 </li>
                 <li>
