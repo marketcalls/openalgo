@@ -28,7 +28,7 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
     logger.info(f'Broker callback initiated for: {broker}')
-    logger.info(f'Session contents: {dict(session)}')
+    logger.debug(f'Session contents: {dict(session)}')
     logger.info(f'Session has user key: {"user" in session}')
     
     # Special handling for Compositedge - it comes from external OAuth and might lose session

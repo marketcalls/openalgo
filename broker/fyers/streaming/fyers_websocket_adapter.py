@@ -326,8 +326,8 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Remove from our subscription tracking
                     subscription_info = self.subscriptions.pop(key)
                     
-                    self.logger.debug(f"Removed subscription for {exchange}:{symbol} (mode: {mode})")
-                    self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription - data will stop publishing but HSM will continue receiving in background")
+                    self.logger.info(f"Unsubscribe for {exchange}:{symbol} (mode: {mode})")
+                    #self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription - data will stop publishing but HSM will continue receiving in background")
                     
                     # Remove the callback reference if it exists
                     if hasattr(self, 'active_callbacks') and key in self.active_callbacks:
@@ -336,7 +336,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # If no more subscriptions, disconnect completely to stop background data
                     # This is needed for Fyers HSM which doesn't support selective unsubscription
                     if len(self.subscriptions) == 0:
-                        self.logger.info("No active subscriptions remaining - disconnecting from Fyers to stop all background data")
+                        self.logger.debug("No active subscriptions remaining - disconnecting from Fyers to stop all background data")
                         
                         # Disconnect from Fyers WebSocket but keep adapter instance and mappings
                         try:

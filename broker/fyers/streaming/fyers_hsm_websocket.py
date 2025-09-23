@@ -676,7 +676,7 @@ class FyersHSMWebSocket:
     def _on_ws_open(self, ws):
         """Handle WebSocket open event"""
         self.connected = True
-        self.logger.info("HSM WebSocket connected")
+        #self.logger.info("HSM WebSocket connected")
         
         # Send authentication message
         auth_msg = self._create_auth_message()

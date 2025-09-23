@@ -137,7 +137,7 @@ class FyersAdapter:
                 self.active_subscriptions.clear()
                 self.subscription_callbacks.clear()
                 self.last_data.clear()
-                self.logger.info(f"Disconnected from Fyers WebSocket (preserved {len(self.hsm_to_symbol)} mappings)")
+                #self.logger.info(f"Disconnected from Fyers WebSocket (preserved {len(self.hsm_to_symbol)} mappings)")
                 
         except Exception as e:
             self.logger.error(f"Error during disconnect: {e}")
@@ -160,7 +160,7 @@ class FyersAdapter:
                 self.logger.debug(f"\n" + "="*60)
                 self.logger.debug(f"SUBSCRIBING TO {len(symbols)} SYMBOLS")
                 self.logger.debug(f"Data type: {data_type}")
-                self.logger.debug(f"Symbols to subscribe: {symbols}")
+                self.logger.info(f"Symbols to subscribe: {symbols}")
                 self.logger.debug("="*60)
                 
                 # Store callback per symbol to prevent data mixing
