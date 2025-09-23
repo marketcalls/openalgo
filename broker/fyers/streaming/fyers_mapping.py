@@ -105,7 +105,6 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
             
-            print(f"Quote Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Get multiplier and precision from data
             multiplier = fyers_data.get("multiplier", 100)
@@ -189,8 +188,6 @@ class FyersDataMapper:
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
-            
-            print(f"Depth Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Apply multiplier and precision
             multiplier = fyers_data.get("multiplier", 100)

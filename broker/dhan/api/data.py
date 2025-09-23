@@ -33,9 +33,9 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     
     url = get_url(endpoint)
     
-    logger.info(f"Making request to {url}")
-    logger.info(f"Headers: {headers}")
-    logger.info(f"Payload: {payload}")
+    #logger.info(f"Making request to {url}")
+    #logger.info(f"Headers: {headers}")
+    #logger.info(f"Payload: {payload}")
     
     if method == "GET":
         res = client.get(url, headers=headers)
@@ -48,8 +48,8 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     res.status = res.status_code
     response = json.loads(res.text)
     
-    logger.info(f"Response status: {res.status}")
-    logger.info(f"Response: {json.dumps(response, indent=2)}")
+    logger.debug(f"Response status: {res.status}")
+    logger.debug(f"Response: {json.dumps(response, indent=2)}")
     
     # Handle Dhan API error codes
     if response.get('status') == 'failed':
@@ -93,7 +93,7 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        logger.info(f"exchange: {exchange}")
+        #logger.info(f"exchange: {exchange}")
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
@@ -308,18 +308,18 @@ class BrokerData:
                 else:
                     end_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
                 end_date = end_dt.strftime("%Y-%m-%d")
-                logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
+                #logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
 
             # Convert symbol to broker format and get securityId
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            logger.info(f"exchange: {exchange}")
+            #logger.info(f"exchange: {exchange}")
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-            logger.info(f"exchange segment: {exchange_segment}")
+            #logger.info(f"exchange segment: {exchange_segment}")
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []
@@ -351,8 +351,8 @@ class BrokerData:
                 if instrument_type == 'EQUITY':
                     request_data["expiryCode"] = 0
                 
-                logger.info(f"Making daily history request to {endpoint}")
-                logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                logger.debug(f"Making daily history request to {endpoint}")
+                logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                 
                 response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
                 
@@ -402,8 +402,8 @@ class BrokerData:
                         "oi": True
                     }
                     
-                    logger.info(f"Making intraday history request to {endpoint}")
-                    logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                    logger.debug(f"Making intraday history request to {endpoint}")
+                    logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                     
                     try:
                         response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
@@ -454,8 +454,8 @@ class BrokerData:
                             "oi": True
                         }
                         
-                        logger.info(f"Making intraday history request to {endpoint}")
-                        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                        logger.debug(f"Making intraday history request to {endpoint}")
+                        logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                         
                         try:
                             response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
@@ -537,8 +537,8 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
-            logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
+            #logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
+            #logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
                 exchange_type: [int(security_id)]  # Use the proper exchange type for indices
@@ -546,7 +546,7 @@ class BrokerData:
             
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
-                logger.info(f"Quotes_Response: {response}")
+                logger.debug(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
                 
                 if not quote_data:
@@ -620,8 +620,8 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
-            logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
+            #logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
+            #logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
                 exchange_type: [int(security_id)]  # Use the proper exchange type for indices

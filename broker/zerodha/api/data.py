@@ -62,14 +62,14 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
     
     try:
         # Log the complete request details for debugging
-        logger.info("=== API Request Details ===")
-        logger.info(f"URL: {url}")
-        logger.info(f"Method: {method}")
-        logger.info(f"Headers: {json.dumps(headers, indent=2)}")
+        #logger.info("=== API Request Details ===")
+        #logger.info(f"URL: {url}")
+        #logger.info(f"Method: {method}")
+        #logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
-            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
         if params:
-            logger.info(f"Params: {json.dumps(params, indent=2)}")
+            logger.debug(f"Params: {json.dumps(params, indent=2)}")
         
         # Make the request using the shared client
         if method.upper() == 'GET':
@@ -90,10 +90,10 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
             raise ZerodhaAPIError(f"Unsupported HTTP method: {method}")
             
         # Log the complete response
-        logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
-        logger.info(f"Response Body: {response.text}")
+        #logger.info("=== API Response Details ===")
+        logger.debug(f"Status Code: {response.status_code}")
+        logger.debug(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Body: {response.text}")
         
         # Parse JSON response
         response_data = response.json()
@@ -197,7 +197,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Fetching quotes for {exchange}:{br_symbol}")
+            logger.debug(f"Fetching quotes for {exchange}:{br_symbol}")
             
             # Get exchange_token from database
             with db_session() as session:
@@ -280,7 +280,7 @@ class BrokerData:
                     all_symbols = session.query(SymToken).filter(
                         SymToken.exchange == exchange
                     ).all()
-                    logger.info(f"All matching symbols in DB: {[(s.symbol, s.brsymbol, s.exchange, s.brexchange, s.token) for s in all_symbols]}")
+                    logger.debug(f"All matching symbols in DB: {[(s.symbol, s.brsymbol, s.exchange, s.brexchange, s.token) for s in all_symbols]}")
                     raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
                 
                 # Split token to get instrument_token for historical data
@@ -309,11 +309,11 @@ class BrokerData:
                 to_str = current_end.strftime('%Y-%m-%d+23:59:59')
                 
                 # Log the request details
-                logger.info(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
+                logger.debug(f"Fetching {resolution} data for {exchange}:{symbol} from {from_str} to {to_str}")
                 
                 # Construct endpoint
                 endpoint = f"/instruments/historical/{instrument_token}/{resolution}?from={from_str}&to={to_str}&oi=1"
-                logger.info(f"Making request to endpoint: {endpoint}")
+                logger.debug(f"Making request to endpoint: {endpoint}")
                 
                 # Use get_api_response
                 response = get_api_response(endpoint, self.auth_token)
@@ -375,7 +375,7 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Fetching market depth for {exchange}:{br_symbol}")
+            logger.debug(f"Fetching market depth for {exchange}:{br_symbol}")
             
             # Get exchange_token from database
             with db_session() as session:

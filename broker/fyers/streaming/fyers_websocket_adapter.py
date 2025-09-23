@@ -67,12 +67,12 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.user_id = user_id
             self.broker_name = broker_name
             
-            self.logger.info(f"Initializing Fyers adapter for user: {user_id}")
+            #self.logger.info(f"Initializing Fyers adapter for user: {user_id}")
             
             # Get access token from auth_data or database
             if auth_data and 'access_token' in auth_data:
                 self.access_token = auth_data['access_token']
-                self.logger.info("Using access token from auth_data")
+                self.logger.debug("Using access token from auth_data")
             else:
                 # Get from database
                 auth_token = get_auth_token(user_id)
@@ -81,7 +81,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 # For Fyers, the auth token IS the access token
                 self.access_token = auth_token
-                self.logger.info("Retrieved access token from database")
+                self.logger.debug("Retrieved access token from database")
             
             if not self.access_token:
                 raise ValueError("Fyers access token is required")
@@ -100,17 +100,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             # Only reinitialize adapter if it doesn't exist
             if not self.fyers_adapter:
-                self.logger.info("Initializing new Fyers adapter...")
+                self.logger.debug("Initializing new Fyers adapter...")
                 self.fyers_adapter = FyersAdapter(self.access_token, self.user_id)
             else:
-                self.logger.info("Using existing Fyers adapter instance")
+                self.logger.debug("Using existing Fyers adapter instance")
             
             # Reinitialize ZMQ if needed
             if not self.socket:
-                self.logger.info("Reinitializing ZeroMQ socket...")
+                self.logger.debug("Reinitializing ZeroMQ socket...")
                 self.setup_zmq()
             
-            self.logger.info("Connecting to Fyers HSM WebSocket...")
+            #self.logger.info("Connecting to Fyers HSM WebSocket...")
             
             # Connect to Fyers
             success = self.fyers_adapter.connect()
@@ -120,7 +120,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = True
             self.running = True
             
-            self.logger.info("Successfully connected to Fyers HSM WebSocket")
+            #self.logger.info("Successfully connected to Fyers HSM WebSocket")
             return {"status": "success", "message": "Connected to Fyers WebSocket"}
             
         except Exception as e:
@@ -131,7 +131,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self):
         """Disconnect from the Fyers WebSocket and cleanup all resources"""
         try:
-            self.logger.info("Starting Fyers WebSocket disconnect and cleanup...")
+            #self.logger.info("Starting Fyers WebSocket disconnect and cleanup...")
             
             # Set flags to stop operations
             self.running = False
@@ -147,17 +147,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     callback_count = len(self.active_callbacks)
                     self.active_callbacks.clear()
                     if callback_count > 0:
-                        self.logger.info(f"Cleared {callback_count} active callbacks")
+                        self.logger.debug(f"Cleared {callback_count} active callbacks")
                 
                 # Clear deduplication cache
                 if hasattr(self, 'last_data_cache'):
                     cache_count = len(self.last_data_cache)
                     self.last_data_cache.clear()
                     if cache_count > 0:
-                        self.logger.info(f"Cleared {cache_count} cached data entries")
+                        self.logger.debug(f"Cleared {cache_count} cached data entries")
                 
                 if subscription_count > 0:
-                    self.logger.info(f"Cleared {subscription_count} active subscriptions")
+                    self.logger.debug(f"Cleared {subscription_count} active subscriptions")
             
             # Disconnect from Fyers HSM WebSocket
             if self.fyers_adapter:
@@ -286,7 +286,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         "subscribed_at": time.time()
                     }
                     
-                    self.logger.info(f"Subscribed to {exchange}:{symbol} (mode: {mode})")
+                    self.logger.debug(f"Subscribed to {exchange}:{symbol} (mode: {mode})")
                     return {
                         "status": "success",
                         "message": f"Subscribed to {exchange}:{symbol}",
@@ -326,7 +326,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Remove from our subscription tracking
                     subscription_info = self.subscriptions.pop(key)
                     
-                    self.logger.info(f"Removed subscription for {exchange}:{symbol} (mode: {mode})")
+                    self.logger.debug(f"Removed subscription for {exchange}:{symbol} (mode: {mode})")
                     self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription - data will stop publishing but HSM will continue receiving in background")
                     
                     # Remove the callback reference if it exists
@@ -481,7 +481,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 low_price = fyers_data.get("low", 0) 
                 close_price = fyers_data.get("close", 0)
                 
-                self.logger.info(f"Mapped Quote data: ltp={ltp}, open={open_price}, high={high_price}, low={low_price}, close={close_price}")
+                self.logger.debug(f"Mapped Quote data: ltp={ltp}, open={open_price}, high={high_price}, low={low_price}, close={close_price}")
                 
                 # Return the already mapped data (no additional processing needed)
                 return fyers_data
@@ -533,10 +533,10 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     sell_levels = depth.get('sell', [])
                     bid1 = buy_levels[0]['price'] if buy_levels else 'N/A'
                     ask1 = sell_levels[0]['price'] if sell_levels else 'N/A'
-                    self.logger.info(f"Published {exchange} depth: {symbol} - Bid={bid1}, Ask={ask1} (topic: {topic})")
+                    self.logger.debug(f"Published {exchange} depth: {symbol} - Bid={bid1}, Ask={ask1} (topic: {topic})")
                 else:  # LTP or Quote data
                     ltp = data.get('ltp', 'N/A')
-                    self.logger.info(f"Published {exchange} data: {symbol} = {ltp} (topic: {topic})")
+                    self.logger.debug(f"Published {exchange} data: {symbol} = {ltp} (topic: {topic})")
                 
         except Exception as e:
             self.logger.error(f"Error sending data via ZeroMQ: {e}")
@@ -587,7 +587,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Comprehensive cleanup method for manual resource cleanup
         """
         try:
-            self.logger.info("Starting comprehensive resource cleanup...")
+            self.logger.debug("Starting comprehensive resource cleanup...")
             
             # Stop all operations
             self.running = False
@@ -651,7 +651,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except:
                 pass
                 
-            print("Force cleanup completed")
+            #print("Force cleanup completed")
             
         except:
             pass  # Suppress all errors in force cleanup

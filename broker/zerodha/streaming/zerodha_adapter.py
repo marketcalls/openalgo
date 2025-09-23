@@ -433,7 +433,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         depth_tick = transformed_tick.copy()
                         depth_tick['mode'] = 'full'
                         depth_topic = self._generate_topic(symbol, subscription_exchange, 'DEPTH')
-                        self.logger.info(f"📊 Publishing DEPTH data to topic: {depth_topic}")
+                        self.logger.debug(f"📊 Publishing DEPTH data to topic: {depth_topic}")
                         self.publish_market_data(depth_topic, depth_tick)
                         
                         # If subscribed to Quote (mode 2), publish quote data
@@ -444,7 +444,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 del quote_tick['depth']
                             quote_tick['mode'] = 'quote'
                             quote_topic = self._generate_topic(symbol, subscription_exchange, 'QUOTE')
-                            self.logger.info(f"📊 Publishing QUOTE data to topic: {quote_topic}")
+                            self.logger.debug(f"📊 Publishing QUOTE data to topic: {quote_topic}")
                             self.publish_market_data(quote_topic, quote_tick)
                         
                         # If subscribed to LTP (mode 1), publish LTP data
@@ -457,7 +457,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 'timestamp': transformed_tick.get('timestamp', int(time.time() * 1000))
                             }
                             ltp_topic = self._generate_topic(symbol, subscription_exchange, 'LTP')
-                            self.logger.info(f"📊 Publishing LTP data to topic: {ltp_topic}")
+                            self.logger.debug(f"📊 Publishing LTP data to topic: {ltp_topic}")
                             self.publish_market_data(ltp_topic, ltp_tick)
                             self.logger.debug(f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}")
                     else:
@@ -469,8 +469,8 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         }.get(original_tick_mode, 'LTP')
                         
                         topic = self._generate_topic(symbol, subscription_exchange, mode_str)
-                        self.logger.info(f"📊 Publishing to topic: {topic}")
-                        self.logger.info(f"📊 Data structure: {transformed_tick}")
+                        self.logger.debug(f"📊 Publishing to topic: {topic}")
+                        self.logger.debug(f"📊 Data structure: {transformed_tick}")
                         
                         # Publish to ZeroMQ
                         self.publish_market_data(topic, transformed_tick)
