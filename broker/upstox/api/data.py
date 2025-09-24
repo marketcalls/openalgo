@@ -356,7 +356,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if intraday_candles:
-                            logger.info(f"Sample intraday candle: {intraday_candles[0]}")
+                            logger.debug(f"Sample intraday candle: {intraday_candles[0]}")
                         
                         # Filter candles to chunk date range
                         filtered_candles = self._filter_candles_by_date(intraday_candles, start_date, end_date)
@@ -386,7 +386,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if historical_candles:
-                            logger.info(f"Sample historical candle: {historical_candles[0]}")
+                            logger.debug(f"Sample historical candle: {historical_candles[0]}")
                         
                         all_candles.extend(historical_candles)
                         logger.info(f"Total candles after historical: {len(all_candles)}")
@@ -453,7 +453,7 @@ class BrokerData:
                 return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
             
             # Debug: Log sample candle data to understand structure
-            logger.info(f"Sample candle data (first 2): {all_candles[:2]}")
+            logger.debug(f"Sample candle data (first 2): {all_candles[:2]}")
             logger.info(f"Total candles for processing: {len(all_candles)}")
             
             # Convert to DataFrame
@@ -461,7 +461,7 @@ class BrokerData:
             
             # Debug: Check timestamp column before conversion
             logger.info(f"Timestamp column types before conversion: {df['timestamp'].dtype}")
-            logger.info(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
+            logger.debug(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
             logger.info(f"Unique timestamp types: {df['timestamp'].apply(type).unique()}")
             
             # Convert timestamp from ISO 8601 string to Unix timestamp (seconds since epoch)
