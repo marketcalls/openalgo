@@ -217,7 +217,7 @@ class FyersAdapter:
                 # The tokens are generated in the same order as valid_symbols
                 self.logger.debug(f"\nCreating HSM mappings for {len(hsm_tokens)} tokens...")
                 self.logger.debug(f"HSM Tokens: {hsm_tokens}")
-                self.logger.debug(f"Valid Symbols: {[f'{s['exchange']}:{s['symbol']}' for s in valid_symbols]}")
+                self.logger.debug(f"Valid Symbols: {[f'{s[\"exchange\"]}:{s[\"symbol\"]}' for s in valid_symbols]}")
                 
                 # Primary mapping strategy: Map by order (most reliable)
                 # Since convert_openalgo_symbols_to_hsm processes symbols in order
