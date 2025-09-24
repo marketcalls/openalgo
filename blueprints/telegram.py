@@ -186,7 +186,8 @@ def start_bot():
 def stop_bot():
     """Stop the telegram bot"""
     try:
-        success, message = run_async(telegram_bot_service.stop_bot())
+        # Use the synchronous stop method
+        success, message = telegram_bot_service.stop_bot_sync()
 
         if success:
             return jsonify({'status': 'success', 'message': message})

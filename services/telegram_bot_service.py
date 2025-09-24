@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import threading
+import concurrent.futures
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import httpx
@@ -355,6 +356,12 @@ class TelegramBotService:
     async def initialize_bot(self, token: str) -> Tuple[bool, str]:
         """Initialize the Telegram bot with given token"""
         try:
+            # If bot is running, stop it first
+            if self.is_running:
+                await self.stop_bot()
+                # Wait a moment for cleanup
+                await asyncio.sleep(1)
+
             self.bot_token = token
 
             # Create a temporary bot just to verify the token
@@ -369,7 +376,8 @@ class TelegramBotService:
             # Update bot config in database
             update_bot_config({
                 'bot_token': token,
-                'is_active': False
+                'is_active': False,
+                'bot_username': bot_info.username
             })
 
             return True, f"Bot initialized successfully: @{bot_info.username}"
@@ -382,7 +390,13 @@ class TelegramBotService:
         """Run bot in separate thread with its own event loop"""
         self.bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.bot_loop)
-        self.bot_loop.run_until_complete(self._start_bot())
+        try:
+            self.bot_loop.run_until_complete(self._start_bot())
+        except Exception as e:
+            logger.debug(f"Bot loop ended: {e}")
+        finally:
+            # Clean shutdown
+            self.bot_loop.close()
 
     async def _start_bot(self):
         """Start the bot with proper handlers"""
@@ -424,10 +438,20 @@ class TelegramBotService:
             while self.is_running:
                 await asyncio.sleep(1)
 
+            # Clean shutdown when is_running becomes False
+            logger.info("Bot stopping gracefully...")
+
         except Exception as e:
             logger.error(f"Error in bot operation: {e}")
             self.is_running = False
             raise
+        finally:
+            # Ensure updater is stopped if it was started
+            if self.application and self.application.updater.running:
+                try:
+                    await self.application.updater.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping updater in finally: {e}")
 
     async def start_bot(self) -> Tuple[bool, str]:
         """Start the bot in polling mode"""
@@ -457,18 +481,49 @@ class TelegramBotService:
             logger.error(f"Failed to start bot: {e}")
             return False, str(e)
 
-    async def stop_bot(self) -> Tuple[bool, str]:
-        """Stop the bot"""
+    def stop_bot_sync(self) -> Tuple[bool, str]:
+        """Stop the bot synchronously (for use from Flask routes)"""
         try:
             if not self.is_running:
                 return False, "Bot is not running"
 
+            # Signal the bot to stop
+            logger.info("Stopping bot...")
             self.is_running = False
 
-            if self.application:
-                await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
+            # If we have a bot loop running in another thread, handle shutdown properly
+            if self.bot_loop and self.bot_loop.is_running() and self.application:
+                # Schedule the shutdown in the bot's event loop
+                async def shutdown():
+                    try:
+                        if self.application.updater.running:
+                            await self.application.updater.stop()
+                        await self.application.stop()
+                        await self.application.shutdown()
+                    except Exception as e:
+                        logger.error(f"Error during shutdown: {e}")
+
+                # Run the shutdown in the bot's event loop
+                future = asyncio.run_coroutine_threadsafe(shutdown(), self.bot_loop)
+                # Wait for shutdown to complete (max 10 seconds)
+                try:
+                    future.result(timeout=10)
+                    logger.info("Bot shutdown completed")
+                except concurrent.futures.TimeoutError:
+                    logger.warning("Shutdown timeout - forcing stop")
+                except Exception as e:
+                    logger.warning(f"Shutdown error: {e}")
+
+            # Wait for the thread to finish (with timeout)
+            if self.bot_thread and self.bot_thread.is_alive():
+                self.bot_thread.join(timeout=5.0)
+                if self.bot_thread.is_alive():
+                    logger.warning("Thread did not stop cleanly")
+                self.bot_thread = None
+
+            # Clean up
+            self.application = None
+            self.bot_loop = None
 
             update_bot_config({'is_active': False})
 
@@ -477,6 +532,11 @@ class TelegramBotService:
         except Exception as e:
             logger.error(f"Failed to stop bot: {e}")
             return False, str(e)
+
+    async def stop_bot(self) -> Tuple[bool, str]:
+        """Stop the bot (async wrapper for compatibility)"""
+        # Just call the sync version since we're dealing with threads
+        return self.stop_bot_sync()
 
     # Command Handlers
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
