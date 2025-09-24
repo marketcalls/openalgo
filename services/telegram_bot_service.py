@@ -104,7 +104,7 @@ class TelegramBotService:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
 
-            logger.info(f"Generating intraday chart for {symbol} on {exchange} with interval {interval}")
+            logger.debug(f"Generating intraday chart for {symbol} on {exchange} with interval {interval}")
 
             # Get historical data
             loop = asyncio.get_event_loop()
@@ -233,7 +233,7 @@ class TelegramBotService:
             # For daily charts, add extra days to ensure we get enough trading days
             start_date = end_date - timedelta(days=int(days * 1.5))
 
-            logger.info(f"Generating daily chart for {symbol} on {exchange} with interval {interval}")
+            logger.debug(f"Generating daily chart for {symbol} on {exchange} with interval {interval}")
 
             # Get historical data
             loop = asyncio.get_event_loop()
@@ -428,7 +428,7 @@ class TelegramBotService:
             await self.application.start()
 
             # Always use polling mode
-            logger.info("Starting bot in polling mode...")
+            logger.debug("Starting bot in polling mode...")
             await self.application.updater.start_polling()
 
             self.is_running = True
@@ -439,7 +439,7 @@ class TelegramBotService:
                 await asyncio.sleep(1)
 
             # Clean shutdown when is_running becomes False
-            logger.info("Bot stopping gracefully...")
+            logger.debug("Bot stopping gracefully...")
 
         except Exception as e:
             logger.error(f"Error in bot operation: {e}")
@@ -488,7 +488,7 @@ class TelegramBotService:
                 return False, "Bot is not running"
 
             # Signal the bot to stop
-            logger.info("Stopping bot...")
+            logger.debug("Stopping bot...")
             self.is_running = False
 
             # If we have a bot loop running in another thread, handle shutdown properly
@@ -508,7 +508,7 @@ class TelegramBotService:
                 # Wait for shutdown to complete (max 10 seconds)
                 try:
                     future.result(timeout=10)
-                    logger.info("Bot shutdown completed")
+                    logger.debug("Bot shutdown completed")
                 except concurrent.futures.TimeoutError:
                     logger.warning("Shutdown timeout - forcing stop")
                 except Exception as e:
@@ -1271,7 +1271,7 @@ class TelegramBotService:
                 text=message,
                 parse_mode='Markdown'
             )
-            logger.info(f"Notification sent to {telegram_id}")
+            logger.debug(f"Notification sent to telegram_id: {telegram_id}")
             return True
         except Exception as e:
             logger.error(f"Error sending notification to {telegram_id}: {str(e)}")
@@ -1314,7 +1314,7 @@ class TelegramBotService:
                     logger.error(f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}")
                     fail_count += 1
 
-            logger.info(f"Broadcast complete: {success_count} success, {fail_count} failed")
+            logger.debug(f"Broadcast complete: {success_count} success, {fail_count} failed")
             return success_count, fail_count
 
         except Exception as e:
