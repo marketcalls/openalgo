@@ -398,7 +398,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if "marketInfo" in data:
             self.market_status = data["marketInfo"]
             if "segmentStatus" in self.market_status:
-                self.logger.info(f"Market status update: {self.market_status['segmentStatus']}")
+                self.logger.debug(f"Market status update: {self.market_status['segmentStatus']}")
 
     def _process_feed(self, feed_key: str, feed_data: Dict[str, Any], current_ts: int):
         """Process individual feed data"""
@@ -421,7 +421,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             matching_subscriptions.append((correlation_id, sub_info))
                             self.logger.debug(f"Matched by token: {correlation_id}")
                 
-                self.logger.info(f"Found {len(matching_subscriptions)} matching subscriptions for {feed_key}")
+                self.logger.debug(f"Found {len(matching_subscriptions)} matching subscriptions for {feed_key}")
             
             if not matching_subscriptions:
                 self.logger.warning(f"No subscription found for feed key: {feed_key}")
@@ -438,9 +438,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 market_data = self._extract_market_data(feed_data, sub_info, current_ts)
                 
                 if market_data:
-                    self.logger.info(f"Publishing data for {symbol} mode {mode} on topic: {topic}")
+                    self.logger.debug(f"Publishing data for {symbol} mode {mode} on topic: {topic}")
                     if mode == 2:  # Quote mode - show the complete data structure
-                        self.logger.info(f"QUOTE DATA: {market_data}")
+                        self.logger.debug(f"QUOTE DATA: {market_data}")
                     
                     if mode == 3:  # Depth mode
                         # For depth mode, structure the data properly with LTP at top level
@@ -503,7 +503,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
         
         # Log the full feed structure to understand available fields
-        self.logger.info(f"Full feed structure for quote extraction: {list(ff.keys())}")
+        self.logger.debug(f"Full feed structure for quote extraction: {list(ff.keys())}")
         
         # Extract LTP and quantity data
         ltpc = ff.get("ltpc", {})
@@ -516,16 +516,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
         # Extract market level data - try different possible field names
         market_level = ff.get("marketLevel", {})
-        self.logger.info(f"Market level keys: {list(market_level.keys()) if market_level else 'None'}")
+        self.logger.debug(f"Market level keys: {list(market_level.keys()) if market_level else 'None'}")
         
         # Also check what's in OHLC
-        self.logger.info(f"OHLC keys: {list(ohlc.keys()) if ohlc else 'None'}")
+        self.logger.debug(f"OHLC keys: {list(ohlc.keys()) if ohlc else 'None'}")
         
         # Check if there are other sections with volume data
         if "marketStatus" in ff:
             self.logger.info(f"Market status keys: {list(ff['marketStatus'].keys())}")
         if "optionGreeks" in ff:
-            self.logger.info(f"Option Greeks keys: {list(ff['optionGreeks'].keys())}")
+            self.logger.debug(f"Option Greeks keys: {list(ff['optionGreeks'].keys())}")
         
         # Extract volume from OHLC (confirmed working)
         volume = ohlc.get("vol", 0) if ohlc else 0
