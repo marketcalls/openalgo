@@ -40,13 +40,13 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     data = response.text
     
     # Print raw response for debugging
-    logger.info(f"Raw Response: {data}")
+    logger.debug(f"Raw Response: {data}")
     
     try:
         return json.loads(data)
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON: {e}")
-        logger.info(f"Response data: {data}")
+        logger.debug(f"Response data: {data}")
         raise
 
 class BrokerData:
@@ -334,10 +334,10 @@ class BrokerData:
                                     'volume': float(quotes_response.get('v', 0)),
                                     'oi': float(quotes_response.get('oi', 0))
                                 }
-                                logger.info(f"Today's quote data: {today_data}")
+                                logger.debug(f"Today's quote data: {today_data}")
                                 # Append today's data
                                 df = pd.concat([df, pd.DataFrame([today_data])], ignore_index=True)
-                                logger.info("Added today's data from quotes")
+                                logger.debug("Added today's data from quotes")
                         except Exception as e:
                             logger.info(f"Error fetching today's data from quotes: {e}")
                 else:
