@@ -546,7 +546,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "low": float(ohlc.get("low", 0)),
             "close": float(ohlc.get("close", 0)),
             "ltp": float(ltp),
-            "last_quantity": int(ltq),
+            "last_trade_quantity": int(ltq),
             "volume": int(volume),
             "average_price": float(avg_price),
             "total_buy_quantity": int(total_buy_qty),
