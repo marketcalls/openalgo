@@ -1,108 +1,131 @@
 {% extends "base.html" %}
 
-{% block head %}
-<style>
-    .table-header {
-        @apply sticky top-0 bg-base-200 z-10;
-    }
-
-    .sort-icon {
-        @apply inline-block ml-1 opacity-50;
-    }
-
-    th.sortable {
-        @apply cursor-pointer hover:bg-base-300 transition-colors duration-200;
-    }
-
-    .symbol-cell {
-        @apply font-medium flex items-center gap-2;
-    }
-
-    .name-cell {
-        @apply opacity-70;
-    }
-
-    .token-cell {
-        @apply font-mono text-sm;
-    }
-
-    .numeric-cell {
-        @apply font-mono text-right;
-    }
-
-    .copy-btn {
-        @apply btn btn-ghost btn-xs p-1;
-    }
-
-    .copy-btn:hover {
-        @apply text-primary;
-    }
-</style>
-{% endblock %}
-
 {% block content %}
-<div class="w-full">
-    <!-- Search Header -->
-    <div class="card bg-base-100 shadow-lg mb-6">
-        <div class="card-body">
-            <div class="flex justify-between items-center mb-4">
-                <h1 class="text-2xl font-bold">Search Results</h1>
-                <a href="{{ url_for('search_bp.token') }}" class="btn btn-ghost btn-sm gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                    New Search
-                </a>
-            </div>
-            <div class="stats shadow">
-                <div class="stat">
-                    <div class="stat-title">Found</div>
-                    <div class="stat-value text-primary">{{ results|length }}</div>
-                    <div class="stat-desc">matching symbols</div>
+<!-- Professional Symbol Search Results -->
+<div class="space-y-4">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Symbol Search Results</h1>
+            <p class="text-sm text-base-content/60 mt-1">Found {{ results|length }} matching instruments</p>
+        </div>
+
+        <!-- New Search Button -->
+        <a href="{{ url_for('search_bp.token') }}" class="btn-pro btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            New Search
+        </a>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="metric-card">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                <div>
+                    <div class="metric-label">Search Results</div>
+                    <div class="metric-value text-lg">{{ results|length }} symbols found</div>
                 </div>
             </div>
+            <span class="badge-pro badge-success">{{ results|length }}</span>
         </div>
     </div>
 
-    <!-- Results Table -->
-    <div class="card bg-base-100 shadow-lg overflow-x-auto">
-        <div class="card-body p-0">
-            <table class="table table-zebra w-full">
-                <thead class="table-header">
+    <!-- Professional Results Table -->
+    {% if results %}
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="data-table w-full">
+                <thead>
                     <tr>
-                        <th class="sortable" data-sort="symbol">
-                            Symbol
-                            <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                            </svg>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors" data-sort="symbol">
+                            <div class="flex items-center gap-2">
+                                Symbol
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
                         </th>
-                        <th class="sortable" data-sort="brsymbol">Broker Symbol</th>
-                        <th class="sortable" data-sort="name">Name</th>
-                        <th class="sortable" data-sort="exchange">Exchange</th>
-                        <th class="sortable" data-sort="brexchange">Broker Exchange</th>
-                        <th class="sortable" data-sort="token">Token</th>
-                        <th class="sortable" data-sort="lotsize">Lot Size</th>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors" data-sort="brsymbol">
+                            <div class="flex items-center gap-2">
+                                Broker Symbol
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors" data-sort="name">
+                            <div class="flex items-center gap-2">
+                                Instrument Name
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors" data-sort="exchange">
+                            <div class="flex items-center gap-2">
+                                Exchange
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors" data-sort="token">
+                            <div class="flex items-center gap-2">
+                                Token
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable cursor-pointer hover:bg-base-200 transition-colors text-right" data-sort="lotsize">
+                            <div class="flex items-center justify-end gap-2">
+                                Lot Size
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th width="50">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in results %}
-                    <tr>
+                    <tr class="hover:bg-base-50">
                         <td>
-                            <div class="symbol-cell">
-                                {{ row.symbol }}
-                                <button class="copy-btn tooltip {% if loop.index <= 3 %}tooltip-bottom{% else %}tooltip-top{% endif %}" data-tip="Copy symbol" onclick="copyToClipboard('{{ row.symbol }}', event)">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <div class="flex items-center gap-3">
+                                <span class="font-semibold text-base-content">{{ row.symbol }}</span>
+                                <button class="btn btn-ghost btn-xs p-1 hover:text-primary tooltip"
+                                        data-tip="Copy symbol"
+                                        onclick="copyToClipboard('{{ row.symbol }}', event)">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                                     </svg>
                                 </button>
                             </div>
                         </td>
-                        <td>{{ row.brsymbol }}</td>
-                        <td class="name-cell">{{ row.name }}</td>
-                        <td><div class="badge badge-ghost">{{ row.exchange }}</div></td>
-                        <td><div class="badge badge-ghost">{{ row.brexchange }}</div></td>
-                        <td class="token-cell">{{ row.token }}</td>
-                        <td class="numeric-cell">{{ row.lotsize or '-' }}</td>
+                        <td class="font-medium text-base-content">{{ row.brsymbol }}</td>
+                        <td class="text-base-content/70">{{ row.name }}</td>
+                        <td>
+                            <span class="badge-pro">{{ row.exchange }}</span>
+                        </td>
+                        <td class="font-mono text-sm">{{ row.token }}</td>
+                        <td class="font-mono text-sm text-right">{{ row.lotsize or '-' }}</td>
+                        <td>
+                            <div class="flex gap-1">
+                                <button class="btn btn-ghost btn-xs tooltip"
+                                        data-tip="Place Order"
+                                        onclick="placeOrder('{{ row.symbol }}', '{{ row.exchange }}')">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -110,19 +133,35 @@
         </div>
     </div>
 
-    <!-- Pagination -->
+    <!-- Professional Pagination -->
     {% if results|length > 10 %}
-    <div id="pagination" class="flex justify-center mt-8">
-        <div class="join">
+    <div class="flex justify-center">
+        <div id="pagination" class="join">
             <!-- Pagination will be populated by JavaScript -->
         </div>
     </div>
     {% endif %}
+
+    {% else %}
+    <!-- Empty State -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-base-content/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <h3 class="text-lg font-semibold text-base-content mb-2">No Symbols Found</h3>
+        <p class="text-base-content/60 mb-4">Try adjusting your search criteria or check the spelling.</p>
+        <a href="{{ url_for('search_bp.token') }}" class="btn-pro btn-primary">
+            Try Another Search
+        </a>
+    </div>
+    {% endif %}
 </div>
 
+{% block head %}
 <script>
+// Professional search results functionality
 function copyToClipboard(text, event) {
-    event.stopPropagation(); // Prevent row click event if any
+    event.stopPropagation();
     navigator.clipboard.writeText(text).then(() => {
         showToast('Symbol copied to clipboard', 'success');
     }).catch(err => {
@@ -131,8 +170,16 @@ function copyToClipboard(text, event) {
     });
 }
 
+function placeOrder(symbol, exchange) {
+    // Redirect to token/order placement page with pre-filled data
+    const url = new URL('{{ url_for("search_bp.token") }}', window.location.origin);
+    url.searchParams.set('symbol', symbol);
+    url.searchParams.set('exchange', exchange);
+    window.location.href = url.toString();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Sorting functionality
+    // Enhanced sorting functionality
     document.querySelectorAll('th.sortable').forEach(header => {
         header.addEventListener('click', () => {
             const table = header.closest('table');
@@ -140,83 +187,83 @@ document.addEventListener('DOMContentLoaded', function() {
             const rows = Array.from(tbody.querySelectorAll('tr'));
             const index = Array.from(header.parentElement.children).indexOf(header);
             const sortKey = header.dataset.sort;
-            
+
             // Get current sort direction
             const currentDirection = header.getAttribute('data-sort-direction') || 'asc';
             const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
-            
+
             // Update sort direction indicators
-            document.querySelectorAll('th').forEach(th => {
+            document.querySelectorAll('th.sortable').forEach(th => {
                 th.removeAttribute('data-sort-direction');
+                const svg = th.querySelector('svg');
+                if (svg) {
+                    svg.style.transform = '';
+                    svg.style.opacity = '0.4';
+                }
             });
+
             header.setAttribute('data-sort-direction', newDirection);
-            
+            const headerSvg = header.querySelector('svg');
+            if (headerSvg) {
+                headerSvg.style.transform = newDirection === 'desc' ? 'rotate(180deg)' : '';
+                headerSvg.style.opacity = '1';
+            }
+
             // Sort rows
             rows.sort((a, b) => {
-                const aValue = a.children[index].textContent.trim();
-                const bValue = b.children[index].textContent.trim();
-                
+                let aValue, bValue;
+
+                if (sortKey === 'symbol') {
+                    aValue = a.children[index].querySelector('span').textContent.trim();
+                    bValue = b.children[index].querySelector('span').textContent.trim();
+                } else {
+                    aValue = a.children[index].textContent.trim();
+                    bValue = b.children[index].textContent.trim();
+                }
+
                 // Handle numeric values
-                if (['lotsize'].includes(sortKey)) {
-                    const aNum = parseFloat(aValue) || 0;
-                    const bNum = parseFloat(bValue) || 0;
+                if (['lotsize', 'token'].includes(sortKey)) {
+                    const aNum = parseFloat(aValue.replace(/[^\d.-]/g, '')) || 0;
+                    const bNum = parseFloat(bValue.replace(/[^\d.-]/g, '')) || 0;
                     return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
                 }
-                
+
                 // Handle text values
-                return newDirection === 'asc' 
+                return newDirection === 'asc'
                     ? aValue.localeCompare(bValue)
                     : bValue.localeCompare(aValue);
             });
-            
+
             // Clear and repopulate tbody
             tbody.innerHTML = '';
-            rows.forEach((row, index) => {
-                // Update tooltip position based on row index
-                const copyBtn = row.querySelector('.copy-btn');
-                if (copyBtn) {
-                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
-                    copyBtn.classList.add(index < 3 ? 'tooltip-bottom' : 'tooltip-top');
-                }
-                tbody.appendChild(row);
-            });
+            rows.forEach(row => tbody.appendChild(row));
         });
     });
 
-    // Pagination functionality
+    // Professional pagination functionality
     const rowsPerPage = 10;
     const rows = document.querySelectorAll('tbody tr');
     const totalPages = Math.ceil(rows.length / rowsPerPage);
     let currentPage = 1;
 
     function showPage(pageNumber) {
-        let visibleIndex = 0;
         rows.forEach((row, index) => {
             const isVisible = (index >= (pageNumber - 1) * rowsPerPage && index < pageNumber * rowsPerPage);
             row.style.display = isVisible ? '' : 'none';
-            
-            // Update tooltip position for visible rows
-            if (isVisible) {
-                const copyBtn = row.querySelector('.copy-btn');
-                if (copyBtn) {
-                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
-                    copyBtn.classList.add(visibleIndex < 3 ? 'tooltip-bottom' : 'tooltip-top');
-                }
-                visibleIndex++;
-            }
         });
     }
 
     function setupPagination() {
-        const pagination = document.getElementById('pagination').querySelector('.join');
+        const pagination = document.getElementById('pagination');
         if (!pagination) return;
-        
+
         pagination.innerHTML = '';
-        
+
         // Previous button
         const prevButton = document.createElement('button');
         prevButton.className = 'join-item btn btn-sm';
         prevButton.innerHTML = '«';
+        prevButton.disabled = currentPage === 1;
         prevButton.addEventListener('click', () => {
             if (currentPage > 1) {
                 currentPage--;
@@ -225,10 +272,19 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         pagination.appendChild(prevButton);
 
+        // Calculate page range to show
+        const maxButtons = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+        let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+
+        if (endPage - startPage + 1 < maxButtons) {
+            startPage = Math.max(1, endPage - maxButtons + 1);
+        }
+
         // Page buttons
-        for (let i = 1; i <= totalPages; i++) {
+        for (let i = startPage; i <= endPage; i++) {
             const button = document.createElement('button');
-            button.className = `join-item btn btn-sm ${i === currentPage ? 'btn-active' : ''}`;
+            button.className = `join-item btn btn-sm ${i === currentPage ? 'btn-active btn-primary' : ''}`;
             button.textContent = i;
             button.addEventListener('click', () => {
                 currentPage = i;
@@ -241,6 +297,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const nextButton = document.createElement('button');
         nextButton.className = 'join-item btn btn-sm';
         nextButton.innerHTML = '»';
+        nextButton.disabled = currentPage === totalPages;
         nextButton.addEventListener('click', () => {
             if (currentPage < totalPages) {
                 currentPage++;
@@ -252,14 +309,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function updatePagination() {
         showPage(currentPage);
-        
-        // Update button states
-        document.querySelectorAll('.join-item').forEach(button => {
-            button.classList.remove('btn-active');
-            if (button.textContent == currentPage) {
-                button.classList.add('btn-active');
-            }
-        });
+        setupPagination();
     }
 
     // Initialize pagination if needed
@@ -267,6 +317,14 @@ document.addEventListener('DOMContentLoaded', function() {
         setupPagination();
         showPage(1);
     }
+
+    // Add loading states to action buttons
+    document.querySelectorAll('button[onclick^="placeOrder"]').forEach(btn => {
+        btn.addEventListener('click', function() {
+            this.classList.add('loading');
+        });
+    });
 });
 </script>
+{% endblock %}
 {% endblock %}

@@ -1,4 +1,5 @@
 
+<!-- Professional Theme Applied -->
 {% extends "base.html" %}
 
 {% block title %}{{ strategy.name }} - Strategy Details{% endblock %}
@@ -11,7 +12,7 @@
         <p class="py-4">Are you sure you want to delete this strategy? This action cannot be undone.</p>
         <div class="modal-action">
             <button class="btn" id="cancel_strategy_delete">Cancel</button>
-            <button class="btn btn-error" id="confirm_strategy_delete">Delete Strategy</button>
+            <button class="btn-pro btn-danger" id="confirm_strategy_delete">Delete Strategy</button>
         </div>
     </form>
     <form method="dialog" class="modal-backdrop">
@@ -19,9 +20,9 @@
     </form>
 </dialog>
 
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">{{ strategy.name }}</h1>
+<div class="space-y-4">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <h1 class="text-2xl font-bold text-base-content">{{ strategy.name }}</h1>
         <div class="space-x-2">
             <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn">
                 Configure Symbols
@@ -36,15 +37,15 @@
         <!-- Left Column -->
         <div class="space-y-6">
             <!-- Strategy Details -->
-            <div class="card bg-base-100 shadow-xl">
-                <div class="card-body">
+            <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+                <div class="p-6">
                     <h2 class="card-title">Strategy Details</h2>
                     
                     <div class="stats stats-vertical shadow">
-                        <div class="stat">
-                            <div class="stat-title">Status</div>
-                            <div class="stat-value text-sm">
-                                <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %} gap-2">
+                        <div class="metric-card">
+                            <div class="metric-label">Status</div>
+                            <div class="metric-value text-sm">
+                                <span class="badge-pro {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %} gap-2">
                                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
@@ -53,39 +54,39 @@
                             </div>
                         </div>
                         
-                        <div class="stat">
-                            <div class="stat-title">Type</div>
-                            <div class="stat-value text-sm">
+                        <div class="metric-card">
+                            <div class="metric-label">Type</div>
+                            <div class="metric-value text-sm">
                                 {{ 'Intraday' if strategy.is_intraday else 'Positional' }}
                             </div>
                         </div>
 
-                        <div class="stat">
-                            <div class="stat-title">Trading Mode</div>
-                            <div class="stat-value text-sm">
+                        <div class="metric-card">
+                            <div class="metric-label">Trading Mode</div>
+                            <div class="metric-value text-sm">
                                 {{ strategy.trading_mode }}
                             </div>
                         </div>
 
                         {% if strategy.is_intraday %}
-                        <div class="stat">
-                            <div class="stat-title">Trading Hours</div>
-                            <div class="stat-value text-sm">
+                        <div class="metric-card">
+                            <div class="metric-label">Trading Hours</div>
+                            <div class="metric-value text-sm">
                                 {{ strategy.start_time }} - {{ strategy.end_time }}
                             </div>
                         </div>
 
-                        <div class="stat">
-                            <div class="stat-title">Square Off Time</div>
-                            <div class="stat-value text-sm">
+                        <div class="metric-card">
+                            <div class="metric-label">Square Off Time</div>
+                            <div class="metric-value text-sm">
                                 {{ strategy.squareoff_time }}
                             </div>
                         </div>
                         {% endif %}
 
-                        <div class="stat">
-                            <div class="stat-title">Created At</div>
-                            <div class="stat-value text-sm">
+                        <div class="metric-card">
+                            <div class="metric-label">Created At</div>
+                            <div class="metric-value text-sm">
                                 {{ strategy.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
                             </div>
                         </div>
@@ -126,8 +127,8 @@
             </div>
 
             <!-- Webhook Request Format -->
-            <div class="card bg-base-100 shadow-xl">
-                <div class="card-body">
+            <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+                <div class="p-6">
                     <h2 class="card-title text-primary">
                         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-primary shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -137,7 +138,7 @@
                     
                     <div class="text-sm space-y-4">
                         <div class="alert bg-base-200/50">
-                            <div class="badge badge-primary">POST</div>
+                            <div class="badge-pro badge-primary">POST</div>
                             <span class="ml-2">Send a request to your webhook URL with this JSON body:</span>
                         </div>
 
@@ -154,22 +155,22 @@
                         {% if strategy.trading_mode == 'LONG' %}
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="alert bg-success/10">
-                                <div class="badge badge-success">ENTRY</div>
+                                <div class="badge-pro badge-success">ENTRY</div>
                                 <span class="ml-2">Use "BUY" to enter positions</span>
                             </div>
                             <div class="alert bg-error/10">
-                                <div class="badge badge-error">EXIT</div>
+                                <div class="badge-pro badge-error">EXIT</div>
                                 <span class="ml-2">Use "SELL" to exit positions</span>
                             </div>
                         </div>
                         {% elif strategy.trading_mode == 'SHORT' %}
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="alert bg-success/10">
-                                <div class="badge badge-success">ENTRY</div>
+                                <div class="badge-pro badge-success">ENTRY</div>
                                 <span class="ml-2">Use "SELL" to enter positions</span>
                             </div>
                             <div class="alert bg-error/10">
-                                <div class="badge badge-error">EXIT</div>
+                                <div class="badge-pro badge-error">EXIT</div>
                                 <span class="ml-2">Use "BUY" to exit positions</span>
                             </div>
                         </div>
@@ -190,22 +191,22 @@
                                     </thead>
                                     <tbody>
                                         <tr>
-                                            <td><div class="badge badge-success">BUY</div></td>
+                                            <td><div class="badge-pro badge-success">BUY</div></td>
                                             <td>> 0</td>
                                             <td>Regular long entry</td>
                                         </tr>
                                         <tr>
-                                            <td><div class="badge badge-error">SELL</div></td>
+                                            <td><div class="badge-pro badge-error">SELL</div></td>
                                             <td>= 0</td>
                                             <td>Smart long exit</td>
                                         </tr>
                                         <tr>
-                                            <td><div class="badge badge-success">SELL</div></td>
+                                            <td><div class="badge-pro badge-success">SELL</div></td>
                                             <td>< 0</td>
                                             <td>Regular short entry</td>
                                         </tr>
                                         <tr>
-                                            <td><div class="badge badge-error">BUY</div></td>
+                                            <td><div class="badge-pro badge-error">BUY</div></td>
                                             <td>= 0</td>
                                             <td>Smart short exit</td>
                                         </tr>
@@ -222,8 +223,8 @@
         <!-- Right Column -->
         <div class="space-y-6">
             <!-- Webhook Configuration -->
-            <div class="card bg-base-100 shadow-xl">
-                <div class="card-body">
+            <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+                <div class="p-6">
                     <h2 class="text-2xl font-bold mb-6">Webhook Configuration</h2>
                     
                     <div class="space-y-4">
@@ -235,7 +236,7 @@
                             <div class="mockup-code webhook-url-container" id="webhookUrl">
                                 <pre><code>{{ request.host_url }}strategy/webhook/{{ strategy.webhook_id }}</code></pre>
                                 <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                                    <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                    <span class="badge-pro badge-neutral dark:badge-primary">Copied!</span>
                                 </div>
                             </div>
                         </div>
@@ -262,7 +263,7 @@
                                     <div class="mockup-code host-url-container" id="hostUrl">
                                         <pre><code>{{ request.host_url }}</code></pre>
                                         <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                            <span class="badge-pro badge-neutral dark:badge-primary">Copied!</span>
                                         </div>
                                     </div>
                                 </div>
@@ -276,7 +277,7 @@
                                     <div class="mockup-code webhook-id-container" id="webhookId">
                                         <pre><code>{{ strategy.webhook_id }}</code></pre>
                                         <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                            <span class="badge-pro badge-neutral dark:badge-primary">Copied!</span>
                                         </div>
                                     </div>
                                 </div>
@@ -289,10 +290,10 @@
 
             <!-- Symbol Mappings -->
             <div class="card bg-base-100 shadow-xl mt-4">
-                <div class="card-body">
+                <div class="p-6">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="card-title">Symbol Mappings</h2>
-                        <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm">
+                        <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn-pro btn-sm">
                             Configure
                         </a>
                     </div>
@@ -313,7 +314,7 @@
                                 {% for mapping in symbol_mappings %}
                                 <tr>
                                     <td>{{ mapping.symbol }}</td>
-                                    <td><div class="badge badge-ghost">{{ mapping.exchange }}</div></td>
+                                    <td><div class="badge-pro badge-ghost">{{ mapping.exchange }}</div></td>
                                     <td>{{ mapping.quantity }}</td>
                                     <td>{{ mapping.product_type }}</td>
                                     <td>
@@ -343,7 +344,7 @@
             {% if strategy.platform == 'tradingview' %}
             <!-- TradingView Message Format -->
             <div class="card bg-base-100 shadow-xl mt-4">
-                <div class="card-body">
+                <div class="p-6">
                     <h2 class="card-title text-primary">
                         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-primary shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />

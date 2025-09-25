@@ -105,18 +105,19 @@ if __name__ == "__main__":
             </div>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="flex justify-between">
-            <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-ghost">
-                Cancel
-            </a>
-            <button type="submit" class="btn btn-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                Upload Strategy
-            </button>
-        </div>
-    </form>
+            <!-- Action Buttons -->
+            <div class="flex flex-col sm:flex-row justify-between items-center gap-3 pt-6 border-t border-base-300">
+                <a href="{{ url_for('python_strategy_bp.index') }}" class="btn-pro btn-pro-ghost w-full sm:w-auto">
+                    Cancel
+                </a>
+                <button type="submit" class="btn-pro btn-pro-primary w-full sm:w-auto">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    Deploy Strategy
+                </button>
+            </div>
+        </form>
+    </div>
 </div>
 {% endblock %}

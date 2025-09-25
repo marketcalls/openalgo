@@ -41,10 +41,11 @@
 {% endblock %}
 
 {% block content %}
+<!-- Professional Theme Applied -->
 <div class="form-container py-8">
     <!-- Header -->
     <div class="mb-8">
-        <h1 class="text-3xl font-bold">Profile Settings</h1>
+        <h1 class="text-2xl font-bold text-base-content">Profile Settings</h1>
         <p class="text-base-content/60">Manage your account settings and security preferences</p>
     </div>
 
@@ -59,8 +60,8 @@
     <div id="account-tab" class="tab-content block">
         <!-- User Info Card -->
         <div class="card bg-base-100 shadow-lg mb-8">
-            <div class="card-body">
-                <h2 class="card-title">Account Information</h2>
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">Account Information</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                     <div>
                         <label class="label">
@@ -72,7 +73,7 @@
                         <label class="label">
                             <span class="label-text">Account Type</span>
                         </label>
-                        <div class="badge badge-primary">Administrator</div>
+                        <div class="badge-pro badge-primary">Administrator</div>
                     </div>
                 </div>
             </div>
@@ -80,8 +81,8 @@
 
         <!-- Password Change Form -->
         <div class="card bg-base-100 shadow-lg">
-            <div class="card-body">
-                <h2 class="card-title">Change Password</h2>
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">Change Password</h2>
                 <form method="POST" action="{{ url_for('auth.change_password') }}" id="changePasswordForm" class="space-y-4">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <!-- Old Password -->
@@ -166,7 +167,7 @@
 
                     <!-- Submit Button -->
                     <div class="form-control mt-6">
-                        <button type="submit" class="btn btn-primary" id="submitButton" disabled>
+                        <button type="submit" class="btn-pro btn-primary" id="submitButton" disabled>
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
                             </svg>
@@ -181,8 +182,8 @@
     <!-- SMTP Configuration Tab -->
     <div id="smtp-tab" class="tab-content hidden">
         <div class="card bg-base-100 shadow-lg">
-            <div class="card-body">
-                <h2 class="card-title">SMTP Configuration</h2>
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">SMTP Configuration</h2>
                 <p class="text-base-content/60 mb-4">Configure email settings for password reset notifications</p>
                 
                 <!-- Gmail Configuration Hint -->
@@ -213,7 +214,7 @@
                             <input type="text" 
                                    name="smtp_server" 
                                    value="{{ smtp_settings['smtp_server'] if smtp_settings and smtp_settings.get('smtp_server') else 'smtp.gmail.com' }}"
-                                   class="input input-bordered" 
+                                   class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                    placeholder="smtp.gmail.com">
                         </div>
                         
@@ -224,7 +225,7 @@
                             <input type="number" 
                                    name="smtp_port" 
                                    value="{{ smtp_settings['smtp_port'] if smtp_settings and smtp_settings.get('smtp_port') else '587' }}"
-                                   class="input input-bordered" 
+                                   class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                    placeholder="587">
                             <label class="label">
                                 <span class="label-text-alt">Port 587 (STARTTLS) or 465 (SSL/TLS)</span>
@@ -239,7 +240,7 @@
                         <input type="email" 
                                name="smtp_username" 
                                value="{{ smtp_settings['smtp_username'] if smtp_settings and smtp_settings.get('smtp_username') else 'your-email@gmail.com' }}"
-                               class="input input-bordered" 
+                               class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                placeholder="your-email@gmail.com">
                     </div>
                     
@@ -257,7 +258,7 @@
                             {% if smtp_settings and smtp_settings.get('smtp_password') %}
                             <button type="button" 
                                     id="clearPasswordBtn"
-                                    class="absolute right-2 top-1/2 transform -translate-y-1/2 btn btn-ghost btn-xs"
+                                    class="absolute right-2 top-1/2 transform -translate-y-1/2 btn-pro btn-ghost btn-xs"
                                     title="Clear password to enter new one">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -277,7 +278,7 @@
                         <input type="email" 
                                name="smtp_from_email" 
                                value="{{ smtp_settings['smtp_from_email'] if smtp_settings and smtp_settings.get('smtp_from_email') else 'your-email@gmail.com' }}"
-                               class="input input-bordered" 
+                               class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                placeholder="your-email@gmail.com">
                     </div>
                     
@@ -288,7 +289,7 @@
                         <input type="text" 
                                name="smtp_helo_hostname" 
                                value="{{ smtp_settings['smtp_helo_hostname'] if smtp_settings and smtp_settings.get('smtp_helo_hostname') else 'smtp.gmail.com' }}"
-                               class="input input-bordered" 
+                               class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                placeholder="smtp.gmail.com">
                         <label class="label">
                             <span class="label-text-alt">Hostname to identify as during SMTP handshake</span>
@@ -306,7 +307,7 @@
                     </div>
                     
                     <div class="form-control mt-6">
-                        <button type="submit" class="btn btn-primary">
+                        <button type="submit" class="btn-pro btn-primary">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
@@ -336,7 +337,7 @@
                             </div>
                             <button type="button" 
                                     id="sendTestEmailBtn" 
-                                    class="btn btn-outline btn-sm">
+                                    class="btn-pro btn-outline btn-sm">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                                 </svg>
@@ -344,7 +345,7 @@
                             </button>
                             <button type="button" 
                                     id="debugSmtpBtn" 
-                                    class="btn btn-ghost btn-sm">
+                                    class="btn-pro btn-ghost btn-sm">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
                                 </svg>
@@ -363,8 +364,8 @@
     <!-- TOTP Authentication Tab -->
     <div id="totp-tab" class="tab-content hidden">
         <div class="card bg-base-100 shadow-lg">
-            <div class="card-body">
-                <h2 class="card-title">TOTP Authentication</h2>
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">TOTP Authentication</h2>
                 <p class="text-base-content/60 mb-4">Manage your Two-Factor Authentication settings</p>
                 
                 <div class="alert alert-info mb-6">
@@ -399,7 +400,7 @@
                         <p class="text-sm mb-2">Secret key for manual entry:</p>
                         <div class="flex items-center gap-2">
                             <code class="flex-1 bg-base-100 p-2 rounded select-all">{{ totp_secret }}</code>
-                            <button onclick="copyToClipboard('{{ totp_secret }}')" class="btn btn-square btn-sm">
+                            <button onclick="copyToClipboard('{{ totp_secret }}')" class="btn-pro btn-square btn-sm">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                                 </svg>

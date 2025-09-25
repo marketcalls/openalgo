@@ -3,102 +3,117 @@
 {% block title %}New Strategy{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8 max-w-2xl">
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title mb-6">Create New Strategy</h2>
+<div class="space-y-4">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Create New Strategy</h1>
+            <p class="text-sm text-base-content/60 mt-1">Configure a new trading strategy for automated execution</p>
+        </div>
+        <a href="{{ url_for('strategy_bp.index') }}" class="btn-pro btn-ghost">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            Back to Strategies
+        </a>
+    </div>
+
+    <!-- Strategy Form Card -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="max-w-2xl mx-auto">
             
             <form method="POST" class="space-y-6">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
                 <!-- Strategy Name -->
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text">Strategy Name</span>
-                    </label>
-                    <input type="text" name="name" id="strategyName" class="input input-bordered w-full" required
-                           pattern="[a-zA-Z0-9\s\-_]+" 
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-base-content">Strategy Name</label>
+                    <input type="text" name="name" id="strategyName"
+                           class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100"
+                           required pattern="[a-zA-Z0-9\s\-_]+"
                            title="Use only letters, numbers, spaces, hyphens, and underscores"
                            placeholder="Enter strategy name">
-                    <label class="label">
-                        <span class="label-text-alt">Final name: <span id="finalName" class="font-mono">platform_strategyname</span></span>
-                    </label>
+                    <p class="text-xs text-base-content/60">
+                        Final name: <span id="finalName" class="font-mono bg-base-200 px-2 py-1 rounded">platform_strategyname</span>
+                    </p>
                 </div>
 
                 <!-- Platform -->
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text">Platform</span>
-                    </label>
-                    <select name="platform" id="platform" class="select select-bordered w-full" required>
-                        <option value="tradingview">Tradingview</option>
-                        <option value="amibroker">Amibroker</option>
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-base-content">Platform</label>
+                    <select name="platform" id="platform"
+                            class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100"
+                            required>
+                        <option value="tradingview">TradingView</option>
+                        <option value="amibroker">AmiBroker</option>
                         <option value="python">Python</option>
-                        <option value="metatrader">Metatrader</option>
+                        <option value="metatrader">MetaTrader</option>
                         <option value="excel">Excel</option>
                         <option value="others">Others</option>
                     </select>
                 </div>
 
                 <!-- Strategy Type -->
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text">Strategy Type</span>
-                    </label>
-                    <select name="type" class="select select-bordered" id="strategyType">
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-base-content">Strategy Type</label>
+                    <select name="type" id="strategyType"
+                            class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                         <option value="intraday">Intraday</option>
                         <option value="positional">Positional</option>
                     </select>
                 </div>
 
                 <!-- Trading Mode -->
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text">Trading Mode</span>
-                        <span class="label-text-alt">
-                            <div class="tooltip" data-tip="LONG: Only long trades (BUY to enter, SELL to exit). SHORT: Only short trades (SELL to enter, BUY to exit). BOTH: Both long and short trades (requires position size)">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                            </div>
-                        </span>
-                    </label>
-                    <select name="trading_mode" class="select select-bordered" id="tradingMode">
+                <div class="space-y-2">
+                    <div class="flex items-center gap-2">
+                        <label class="block text-sm font-medium text-base-content">Trading Mode</label>
+                        <div class="tooltip" data-tip="LONG: Only long trades (BUY to enter, SELL to exit). SHORT: Only short trades (SELL to enter, BUY to exit). BOTH: Both long and short trades (requires position size)">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current text-base-content/40">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <select name="trading_mode" id="tradingMode"
+                            class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                         <option value="LONG">LONG Only</option>
                         <option value="SHORT">SHORT Only</option>
                         <option value="BOTH">BOTH (Long & Short)</option>
                     </select>
-                    <label class="label">
-                        <span class="label-text-alt text-warning" id="tradingModeHint"></span>
-                    </label>
+                    <p class="text-xs text-warning" id="tradingModeHint"></p>
                 </div>
 
                 <!-- Trading Times (for intraday) -->
                 <div id="tradingTimes" class="space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text">Start Time</span>
-                            </label>
-                            <input type="time" name="start_time" class="input input-bordered" value="09:15">
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-base-content">Start Time</label>
+                            <input type="time" name="start_time" value="09:15"
+                                   class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                         </div>
-                        
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text">End Time</span>
-                            </label>
-                            <input type="time" name="end_time" class="input input-bordered" value="15:00">
+
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-base-content">End Time</label>
+                            <input type="time" name="end_time" value="15:00"
+                                   class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                         </div>
                     </div>
-                    
-                    <div class="form-control">
-                        <label class="label">
-                            <span class="label-text">Square Off Time</span>
-                        </label>
-                        <input type="time" name="squareoff_time" class="input input-bordered" value="15:15">
+
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-base-content">Square Off Time</label>
+                        <input type="time" name="squareoff_time" value="15:15"
+                               class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                     </div>
                 </div>
 
-                <div class="card-actions justify-end mt-6">
-                    <a href="{{ url_for('strategy_bp.index') }}" class="btn">Cancel</a>
-                    <button type="submit" class="btn btn-primary">Create Strategy</button>
+                <!-- Form Actions -->
+                <div class="flex items-center justify-end gap-3 pt-6 border-t border-base-300">
+                    <a href="{{ url_for('strategy_bp.index') }}" class="btn-pro btn-ghost">Cancel</a>
+                    <button type="submit" class="btn-pro btn-primary">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                        </svg>
+                        Create Strategy
+                    </button>
                 </div>
             </form>
         </div>

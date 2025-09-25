@@ -3,51 +3,82 @@
 {% block title %}Trading Strategies{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Trading Strategies</h1>
-        <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn btn-primary">
-            New Strategy
+<div class="space-y-4">
+    <!-- Professional Strategy Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Trading Strategies</h1>
+            <p class="text-sm text-base-content/60 mt-1">Manage and monitor your automated trading strategies</p>
+        </div>
+        <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn-pro btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            <span>New Strategy</span>
         </a>
     </div>
 
     {% if strategies %}
-    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {% for strategy in strategies %}
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body min-h-[250px] flex flex-col justify-between">
+        <div class="bg-base-100 border border-base-300 rounded-lg p-6 hover:border-primary transition-colors">
+            <div class="min-h-[220px] flex flex-col justify-between">
                 <div>
-                    <h2 class="card-title flex justify-between">
-                        {{ strategy.name }}
+                    <div class="flex justify-between items-start mb-4">
+                        <h3 class="text-lg font-bold text-base-content">{{ strategy.name }}</h3>
                         <div class="flex gap-2">
-                            <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
-                                {{ 'Active' if strategy.is_active else 'Inactive' }}
-                            </div>
-                            <div class="badge {% if strategy.trading_mode == 'LONG' %}badge-primary{% elif strategy.trading_mode == 'SHORT' %}badge-warning{% else %}badge-secondary{% endif %}">
+                            <span class="badge-pro {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
+                                {{ 'ACTIVE' if strategy.is_active else 'INACTIVE' }}
+                            </span>
+                            <span class="badge-pro {% if strategy.trading_mode == 'LONG' %}badge-info{% elif strategy.trading_mode == 'SHORT' %}badge-warning{% else %}badge-secondary{% endif %}">
                                 {{ strategy.trading_mode }}
-                            </div>
+                            </span>
                         </div>
-                    </h2>
+                    </div>
                     
-                    <div class="text-sm opacity-70 mt-4 space-y-2">
-                        <p>Type: {{ 'Intraday' if strategy.is_intraday else 'Positional' }}</p>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span class="text-base-content/70">Type:</span>
+                            <span class="font-medium">{{ 'Intraday' if strategy.is_intraday else 'Positional' }}</span>
+                        </div>
                         {% if strategy.is_intraday %}
-                        <p>Trading Hours: {{ strategy.start_time }} - {{ strategy.end_time }}</p>
-                        <p>Square Off: {{ strategy.squareoff_time }}</p>
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <span class="text-base-content/70">Hours:</span>
+                            <span class="font-mono">{{ strategy.start_time }} - {{ strategy.end_time }}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                            </svg>
+                            <span class="text-base-content/70">Square Off:</span>
+                            <span class="font-mono">{{ strategy.squareoff_time }}</span>
+                        </div>
                         {% else %}
-                        <!-- Spacer divs to maintain consistent height -->
-                        <div class="h-5"></div>
+                        <div class="h-10"></div>
                         <div class="h-5"></div>
                         {% endif %}
                     </div>
                 </div>
 
-                <div class="card-actions justify-end mt-4 gap-2">
-                    <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm flex-1">
-                        Configure Symbols
+                <div class="flex gap-2 mt-4 pt-4 border-t border-base-300">
+                    <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn-pro btn-secondary btn-sm flex-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                        </svg>
+                        <span>Configure</span>
                     </a>
-                    <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn btn-primary btn-sm flex-1">
-                        View Details
+                    <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-primary btn-sm flex-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        <span>View</span>
                     </a>
                 </div>
             </div>
@@ -55,42 +86,81 @@
         {% endfor %}
     </div>
     {% else %}
-    <div class="text-center py-12">
+    <div class="bg-base-100 border border-base-300 rounded-lg p-12 text-center">
+        <svg class="w-16 h-16 mx-auto mb-4 text-base-content/20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
         <h3 class="text-lg font-semibold mb-2">No strategies found</h3>
-        <p class="text-base-content/70">Create your first strategy to get started</p>
+        <p class="text-base-content/60 mb-4">Create your first strategy to get started with automated trading</p>
+        <a href="{{ url_for('strategy_bp.new_strategy') }}" class="btn-pro btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            <span>Create Strategy</span>
+        </a>
     </div>
     {% endif %}
-</div>
 
-<!-- Webhook Setup Instructions -->
-<div class="container mx-auto px-4 py-8">
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title mb-4">How to Setup Webhook</h2>
-            <div class="space-y-4">
-                <p>1. Go to your trading platform and find the webhook/alert settings</p>
-                <p>2. In the alert form, find the "Webhook URL" field</p>
-                <p>3. Enter your webhook URL in the format:</p>
-                <div class="mockup-code cursor-pointer" id="webhookUrl">
-                    <pre><code>{{ request.host_url }}strategy/webhook/YOUR_WEBHOOK_ID</code></pre>
-                    <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                        Click to copy
-                    </div>
+    <!-- Professional Webhook Setup Instructions -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6 mt-6">
+        <div class="flex items-center gap-3 mb-4">
+            <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            <h2 class="text-xl font-bold">Webhook Setup Guide</h2>
+        </div>
+        <div class="space-y-4">
+            <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div class="flex gap-3">
+                    <span class="flex-shrink-0 w-8 h-8 bg-primary/10 text-primary rounded-full flex items-center justify-center text-sm font-bold">1</span>
+                    <p class="text-sm">Go to your trading platform and find the webhook/alert settings</p>
                 </div>
-                <p>4. Replace YOUR_WEBHOOK_ID with the webhook ID from your strategy details</p>
-                <p>5. Save the alert settings</p>
-                <div class="alert alert-info mt-4">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    <div>
-                        <h3 class="font-bold">Alert Name Keywords</h3>
-                        <p class="text-sm mt-2">Include one of these keywords in your alert name:</p>
-                        <ul class="list-disc list-inside text-sm mt-2">
-                            <li><span class="font-semibold">BUY</span> - For long entry</li>
-                            <li><span class="font-semibold">SELL</span> - For long exit</li>
-                            <li><span class="font-semibold">SHORT</span> - For short entry</li>
-                            <li><span class="font-semibold">COVER</span> - For short cover</li>
-                        </ul>
-                        <p class="text-sm mt-2">Keywords are not case-sensitive and can be anywhere in the alert name.</p>
+                <div class="flex gap-3">
+                    <span class="flex-shrink-0 w-8 h-8 bg-primary/10 text-primary rounded-full flex items-center justify-center text-sm font-bold">2</span>
+                    <p class="text-sm">In the alert form, find the "Webhook URL" field</p>
+                </div>
+                <div class="flex gap-3">
+                    <span class="flex-shrink-0 w-8 h-8 bg-primary/10 text-primary rounded-full flex items-center justify-center text-sm font-bold">3</span>
+                    <p class="text-sm">Enter your webhook URL (see below)</p>
+                </div>
+            </div>
+
+            <div class="bg-base-200 rounded-lg p-4 relative cursor-pointer hover:bg-base-300 transition-colors" id="webhookUrl">
+                <div class="flex items-center justify-between">
+                    <code class="text-sm font-mono">{{ request.host_url }}strategy/webhook/YOUR_WEBHOOK_ID</code>
+                    <svg class="w-5 h-5 text-base-content/40 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                </div>
+                <p class="text-xs text-base-content/60 mt-2">Replace YOUR_WEBHOOK_ID with the webhook ID from your strategy details</p>
+            </div>
+            <div class="bg-info/10 border border-info/30 rounded-lg p-4 mt-4">
+                <div class="flex gap-3">
+                    <svg class="w-5 h-5 text-info flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div class="space-y-2">
+                        <h3 class="font-bold text-sm">Alert Name Keywords</h3>
+                        <p class="text-sm text-base-content/70">Include one of these keywords in your alert name:</p>
+                        <div class="grid grid-cols-2 gap-2 mt-2">
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-success">BUY</span>
+                                <span class="text-xs text-base-content/60">Long entry</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-error">SELL</span>
+                                <span class="text-xs text-base-content/60">Long exit</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-warning">SHORT</span>
+                                <span class="text-xs text-base-content/60">Short entry</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-info">COVER</span>
+                                <span class="text-xs text-base-content/60">Short cover</span>
+                            </div>
+                        </div>
+                        <p class="text-xs text-base-content/60 mt-2">Keywords are not case-sensitive and can be anywhere in the alert name.</p>
                     </div>
                 </div>
             </div>

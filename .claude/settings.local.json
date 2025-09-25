@@ -37,7 +37,12 @@
       "Read(//d/openalgo/**)",
       "Bash(netstat:*)",
       "Bash(gunzip:*)",
-      "Read(//d//**)"
+      "Read(//d//**)",
+      "Bash(for file in tradebook.html apikey.html logs.html search.html token.html holdings.html pnltracker.html analyzer.html)",
+      "Bash(do echo -n \"$file: \")",
+      "Bash(done)",
+      "Bash(for file in login.html profile.html reset_password.html setup.html index.html)",
+      "Bash(while read f)"
     ],
     "deny": []
   }

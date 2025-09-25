@@ -5,18 +5,228 @@
 {% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <!-- Controls Section -->
-    {% include 'components/logs_filters.html' %}
+<!-- Professional System Logs Viewer -->
+<div class="space-y-4">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">System Logs</h1>
+            <p class="text-sm text-base-content/60 mt-1">Monitor trading activity and API requests</p>
+        </div>
+
+        <!-- Export Button -->
+        <button onclick="exportLogs()" class="btn-pro btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            </svg>
+            Export to CSV
+        </button>
+    </div>
+
+    <!-- Professional Filters Card -->
+    <div class="bg-base-100 border border-base-300 rounded-lg">
+        <div class="p-4 border-b border-base-300">
+            <h2 class="font-semibold text-base-content">Filters & Search</h2>
+        </div>
+        <div class="p-4">
+            <form id="log-filters" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Date Range -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-base-content">Start Date</label>
+                    <input type="date"
+                           id="start_date"
+                           name="start_date"
+                           value="{{ start_date if start_date else '' }}"
+                           class="input input-bordered w-full" />
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-base-content">End Date</label>
+                    <input type="date"
+                           id="end_date"
+                           name="end_date"
+                           value="{{ end_date if end_date else '' }}"
+                           class="input input-bordered w-full" />
+                </div>
+                <!-- Search -->
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-base-content">Search</label>
+                    <div class="relative">
+                        <input type="text"
+                               id="search"
+                               name="search"
+                               value="{{ search_query }}"
+                               placeholder="Search logs..."
+                               class="input input-bordered w-full pl-10" />
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Loading State -->
     {% include 'components/loading_spinner.html' %}
 
-    <!-- Logs Section -->
-    <div id="logs-container" class="space-y-6">
-        {% for log in logs %}
-        {% include 'components/log_entry.html' %}
-        {% endfor %}
+    <!-- Professional Logs Container -->
+    <div id="logs-container" class="space-y-4">
+        {% if logs %}
+            {% for log in logs %}
+            {% set request_data = log.request_data %}
+            <div class="bg-base-100 border border-base-300 rounded-lg hover:border-primary/30 transition-colors">
+                <!-- Log Header -->
+                <div class="p-4 border-b border-base-300">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <!-- API Type Badge -->
+                            <span class="badge-pro {% if log.api_type == 'placeorder' %}badge-success{% elif log.api_type == 'cancelorder' %}badge-error{% elif log.api_type == 'modifyorder' %}badge-warning{% else %}badge-info{% endif %}">
+                                {% if log.api_type == 'placeorder' %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                    </svg>
+                                {% elif log.api_type == 'cancelorder' %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                {% elif log.api_type == 'modifyorder' %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                    </svg>
+                                {% else %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                                    </svg>
+                                {% endif %}
+                                {{ log.api_type }}
+                            </span>
+
+                            <!-- Strategy Badge -->
+                            <span class="badge-pro badge-info">
+                                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
+                                </svg>
+                                {{ log.strategy }}
+                            </span>
+
+                            <!-- Action Badge -->
+                            {% if request_data.action %}
+                            <span class="badge-pro {% if request_data.action == 'BUY' %}badge-success{% else %}badge-error{% endif %}">
+                                {% if request_data.action == 'BUY' %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12" />
+                                    </svg>
+                                {% else %}
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 13l-5 5m0 0l-5-5m5 5V6" />
+                                    </svg>
+                                {% endif %}
+                                {{ request_data.action }}
+                            </span>
+                            {% endif %}
+
+                            <!-- Exchange Badge -->
+                            {% if request_data.exchange %}
+                            <span class="badge-pro">{{ request_data.exchange }}</span>
+                            {% endif %}
+                        </div>
+
+                        <!-- Timestamp -->
+                        <span class="text-sm text-base-content/60 flex items-center gap-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            {{ log.created_at }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Order Details -->
+                {% if request_data.symbol or request_data.quantity or request_data.price or request_data.product %}
+                <div class="p-4 border-b border-base-300">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {% if request_data.symbol %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Symbol</div>
+                            <div class="metric-value text-sm">{{ request_data.symbol }}</div>
+                        </div>
+                        {% endif %}
+
+                        {% if request_data.quantity %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Quantity</div>
+                            <div class="metric-value text-sm">{{ request_data.quantity }}</div>
+                        </div>
+                        {% endif %}
+
+                        {% if request_data.price and request_data.price != "0" %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Price</div>
+                            <div class="metric-value text-sm">{{ request_data.price }}</div>
+                        </div>
+                        {% endif %}
+
+                        {% if request_data.product %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Product</div>
+                            <div class="metric-value text-sm">{{ request_data.product }}</div>
+                        </div>
+                        {% endif %}
+
+                        {% if request_data.pricetype %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Price Type</div>
+                            <div class="metric-value text-sm">{{ request_data.pricetype }}</div>
+                        </div>
+                        {% endif %}
+
+                        {% if request_data.orderid %}
+                        <div class="metric-card-sm">
+                            <div class="metric-label">Order ID</div>
+                            <div class="metric-value text-sm">{{ request_data.orderid }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Collapsible JSON Data -->
+                <div class="collapse collapse-arrow">
+                    <input type="checkbox" class="peer" aria-label="View JSON Data" />
+                    <div class="collapse-title text-sm font-medium bg-base-200/50">
+                        View Request/Response Data
+                    </div>
+                    <div class="collapse-content bg-base-200/30">
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4">
+                            <div class="space-y-2">
+                                <h4 class="text-xs font-semibold text-base-content/80 uppercase tracking-wider">Request Data</h4>
+                                <div class="bg-base-300 rounded-lg p-3 overflow-x-auto">
+                                    <pre class="text-xs font-mono text-base-content/80">{{ request_data | tojson(indent=2) }}</pre>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <h4 class="text-xs font-semibold text-base-content/80 uppercase tracking-wider">Response Data</h4>
+                                <div class="bg-base-300 rounded-lg p-3 overflow-x-auto">
+                                    <pre class="text-xs font-mono text-base-content/80">{{ log.response_data | tojson(indent=2) }}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <!-- Empty State -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-12 text-center">
+                <svg class="w-16 h-16 mx-auto text-base-content/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <h3 class="text-lg font-semibold text-base-content mb-2">No Logs Found</h3>
+                <p class="text-base-content/60">No trading logs match your current filters.</p>
+            </div>
+        {% endif %}
     </div>
 
     <!-- Pagination -->

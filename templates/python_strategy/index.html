@@ -3,14 +3,15 @@
 {% block title %}Python Strategies - OpenAlgo{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+<!-- Professional Theme Applied -->
+<div class="space-y-4">
     <!-- Header -->
     <div class="flex justify-between items-center mb-8">
         <div>
-            <h1 class="text-3xl font-bold">Python Strategies</h1>
+            <h1 class="text-2xl font-bold text-base-content">Python Strategies</h1>
             <p class="text-base-content/70 mt-2">Manage and schedule your trading strategies</p>
         </div>
-        <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn btn-primary">
+        <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn-pro btn-primary">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
@@ -20,59 +21,59 @@
 
     <!-- Status Summary with IST Time -->
     <div class="stats shadow w-full mb-8">
-        <div class="stat">
+        <div class="metric-card">
             <div class="stat-figure text-primary">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
             </div>
-            <div class="stat-title">Total Strategies</div>
-            <div class="stat-value">{{ strategies|length }}</div>
+            <div class="metric-label">Total Strategies</div>
+            <div class="metric-value">{{ strategies|length }}</div>
         </div>
         
-        <div class="stat">
+        <div class="metric-card">
             <div class="stat-figure text-success">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
             </div>
-            <div class="stat-title">Running</div>
-            <div class="stat-value text-success">{{ strategies|selectattr('is_running')|list|length }}</div>
+            <div class="metric-label">Running</div>
+            <div class="metric-value text-success">{{ strategies|selectattr('is_running')|list|length }}</div>
         </div>
         
-        <div class="stat">
+        <div class="metric-card">
             <div class="stat-figure text-info">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
             </div>
-            <div class="stat-title">Scheduled</div>
-            <div class="stat-value text-info">{{ strategies|selectattr('is_scheduled')|list|length }}</div>
+            <div class="metric-label">Scheduled</div>
+            <div class="metric-value text-info">{{ strategies|selectattr('is_scheduled')|list|length }}</div>
         </div>
         
-        <div class="stat">
+        <div class="metric-card">
             <div class="stat-figure text-warning">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
             </div>
-            <div class="stat-title">Master Contract</div>
-            <div class="stat-value text-sm" id="contract-status">
-                <span class="badge badge-warning">Checking...</span>
+            <div class="metric-label">Master Contract</div>
+            <div class="metric-value text-sm" id="contract-status">
+                <span class="badge-pro badge-warning">Checking...</span>
             </div>
             <div class="stat-actions">
-                <button onclick="checkContracts()" class="btn btn-xs btn-outline" id="check-contracts-btn">Check & Start</button>
+                <button onclick="checkContracts()" class="btn-pro btn-xs btn-outline" id="check-contracts-btn">Check & Start</button>
             </div>
         </div>
         
-        <div class="stat">
+        <div class="metric-card">
             <div class="stat-figure text-accent">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
             </div>
-            <div class="stat-title">Current Time (IST)</div>
-            <div class="stat-value text-accent text-lg">{{ current_ist_time|default('--:--:-- IST') }}</div>
+            <div class="metric-label">Current Time (IST)</div>
+            <div class="metric-value text-accent text-lg">{{ current_ist_time|default('--:--:-- IST') }}</div>
         </div>
     </div>
 
@@ -80,26 +81,26 @@
     {% if strategies %}
     <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
         {% for strategy in strategies %}
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
                 <!-- Header with Status -->
                 <div class="flex justify-between items-start">
-                    <h2 class="card-title">{{ strategy.name }}</h2>
+                    <h3 class="text-lg font-bold mb-4">{{ strategy.name }}</h2>
                     <div class="flex gap-2">
                         {% if strategy.is_error %}
                             {% if 'master contract' in strategy.error_message|lower %}
-                            <span class="badge badge-warning">Waiting</span>
+                            <span class="badge-pro badge-warning">Waiting</span>
                             {% else %}
-                            <span class="badge badge-error">Error</span>
+                            <span class="badge-pro badge-error">Error</span>
                             {% endif %}
                         {% elif strategy.is_running %}
-                        <span class="badge badge-success">Running</span>
+                        <span class="badge-pro badge-success">Running</span>
                         {% else %}
-                        <span class="badge badge-ghost">Stopped</span>
+                        <span class="badge-pro badge-ghost">Stopped</span>
                         {% endif %}
                         
                         {% if strategy.is_scheduled %}
-                        <span class="badge badge-info">Scheduled</span>
+                        <span class="badge-pro badge-info">Scheduled</span>
                         {% endif %}
                     </div>
                 </div>
@@ -182,32 +183,32 @@
                     <div class="flex items-center gap-2">
                     {% if strategy.is_error %}
                         {% if 'master contract' not in strategy.error_message|lower %}
-                        <button onclick="clearErrorState('{{ strategy.id }}')" class="btn btn-sm btn-warning">
+                        <button onclick="clearErrorState('{{ strategy.id }}')" class="btn-pro btn-sm btn-warning">
                             Clear Error
                         </button>
-                        <button onclick="startStrategy('{{ strategy.id }}')" class="btn btn-sm btn-success" title="Try to restart after clearing error">
+                        <button onclick="startStrategy('{{ strategy.id }}')" class="btn-pro btn-sm btn-success" title="Try to restart after clearing error">
                             Restart
                         </button>
                         {% endif %}
                     {% elif strategy.is_running %}
-                    <button onclick="stopStrategy('{{ strategy.id }}')" class="btn btn-sm btn-error">
+                    <button onclick="stopStrategy('{{ strategy.id }}')" class="btn-pro btn-sm btn-error">
                         Stop
                     </button>
                     {% else %}
-                    <button onclick="startStrategy('{{ strategy.id }}')" class="btn btn-sm btn-success">
+                    <button onclick="startStrategy('{{ strategy.id }}')" class="btn-pro btn-sm btn-success">
                         Start
                     </button>
                     {% endif %}
                     
                     {% if strategy.is_scheduled %}
                     <button onclick="unscheduleStrategy('{{ strategy.id }}', '{{ strategy.name }}')" 
-                            class="btn btn-sm btn-warning {% if strategy.is_running %}btn-disabled{% endif %}"
+                            class="btn-pro btn-sm btn-warning {% if strategy.is_running %}btn-disabled{% endif %}"
                             {% if strategy.is_running %}disabled title="Cannot modify schedule while strategy is running"{% endif %}>
                         Unschedule
                     </button>
                     {% else %}
                     <button onclick="openScheduleModal('{{ strategy.id }}', '{{ strategy.name }}')" 
-                            class="btn btn-sm btn-info {% if strategy.is_running %}btn-disabled{% endif %}"
+                            class="btn-pro btn-sm btn-info {% if strategy.is_running %}btn-disabled{% endif %}"
                             {% if strategy.is_running %}disabled title="Cannot modify schedule while strategy is running"{% endif %}>
                         Schedule
                     </button>
@@ -216,13 +217,13 @@
                     
                     <!-- Icon Buttons -->
                     <div class="flex items-center gap-1">
-                    <a href="{{ url_for('python_strategy_bp.view_logs', strategy_id=strategy.id, latest=1) }}" class="btn btn-sm btn-ghost btn-square" title="View Logs">
+                    <a href="{{ url_for('python_strategy_bp.view_logs', strategy_id=strategy.id, latest=1) }}" class="btn-pro btn-sm btn-ghost btn-square" title="View Logs">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                     </a>
                     
-                    <a href="{{ url_for('python_strategy_bp.edit_strategy', strategy_id=strategy.id) }}" class="btn btn-sm btn-ghost btn-square" title="{% if strategy.is_running %}View{% else %}Edit{% endif %}">
+                    <a href="{{ url_for('python_strategy_bp.edit_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-sm btn-ghost btn-square" title="{% if strategy.is_running %}View{% else %}Edit{% endif %}">
                         {% if strategy.is_running %}
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -235,14 +236,14 @@
                         {% endif %}
                     </a>
                     
-                    <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy.id) }}" class="btn btn-sm btn-ghost btn-square" title="Export">
+                    <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-sm btn-ghost btn-square" title="Export">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                         </svg>
                     </a>
                     
                     <button onclick="openEnvModal('{{ strategy.id }}', '{{ strategy.name }}')" 
-                            class="btn btn-sm btn-ghost btn-square" 
+                            class="btn-pro btn-sm btn-ghost btn-square" 
                             title="Environment Variables{% if strategy.is_running %} (Read-only while running){% endif %}">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -251,7 +252,7 @@
                     </button>
                     
                     {% if not strategy.is_running %}
-                    <button onclick="deleteStrategy('{{ strategy.id }}', '{{ strategy.name }}')" class="btn btn-sm btn-ghost btn-square text-error" title="Delete Strategy">
+                    <button onclick="deleteStrategy('{{ strategy.id }}', '{{ strategy.name }}')" class="btn-pro btn-sm btn-ghost btn-square text-error" title="Delete Strategy">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                         </svg>
@@ -272,7 +273,7 @@
         <h3 class="mt-4 text-lg font-medium">No strategies uploaded</h3>
         <p class="mt-2 text-base-content/70">Get started by uploading your first Python strategy</p>
         <div class="mt-6">
-            <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn btn-primary">
+            <a href="{{ url_for('python_strategy_bp.new_strategy') }}" class="btn-pro btn-primary">
                 Add Your First Strategy
             </a>
         </div>
@@ -289,7 +290,7 @@
         <input type="hidden" id="delete_strategy_id">
         <div class="modal-action">
             <button onclick="delete_modal.close()" class="btn">Cancel</button>
-            <button onclick="confirmDelete()" class="btn btn-error">Delete</button>
+            <button onclick="confirmDelete()" class="btn-pro btn-danger">Delete</button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">
@@ -306,7 +307,7 @@
         <input type="hidden" id="unschedule_strategy_id">
         <div class="modal-action">
             <button onclick="unschedule_modal.close()" class="btn">Cancel</button>
-            <button onclick="confirmUnschedule()" class="btn btn-warning">Remove Schedule</button>
+            <button onclick="confirmUnschedule()" class="btn-pro btn-warning">Remove Schedule</button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">
@@ -326,7 +327,7 @@
                 <label class="label">
                     <span class="label-text">Start Time (IST)</span>
                 </label>
-                <input type="time" id="start_time" class="input input-bordered" required>
+                <input type="time" id="start_time" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" required>
                 <label class="label">
                     <span class="label-text-alt">Enter time in Indian Standard Time (IST)</span>
                 </label>
@@ -336,7 +337,7 @@
                 <label class="label">
                     <span class="label-text">Stop Time (IST) - Optional</span>
                 </label>
-                <input type="time" id="stop_time" class="input input-bordered">
+                <input type="time" id="stop_time" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100">
                 <label class="label">
                     <span class="label-text-alt">Leave empty to run indefinitely</span>
                 </label>
@@ -380,7 +381,7 @@
             
             <div class="modal-action">
                 <button type="button" onclick="schedule_modal.close()" class="btn">Cancel</button>
-                <button type="submit" class="btn btn-primary">Schedule</button>
+                <button type="submit" class="btn-pro btn-primary">Schedule</button>
             </div>
         </form>
     </div>
@@ -399,7 +400,7 @@
         <div class="mb-6">
             <div class="flex justify-between items-center mb-3">
                 <h4 class="font-semibold">Regular Variables</h4>
-                <button onclick="addEnvVariable('regular')" class="btn btn-sm btn-primary">Add Variable</button>
+                <button onclick="addEnvVariable('regular')" class="btn-pro btn-sm btn-primary">Add Variable</button>
             </div>
             <div id="regular_vars" class="space-y-2">
                 <!-- Regular variables will be loaded here -->
@@ -411,7 +412,7 @@
             <div class="flex justify-between items-center mb-3">
                 <h4 class="font-semibold">Secure Variables</h4>
                 <span class="text-xs text-base-content/60">Encrypted storage for API keys, passwords</span>
-                <button onclick="addEnvVariable('secure')" class="btn btn-sm btn-secondary">Add Secure Variable</button>
+                <button onclick="addEnvVariable('secure')" class="btn-pro btn-sm btn-secondary">Add Secure Variable</button>
             </div>
             <div id="secure_vars" class="space-y-2">
                 <!-- Secure variables will be loaded here -->
@@ -420,7 +421,7 @@
         
         <div class="modal-action">
             <button onclick="env_modal.close()" class="btn">Cancel</button>
-            <button onclick="saveEnvironmentVariables()" class="btn btn-primary">Save Variables</button>
+            <button onclick="saveEnvironmentVariables()" class="btn-pro btn-primary">Save Variables</button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">
@@ -664,7 +665,7 @@ function addEnvVariableRow(type, key = '', value = '', readOnly = false, isExist
     const valueType = isSecure ? 'password' : 'text';
     const valuePlaceholder = isSecure ? 'Enter sensitive value' : 'Enter value';
     const disabledAttr = readOnly ? 'disabled' : '';
-    const inputClass = readOnly ? 'input input-sm input-bordered flex-1 input-disabled' : 'input input-sm input-bordered flex-1';
+    const inputClass = readOnly ? 'form-input form-input-sm flex-1 form-input-disabled' : 'form-input form-input-sm flex-1';
     
     // Mark existing secure variables so we don't overwrite them with empty values
     const existingDataAttr = isExisting && isSecure ? 'data-existing-secure="true"' : '';
@@ -674,7 +675,7 @@ function addEnvVariableRow(type, key = '', value = '', readOnly = false, isExist
                class="${inputClass}" data-env-key ${disabledAttr}>
         <input type="${valueType}" placeholder="${valuePlaceholder}" value="${value}" 
                class="${inputClass}" data-env-value ${disabledAttr} ${existingDataAttr}>
-        <button onclick="this.parentElement.remove()" class="btn btn-sm btn-ghost text-error" ${disabledAttr}>
+        <button onclick="this.parentElement.remove()" class="btn-pro btn-sm btn-ghost text-error" ${disabledAttr}>
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
@@ -690,7 +691,7 @@ function updateEnvModalForReadOnly(readOnly, isRunning) {
     const modalTitle = document.querySelector('#env_modal h3');
     const strategyName = document.getElementById('env_strategy_name').textContent;
     if (readOnly) {
-        modalTitle.innerHTML = `Environment Variables: <span>${strategyName}</span> <span class="badge badge-warning badge-sm ml-2">Read-Only</span>`;
+        modalTitle.innerHTML = `Environment Variables: <span>${strategyName}</span> <span class="badge-pro badge-warning badge-sm ml-2">Read-Only</span>`;
     }
     
     // Disable/enable add buttons
@@ -871,9 +872,9 @@ async function updateContractStatus() {
         
         const statusElement = document.getElementById('contract-status');
         if (data.master_contracts_ready) {
-            statusElement.innerHTML = '<span class="badge badge-success">Ready</span>';
+            statusElement.innerHTML = '<span class="badge-pro badge-pro-buy">Ready</span>';
         } else {
-            statusElement.innerHTML = '<span class="badge badge-error">Not Ready</span>';
+            statusElement.innerHTML = '<span class="badge-pro badge-pro-sell">Not Ready</span>';
         }
     } catch (error) {
         console.error('Failed to update contract status:', error);

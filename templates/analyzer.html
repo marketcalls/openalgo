@@ -52,10 +52,11 @@
 {% endblock %}
 
 {% block content %}
-<div class="w-full">
+<!-- Professional Theme Applied -->
+<div class="space-y-4">
     <!-- Header Section -->
     <div class="mb-6">
-        <h1 class="text-3xl font-bold">API Request Analyzer</h1>
+        <h1 class="text-2xl font-bold text-base-content">API Request Analyzer</h1>
         <p class="text-base-content/60">Monitor and analyze your API requests</p>
         
         <!-- Date Filter and Export Section -->
@@ -65,22 +66,22 @@
                     <label class="label">
                         <span class="label-text">Start Date</span>
                     </label>
-                    <input type="date" name="start_date" class="input input-bordered" value="{{ start_date or '' }}">
+                    <input type="date" name="start_date" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" value="{{ start_date or '' }}">
                 </div>
                 <div class="form-control">
                     <label class="label">
                         <span class="label-text">End Date</span>
                     </label>
-                    <input type="date" name="end_date" class="input input-bordered" value="{{ end_date or '' }}">
+                    <input type="date" name="end_date" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" value="{{ end_date or '' }}">
                 </div>
                 <div class="form-control mt-8">
-                    <button type="submit" class="btn btn-primary">Filter</button>
+                    <button type="submit" class="btn-pro btn-primary">Filter</button>
                 </div>
             </form>
             
             <div class="form-control mt-8">
                 <a href="{{ url_for('analyzer_bp.export_requests', start_date=start_date, end_date=end_date) }}" 
-                   class="btn btn-secondary">
+                   class="btn-pro btn-secondary">
                     Export to CSV
                 </a>
             </div>
@@ -90,43 +91,43 @@
     <!-- Stats Grid -->
     <div id="stats-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <!-- Total Requests -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Total Requests</div>
-                <div class="stat-value text-primary" id="total-requests">{{ stats.total_requests }}</div>
+        <div class="metric-card">
+            <div class="metric-card">
+                <div class="metric-label">Total Requests</div>
+                <div class="metric-value text-primary" id="total-requests">{{ stats.total_requests }}</div>
                 <div class="stat-desc mt-2">
-                    <div class="badge badge-primary">Last 24 hours</div>
+                    <div class="badge-pro badge-primary">Last 24 hours</div>
                 </div>
             </div>
         </div>
 
         <!-- Issues Found -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Issues Found</div>
-                <div class="stat-value text-warning" id="total-issues">{{ stats.issues.total }}</div>
+        <div class="metric-card">
+            <div class="metric-card">
+                <div class="metric-label">Issues Found</div>
+                <div class="metric-value text-warning" id="total-issues">{{ stats.issues.total }}</div>
                 <div class="stat-desc mt-2">
-                    <div class="badge badge-warning">Needs Attention</div>
+                    <div class="badge-pro badge-warning">Needs Attention</div>
                 </div>
             </div>
         </div>
 
         <!-- Unique Symbols -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Unique Symbols</div>
-                <div class="stat-value text-accent" id="unique-symbols">{{ stats.symbols|length }}</div>
+        <div class="metric-card">
+            <div class="metric-card">
+                <div class="metric-label">Unique Symbols</div>
+                <div class="metric-value text-accent" id="unique-symbols">{{ stats.symbols|length }}</div>
                 <div class="stat-desc mt-2">
-                    <div class="badge badge-accent">Tracked</div>
+                    <div class="badge-pro badge-accent">Tracked</div>
                 </div>
             </div>
         </div>
 
         <!-- Active Sources -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Active Sources</div>
-                <div class="stat-value" id="active-sources">{{ stats.sources|length }}</div>
+        <div class="metric-card">
+            <div class="metric-card">
+                <div class="metric-label">Active Sources</div>
+                <div class="metric-value" id="active-sources">{{ stats.sources|length }}</div>
                 <div class="stat-desc mt-2">
                     <div class="badge">Connected</div>
                 </div>
@@ -135,8 +136,8 @@
     </div>
 
     <!-- Requests Table -->
-    <div class="table-container">
-        <table class="table w-full">
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <table class="data-table w-full">
             <thead class="table-header">
                 <tr>
                     <th class="cursor-pointer hover:bg-base-300">
@@ -160,12 +161,12 @@
                     <td class="text-sm">{{ request.timestamp }}</td>
                     <td class="badge-cell">
                         <div class="badge-container">
-                            <div class="badge badge-primary">{{ request.api_type }}</div>
+                            <div class="badge-pro badge-primary">{{ request.api_type }}</div>
                         </div>
                     </td>
                     <td class="badge-cell">
                         <div class="badge-container">
-                            <div class="badge badge-neutral truncate">{{ request.source }}</div>
+                            <div class="badge-pro badge-neutral truncate">{{ request.source }}</div>
                         </div>
                     </td>
                     <td class="font-medium">
@@ -215,7 +216,7 @@
                     </td>
                     <td class="badge-cell">
                         <div class="badge-container">
-                            <button class="btn btn-sm btn-primary view-details" 
+                            <button class="btn-pro btn-sm btn-primary view-details" 
                                     data-request='{{ request.request_data|tojson }}'
                                     data-response='{{ request.response_data|tojson if request.response_data else request.analysis|tojson }}'>
                                 View

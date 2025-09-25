@@ -24,17 +24,16 @@
 {% endblock %}
 
 {% block content %}
-<h1 class="text-4xl font-bold text-center mb-8">FastScalper <span class="text-primary">Desktop</span></h1>
+<h1 class="text-3xl font-bold text-base-content text-center mb-8">FastScalper <span class="text-primary">Desktop</span></h1>
 
-<div class="card bg-base-100 shadow-xl">
-    <div class="card-body">
-        <!-- Version Selector -->
-        <div class="flex justify-between items-center mb-6">
-            <h2 class="card-title">Available Downloads</h2>
-            <select class="select select-bordered w-full max-w-xs" id="versionSelect">
-                <option value="0.1.0">Version 0.1.0</option>
-            </select>
-        </div>
+<div class="bg-base-100 border border-base-300 rounded-lg p-6">
+    <!-- Version Selector -->
+    <div class="flex justify-between items-center border-b border-base-300 pb-4 mb-6">
+        <h2 class="text-xl font-semibold">Available Downloads</h2>
+        <select class="w-full max-w-xs px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary" id="versionSelect">
+            <option value="0.1.0">Version 0.1.0</option>
+        </select>
+    </div>
 
         <!-- Platform Tabs -->
         <div class="tabs tabs-boxed mb-6">
@@ -58,9 +57,9 @@
             </a>
         </div>
 
-        <!-- Download Tables -->
-        <div id="macDownloads" class="overflow-x-auto">
-            <table class="table w-full">
+    <!-- Download Tables -->
+    <div id="macDownloads" class="overflow-x-auto">
+        <table class="data-table">
                 <thead>
                     <tr>
                         <th>Platform</th>
@@ -73,7 +72,7 @@
                         <td>Mac Universal</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal.dmg" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal.dmg" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download DMG
                             </a>
                         </td>
@@ -82,7 +81,7 @@
                         <td>Mac Universal (Portable)</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal_mac.zip" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_universal_mac.zip" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download ZIP
                             </a>
                         </td>
@@ -91,8 +90,8 @@
             </table>
         </div>
 
-        <div id="linuxDownloads" class="overflow-x-auto hidden">
-            <table class="table w-full">
+    <div id="linuxDownloads" class="overflow-x-auto hidden">
+        <table class="data-table">
                 <thead>
                     <tr>
                         <th>Platform</th>
@@ -105,7 +104,7 @@
                         <td>Ubuntu / Debian</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.deb" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.deb" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download DEB
                             </a>
                         </td>
@@ -114,7 +113,7 @@
                         <td>Fedora / Red Hat</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper-0.1.0-1.x86_64.rpm" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper-0.1.0-1.x86_64.rpm" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download RPM
                             </a>
                         </td>
@@ -123,7 +122,7 @@
                         <td>AppImage</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.AppImage" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_amd64.AppImage" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download AppImage
                             </a>
                         </td>
@@ -132,8 +131,8 @@
             </table>
         </div>
 
-        <div id="windowsDownloads" class="overflow-x-auto hidden">
-            <table class="table w-full">
+    <div id="windowsDownloads" class="overflow-x-auto hidden">
+        <table class="data-table">
                 <thead>
                     <tr>
                         <th>Platform</th>
@@ -146,7 +145,7 @@
                         <td>Windows (MSI)</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64_en-US.msi" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64_en-US.msi" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download MSI
                             </a>
                         </td>
@@ -155,14 +154,13 @@
                         <td>Windows (EXE)</td>
                         <td>v0.1.0</td>
                         <td>
-                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64-setup.exe" class="btn btn-sm btn-primary">
+                            <a href="https://github.com/marketcalls/fastscalper-tauri/releases/download/v0.1.0/fastscalper_0.1.0_x64-setup.exe" class="btn-pro btn-pro-primary btn-pro-sm">
                                 Download EXE
                             </a>
                         </td>
                     </tr>
                 </tbody>
             </table>
-        </div>
     </div>
 </div>
 {% endblock %}

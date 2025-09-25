@@ -9,8 +9,8 @@
         <h3 class="font-bold text-lg">Delete Symbol</h3>
         <p class="py-4">Are you sure you want to delete this symbol mapping?</p>
         <div class="modal-action">
-            <button class="btn" id="cancel_delete">Cancel</button>
-            <button class="btn btn-error" id="confirm_delete">Delete</button>
+            <button class="btn-pro btn-pro-ghost" id="cancel_delete">Cancel</button>
+            <button class="btn-pro btn-pro-sell" id="confirm_delete">Delete</button>
         </div>
     </form>
     <form method="dialog" class="modal-backdrop">
@@ -18,14 +18,19 @@
     </form>
 </dialog>
 
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Configure Symbols - {{ strategy.name }}</h1>
-        <div class="space-x-2">
-            <a href="{{ url_for('chartink_bp.view_strategy', strategy_id=strategy.id) }}" class="btn">
-                Back to Strategy
-            </a>
+<div class="space-y-4">
+    <!-- Professional Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Configure Symbols</h1>
+            <p class="text-sm text-base-content/60 mt-1">{{ strategy.name }} - Symbol mapping configuration</p>
         </div>
+        <a href="{{ url_for('chartink_bp.view_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-pro-ghost">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Strategy
+        </a>
     </div>
 
     <div class="grid gap-6 lg:grid-cols-2">

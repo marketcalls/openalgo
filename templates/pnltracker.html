@@ -2,75 +2,120 @@
 
 {% block head %}
 <style>
+    /* Professional PnL Tracker Styles */
+    .pnl-stats-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    }
+
+    @media (min-width: 1280px) {
+        .pnl-stats-grid {
+            grid-template-columns: repeat(4, 1fr);
+        }
+    }
+
     .chart-container {
-        @apply bg-base-100 rounded-lg shadow-lg p-6;
+        background: var(--base-100);
+        border: 1px solid var(--base-300);
+        border-radius: 8px;
+        padding: 1.5rem;
     }
 
     .metric-value {
-        @apply text-2xl font-bold font-mono;
+        font-size: 1.5rem;
+        font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
     }
 
     .metric-time {
-        @apply text-sm text-base-content/70;
+        font-size: 0.75rem;
+        color: var(--base-content-60);
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full">
-    <!-- Header Section -->
-    <div class="mb-6 flex justify-between items-center">
+<div class="space-y-4">
+    <!-- Professional PnL Tracker Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
         <div>
-            <h1 class="text-3xl font-bold">PnL Tracker</h1>
-            <p class="text-base-content/60">Monitor your intraday profit and loss</p>
+            <h1 class="text-2xl font-bold text-base-content">P&L Tracker</h1>
+            <p class="text-sm text-base-content/60 mt-1">Real-time profit and loss monitoring</p>
         </div>
-        <div class="flex gap-2">
-            <button id="screenshot-btn" class="btn btn-secondary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div class="flex items-center gap-3">
+            <button id="screenshot-btn" class="btn-pro btn-secondary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                Screenshot
+                <span>Screenshot</span>
             </button>
-            <button id="refresh-btn" class="btn btn-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <button id="refresh-btn" class="btn-pro btn-primary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
-                Refresh
+                <span>Refresh</span>
             </button>
         </div>
     </div>
 
     <!-- Screenshot Container - wrap everything that should be in screenshot -->
     <div id="screenshot-container">
-        <!-- Metrics Cards (moved inside screenshot container) -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="metrics-section">
+        <!-- Professional PnL Metrics -->
+        <div class="pnl-stats-grid mb-6" id="metrics-section">
             <!-- Current MTM -->
-            <div class="stat">
-                <div class="stat-title">Current MTM</div>
-                <div class="stat-value" id="current-mtm">₹ 0.00</div>
-                <div class="stat-desc" id="current-mtm-percent">0.00%</div>
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Current MTM</span>
+                    <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                </div>
+                <div class="metric-value" id="current-mtm">₹ 0.00</div>
+                <div class="metric-change" id="current-mtm-percent">0.00%</div>
             </div>
 
             <!-- Max MTM -->
-            <div class="stat">
-                <div class="stat-title">Max MTM</div>
-                <div class="stat-value text-success" id="max-mtm">₹ 0.00</div>
-                <div class="stat-desc" id="max-mtm-time">--:--</div>
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Max MTM</span>
+                    <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                </div>
+                <div class="metric-value text-success" id="max-mtm">₹ 0.00</div>
+                <div class="metric-change">
+                    <span class="metric-time" id="max-mtm-time">--:--</span>
+                </div>
             </div>
 
             <!-- Min MTM -->
-            <div class="stat">
-                <div class="stat-title">Min MTM</div>
-                <div class="stat-value text-error" id="min-mtm">₹ 0.00</div>
-                <div class="stat-desc" id="min-mtm-time">--:--</div>
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Min MTM</span>
+                    <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                </div>
+                <div class="metric-value text-error" id="min-mtm">₹ 0.00</div>
+                <div class="metric-change">
+                    <span class="metric-time" id="min-mtm-time">--:--</span>
+                </div>
             </div>
 
             <!-- Max Drawdown -->
-            <div class="stat">
-                <div class="stat-title">Max Drawdown</div>
-                <div class="stat-value text-warning" id="max-drawdown">₹ 0.00</div>
-                <div class="stat-desc">Peak to trough</div>
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-label">Max Drawdown</span>
+                    <svg class="w-4 h-4 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                    </svg>
+                </div>
+                <div class="metric-value text-warning" id="max-drawdown">₹ 0.00</div>
+                <div class="metric-change">
+                    <span class="badge-pro badge-warning">RISK</span>
+                </div>
             </div>
         </div>
 

@@ -3,120 +3,224 @@
 {% block content %}
 <div id="userInfo" data-login-username="{{ login_username }}" class="hidden"></div>
 
-<div class="py-6">
-    <div class="container mx-auto px-4">
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <h2 class="card-title">API Key Management</h2>
-                <p class="text-base-content/70">
-                    {% if has_api_key %}
-                        Your API key was automatically generated during account creation. You can view it below or generate a new one if needed.
-                    {% else %}
-                        Your API key could not be found. Please generate a new one.
-                    {% endif %}
-                </p>
+<!-- Professional API Key Management -->
+<div class="space-y-4">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">API Key Management</h1>
+            <p class="text-sm text-base-content/60 mt-1">Manage your API authentication credentials</p>
+        </div>
 
-                <!-- API Key Display -->
-                <div class="mt-4">
-                    <div class="collapse bg-base-200 rounded-box">
-                        <input type="checkbox" id="apiKeyCollapse" /> 
-                        <div class="collapse-title font-medium">
-                            <div class="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                                </svg>
-                                {% if has_api_key %}Click to Show/Hide API Key{% else %}No Active API Key{% endif %}
-                            </div>
+        <!-- Status Badge -->
+        <div class="flex items-center gap-2">
+            {% if has_api_key %}
+                <span class="badge-pro badge-success">Active</span>
+            {% else %}
+                <span class="badge-pro badge-warning">No Key</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- API Key Card -->
+        <div class="lg:col-span-2 space-y-4">
+            <!-- Key Display Card -->
+            <div class="bg-base-100 border border-base-300 rounded-lg">
+                <div class="p-4 border-b border-base-300">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                            </svg>
+                            <h2 class="font-semibold text-base-content">Your API Key</h2>
                         </div>
-                        <div class="collapse-content"> 
-                            <div id="apiKeyDisplay" class="font-mono bg-base-300 p-4 rounded-box mt-2">
-                                {% if api_key %}
-                                    {{ api_key }}
-                                {% else %}
-                                    No API key generated yet
-                                {% endif %}
-                            </div>
+
+                        <!-- Toggle Visibility -->
+                        <label class="swap">
+                            <input type="checkbox" id="apiKeyCollapse" />
+                            <svg class="swap-off w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21" />
+                            </svg>
+                            <svg class="swap-on w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="p-4">
+                    <!-- API Key Display -->
+                    <div id="apiKeyContainer" class="space-y-3">
+                        <div id="apiKeyDisplay" class="font-mono text-sm bg-base-200 p-3 rounded-lg border border-base-300 select-all cursor-text transition-all" style="display: none;">
+                            {% if api_key %}
+                                {{ api_key }}
+                            {% else %}
+                                No API key generated yet
+                            {% endif %}
+                        </div>
+
+                        <div id="apiKeyMasked" class="font-mono text-sm bg-base-200 p-3 rounded-lg border border-base-300 text-base-content/50">
+                            {% if api_key %}
+                                {{ api_key[:8] }}****************************{{ api_key[-4:] }}
+                            {% else %}
+                                No API key generated yet
+                            {% endif %}
                         </div>
                     </div>
 
-                    <!-- Copy Button -->
-                    <div class="mt-4 flex gap-2">
-                        <button onclick="copyApiKeyToClipboard()" class="btn btn-primary gap-2" id="copyButton" {% if not has_api_key %}disabled{% endif %}>
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <!-- Action Buttons -->
+                    <div class="flex flex-col sm:flex-row gap-2 mt-4">
+                        <button onclick="copyApiKeyToClipboard()" class="btn-pro btn-primary flex-1" id="copyButton" {% if not has_api_key %}disabled{% endif %}>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                             </svg>
-                            Copy API Key
+                            Copy to Clipboard
                         </button>
 
-                        <!-- Generate/Regenerate Button -->
-                        <button onclick="document.getElementById('confirm-modal').showModal()" class="btn btn-secondary gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <button onclick="document.getElementById('confirm-modal').showModal()" class="btn-pro btn-secondary flex-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
-                            {% if has_api_key %}Regenerate API Key{% else %}Generate API Key{% endif %}
+                            {% if has_api_key %}Regenerate{% else %}Generate{% endif %}
                         </button>
                     </div>
 
                     <!-- Loading Indicator -->
-                    <div id="loadingIndicator" class="hidden mt-4">
-                        <span class="loading loading-spinner loading-md"></span>
-                        <span class="ml-2">{% if has_api_key %}Regenerating{% else %}Generating{% endif %} API key...</span>
+                    <div id="loadingIndicator" class="hidden mt-4 flex items-center gap-2 text-primary">
+                        <span class="loading loading-spinner loading-sm"></span>
+                        <span class="text-sm">{% if has_api_key %}Regenerating{% else %}Generating{% endif %} API key...</span>
                     </div>
 
-                    <!-- Success Alert -->
+                    <!-- Alerts -->
                     <div id="copySuccessAlert" class="alert alert-success mt-4 hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <div>
-                            <h3 class="font-bold">Copied!</h3>
-                            <div class="text-sm">The API key has been copied to your clipboard.</div>
+                            <h3 class="font-semibold">Copied Successfully!</h3>
+                            <div class="text-sm opacity-80">API key has been copied to your clipboard.</div>
                         </div>
                     </div>
 
-                    <!-- Error Alert -->
                     <div id="errorAlert" class="alert alert-error mt-4 hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <div>
-                            <h3 class="font-bold">Error!</h3>
-                            <div class="text-sm" id="errorMessage">Failed to regenerate API key. Please try again.</div>
+                            <h3 class="font-semibold">Error!</h3>
+                            <div class="text-sm opacity-80" id="errorMessage">Failed to process API key. Please try again.</div>
                         </div>
                     </div>
 
-                    <!-- Success Alert for Generation -->
                     <div id="regenerateSuccessAlert" class="alert alert-success mt-4 hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <div>
-                            <h3 class="font-bold">Success!</h3>
-                            <div class="text-sm">API key has been generated successfully.</div>
+                            <h3 class="font-semibold">Success!</h3>
+                            <div class="text-sm opacity-80">API key has been {% if has_api_key %}regenerated{% else %}generated{% endif %} successfully.</div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Information Panel -->
+        <div class="space-y-4">
+            <!-- Security Notice -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-warning mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.664-.833-2.464 0L4.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <div>
+                        <h3 class="font-semibold text-warning mb-2">Security Notice</h3>
+                        <ul class="text-sm text-base-content/70 space-y-1">
+                            <li>• Keep your API key secure and private</li>
+                            <li>• Never share it in public repositories</li>
+                            <li>• Regenerate if compromised</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Usage Information -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-info mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div>
+                        <h3 class="font-semibold text-info mb-2">API Usage</h3>
+                        <div class="text-sm text-base-content/70 space-y-2">
+                            <p>Use this key for API authentication:</p>
+                            <code class="block bg-base-200 p-2 rounded text-xs">
+                                Authorization: Bearer YOUR_API_KEY
+                            </code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Links -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-4">
+                <h3 class="font-semibold text-base-content mb-3">Documentation</h3>
+                <div class="space-y-2">
+                    <a href="https://docs.openalgo.in" target="_blank" class="flex items-center gap-2 text-sm text-primary hover:underline">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        API Documentation
+                    </a>
+                    <a href="https://docs.openalgo.in/authentication" target="_blank" class="flex items-center gap-2 text-sm text-primary hover:underline">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        Authentication Guide
+                    </a>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Confirmation Modal -->
+<!-- Professional Confirmation Modal -->
 <dialog id="confirm-modal" class="modal modal-bottom sm:modal-middle">
-    <div class="modal-box">
-        <h3 class="font-bold text-lg">Confirm {% if has_api_key %}Regeneration{% else %}Generation{% endif %}</h3>
-        <p class="py-4">
+    <div class="modal-box bg-base-100 border border-base-300">
+        <div class="flex items-start gap-3 mb-4">
             {% if has_api_key %}
-            Are you sure you want to regenerate your API key? The current key will be invalidated and any applications using it will need to be updated.
+                <svg class="w-6 h-6 text-warning mt-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.664-.833-2.464 0L4.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
             {% else %}
-            Generate a new API key for authenticating your API requests?
+                <svg class="w-6 h-6 text-info mt-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1721 9z" />
+                </svg>
             {% endif %}
-        </p>
-        <div class="modal-action">
-            <form method="dialog">
-                <button class="btn btn-ghost">Cancel</button>
-            </form>
-            <button onclick="regenerateApiKey()" class="btn btn-primary">{% if has_api_key %}Regenerate{% else %}Generate{% endif %}</button>
+            <div>
+                <h3 class="font-bold text-lg text-base-content">
+                    {% if has_api_key %}Regenerate API Key{% else %}Generate API Key{% endif %}
+                </h3>
+                <p class="text-sm text-base-content/70 mt-2">
+                    {% if has_api_key %}
+                    Are you sure you want to regenerate your API key? The current key will be invalidated and any applications using it will need to be updated.
+                    {% else %}
+                    Generate a new API key for authenticating your API requests?
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-3 justify-end">
+            <button onclick="document.getElementById('confirm-modal').close()" class="btn-pro btn-secondary">
+                Cancel
+            </button>
+            <button onclick="regenerateApiKey()" class="btn-pro {% if has_api_key %}btn-warning{% else %}btn-primary{% endif %}">
+                {% if has_api_key %}Regenerate Key{% else %}Generate Key{% endif %}
+            </button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">
@@ -128,6 +232,23 @@
 {% block head %}
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
+    // Enhanced visibility toggle functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        const toggle = document.getElementById('apiKeyCollapse');
+        const maskedDisplay = document.getElementById('apiKeyMasked');
+        const realDisplay = document.getElementById('apiKeyDisplay');
+
+        toggle.addEventListener('change', function() {
+            if (this.checked) {
+                maskedDisplay.style.display = 'none';
+                realDisplay.style.display = 'block';
+            } else {
+                maskedDisplay.style.display = 'block';
+                realDisplay.style.display = 'none';
+            }
+        });
+    });
+
     function showLoading(show) {
         document.getElementById('loadingIndicator').classList.toggle('hidden', !show);
     }
@@ -139,14 +260,20 @@
     }
 
     function updateApiKeyDisplay(newKey) {
-        const display = document.getElementById('apiKeyDisplay');
-        display.textContent = newKey;
-        
+        // Update both displays
+        const realDisplay = document.getElementById('apiKeyDisplay');
+        const maskedDisplay = document.getElementById('apiKeyMasked');
+
+        realDisplay.textContent = newKey;
+        maskedDisplay.textContent = newKey.substring(0, 8) + '****************************' + newKey.slice(-4);
+
         // Enable copy button
         document.getElementById('copyButton').disabled = false;
-        
-        // Ensure the collapse is open to show the new key
+
+        // Show the real key briefly
         document.getElementById('apiKeyCollapse').checked = true;
+        document.getElementById('apiKeyMasked').style.display = 'none';
+        document.getElementById('apiKeyDisplay').style.display = 'block';
     }
 
     function copyApiKeyToClipboard() {
@@ -170,10 +297,10 @@
     function regenerateApiKey() {
         // Close the modal
         document.getElementById('confirm-modal').close();
-        
+
         // Show loading indicator
         showLoading(true);
-        
+
         fetch('/apikey', {
             method: 'POST',
             headers: {

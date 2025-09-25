@@ -1,57 +1,56 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="w-full">
+<div class="space-y-4">
     <!-- Stats Cards -->
-    <div class="stats shadow w-full mb-8">
-        <div class="stat">
-            <div class="stat-title">Total Orders</div>
-            <div class="stat-value" id="total-orders">{{ stats.total_orders }}</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="metric-card">
+            <div class="metric-label">Total Orders</div>
+            <div class="metric-value" id="total-orders">{{ stats.total_orders }}</div>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">Failed Orders</div>
-            <div class="stat-value text-error" id="failed-orders">{{ stats.failed_orders }}</div>
-            <div class="stat-desc" id="failure-rate">
+
+        <div class="metric-card">
+            <div class="metric-label">Failed Orders</div>
+            <div class="metric-value text-error" id="failed-orders">{{ stats.failed_orders }}</div>
+            <div class="metric-desc" id="failure-rate">
                 {{ "%.1f"|format(stats.failed_orders / stats.total_orders * 100 if stats.total_orders else 0) }}% Failure Rate
             </div>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">Avg Round-Trip Time</div>
-            <div class="stat-value" id="avg-rtt">{{ "%.2f"|format(stats.avg_rtt) }}ms</div>
-            <div class="stat-desc">Comparable to Postman/Bruno</div>
+
+        <div class="metric-card">
+            <div class="metric-label">Avg Round-Trip Time</div>
+            <div class="metric-value" id="avg-rtt">{{ "%.2f"|format(stats.avg_rtt) }}ms</div>
+            <div class="metric-desc">Comparable to Postman/Bruno</div>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">P99 Round-Trip Time</div>
-            <div class="stat-value" id="p99-rtt">{{ "%.2f"|format(stats.p99_rtt) }}ms</div>
-            <div class="stat-desc">99th percentile</div>
+
+        <div class="metric-card">
+            <div class="metric-label">P99 Round-Trip Time</div>
+            <div class="metric-value" id="p99-rtt">{{ "%.2f"|format(stats.p99_rtt) }}ms</div>
+            <div class="metric-desc">99th percentile</div>
         </div>
     </div>
 
     <!-- Recent Orders Table -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="card-title">Recent Orders</h2>
-                <div class="flex gap-2">
-                    <a href="{{ url_for('latency_bp.export_logs') }}" class="btn btn-sm btn-primary gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        Export to CSV
-                    </a>
-                    <button class="btn btn-sm" onclick="refreshData()">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        Refresh
-                    </button>
-                </div>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex justify-between items-center border-b border-base-300 pb-4 mb-4">
+            <h2 class="text-xl font-semibold">Recent Orders</h2>
+            <div class="flex gap-2">
+                <a href="{{ url_for('latency_bp.export_logs') }}" class="btn-pro btn-pro-primary btn-pro-sm gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export to CSV
+                </a>
+                <button class="btn-pro btn-pro-secondary btn-pro-sm" onclick="refreshData()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Refresh
+                </button>
             </div>
-            <div class="overflow-x-auto">
-                <table class="table table-zebra w-full">
+        </div>
+        <div class="overflow-x-auto">
+            <table class="data-table">
                     <thead>
                         <tr>
                             <th>Timestamp</th>
@@ -73,28 +72,27 @@
                             <td>{{ log.broker }}</td>
                             <td>{{ log.symbol }}</td>
                             <td>
-                                <span class="badge badge-sm 
-                                    {% if log.order_type == 'MARKET' %}badge-info
-                                    {% elif log.order_type == 'LIMIT' %}badge-success
-                                    {% else %}badge-warning{% endif %}">
+                                <span class="badge-pro badge-pro-sm
+                                    {% if log.order_type == 'MARKET' %}badge-pro-primary
+                                    {% elif log.order_type == 'LIMIT' %}badge-pro-secondary
+                                    {% else %}badge-pro-primary{% endif %}">
                                     {{ log.order_type }}
                                 </span>
                             </td>
                             <td>{{ "%.2f"|format(log.rtt_ms) }}ms</td>
                             <td>{{ "%.2f"|format(log.total_latency_ms) }}ms</td>
                             <td>
-                                <span class="badge badge-sm {% if log.status == 'SUCCESS' %}badge-success{% else %}badge-error{% endif %}">
+                                <span class="badge-pro badge-pro-sm {% if log.status == 'SUCCESS' %}badge-pro-secondary{% else %}badge-pro-danger{% endif %}">
                                     {{ log.status }}
                                 </span>
                             </td>
                             <td>
-                                <button class="btn btn-xs view-details">View</button>
+                                <button class="btn-pro btn-pro-ghost btn-pro-xs view-details">View</button>
                             </td>
                         </tr>
                     {% endfor %}
                     </tbody>
                 </table>
-            </div>
         </div>
     </div>
 
@@ -104,7 +102,7 @@
             <h3 class="font-bold text-lg mb-4">Order Details</h3>
             <div id="modal-content"></div>
             <div class="modal-action">
-                <button class="btn" onclick="closeModal()">Close</button>
+                <button class="btn-pro btn-pro-primary" onclick="closeModal()">Close</button>
             </div>
         </div>
     </div>
@@ -150,11 +148,11 @@ function formatDate(timestamp) {
 function updateTable(logs) {
     const tbody = document.getElementById('orders-table-body');
     tbody.innerHTML = logs.map(log => {
-        const orderTypeClass = log.order_type === 'MARKET' ? 'badge-info' : 
-                             log.order_type === 'LIMIT' ? 'badge-success' : 
-                             'badge-warning';
-        
-        const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-error';
+        const orderTypeClass = log.order_type === 'MARKET' ? 'badge-pro-primary' :
+                             log.order_type === 'LIMIT' ? 'badge-pro-secondary' :
+                             'badge-pro-primary';
+
+        const statusClass = log.status === 'SUCCESS' ? 'badge-pro-secondary' : 'badge-pro-danger';
         
         return `
             <tr class="hover" data-id="${log.id}">
@@ -162,11 +160,11 @@ function updateTable(logs) {
                 <td>${log.order_id}</td>
                 <td>${log.broker || ''}</td>
                 <td>${log.symbol || ''}</td>
-                <td><span class="badge badge-sm ${orderTypeClass}">${log.order_type}</span></td>
+                <td><span class="badge-pro badge-pro-sm ${orderTypeClass}">${log.order_type}</span></td>
                 <td>${log.rtt_ms.toFixed(2)}ms</td>
                 <td>${log.total_latency_ms.toFixed(2)}ms</td>
-                <td><span class="badge badge-sm ${statusClass}">${log.status}</span></td>
-                <td><button class="btn btn-xs view-details">View</button></td>
+                <td><span class="badge-pro badge-pro-sm ${statusClass}">${log.status}</span></td>
+                <td><button class="btn-pro btn-pro-ghost btn-pro-xs view-details">View</button></td>
             </tr>
         `;
     }).join('');

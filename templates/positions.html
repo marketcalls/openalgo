@@ -152,6 +152,48 @@
             </tbody>
         </table>
     </div>
+
+    <!-- Professional Summary Section -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+        <!-- Total Positions -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Total Positions</span>
+                <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                </svg>
+            </div>
+            <div class="metric-value">
+                <span class="font-mono">{{ positions_data|length }}</span>
+            </div>
+        </div>
+
+        <!-- Long Positions -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Long Positions</span>
+                <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+            </div>
+            <div class="metric-value text-success">
+                <span class="font-mono">{{ positions_data|selectattr('quantity', 'gt', 0)|list|length }}</span>
+            </div>
+        </div>
+
+        <!-- Short Positions -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Short Positions</span>
+                <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                </svg>
+            </div>
+            <div class="metric-value text-error">
+                <span class="font-mono">{{ positions_data|selectattr('quantity', 'lt', 0)|list|length }}</span>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>

@@ -7,33 +7,33 @@
 {% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <!-- Header -->
-    <div class="mb-6">
+<div class="space-y-4">
+    <!-- Professional Header -->
+    <div class="pb-4 border-b border-base-300">
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-4">
-                <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-ghost btn-circle">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <a href="{{ url_for('python_strategy_bp.index') }}" class="btn-pro btn-pro-ghost btn-pro-circle">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
                     </svg>
                 </a>
                 <div>
-                    <h1 class="text-2xl font-bold">
+                    <h1 class="text-2xl font-bold text-base-content">
                         {% if can_edit %}Edit{% else %}View{% endif %} Strategy
                     </h1>
-                    <p class="text-base-content/60 text-sm">{{ strategy_name }}</p>
+                    <p class="text-sm text-base-content/60">{{ strategy_name }}</p>
                 </div>
             </div>
-            
+
             <!-- Status Badge -->
             <div>
                 {% if is_running %}
-                <div class="badge badge-success badge-lg gap-2">
-                    <div class="w-2 h-2 bg-success rounded-full animate-pulse"></div>
+                <div class="badge-pro badge-pro-buy badge-pro-lg">
+                    <div class="w-2 h-2 bg-buy rounded-full animate-pulse"></div>
                     Running (View Only)
                 </div>
                 {% else %}
-                <div class="badge badge-ghost badge-lg">
+                <div class="badge-pro badge-pro-neutral badge-pro-lg">
                     Stopped (Editable)
                 </div>
                 {% endif %}
@@ -41,12 +41,12 @@
         </div>
     </div>
 
-    <!-- File Info Bar -->
-    <div class="bg-base-200 rounded-lg p-4 mb-4">
+    <!-- File Information Panel -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-4">
         <div class="flex flex-wrap gap-6 text-sm">
             <div>
                 <span class="text-base-content/60">File:</span>
-                <span class="font-mono">{{ file_info.name }}</span>
+                <span class="font-mono text-primary">{{ file_info.name }}</span>
             </div>
             <div>
                 <span class="text-base-content/60">Lines:</span>
@@ -63,51 +63,51 @@
         </div>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="flex justify-between items-center mb-4">
-        <div class="flex gap-2">
+    <!-- Action Toolbar -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div class="flex flex-wrap gap-2">
             {% if can_edit %}
-            <button onclick="saveStrategy()" class="btn btn-primary btn-sm">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <button onclick="saveStrategy()" class="btn-pro btn-pro-primary btn-pro-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
                 </svg>
                 Save Changes
             </button>
-            <button onclick="resetChanges()" class="btn btn-ghost btn-sm">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <button onclick="resetChanges()" class="btn-pro btn-pro-ghost btn-pro-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
                 Reset
             </button>
             {% else %}
-            <div class="alert alert-warning">
-                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <div class="bg-warning/10 border border-warning/30 rounded-lg p-3 flex items-center gap-2">
+                <svg class="w-5 h-5 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
-                <span>Strategy is running. Stop it to enable editing.</span>
+                <span class="text-sm text-warning">Strategy is running. Stop it to enable editing.</span>
             </div>
             {% endif %}
             
-            <!-- Export buttons -->
+            <!-- Export Options -->
             <div class="dropdown dropdown-hover">
-                <label tabindex="0" class="btn btn-ghost btn-sm">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <label tabindex="0" class="btn-pro btn-pro-ghost btn-pro-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
                     Export
                 </label>
-                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 border border-base-300">
                     <li>
-                        <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy_id) }}">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy_id) }}" class="text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
                             </svg>
                             Export Saved Version
                         </a>
                     </li>
                     <li>
-                        <a href="javascript:void(0)" onclick="exportCurrentContent()">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <a href="javascript:void(0)" onclick="exportCurrentContent()" class="text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                             Export Current Content
@@ -116,15 +116,16 @@
                 </ul>
             </div>
         </div>
-        
-        <div class="flex gap-2">
-            <button onclick="toggleTheme()" class="btn btn-ghost btn-sm btn-circle" title="Toggle Theme">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+
+        <!-- Editor Tools -->
+        <div class="flex gap-1">
+            <button onclick="toggleTheme()" class="btn-pro btn-pro-ghost btn-pro-sm btn-pro-circle" title="Toggle Theme">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
                 </svg>
             </button>
-            <button onclick="toggleFullscreen()" class="btn btn-ghost btn-sm btn-circle" title="Fullscreen">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <button onclick="toggleFullscreen()" class="btn-pro btn-pro-ghost btn-pro-sm btn-pro-circle" title="Fullscreen">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                 </svg>
             </button>
@@ -132,37 +133,38 @@
     </div>
 
     <!-- Code Editor -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body p-0">
-            <div id="editor-container" style="min-height: 600px;"></div>
-        </div>
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <div id="editor-container" style="min-height: 600px;"></div>
     </div>
 
-    <!-- Keyboard Shortcuts Help -->
-    <div class="mt-4">
-        <details class="collapse collapse-arrow bg-base-200">
-            <summary class="collapse-title text-sm font-medium">
-                Keyboard Shortcuts
+    <!-- Editor Help -->
+    <div class="bg-base-100 border border-base-300 rounded-lg">
+        <details class="group">
+            <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-base-200 rounded-t-lg">
+                <span class="text-sm font-medium">Keyboard Shortcuts</span>
+                <svg class="w-4 h-4 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
             </summary>
-            <div class="collapse-content">
+            <div class="p-4 pt-0 border-t border-base-300">
                 <div class="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                        <kbd class="kbd kbd-sm">Tab</kbd> Insert 4 spaces
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">Tab</kbd> Insert 4 spaces
                     </div>
-                    <div>
-                        <kbd class="kbd kbd-sm">Shift</kbd> + <kbd class="kbd kbd-sm">Tab</kbd> Unindent
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">Shift+Tab</kbd> Unindent
                     </div>
-                    <div>
-                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">S</kbd> Save (when editable)
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">Ctrl+S</kbd> Save (when editable)
                     </div>
-                    <div>
-                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">Z</kbd> Undo
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">Ctrl+Z</kbd> Undo
                     </div>
-                    <div>
-                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">Y</kbd> Redo
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">Ctrl+Y</kbd> Redo
                     </div>
-                    <div>
-                        <kbd class="kbd kbd-sm">F11</kbd> Toggle Fullscreen
+                    <div class="flex items-center gap-2">
+                        <kbd class="px-2 py-1 text-xs bg-base-200 border border-base-300 rounded">F11</kbd> Toggle Fullscreen
                     </div>
                 </div>
             </div>
@@ -177,8 +179,8 @@
         <p class="py-4">Are you sure you want to discard all changes?</p>
         <p class="text-sm text-warning">Your unsaved changes will be lost.</p>
         <div class="modal-action">
-            <button onclick="reset_modal.close()" class="btn">Cancel</button>
-            <button onclick="confirmReset()" class="btn btn-warning">Discard Changes</button>
+            <button onclick="reset_modal.close()" class="btn-pro btn-pro-ghost">Cancel</button>
+            <button onclick="confirmReset()" class="btn-pro btn-pro-warning">Discard Changes</button>
         </div>
     </div>
     <form method="dialog" class="modal-backdrop">

@@ -1,95 +1,187 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="w-full">
-    <!-- Header -->
-    <div class="section-header">
-        <h1 class="text-2xl font-semibold text-base-content">Investor Summary</h1>
-    </div>
-
-    <!-- Holdings Summary Dashboard Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <!-- Total Holding Value Card -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Total Holding Value</div>
-                <div class="stat-value text-primary">
-                    {{ portfolio_stats.totalholdingvalue| round(2) }}
-                </div>
-            </div>
+<!-- Professional Holdings Portfolio -->
+<div class="space-y-4">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Portfolio Holdings</h1>
+            <p class="text-sm text-base-content/60 mt-1">Your investment portfolio overview and holdings</p>
         </div>
 
-        <!-- Total Investment Value Card -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Total Investment Value</div>
-                <div class="stat-value text-secondary">
-                    {{ portfolio_stats.totalinvvalue| round(2) }}
-                </div>
-            </div>
-        </div>
-
-        <!-- Total Profit and Loss Card -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Total Profit and Loss</div>
-                <div class="stat-value {% if portfolio_stats.totalprofitandloss > 0 %}text-success{% else %}text-error{% endif %}">
-                    {{ portfolio_stats.totalprofitandloss| round(2) }}
-                </div>
-            </div>
-        </div>
-
-        <!-- Total PnL Percentage Card -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Total PnL Percentage</div>
-                <div class="stat-value {% if portfolio_stats.totalpnlpercentage > 0 %}text-success{% else %}text-error{% endif %}">
-                    {{ portfolio_stats.totalpnlpercentage| round(2) }}%
-                </div>
-            </div>
+        <!-- Portfolio Status -->
+        <div class="flex items-center gap-2">
+            {% set total_pnl = portfolio_stats.totalprofitandloss %}
+            <span class="badge-pro {% if total_pnl > 0 %}badge-success{% elif total_pnl < 0 %}badge-error{% else %}badge-info{% endif %}">
+                {% if total_pnl > 0 %}Profitable{% elif total_pnl < 0 %}In Loss{% else %}Breakeven{% endif %}
+            </span>
         </div>
     </div>
 
-    <!-- Holdings Table -->
-    <div class="card bg-base-100 shadow-lg">
-        <div class="card-body">
-            <div class="overflow-x-auto">
-                <table class="table w-full">
-                    <thead>
-                        <tr>
-                            <th>Trading Symbol</th>
-                            <th>Exchange</th>
-                            <th>Quantity</th>
-                            <th>Product</th>
-                            <th>Profit and Loss</th>
-                            <th>PnL Percentage</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for holding in holdings_data %}
-                        <tr class="hover">
-                            <td class="font-medium">{{ holding.symbol }}</td>
-                            <td>
-                                <span class="badge badge-{{ holding.exchange.lower() }}">
-                                    {{ holding.exchange }}
-                                </span>
-                            </td>
-                            <td>{{ holding.quantity }}</td>
-                            <td>
-                                <div class="badge badge-ghost">{{ holding.product }}</div>
-                            </td>
-                            <td class="{% if holding.pnl > 0 %}text-success{% elif holding.pnl < 0 %}text-error{% endif %}">
-                                {{ holding.pnl }}
-                            </td>
-                            <td class="{% if holding.pnlpercent > 0 %}text-success{% elif holding.pnlpercent < 0 %}text-error{% endif %}">
-                                {{ '{:.2f}'.format(holding.pnlpercent) }}%
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+    <!-- Professional Portfolio Metrics -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Total Portfolio Value -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Portfolio Value</span>
+                <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="metric-value">
+                <span class="text-xs">₹</span>
+                <span class="font-mono">{{ "{:,.2f}".format(portfolio_stats.totalholdingvalue) }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro badge-primary">Current Value</span>
+            </div>
+        </div>
+
+        <!-- Investment Cost -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Investment Cost</span>
+                <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+            </div>
+            <div class="metric-value">
+                <span class="text-xs">₹</span>
+                <span class="font-mono">{{ "{:,.2f}".format(portfolio_stats.totalinvvalue) }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro badge-secondary">Invested</span>
+            </div>
+        </div>
+
+        <!-- Total P&L -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Unrealized P&L</span>
+                <svg class="w-4 h-4 {% if portfolio_stats.totalprofitandloss > 0 %}text-success{% elif portfolio_stats.totalprofitandloss < 0 %}text-error{% else %}text-base-content/40{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {% if portfolio_stats.totalprofitandloss > 0 %}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    {% elif portfolio_stats.totalprofitandloss < 0 %}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                    {% else %}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14" />
+                    {% endif %}
+                </svg>
+            </div>
+            <div class="metric-value {% if portfolio_stats.totalprofitandloss > 0 %}positive{% elif portfolio_stats.totalprofitandloss < 0 %}negative{% endif %}">
+                <span class="text-xs">₹</span>
+                <span class="font-mono">{{ "{:,.2f}".format(portfolio_stats.totalprofitandloss) }}</span>
+            </div>
+            <div class="metric-change">
+                {% if portfolio_stats.totalprofitandloss > 0 %}
+                    <span class="change-value positive">+{{ "{:,.2f}".format(portfolio_stats.totalprofitandloss) }}</span>
+                    <span class="badge-pro badge-success">PROFIT</span>
+                {% elif portfolio_stats.totalprofitandloss < 0 %}
+                    <span class="change-value negative">{{ "{:,.2f}".format(portfolio_stats.totalprofitandloss) }}</span>
+                    <span class="badge-pro badge-error">LOSS</span>
+                {% else %}
+                    <span class="change-value">0.00</span>
+                    <span class="badge-pro">FLAT</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- P&L Percentage -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Return %</span>
+                <svg class="w-4 h-4 {% if portfolio_stats.totalpnlpercentage > 0 %}text-success{% elif portfolio_stats.totalpnlpercentage < 0 %}text-error{% else %}text-base-content/40{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+            </div>
+            <div class="metric-value {% if portfolio_stats.totalpnlpercentage > 0 %}positive{% elif portfolio_stats.totalpnlpercentage < 0 %}negative{% endif %}">
+                <span class="font-mono">{{ "{:.2f}".format(portfolio_stats.totalpnlpercentage) }}</span>
+                <span class="text-xs">%</span>
+            </div>
+            <div class="metric-change">
+                {% if portfolio_stats.totalpnlpercentage > 0 %}
+                    <span class="change-value positive">+{{ "{:.2f}".format(portfolio_stats.totalpnlpercentage) }}%</span>
+                {% elif portfolio_stats.totalpnlpercentage < 0 %}
+                    <span class="change-value negative">{{ "{:.2f}".format(portfolio_stats.totalpnlpercentage) }}%</span>
+                {% else %}
+                    <span class="change-value">0.00%</span>
+                {% endif %}
             </div>
         </div>
     </div>
+
+    <!-- Professional Holdings Table -->
+    {% if holdings_data %}
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <div class="p-4 border-b border-base-300">
+            <div class="flex items-center justify-between">
+                <h2 class="font-semibold text-base-content">Holdings Details</h2>
+                <span class="text-sm text-base-content/60">{{ holdings_data|length }} positions</span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="data-table w-full">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Exchange</th>
+                        <th class="text-right">Quantity</th>
+                        <th>Product Type</th>
+                        <th class="text-right">P&L</th>
+                        <th class="text-right">P&L %</th>
+                        <th class="text-center">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for holding in holdings_data %}
+                    <tr class="hover:bg-base-50">
+                        <td>
+                            <div class="font-semibold text-base-content">{{ holding.symbol }}</div>
+                        </td>
+                        <td>
+                            <span class="badge-pro">{{ holding.exchange }}</span>
+                        </td>
+                        <td class="text-right font-mono">
+                            {{ "{:,}".format(holding.quantity) }}
+                        </td>
+                        <td>
+                            <span class="badge-pro badge-info badge-sm">{{ holding.product }}</span>
+                        </td>
+                        <td class="text-right font-mono {% if holding.pnl > 0 %}text-success{% elif holding.pnl < 0 %}text-error{% else %}text-base-content/60{% endif %}">
+                            {% if holding.pnl > 0 %}+{% endif %}{{ "{:,.2f}".format(holding.pnl) }}
+                        </td>
+                        <td class="text-right font-mono {% if holding.pnlpercent > 0 %}text-success{% elif holding.pnlpercent < 0 %}text-error{% else %}text-base-content/60{% endif %}">
+                            {% if holding.pnlpercent > 0 %}+{% endif %}{{ "{:.2f}".format(holding.pnlpercent) }}%
+                        </td>
+                        <td class="text-center">
+                            {% if holding.pnl > 0 %}
+                                <span class="badge-pro badge-success badge-sm">Profitable</span>
+                            {% elif holding.pnl < 0 %}
+                                <span class="badge-pro badge-error badge-sm">Loss</span>
+                            {% else %}
+                                <span class="badge-pro badge-info badge-sm">Breakeven</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <!-- Empty State -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-base-content/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+        </svg>
+        <h3 class="text-lg font-semibold text-base-content mb-2">No Holdings Found</h3>
+        <p class="text-base-content/60 mb-4">You don't have any current holdings in your portfolio.</p>
+        <a href="{{ url_for('search_bp.token') }}" class="btn-pro btn-primary">
+            Start Trading
+        </a>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}

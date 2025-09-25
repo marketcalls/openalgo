@@ -1,10 +1,9 @@
 {% set request_data = log.request_data %}
-<div class="card bg-base-100 shadow-lg mb-4 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
-    <div class="card-body p-6">
+<div class="bg-base-100 border border-base-300 rounded-lg p-6 mb-4 hover:shadow-md transition-all duration-200">
         <!-- Header with Badges -->
         <div class="flex flex-wrap gap-2 mb-4">
             <!-- API Type Badge -->
-            <div class="badge badge-function gap-2">
+            <div class="badge-pro badge-pro-primary">
                 {% if log.api_type == 'placeorder' %}
                 <svg class="api-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -34,7 +33,7 @@
             </div>
 
             <!-- Strategy Badge -->
-            <div class="badge badge-strategy gap-2">
+            <div class="badge-pro badge-pro-secondary">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
                 </svg>
@@ -42,7 +41,7 @@
             </div>
 
             {% if request_data.action %}
-            <div class="badge {% if request_data.action == 'BUY' %}badge-buy{% else %}badge-sell{% endif %} gap-2">
+            <div class="badge-pro {% if request_data.action == 'BUY' %}badge-pro-buy{% else %}badge-pro-sell{% endif %}">
                 {% if request_data.action == 'BUY' %}
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
@@ -57,7 +56,7 @@
             {% endif %}
 
             {% if request_data.exchange %}
-            <div class="badge badge-exchange gap-2">
+            <div class="badge-pro badge-pro-info">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V6.414l-1.293 1.293a1 1 0 01-1.414-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L13 6.414V16a1 1 0 01-1 1H4a1 1 0 01-1-1V4z" clip-rule="evenodd"/>
                 </svg>
@@ -65,7 +64,7 @@
             </div>
             {% endif %}
 
-            <div class="badge badge-ghost gap-2">
+            <div class="badge-pro badge-pro-neutral">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
                 </svg>
@@ -79,54 +78,57 @@
             {% if request_data.symbol %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Symbol</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.symbol }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.symbol }}</div>
             </div>
             {% endif %}
 
             {% if request_data.quantity %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Quantity</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.quantity }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.quantity }}</div>
             </div>
             {% endif %}
 
             {% if request_data.price and request_data.price != "0" %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Price</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.price }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.price }}</div>
             </div>
             {% endif %}
 
             {% if request_data.product %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Product</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.product }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.product }}</div>
             </div>
             {% endif %}
 
             {% if request_data.pricetype %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Price Type</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.pricetype }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.pricetype }}</div>
             </div>
             {% endif %}
 
             {% if request_data.orderid %}
             <div class="stat bg-base-200 rounded-box shadow-sm">
                 <div class="stat-title text-xs uppercase tracking-wide">Order ID</div>
-                <div class="stat-value text-lg font-bold">{{ request_data.orderid }}</div>
+                <div class="metric-value text-lg font-bold">{{ request_data.orderid }}</div>
             </div>
             {% endif %}
         </div>
         {% endif %}
 
-        <!-- Collapsible Request/Response Data -->
-        <div class="collapse collapse-plus bg-base-200 rounded-box">
-            <input type="checkbox" class="peer" aria-label="View JSON Data" /> 
-            <div class="collapse-title font-medium">
-                View Request/Response Data
-            </div>
-            <div class="collapse-content">
+        <!-- Professional Data Viewer -->
+        <div class="bg-base-200 border border-base-300 rounded-lg">
+            <details class="group">
+                <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-base-300 rounded-t-lg">
+                    <span class="font-medium">View Request/Response Data</span>
+                    <svg class="w-4 h-4 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </summary>
+                <div class="p-4 pt-0 border-t border-base-300">
                 <div class="space-y-4">
                     <div class="bg-base-100 rounded-box p-4">
                         <h4 class="text-sm font-medium flex items-center mb-2">
@@ -151,7 +153,6 @@
                         </div>
                     </div>
                 </div>
-            </div>
+            </details>
         </div>
-    </div>
 </div>

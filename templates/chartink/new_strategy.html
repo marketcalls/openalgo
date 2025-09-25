@@ -3,7 +3,8 @@
 {% block title %}New Chartink Strategy{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+<!-- Professional Theme Applied -->
+<div class="space-y-4">
     <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">New Chartink Strategy</h1>
         <a href="{{ url_for('chartink_bp.index') }}" class="btn">
@@ -11,8 +12,8 @@
         </a>
     </div>
 
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
+    <div class="bg-base-100 border border-base-300 rounded-lg">
+        <div class="p-6">
             <form method="POST" class="space-y-6" id="strategyForm">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <div class="form-control">
@@ -39,7 +40,7 @@
                         <span class="label-text">Strategy Type</span>
                         <span class="label-text-alt text-error">*</span>
                     </label>
-                    <select name="type" class="select select-bordered" id="strategyType" required>
+                    <select name="type" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" id="strategyType" required>
                         <option value="intraday">Intraday</option>
                         <option value="positional">Positional</option>
                     </select>
@@ -55,7 +56,7 @@
                                 <span class="label-text">Start Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="start_time" class="input input-bordered"
+                            <input type="time" name="start_time" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100"
                                    value="09:15">
                             <label class="label">
                                 <span class="label-text-alt">When to start taking trades</span>
@@ -67,7 +68,7 @@
                                 <span class="label-text">End Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="end_time" class="input input-bordered"
+                            <input type="time" name="end_time" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100"
                                    value="15:00">
                             <label class="label">
                                 <span class="label-text-alt">Last trade entry time</span>
@@ -79,7 +80,7 @@
                                 <span class="label-text">Square Off Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="squareoff_time" class="input input-bordered"
+                            <input type="time" name="squareoff_time" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100"
                                    value="15:15">
                             <label class="label">
                                 <span class="label-text-alt">Auto square off time</span>
@@ -103,7 +104,7 @@
 
                 <div class="card-actions justify-end">
                     <button type="reset" class="btn">Reset</button>
-                    <button type="submit" class="btn btn-primary">Create Strategy</button>
+                    <button type="submit" class="btn-pro btn-primary">Create Strategy</button>
                 </div>
             </form>
         </div>
@@ -157,11 +158,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function showAlert(type, message) {
-    const alert = document.createElement('div');
-    alert.className = 'alert alert-' + type + ' fixed top-4 left-1/2 transform -translate-x-1/2 z-50 w-auto';
-    alert.innerHTML = `<span>${message}</span>`;
-    document.body.appendChild(alert);
-    setTimeout(() => alert.remove(), 3000);
+    // Use global showToast if available, otherwise create simple alert
+    if (window.showToast) {
+        window.showToast(message, type);
+    } else {
+        alert(message);
+    }
 }
 </script>
 {% endblock %}

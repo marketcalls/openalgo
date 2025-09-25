@@ -10,7 +10,7 @@
         <p class="py-4">Are you sure you want to delete this symbol mapping?</p>
         <div class="modal-action">
             <button class="btn" id="cancel_delete">Cancel</button>
-            <button class="btn btn-error" id="confirm_delete">Delete</button>
+            <button class="btn-pro btn-danger" id="confirm_delete">Delete</button>
         </div>
     </form>
     <form method="dialog" class="modal-backdrop">
@@ -18,21 +18,25 @@
     </form>
 </dialog>
 
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Configure Symbols - {{ strategy.name }}</h1>
-        <div class="space-x-2">
-            <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn">
-                Back to Strategy
-            </a>
+<div class="space-y-4">
+    <!-- Professional Configure Symbols Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Configure Symbols</h1>
+            <p class="text-sm text-base-content/60 mt-1">{{ strategy.name }}</p>
         </div>
+        <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-secondary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            <span>Back to Strategy</span>
+        </a>
     </div>
 
-    <div class="grid gap-6 lg:grid-cols-2">
+    <div class="grid gap-4 lg:grid-cols-2">
         <!-- Single Symbol Form -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <h2 class="card-title">Add Single Symbol</h2>
+        <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+            <h2 class="text-lg font-bold mb-4">Add Single Symbol</h2>
                 
                 <form id="singleSymbolForm" class="space-y-4">
                     <div class="form-control">
@@ -41,7 +45,7 @@
                             <span class="label-text-alt text-error">*</span>
                         </label>
                         <div class="relative">
-                            <input type="text" id="symbolSearch" name="symbol" class="input input-bordered w-full" 
+                            <input type="text" id="symbolSearch" name="symbol" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100 w-full" 
                                    placeholder="Search symbol..." required readonly>
                             <div id="searchResults" class="absolute z-10 w-full mt-1 hidden">
                                 <ul class="menu bg-base-200 rounded-box shadow-lg max-h-60 overflow-y-auto">
@@ -56,7 +60,7 @@
                             <span class="label-text">Exchange</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <select name="exchange" class="select select-bordered" required>
+                        <select name="exchange" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" required>
                             <option value="NSE" selected>NSE</option>
                             <option value="BSE">BSE</option>
                             <option value="NFO">NFO</option>
@@ -73,7 +77,7 @@
                             <span class="label-text">Quantity</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <input type="number" name="quantity" class="input input-bordered" 
+                        <input type="number" name="quantity" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" 
                                min="1" step="1" required>
                     </div>
 
@@ -82,22 +86,27 @@
                             <span class="label-text">Product Type</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <select name="product_type" class="select select-bordered" required>
+                        <select name="product_type" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" required>
                             <option value="MIS">MIS (Intraday)</option>
                             <option value="CNC">CNC (Delivery)</option>
                             <option value="NRML">NRML (Normal)</option>
                         </select>
                     </div>
 
-                    <div class="card-actions justify-end">
-                        <button type="submit" class="btn btn-primary">Add Symbol</button>
+                    <div class="flex justify-end mt-6">
+                        <button type="submit" class="btn-pro btn-primary">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span>Add Symbol</span>
+                        </button>
                     </div>
                 </form>
             </div>
         </div>
 
         <!-- Bulk Symbols Form -->
-        <div class="card bg-base-100 shadow-xl">
+        <div class="bg-base-100 border border-base-300 rounded-lg p-6">
             <div class="card-body">
                 <h2 class="card-title">Add Multiple Symbols</h2>
                 
@@ -126,7 +135,7 @@
                     </div>
 
                     <div class="card-actions justify-end">
-                        <button type="submit" class="btn btn-primary">Add Symbols</button>
+                        <button type="submit" class="btn-pro btn-primary">Add Symbols</button>
                     </div>
                 </form>
             </div>
@@ -158,7 +167,7 @@
                             <td>{{ mapping.quantity }}</td>
                             <td>{{ mapping.product_type }}</td>
                             <td>
-                                <button class="btn btn-error btn-xs delete-symbol">
+                                <button class="btn-pro btn-danger btn-xs delete-symbol">
                                     Delete
                                 </button>
                             </td>

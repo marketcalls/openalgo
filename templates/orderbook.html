@@ -2,211 +2,243 @@
 
 {% block head %}
 <style>
-    .stat-card {
-        @apply bg-base-100 rounded-lg shadow-lg p-6 transition-all duration-300;
-    }
-    
-    .stat-card:hover {
-        @apply shadow-xl transform -translate-y-1;
-    }
-
-    .table-container {
-        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg;
+    /* Professional Orderbook Styles */
+    .order-stats-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     }
 
-    .table-header {
-        @apply sticky top-0 bg-base-200 z-10;
+    @media (min-width: 1280px) {
+        .order-stats-grid {
+            grid-template-columns: repeat(5, 1fr);
+        }
     }
 
-    .numeric-cell {
-        @apply font-mono text-right;
+    .order-stat-card {
+        background: var(--base-100);
+        border: 1px solid var(--base-300);
+        border-radius: 8px;
+        padding: 1rem;
+        transition: all 0.2s;
+    }
+
+    .order-stat-card:hover {
+        border-color: var(--primary);
+        transform: translateY(-2px);
+    }
+
+    .order-table {
+        font-size: 0.875rem;
+    }
+
+    .order-table th {
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.025em;
+    }
+
+    .order-table td {
+        padding: 0.5rem 0.75rem;
+    }
+
+    .order-row:hover {
+        background-color: var(--base-200);
+    }
+
+    .order-status-badge {
+        font-size: 0.625rem;
+        font-weight: 600;
+        letter-spacing: 0.025em;
+        text-transform: uppercase;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full">
-    <!-- Header Section -->
-    <div class="mb-6 flex justify-between items-center">
+<div class="space-y-4">
+    <!-- Professional Order Book Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
         <div>
-            <h1 class="text-3xl font-bold">Order Book</h1>
-            <p class="text-base-content/60">Track and manage your trading orders</p>
+            <h1 class="text-2xl font-bold text-base-content">Order Book</h1>
+            <p class="text-sm text-base-content/60 mt-1">Real-time order tracking and management</p>
         </div>
-        <div class="flex gap-2">
-            <button onclick="openCancelAllModal()" class="btn btn-error">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+        <div class="flex items-center gap-3">
+            <button onclick="openCancelAllModal()" class="btn-pro btn-danger">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
-                Cancel All Orders
+                <span>Cancel All</span>
             </button>
-            <a href="{{ url_for('orders_bp.export_orderbook') }}" class="btn btn-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+            <a href="{{ url_for('orders_bp.export_orderbook') }}" class="btn-pro btn-secondary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                Export to CSV
+                <span>Export CSV</span>
             </a>
         </div>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+    <!-- Professional Order Statistics -->
+    <div class="order-stats-grid">
         <!-- Buy Orders -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Buy Orders</div>
-                <div class="stat-value text-success">{{ order_stats.total_buy_orders }}</div>
-                <div class="stat-desc mt-2">
-                    <div class="badge badge-success">Long Positions</div>
-                </div>
+        <div class="order-stat-card">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">Buy Orders</span>
+                <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+            </div>
+            <div class="text-2xl font-bold font-mono text-success">{{ order_stats.total_buy_orders }}</div>
+            <div class="mt-2">
+                <span class="badge-pro badge-success">LONG</span>
             </div>
         </div>
 
         <!-- Sell Orders -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Sell Orders</div>
-                <div class="stat-value text-error">{{ order_stats.total_sell_orders }}</div>
-                <div class="stat-desc mt-2">
-                    <div class="badge badge-error">Short Positions</div>
-                </div>
+        <div class="order-stat-card">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">Sell Orders</span>
+                <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                </svg>
+            </div>
+            <div class="text-2xl font-bold font-mono text-error">{{ order_stats.total_sell_orders }}</div>
+            <div class="mt-2">
+                <span class="badge-pro badge-error">SHORT</span>
             </div>
         </div>
 
         <!-- Completed Orders -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Completed Orders</div>
-                <div class="stat-value text-success">{{ order_stats.total_completed_orders }}</div>
-                <div class="stat-desc mt-2">
-                    <div class="badge badge-success">Executed</div>
-                </div>
+        <div class="order-stat-card">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">Completed</span>
+                <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="text-2xl font-bold font-mono">{{ order_stats.total_completed_orders }}</div>
+            <div class="mt-2">
+                <span class="badge-pro badge-success">FILLED</span>
             </div>
         </div>
 
         <!-- Open Orders -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Open Orders</div>
-                <div class="stat-value text-warning">{{ order_stats.total_open_orders }}</div>
-                <div class="stat-desc mt-2">
-                    <div class="badge badge-warning">Pending</div>
-                </div>
+        <div class="order-stat-card">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">Open Orders</span>
+                <svg class="w-4 h-4 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="text-2xl font-bold font-mono text-warning">{{ order_stats.total_open_orders }}</div>
+            <div class="mt-2">
+                <span class="badge-pro badge-warning">PENDING</span>
             </div>
         </div>
 
         <!-- Rejected Orders -->
-        <div class="stat-card">
-            <div class="stat">
-                <div class="stat-title">Rejected Orders</div>
-                <div class="stat-value text-error">{{ order_stats.total_rejected_orders }}</div>
-                <div class="stat-desc mt-2">
-                    <div class="badge badge-error">Failed</div>
-                </div>
+        <div class="order-stat-card">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">Rejected</span>
+                <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <div class="text-2xl font-bold font-mono text-error">{{ order_stats.total_rejected_orders }}</div>
+            <div class="mt-2">
+                <span class="badge-pro badge-error">FAILED</span>
             </div>
         </div>
     </div>
 
-    <!-- Orders Table -->
-    <div id="orderbook-table-container" class="table-container">
-        <table class="table w-full">
-            <thead class="table-header">
-                <tr>
-                    <th class="cursor-pointer hover:bg-base-300">
-                        Trading Symbol
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                        </svg>
-                    </th>
-                    <th>Exchange</th>
-                    <th>Transaction Type</th>
-                    <th>Quantity</th>
-                    <th>Price</th>
-                    <th>Trigger Price</th>
-                    <th>Order Type</th>
-                    <th>Product Type</th>
-                    <th>Order ID</th>
-                    <th>Status</th>
-                    <th>Time</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for order in order_data %}
-                <tr class="hover:bg-base-200">
-                    <td class="font-medium">{{ order.symbol }}</td>
-                    <td>
-                        {% set exchange_colors = {
-                            'NSE': 'badge-accent',
-                            'BSE': 'badge-neutral',
-                            'NFO': 'badge-secondary',
-                            'MCX': 'badge-primary'
-                        } %}
-                        <div class="badge {{ exchange_colors.get(order.exchange, 'badge-ghost') }}">
-                            {{ order.exchange }}
-                        </div>
-                    </td>
-                    <td>
-                        <div class="badge {% if order.action == 'BUY' %}badge-success{% else %}badge-error{% endif %} gap-2">
-                            {% if order.action == 'BUY' %}
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                            </svg>
+    <!-- Professional Orders Table -->
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="data-table order-table w-full">
+                <thead>
+                    <tr>
+                        <th class="cursor-pointer hover:bg-base-200 transition-colors">
+                            <div class="flex items-center gap-1">
+                                <span>Symbol</span>
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th>Exchange</th>
+                        <th>Side</th>
+                        <th class="text-right">Qty</th>
+                        <th class="text-right">Price</th>
+                        <th class="text-right">Trigger</th>
+                        <th>Type</th>
+                        <th>Product</th>
+                        <th>Order ID</th>
+                        <th>Status</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for order in order_data %}
+                    <tr class="order-row transition-colors">
+                        <td class="font-medium font-mono">{{ order.symbol }}</td>
+                        <td>
+                            {% set exchange_colors = {
+                                'NSE': 'badge-info',
+                                'BSE': 'badge-secondary',
+                                'NFO': 'badge-warning',
+                                'MCX': 'badge-primary'
+                            } %}
+                            <span class="badge-pro {{ exchange_colors.get(order.exchange, '') }}">
+                                {{ order.exchange }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="font-semibold {% if order.action == 'BUY' %}text-success{% else %}text-error{% endif %}">
+                                {{ order.action }}
+                            </span>
+                        </td>
+                        <td class="text-right font-mono text-sm">{{ order.quantity }}</td>
+                        <td class="text-right font-mono text-sm">
+                            {% if order.pricetype|upper == 'MARKET' %}
+                                <span class="text-base-content/60">MKT</span>
                             {% else %}
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                            </svg>
+                                {{ order.price }}
                             {% endif %}
-                            {{ order.action }}
-                        </div>
-                    </td>
-                    <td class="numeric-cell">{{ order.quantity }}</td>
-                    <td class="numeric-cell">
-                        {% if order.pricetype|upper == 'MARKET' %}
-                            0.00
-                        {% else %}
-                            {{ order.price }}
-                        {% endif %}
-                    </td>
-                    <td class="numeric-cell">{{ order.trigger_price }}</td>
-                    <td>
-                        {% set order_type_colors = {
-                            'MARKET': 'badge-primary',
-                            'LIMIT': 'badge-info',
-                            'SL': 'badge-warning',
-                            'SL-M': 'badge-warning'
-                        } %}
-                        <div class="badge {{ order_type_colors.get(order.pricetype, 'badge-ghost') }}">
-                            {{ order.pricetype }}
-                        </div>
-                    </td>
-                    <td>
-                        {% set product_type_colors = {
-                            'CNC': 'badge-secondary',
-                            'MIS': 'badge-accent',
-                            'NRML': 'badge-neutral'
-                        } %}
-                        <div class="badge {{ product_type_colors.get(order.product, 'badge-ghost') }}">
-                            {{ order.product }}
-                        </div>
-                    </td>
-                    <td class="font-mono text-sm">{{ order.orderid }}</td>
-                    <td>
-                        {% set status_colors = {
-                            'complete': 'badge-success',
-                            'rejected': 'badge-error',
-                            'cancelled': 'badge-error',
-                            'open': 'badge-warning',
-                            'pending': 'badge-warning',
-                            'trigger pending': 'badge-info'
-                        } %}
-                        <div class="badge {{ status_colors.get(order.order_status|lower, 'badge-ghost') }}">
-                            {{ order.order_status }}
-                        </div>
-                    </td>
-                    <td class="text-sm">{{ order.timestamp }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                        </td>
+                        <td class="text-right font-mono text-sm">
+                            {% if order.trigger_price and order.trigger_price != '0.00' %}
+                                {{ order.trigger_price }}
+                            {% else %}
+                                <span class="text-base-content/30">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="order-status-badge {% if order.pricetype == 'MARKET' %}bg-primary/10 text-primary{% elif order.pricetype == 'LIMIT' %}bg-info/10 text-info{% else %}bg-warning/10 text-warning{% endif %}">
+                                {{ order.pricetype }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="order-status-badge bg-base-200 text-base-content">
+                                {{ order.product }}
+                            </span>
+                        </td>
+                        <td class="font-mono text-xs text-base-content/60">{{ order.orderid }}</td>
+                        <td>
+                            {% set status = order.order_status|lower %}
+                            <span class="order-status-badge {% if status == 'complete' %}bg-success/10 text-success{% elif status in ['rejected', 'cancelled'] %}bg-error/10 text-error{% elif status in ['open', 'pending'] %}bg-warning/10 text-warning{% else %}bg-info/10 text-info{% endif %}">
+                                {{ order.order_status }}
+                            </span>
+                        </td>
+                        <td class="text-xs text-base-content/60">{{ order.timestamp }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 

@@ -3,12 +3,13 @@
 {% block title %}Tradejini Login - OpenAlgo{% endblock %}
 
 {% block content %}
+<!-- Professional Theme Applied -->
 <div class="min-h-[calc(100vh-8rem)] flex items-center justify-center py-8">
     <div class="container mx-auto px-4">
         <div class="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-16">
             <!-- Right side login form - Shown first on mobile -->
             <div class="card flex-shrink-0 w-full max-w-md shadow-2xl bg-base-100 order-1 lg:order-2">
-                <div class="card-body">
+                <div class="p-6">
                     <div class="flex justify-center mb-6">
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
@@ -20,14 +21,14 @@
                             <label class="label">
                                 <span class="label-text">Password</span>
                             </label>
-                            <input type="password" name="password" class="input input-bordered" required>
+                            <input type="password" name="password" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" required>
                         </div>
                         
                         <div class="form-control">
                             <label class="label">
                                 <span class="label-text">2FA Code</span>
                             </label>
-                            <input type="text" name="twofa" class="input input-bordered" required>
+                            <input type="text" name="twofa" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent bg-base-100" required>
                             <label class="label">
                                 <span class="label-text-alt text-info">To get TOTP, login to web app and click 'Having trouble with AppCode/TOTP' in 2FA page</span>
                             </label>
@@ -48,7 +49,7 @@
                         </div>
                         {% endif %}
                         
-                        <button type="submit" class="btn btn-primary w-full">
+                        <button type="submit" class="btn-pro btn-primary w-full">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                             </svg>

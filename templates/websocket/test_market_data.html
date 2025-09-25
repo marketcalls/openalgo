@@ -54,133 +54,133 @@
 {% block content %}
 <div class="space-y-6">
     <!-- Header -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h1 class="card-title text-3xl">WebSocket Market Data Test</h1>
-            <p class="text-base-content/70">Real-time testing for multiple symbols with dynamic symbol management</p>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex items-center border-b border-base-300 pb-4">
+            <h1 class="text-3xl font-semibold">WebSocket Market Data Test</h1>
         </div>
+        <p class="text-base-content/70 mt-4">Real-time testing for multiple symbols with dynamic symbol management</p>
     </div>
 
     <!-- Connection Status -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title text-xl mb-4">Connection Status</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div class="flex items-center">
-                    <span class="text-base-content/70 mr-2">WebSocket:</span>
-                    <span class="connection-indicator status-disconnected"></span>
-                    <span id="websocket-status" class="font-semibold text-error">Disconnected</span>
-                </div>
-                <div class="flex items-center">
-                    <span class="text-base-content/70 mr-2">Subscriptions:</span>
-                    <span id="subscription-count" class="badge badge-primary">0</span>
-                </div>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex items-center border-b border-base-300 pb-4 mb-4">
+            <h2 class="text-xl font-semibold">Connection Status</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="flex items-center">
+                <span class="text-base-content/70 mr-2">WebSocket:</span>
+                <span class="connection-indicator status-disconnected"></span>
+                <span id="websocket-status" class="font-semibold text-error">Disconnected</span>
+            </div>
+            <div class="flex items-center">
+                <span class="text-base-content/70 mr-2">Subscriptions:</span>
+                <span id="subscription-count" class="badge-pro badge-pro-primary">0</span>
             </div>
         </div>
     </div>
 
     <!-- Symbol Management Panel -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title text-xl mb-4">Symbol Management</h2>
-            
-            <!-- Add Symbol Section -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text font-medium">Add Symbol</span>
-                    </label>
-                    <div class="relative">
-                        <input type="text" 
-                               id="symbol-search" 
-                               class="input input-bordered w-full" 
-                               placeholder="Search for symbol..."
-                               autocomplete="off">
-                        <div class="loading-indicator hidden absolute right-3 top-3">
-                            <span class="loading loading-spinner loading-sm"></span>
-                        </div>
-                        <div id="symbol-search-results" class="menu bg-base-200 w-full rounded-box absolute z-50 mt-1 hidden shadow-lg"></div>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex items-center border-b border-base-300 pb-4 mb-4">
+            <h2 class="text-xl font-semibold">Symbol Management</h2>
+        </div>
+
+        <!-- Add Symbol Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-medium">Add Symbol</span>
+                </label>
+                <div class="relative">
+                    <input type="text"
+                           id="symbol-search"
+                           class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary"
+                           placeholder="Search for symbol..."
+                           autocomplete="off">
+                    <div class="loading-indicator hidden absolute right-3 top-3">
+                        <span class="loading loading-spinner loading-sm"></span>
                     </div>
-                </div>
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text font-medium">Exchange</span>
-                    </label>
-                    <select id="exchange-filter" class="select select-bordered w-full">
-                        <option value="">All Exchanges</option>
-                        <option value="NSE">NSE</option>
-                        <option value="NFO">NFO</option>
-                        <option value="BSE">BSE</option>
-                        <option value="BFO">BFO</option>
-                        <option value="CDS">CDS</option>
-                        <option value="MCX">MCX</option>
-                    </select>
+                    <div id="symbol-search-results" class="menu bg-base-200 w-full rounded-box absolute z-50 mt-1 hidden shadow-lg"></div>
                 </div>
             </div>
-            
-            <!-- Active Symbols Display -->
-            <div class="mb-4">
-                <h3 class="font-semibold mb-2">Active Symbols (<span id="active-symbol-count">2</span>)</h3>
-                <div id="active-symbols" class="flex flex-wrap gap-2">
-                    <div class="badge badge-primary gap-2 p-3" data-symbol="RELIANCE" data-exchange="NSE">
-                        NSE:RELIANCE
-                        <button onclick="removeSymbol('RELIANCE', 'NSE')" class="btn btn-ghost btn-xs">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="badge badge-secondary gap-2 p-3" data-symbol="TCS" data-exchange="NSE">
-                        NSE:TCS
-                        <button onclick="removeSymbol('TCS', 'NSE')" class="btn btn-ghost btn-xs">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                            </svg>
-                        </button>
-                    </div>
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-medium">Exchange</span>
+                </label>
+                <select id="exchange-filter" class="w-full px-3 py-2 border border-base-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary">
+                    <option value="">All Exchanges</option>
+                    <option value="NSE">NSE</option>
+                    <option value="NFO">NFO</option>
+                    <option value="BSE">BSE</option>
+                    <option value="BFO">BFO</option>
+                    <option value="CDS">CDS</option>
+                    <option value="MCX">MCX</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Active Symbols Display -->
+        <div class="mb-4">
+            <h3 class="font-semibold mb-2">Active Symbols (<span id="active-symbol-count">2</span>)</h3>
+            <div id="active-symbols" class="flex flex-wrap gap-2">
+                <div class="badge-pro badge-pro-primary gap-2 p-3" data-symbol="RELIANCE" data-exchange="NSE">
+                    NSE:RELIANCE
+                    <button onclick="removeSymbol('RELIANCE', 'NSE')" class="btn-pro btn-pro-ghost btn-pro-xs">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="badge-pro badge-pro-secondary gap-2 p-3" data-symbol="TCS" data-exchange="NSE">
+                    NSE:TCS
+                    <button onclick="removeSymbol('TCS', 'NSE')" class="btn-pro btn-pro-ghost btn-pro-xs">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </div>
     </div>
     
     <!-- Control Panel -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title text-xl mb-4">Control Panel</h2>
-            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                <button onclick="connectWebSocket()" class="btn btn-primary btn-sm">
-                    Connect WebSocket
-                </button>
-                <button onclick="subscribeAll()" class="btn btn-success btn-sm">
-                    Subscribe All
-                </button>
-                <button onclick="subscribeAllLTP()" class="btn btn-info btn-sm">
-                    Subscribe All LTP
-                </button>
-                <button onclick="subscribeAllQuote()" class="btn btn-accent btn-sm">
-                    Subscribe All Quote
-                </button>
-                <button onclick="subscribeAllDepth()" class="btn btn-secondary btn-sm">
-                    Subscribe All Depth
-                </button>
-                <button onclick="unsubscribeAll()" class="btn btn-warning btn-sm">
-                    Unsubscribe All
-                </button>
-            </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-                <button onclick="testSequential()" class="btn btn-outline btn-sm">
-                    Test Sequential
-                </button>
-                <button onclick="showSubscriptions()" class="btn btn-outline btn-sm">
-                    Show Subscriptions
-                </button>
-                <button onclick="clearData()" class="btn btn-error btn-sm">
-                    Clear Data
-                </button>
-                <button onclick="testPerformance()" class="btn btn-outline btn-sm">
-                    Performance Test
-                </button>
-            </div>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex items-center border-b border-base-300 pb-4 mb-4">
+            <h2 class="text-xl font-semibold">Control Panel</h2>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <button onclick="connectWebSocket()" class="btn-pro btn-pro-primary btn-pro-sm">
+                Connect WebSocket
+            </button>
+            <button onclick="subscribeAll()" class="btn-pro btn-pro-secondary btn-pro-sm">
+                Subscribe All
+            </button>
+            <button onclick="subscribeAllLTP()" class="btn-pro btn-pro-primary btn-pro-sm">
+                Subscribe All LTP
+            </button>
+            <button onclick="subscribeAllQuote()" class="btn-pro btn-pro-secondary btn-pro-sm">
+                Subscribe All Quote
+            </button>
+            <button onclick="subscribeAllDepth()" class="btn-pro btn-pro-primary btn-pro-sm">
+                Subscribe All Depth
+            </button>
+            <button onclick="unsubscribeAll()" class="btn-pro btn-pro-danger btn-pro-sm">
+                Unsubscribe All
+            </button>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            <button onclick="testSequential()" class="btn-pro btn-pro-ghost btn-pro-sm">
+                Test Sequential
+            </button>
+            <button onclick="showSubscriptions()" class="btn-pro btn-pro-ghost btn-pro-sm">
+                Show Subscriptions
+            </button>
+            <button onclick="clearData()" class="btn-pro btn-pro-danger btn-pro-sm">
+                Clear Data
+            </button>
+            <button onclick="testPerformance()" class="btn-pro btn-pro-ghost btn-pro-sm">
+                Performance Test
+            </button>
         </div>
     </div>
 
@@ -190,17 +190,15 @@
     </div>
 
     <!-- Event Log -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="card-title text-xl">Event Log</h2>
-                <button onclick="clearLog()" class="btn btn-ghost btn-sm">
-                    Clear Log
-                </button>
-            </div>
-            <div id="event-log" class="mockup-code h-64 overflow-y-auto text-xs">
-                <pre class="text-base-content/70"><code>Waiting for events...</code></pre>
-            </div>
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <div class="flex justify-between items-center border-b border-base-300 pb-4 mb-4">
+            <h2 class="text-xl font-semibold">Event Log</h2>
+            <button onclick="clearLog()" class="btn-pro btn-pro-ghost btn-pro-sm">
+                Clear Log
+            </button>
+        </div>
+        <div id="event-log" class="mockup-code h-64 overflow-y-auto text-xs">
+            <pre class="text-base-content/70"><code>Waiting for events...</code></pre>
         </div>
     </div>
 </div>
@@ -1000,7 +998,7 @@
                     div.innerHTML = `
                         <div class="flex items-center justify-between">
                             <span class="font-medium">${result.symbol}</span>
-                            <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
+                            <span class="badge-pro badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
                         </div>
                         <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
                         <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
@@ -1088,15 +1086,15 @@
         Array.from(activeSymbols).forEach((symbolKey, index) => {
             const [exchange, symbol] = symbolKey.split(':');
             const badge = document.createElement('div');
-            const badgeColors = ['badge-primary', 'badge-secondary', 'badge-accent', 'badge-info', 'badge-success', 'badge-warning'];
+            const badgeColors = ['badge-pro-primary', 'badge-pro-secondary', 'badge-pro-primary', 'badge-pro-secondary', 'badge-pro-primary', 'badge-pro-secondary'];
             const colorClass = badgeColors[index % badgeColors.length];
-            
-            badge.className = `badge ${colorClass} gap-2 p-3`;
+
+            badge.className = `badge-pro ${colorClass} gap-2 p-3`;
             badge.setAttribute('data-symbol', symbol);
             badge.setAttribute('data-exchange', exchange);
             badge.innerHTML = `
                 ${symbolKey}
-                <button onclick="removeSymbol('${symbol}', '${exchange}')" class="btn btn-ghost btn-xs">
+                <button onclick="removeSymbol('${symbol}', '${exchange}')" class="btn-pro btn-pro-ghost btn-pro-xs">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                     </svg>
@@ -1115,112 +1113,104 @@
         const symbolId = symbol.toLowerCase();
         
         const card = document.createElement('div');
-        card.className = 'card bg-base-100 shadow-xl';
+        card.className = 'bg-base-100 border border-base-300 rounded-lg p-6';
         card.setAttribute('data-symbol-card', symbolKey);
         
         card.innerHTML = `
-            <div class="card-body">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="card-title text-xl">${symbolKey}</h3>
-                    <div class="text-xs space-y-2">
-                        <div>
-                            <span class="text-base-content/70">Subscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="subscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-primary btn-xs">LTP</button>
-                                <button onclick="subscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-success btn-xs">Quote</button>
-                                <button onclick="subscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-secondary btn-xs">Depth</button>
-                            </div>
-                        </div>
-                        <div>
-                            <span class="text-base-content/70">Unsubscribe:</span>
-                            <div class="btn-group ml-2">
-                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'LTP')" class="btn btn-error btn-xs">LTP</button>
-                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Quote')" class="btn btn-error btn-xs">Quote</button>
-                                <button onclick="unsubscribe('${symbol}', '${exchange}', 'Depth')" class="btn btn-error btn-xs">Depth</button>
-                            </div>
+            <div class="flex justify-between items-center border-b border-base-300 pb-4 mb-4">
+                <h3 class="text-xl font-semibold">${symbolKey}</h3>
+                <div class="text-xs space-y-2">
+                    <div>
+                        <span class="text-base-content/70">Subscribe:</span>
+                        <div class="btn-group ml-2">
+                            <button onclick="subscribe('${symbol}', '${exchange}', 'LTP')" class="btn-pro btn-pro-primary btn-pro-xs">LTP</button>
+                            <button onclick="subscribe('${symbol}', '${exchange}', 'Quote')" class="btn-pro btn-pro-secondary btn-pro-xs">Quote</button>
+                            <button onclick="subscribe('${symbol}', '${exchange}', 'Depth')" class="btn-pro btn-pro-primary btn-pro-xs">Depth</button>
                         </div>
                     </div>
-                </div>
-                
-                <!-- LTP Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
-                        <div class="grid grid-cols-1 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Price:</span>
-                                <div id="${symbolId}-ltp" class="data-value text-2xl font-bold">-</div>
-                            </div>
-                        </div>
-                        <div class="mt-2">
-                            <span class="text-xs text-base-content/50">Last Update:</span>
-                            <span id="${symbolId}-ltp-time" class="data-value text-xs">-</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Quote Section -->
-                <div class="card bg-base-200 mb-4">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Quote</h4>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <span class="text-xs text-base-content/50">Open:</span>
-                                <div id="${symbolId}-open" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">High:</span>
-                                <div id="${symbolId}-high" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Low:</span>
-                                <div id="${symbolId}-low" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Close:</span>
-                                <div id="${symbolId}-close" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Volume:</span>
-                                <div id="${symbolId}-volume" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Avg Price:</span>
-                                <div id="${symbolId}-average-price" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Buy Qty:</span>
-                                <div id="${symbolId}-total-buy-quantity" class="data-value">-</div>
-                            </div>
-                            <div>
-                                <span class="text-xs text-base-content/50">Sell Qty:</span>
-                                <div id="${symbolId}-total-sell-quantity" class="data-value">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Depth Section -->
-                <div class="card bg-base-200">
-                    <div class="card-body p-4">
-                        <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
-                                <div id="${symbolId}-buy-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
-                            <div>
-                                <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
-                                <div id="${symbolId}-sell-depth" class="text-xs space-y-1">
-                                    <div class="text-base-content/50">No data</div>
-                                </div>
-                            </div>
+                    <div>
+                        <span class="text-base-content/70">Unsubscribe:</span>
+                        <div class="btn-group ml-2">
+                            <button onclick="unsubscribe('${symbol}', '${exchange}', 'LTP')" class="btn-pro btn-pro-danger btn-pro-xs">LTP</button>
+                            <button onclick="unsubscribe('${symbol}', '${exchange}', 'Quote')" class="btn-pro btn-pro-danger btn-pro-xs">Quote</button>
+                            <button onclick="unsubscribe('${symbol}', '${exchange}', 'Depth')" class="btn-pro btn-pro-danger btn-pro-xs">Depth</button>
                         </div>
                     </div>
                 </div>
             </div>
+
+                <!-- LTP Section -->
+                <div class="bg-base-200 border border-base-300 rounded-lg p-4 mb-4">
+                    <h4 class="font-semibold text-sm mb-2">Last Traded Price (LTP)</h4>
+                    <div class="grid grid-cols-1 gap-2">
+                        <div>
+                            <span class="text-xs text-base-content/50">Price:</span>
+                            <div id="${symbolId}-ltp" class="data-value text-2xl font-bold">-</div>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <span class="text-xs text-base-content/50">Last Update:</span>
+                        <span id="${symbolId}-ltp-time" class="data-value text-xs">-</span>
+                    </div>
+                </div>
+
+                <!-- Quote Section -->
+                <div class="bg-base-200 border border-base-300 rounded-lg p-4 mb-4">
+                    <h4 class="font-semibold text-sm mb-2">Quote</h4>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <span class="text-xs text-base-content/50">Open:</span>
+                            <div id="${symbolId}-open" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">High:</span>
+                            <div id="${symbolId}-high" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Low:</span>
+                            <div id="${symbolId}-low" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Close:</span>
+                            <div id="${symbolId}-close" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Volume:</span>
+                            <div id="${symbolId}-volume" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Avg Price:</span>
+                            <div id="${symbolId}-average-price" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Buy Qty:</span>
+                            <div id="${symbolId}-total-buy-quantity" class="data-value">-</div>
+                        </div>
+                        <div>
+                            <span class="text-xs text-base-content/50">Sell Qty:</span>
+                            <div id="${symbolId}-total-sell-quantity" class="data-value">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Depth Section -->
+                <div class="bg-base-200 border border-base-300 rounded-lg p-4">
+                    <h4 class="font-semibold text-sm mb-2">Market Depth</h4>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <h5 class="text-xs font-semibold text-success mb-1">BUY</h5>
+                            <div id="${symbolId}-buy-depth" class="text-xs space-y-1">
+                                <div class="text-base-content/50">No data</div>
+                            </div>
+                        </div>
+                        <div>
+                            <h5 class="text-xs font-semibold text-error mb-1">SELL</h5>
+                            <div id="${symbolId}-sell-depth" class="text-xs space-y-1">
+                                <div class="text-base-content/50">No data</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
         `;
         
         container.appendChild(card);

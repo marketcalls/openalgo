@@ -3,45 +3,62 @@
 {% block title %}Chartink Strategies{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Chartink Strategies</h1>
-        <a href="{{ url_for('chartink_bp.new_strategy') }}" class="btn btn-primary">
-            New Strategy
+<div class="space-y-4">
+    <!-- Professional Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">ChartInk Integration</h1>
+            <p class="text-sm text-base-content/60 mt-1">Automated trading strategies from ChartInk scan alerts</p>
+        </div>
+        <a href="{{ url_for('chartink_bp.new_strategy') }}" class="btn-pro btn-pro-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            Create Strategy
         </a>
     </div>
 
+    <!-- Strategy Grid -->
     {% if strategies %}
-    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {% for strategy in strategies %}
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body min-h-[250px] flex flex-col justify-between">
+        <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+            <div class="min-h-[220px] flex flex-col justify-between">
                 <div>
-                    <h2 class="card-title flex justify-between">
-                        {{ strategy.name }}
-                        <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %}">
+                    <div class="flex justify-between items-start mb-4">
+                        <h2 class="text-lg font-semibold text-base-content">{{ strategy.name }}</h2>
+                        <div class="badge-pro {% if strategy.is_active %}badge-pro-buy{% else %}badge-pro-sell{% endif %}">
                             {{ 'Active' if strategy.is_active else 'Inactive' }}
                         </div>
-                    </h2>
-                    
-                    <div class="text-sm opacity-70 mt-4 space-y-2">
-                        <p>Type: {{ 'Intraday' if strategy.is_intraday else 'Positional' }}</p>
+                    </div>
+
+                    <div class="space-y-2 text-sm text-base-content/70">
+                        <div class="flex justify-between">
+                            <span class="font-medium">Type:</span>
+                            <span>{{ 'Intraday' if strategy.is_intraday else 'Positional' }}</span>
+                        </div>
                         {% if strategy.is_intraday %}
-                        <p>Trading Hours: {{ strategy.start_time }} - {{ strategy.end_time }}</p>
-                        <p>Square Off: {{ strategy.squareoff_time }}</p>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Trading Hours:</span>
+                            <span>{{ strategy.start_time }} - {{ strategy.end_time }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Square Off:</span>
+                            <span>{{ strategy.squareoff_time }}</span>
+                        </div>
                         {% else %}
                         <!-- Spacer divs to maintain consistent height -->
-                        <div class="h-5"></div>
-                        <div class="h-5"></div>
+                        <div class="h-4"></div>
+                        <div class="h-4"></div>
                         {% endif %}
                     </div>
                 </div>
 
-                <div class="card-actions justify-end mt-4 gap-2">
-                    <a href="{{ url_for('chartink_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm flex-1">
+                <div class="flex flex-col gap-2 mt-4 pt-4 border-t border-base-300">
+                    <a href="{{ url_for('chartink_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn-pro btn-pro-sm btn-pro-ghost">
                         Configure Symbols
                     </a>
-                    <a href="{{ url_for('chartink_bp.view_strategy', strategy_id=strategy.id) }}" class="btn btn-primary btn-sm flex-1">
+                    <a href="{{ url_for('chartink_bp.view_strategy', strategy_id=strategy.id) }}" class="btn-pro btn-pro-sm btn-pro-primary">
                         View Details
                     </a>
                 </div>
@@ -49,43 +66,76 @@
         </div>
         {% endfor %}
     </div>
+    </div>
     {% else %}
-    <div class="text-center py-12">
-        <h3 class="text-lg font-semibold mb-2">No strategies found</h3>
-        <p class="text-base-content/70">Create your first strategy to get started</p>
+    <!-- Empty State -->
+    <div class="text-center py-16">
+        <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2-2V7a2 2 0 012-2h2a2 2 0 002-2V3a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 002 2h2a2 2 0 012 2v2a2 2 0 00-2 2h-2a2 2 0 00-2 2v6a2 2 0 01-2 2H11a2 2 0 01-2-2z" />
+        </svg>
+        <h3 class="text-lg font-medium mb-2">No ChartInk Strategies</h3>
+        <p class="text-base-content/60 mb-4">Connect your ChartInk scans to start automated trading</p>
+        <a href="{{ url_for('chartink_bp.new_strategy') }}" class="btn-pro btn-pro-primary">
+            Create First Strategy
+        </a>
     </div>
     {% endif %}
-</div>
 
-<!-- Webhook Setup Instructions -->
-<div class="container mx-auto px-4 py-8">
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title mb-4">How to Setup Webhook in Chartink</h2>
-            <div class="space-y-4">
-                <p>1. Go to your Chartink scan and click "Create/Modify Alert"</p>
-                <p>2. In the alert form, find the "Webhook URL" field</p>
-                <p>3. Enter your webhook URL in the format:</p>
-                <div class="mockup-code cursor-pointer" id="webhookUrl">
-                    <pre><code>{{ request.host_url }}chartink/webhook/YOUR_WEBHOOK_ID</code></pre>
-                    <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                        Click to copy
-                    </div>
+    <!-- Integration Setup Guide -->
+    <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+        <h2 class="text-lg font-semibold text-base-content mb-4">ChartInk Webhook Setup</h2>
+        <div class="space-y-4 text-sm">
+            <div class="step">
+                <span class="font-semibold text-primary">1.</span> Go to your ChartInk scan and click "Create/Modify Alert"
+            </div>
+            <div class="step">
+                <span class="font-semibold text-primary">2.</span> In the alert form, find the "Webhook URL" field
+            </div>
+            <div class="step">
+                <span class="font-semibold text-primary">3.</span> Enter your webhook URL in the format:
+            </div>
+
+            <div class="bg-base-200 border border-base-300 rounded-lg p-4 cursor-pointer hover:bg-base-300 transition-colors relative" id="webhookUrl">
+                <code class="text-sm font-mono">{{ request.host_url }}chartink/webhook/YOUR_WEBHOOK_ID</code>
+                <div class="absolute right-2 top-1/2 -translate-y-1/2 text-xs bg-base-100 px-2 py-1 rounded border hidden copy-hint">
+                    Click to copy
                 </div>
-                <p>4. Replace YOUR_WEBHOOK_ID with the webhook ID from your strategy details</p>
-                <p>5. Save the alert settings</p>
-                <div class="alert alert-info mt-4">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+
+            <div class="step">
+                <span class="font-semibold text-primary">4.</span> Replace YOUR_WEBHOOK_ID with the webhook ID from your strategy details
+            </div>
+            <div class="step">
+                <span class="font-semibold text-primary">5.</span> Save the alert settings
+            </div>
+
+            <div class="bg-primary/10 border border-primary/30 rounded-lg p-4 mt-6">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-primary mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
                     <div>
-                        <h3 class="font-bold">Alert Name Keywords</h3>
-                        <p class="text-sm mt-2">Include one of these keywords in your alert name:</p>
-                        <ul class="list-disc list-inside text-sm mt-2">
-                            <li><span class="font-semibold">BUY</span> - For long entry</li>
-                            <li><span class="font-semibold">SELL</span> - For long exit</li>
-                            <li><span class="font-semibold">SHORT</span> - For short entry</li>
-                            <li><span class="font-semibold">COVER</span> - For short cover</li>
-                        </ul>
-                        <p class="text-sm mt-2">Keywords are not case-sensitive and can be anywhere in the alert name.</p>
+                        <h3 class="font-semibold text-primary mb-2">Alert Name Keywords</h3>
+                        <p class="text-xs text-primary/80 mb-3">Include one of these keywords in your alert name:</p>
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-pro-buy badge-pro-xs">BUY</span>
+                                <span>Long entry</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-pro-sell badge-pro-xs">SELL</span>
+                                <span>Long exit</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-pro-warning badge-pro-xs">SHORT</span>
+                                <span>Short entry</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="badge-pro badge-pro-primary badge-pro-xs">COVER</span>
+                                <span>Short cover</span>
+                            </div>
+                        </div>
+                        <p class="text-xs text-primary/80 mt-2">Keywords are not case-sensitive and can be anywhere in the alert name.</p>
                     </div>
                 </div>
             </div>
@@ -119,21 +169,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function showToast(type, message) {
-    const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
-    const icon = type === 'success' ? 
-        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
-        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
-
-    const toast = document.createElement('div');
-    toast.className = 'toast toast-end z-50';
-    toast.innerHTML = `
-        <div class="alert ${alertClass}">
-            ${icon}
-            <span>${message}</span>
-        </div>
-    `;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+    // Use global showToast if available, otherwise create simple alert
+    if (window.showToast) {
+        window.showToast(message, type);
+    } else {
+        alert(message);
+    }
 }
 </script>
 {% endblock %}

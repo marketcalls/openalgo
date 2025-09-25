@@ -1,198 +1,340 @@
 {% extends "base.html" %}
 
-{% block head %}
-<style>
-    .search-results {
-        @apply absolute w-full max-h-[300px] overflow-y-auto bg-base-100 border border-base-200 rounded-lg shadow-lg z-50;
-        display: none;
-        top: 100%;
-        margin-top: 4px;
-    }
-
-    .result-item {
-        @apply p-4 border-b border-base-200 hover:bg-base-200 cursor-pointer transition-all duration-200;
-    }
-
-    .result-item:last-child {
-        @apply border-b-0;
-    }
-
-    .loading-indicator {
-        @apply absolute right-3 top-1/2 -translate-y-1/2;
-        display: none;
-    }
-
-    .search-tips {
-        @apply mt-8 p-4 bg-base-200 rounded-lg;
-    }
-
-    .search-tips ul {
-        @apply mt-2 space-y-2;
-    }
-
-    .search-tips li {
-        @apply flex items-center gap-2;
-    }
-
-    .search-tips li::before {
-        content: "•";
-        @apply text-primary;
-    }
-</style>
-{% endblock %}
-
 {% block content %}
-<div class="max-w-3xl mx-auto">
-    <!-- Header -->
-    <div class="section-header text-center">
-        <h1 class="text-3xl font-bold">Symbol Search</h1>
-        <p class="text-base-content/60 mt-2">Search for symbols across different exchanges to get detailed information</p>
-    </div>
+<!-- Professional Symbol Search -->
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
+        <div>
+            <h1 class="text-2xl font-bold text-base-content">Symbol Search</h1>
+            <p class="text-sm text-base-content/60 mt-1">Search for trading instruments across all exchanges</p>
+        </div>
 
-    <!-- Search Form -->
-    <div class="card bg-base-100 shadow-lg">
-        <div class="card-body">
-            <form action="{{ url_for('search_bp.search') }}" method="get" id="searchForm" class="space-y-6">
-                <!-- Symbol Search -->
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text">Symbol, Name, or Token</span>
-                    </label>
-                    <div class="relative">
-                        <input type="text" 
-                               name="symbol" 
-                               id="symbolSearch" 
-                               required 
-                               class="input input-bordered w-full pr-10" 
-                               placeholder="Enter your search query..."
-                               autocomplete="off">
-                        <div class="loading-indicator">
-                            <span class="loading loading-spinner loading-sm"></span>
-                        </div>
-                        <div id="searchResults" class="search-results"></div>
-                    </div>
-                </div>
-
-                <!-- Exchange Select -->
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text">Exchange</span>
-                    </label>
-                    <select name="exchange" id="exchangeSelect" required class="select select-bordered w-full">
-                        <option value="">Select Exchange</option>
-                        <option value="NSE">NSE - National Stock Exchange</option>
-                        <option value="NFO">NFO - NSE Futures & Options</option>
-                        <option value="BSE">BSE - Bombay Stock Exchange</option>
-                        <option value="BFO">BFO - BSE Futures & Options</option>
-                        <option value="CDS">CDS - Currency Derivatives</option>
-                        <option value="MCX">MCX - Multi Commodity Exchange</option>
-                        <option value="NSE_INDEX">NSE_INDEX - National Stock Exchange Index</option>
-                        <option value="BSE_INDEX">BSE_INDEX - Bombay Stock Exchange Index</option>
-                    </select>
-                </div>
-
-                <!-- Search Button -->
-                <button type="submit" class="btn btn-primary w-full gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                    Search Symbol
-                </button>
-            </form>
+        <!-- Quick Stats -->
+        <div class="flex items-center gap-2">
+            <span class="badge-pro badge-info">Live Search</span>
         </div>
     </div>
 
-    <!-- Search Tips -->
-    <div class="search-tips">
-        <div class="flex items-start gap-3">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div>
-                <h3 class="font-bold text-lg">Search Tips</h3>
-                <ul class="text-base-content/70">
-                    <li>Search by symbol name (e.g., RELIANCE, INFY)</li>
-                    <li>Search by company name (e.g., Reliance Industries)</li>
-                    <li>Search by token number</li>
-                    <li>Select appropriate exchange for accurate results</li>
-                </ul>
+    <!-- Main Search Interface -->
+    <div class="max-w-4xl mx-auto">
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
+                <form action="{{ url_for('search_bp.search') }}" method="get" id="searchForm" class="space-y-6">
+                    <!-- Advanced Search Section -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Symbol Search Input -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-base-content">Symbol / Company Name / Token</label>
+                            <div class="relative">
+                                <input type="text"
+                                       name="symbol"
+                                       id="symbolSearch"
+                                       required
+                                       class="input input-bordered w-full pr-12"
+                                       placeholder="Start typing to search..."
+                                       autocomplete="off"
+                                       value="{{ request.args.get('symbol', '') }}">
+                                <!-- Search Icon -->
+                                <div class="absolute right-3 top-1/2 -translate-y-1/2">
+                                    <svg class="w-5 h-5 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </div>
+                                <!-- Loading Indicator -->
+                                <div class="loading-indicator absolute right-3 top-1/2 -translate-y-1/2 hidden">
+                                    <span class="loading loading-spinner loading-sm"></span>
+                                </div>
+                                <!-- Live Search Results -->
+                                <div id="searchResults" class="search-results absolute w-full bg-base-100 border border-base-300 rounded-lg shadow-lg z-50 mt-1 hidden max-h-80 overflow-y-auto"></div>
+                            </div>
+                        </div>
+
+                        <!-- Exchange Selector -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-base-content">Exchange</label>
+                            <select name="exchange" id="exchangeSelect" required class="select select-bordered w-full">
+                                <option value="">Select Exchange</option>
+                                <option value="NSE" {% if request.args.get('exchange') == 'NSE' %}selected{% endif %}>NSE - National Stock Exchange</option>
+                                <option value="NFO" {% if request.args.get('exchange') == 'NFO' %}selected{% endif %}>NFO - NSE Futures & Options</option>
+                                <option value="BSE" {% if request.args.get('exchange') == 'BSE' %}selected{% endif %}>BSE - Bombay Stock Exchange</option>
+                                <option value="BFO" {% if request.args.get('exchange') == 'BFO' %}selected{% endif %}>BFO - BSE Futures & Options</option>
+                                <option value="CDS" {% if request.args.get('exchange') == 'CDS' %}selected{% endif %}>CDS - Currency Derivatives</option>
+                                <option value="MCX" {% if request.args.get('exchange') == 'MCX' %}selected{% endif %}>MCX - Multi Commodity Exchange</option>
+                                <option value="NSE_INDEX" {% if request.args.get('exchange') == 'NSE_INDEX' %}selected{% endif %}>NSE_INDEX - NSE Index</option>
+                                <option value="BSE_INDEX" {% if request.args.get('exchange') == 'BSE_INDEX' %}selected{% endif %}>BSE_INDEX - BSE Index</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Search Button -->
+                    <div class="flex justify-center">
+                        <button type="submit" class="btn-pro btn-primary px-8">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            Search Instruments
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Search Tips & Information -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+            <!-- Search Tips -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-info mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div>
+                        <h3 class="font-semibold text-info mb-2">Search Tips</h3>
+                        <ul class="text-sm text-base-content/70 space-y-1">
+                            <li class="flex items-center gap-2">
+                                <span class="w-1 h-1 bg-primary rounded-full"></span>
+                                Search by symbol (e.g., RELIANCE, INFY)
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="w-1 h-1 bg-primary rounded-full"></span>
+                                Search by company name (e.g., Reliance Industries)
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="w-1 h-1 bg-primary rounded-full"></span>
+                                Search by token number
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="w-1 h-1 bg-primary rounded-full"></span>
+                                Use live autocomplete for quick selection
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Exchange Information -->
+            <div class="bg-base-100 border border-base-300 rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-primary mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                    <div>
+                        <h3 class="font-semibold text-primary mb-2">Available Exchanges</h3>
+                        <div class="grid grid-cols-2 gap-2 text-sm text-base-content/70">
+                            <span class="badge-pro badge-sm">NSE - Stocks</span>
+                            <span class="badge-pro badge-sm">NFO - F&O</span>
+                            <span class="badge-pro badge-sm">BSE - Stocks</span>
+                            <span class="badge-pro badge-sm">BFO - F&O</span>
+                            <span class="badge-pro badge-sm">CDS - Currency</span>
+                            <span class="badge-pro badge-sm">MCX - Commodity</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
+{% block head %}
+<style>
+.search-results {
+    transform: translateY(2px);
+}
+.result-item {
+    padding: 0.75rem;
+    border-bottom: 1px solid hsl(var(--bc) / 0.1);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.result-item:hover {
+    background-color: hsl(var(--b2));
+}
+.result-item:last-child {
+    border-bottom: none;
+}
+</style>
+
 <script>
-let debounceTimeout;
-const loadingIndicator = document.querySelector('.loading-indicator');
-const symbolInput = document.getElementById('symbolSearch');
-const searchResults = document.getElementById('searchResults');
-const exchangeSelect = document.getElementById('exchangeSelect');
-
-symbolInput.addEventListener('input', function(e) {
-    clearTimeout(debounceTimeout);
-    const query = e.target.value.trim();
-    const exchange = exchangeSelect.value;
-    
-    if (query.length < 2) {
-        searchResults.style.display = 'none';
-        return;
+// Professional live search functionality
+class SymbolSearchManager {
+    constructor() {
+        this.debounceTimeout = null;
+        this.currentRequest = null;
+        this.init();
     }
-    
-    debounceTimeout = setTimeout(() => {
-        fetchSearchResults(query, exchange);
-    }, 300);
-});
 
-exchangeSelect.addEventListener('change', function(e) {
-    const query = symbolInput.value.trim();
-    if (query.length >= 2) {
-        fetchSearchResults(query, e.target.value);
+    init() {
+        this.loadingIndicator = document.querySelector('.loading-indicator');
+        this.symbolInput = document.getElementById('symbolSearch');
+        this.searchResults = document.getElementById('searchResults');
+        this.exchangeSelect = document.getElementById('exchangeSelect');
+
+        // Event listeners
+        this.symbolInput.addEventListener('input', (e) => this.handleInput(e));
+        this.exchangeSelect.addEventListener('change', (e) => this.handleExchangeChange(e));
+        document.addEventListener('click', (e) => this.handleOutsideClick(e));
+
+        // Form submission
+        document.getElementById('searchForm').addEventListener('submit', (e) => this.handleSubmit(e));
     }
-});
 
-document.addEventListener('click', function(e) {
-    if (!symbolInput.contains(e.target) && !searchResults.contains(e.target)) {
-        searchResults.style.display = 'none';
-    }
-});
+    handleInput(e) {
+        clearTimeout(this.debounceTimeout);
+        const query = e.target.value.trim();
+        const exchange = this.exchangeSelect.value;
 
-async function fetchSearchResults(query, exchange) {
-    try {
-        loadingIndicator.style.display = 'block';
-        const response = await fetch(`{{ url_for('search_bp.api_search') }}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
-        const data = await response.json();
-        
-        searchResults.innerHTML = '';
-        
-        if (data.results.length > 0) {
-            data.results.forEach(result => {
-                const div = document.createElement('div');
-                div.className = 'result-item';
-                div.innerHTML = `
-                    <div class="flex items-center justify-between">
-                        <span class="font-medium">${result.symbol}</span>
-                        <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
-                    </div>
-                    <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
-                    <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
-                `;
-                div.addEventListener('click', () => {
-                    symbolInput.value = result.symbol;
-                    exchangeSelect.value = result.exchange;
-                    searchResults.style.display = 'none';
-                });
-                searchResults.appendChild(div);
-            });
-            searchResults.style.display = 'block';
-        } else {
-            searchResults.style.display = 'none';
+        if (query.length < 2) {
+            this.hideResults();
+            return;
         }
-    } catch (error) {
-        console.error('Error:', error);
-        showToast('Error fetching search results', 'error');
-    } finally {
-        loadingIndicator.style.display = 'none';
+
+        this.debounceTimeout = setTimeout(() => {
+            this.fetchSearchResults(query, exchange);
+        }, 300);
+    }
+
+    handleExchangeChange(e) {
+        const query = this.symbolInput.value.trim();
+        if (query.length >= 2) {
+            this.fetchSearchResults(query, e.target.value);
+        }
+    }
+
+    handleOutsideClick(e) {
+        if (!this.symbolInput.contains(e.target) && !this.searchResults.contains(e.target)) {
+            this.hideResults();
+        }
+    }
+
+    handleSubmit(e) {
+        // Add loading state to button
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.classList.add('loading');
+    }
+
+    showLoading() {
+        this.loadingIndicator.classList.remove('hidden');
+        this.loadingIndicator.previousElementSibling.classList.add('hidden'); // Hide search icon
+    }
+
+    hideLoading() {
+        this.loadingIndicator.classList.add('hidden');
+        this.loadingIndicator.previousElementSibling.classList.remove('hidden'); // Show search icon
+    }
+
+    showResults() {
+        this.searchResults.classList.remove('hidden');
+    }
+
+    hideResults() {
+        this.searchResults.classList.add('hidden');
+    }
+
+    async fetchSearchResults(query, exchange) {
+        try {
+            // Cancel previous request
+            if (this.currentRequest) {
+                this.currentRequest.abort();
+            }
+
+            // Create new request
+            const controller = new AbortController();
+            this.currentRequest = controller;
+
+            this.showLoading();
+
+            const url = `{{ url_for('search_bp.api_search') }}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`;
+            const response = await fetch(url, {
+                signal: controller.signal
+            });
+
+            const data = await response.json();
+            this.renderResults(data.results || []);
+
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                console.error('Search error:', error);
+                showToast('Error fetching search results', 'error');
+            }
+        } finally {
+            this.hideLoading();
+            this.currentRequest = null;
+        }
+    }
+
+    renderResults(results) {
+        this.searchResults.innerHTML = '';
+
+        if (results.length === 0) {
+            this.searchResults.innerHTML = `
+                <div class="p-4 text-center text-base-content/60">
+                    <svg class="w-8 h-8 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    No matching symbols found
+                </div>
+            `;
+            this.showResults();
+            return;
+        }
+
+        results.slice(0, 10).forEach(result => { // Limit to 10 results
+            const div = document.createElement('div');
+            div.className = 'result-item';
+            div.innerHTML = `
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-semibold text-base-content">${this.escapeHtml(result.symbol)}</span>
+                    <span class="badge-pro badge-sm">${this.escapeHtml(result.exchange)}</span>
+                </div>
+                ${result.name ? `<div class="text-sm text-base-content/70 mb-1">${this.escapeHtml(result.name)}</div>` : ''}
+                <div class="flex items-center justify-between text-xs text-base-content/60">
+                    <span>Token: ${this.escapeHtml(result.token)}</span>
+                    ${result.lotsize ? `<span>Lot: ${this.escapeHtml(result.lotsize)}</span>` : ''}
+                </div>
+            `;
+
+            div.addEventListener('click', () => {
+                this.selectResult(result);
+            });
+
+            this.searchResults.appendChild(div);
+        });
+
+        this.showResults();
+    }
+
+    selectResult(result) {
+        this.symbolInput.value = result.symbol;
+        this.exchangeSelect.value = result.exchange;
+        this.hideResults();
+
+        // Optional: Show success feedback
+        showToast(`Selected ${result.symbol} from ${result.exchange}`, 'success');
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 }
+
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    window.symbolSearchManager = new SymbolSearchManager();
+
+    // URL parameter handling
+    const urlParams = new URLSearchParams(window.location.search);
+    const symbol = urlParams.get('symbol');
+    const exchange = urlParams.get('exchange');
+
+    if (symbol) {
+        document.getElementById('symbolSearch').value = symbol;
+    }
+    if (exchange) {
+        document.getElementById('exchangeSelect').value = exchange;
+    }
+});
 </script>
+{% endblock %}
 {% endblock %}

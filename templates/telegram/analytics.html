@@ -5,11 +5,12 @@
 {% endblock %}
 
 {% block content %}
+<!-- Professional Theme Applied -->
 <div class="container mx-auto p-4">
     <!-- Header -->
     <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold">Telegram Bot Analytics</h1>
-        <a href="{{ url_for('telegram_bp.index') }}" class="btn btn-ghost">
+        <h1 class="text-2xl font-bold text-base-content">Telegram Bot Analytics</h1>
+        <a href="{{ url_for('telegram_bp.index') }}" class="btn-pro btn-ghost">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
             </svg>
@@ -20,31 +21,31 @@
     <!-- Overview Stats -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <div class="stats shadow">
-            <div class="stat">
-                <div class="stat-title">Total Users</div>
-                <div class="stat-value text-primary">{{ analytics.total_users }}</div>
-                <div class="stat-desc">Registered users</div>
+            <div class="metric-card">
+                <div class="metric-label">Total Users</div>
+                <div class="metric-value text-primary">{{ analytics.total_users }}</div>
+                <div class="metric-change">Registered users</div>
             </div>
         </div>
         <div class="stats shadow">
-            <div class="stat">
-                <div class="stat-title">Active Users</div>
-                <div class="stat-value text-secondary">{{ analytics.active_users }}</div>
-                <div class="stat-desc">With notifications</div>
+            <div class="metric-card">
+                <div class="metric-label">Active Users</div>
+                <div class="metric-value text-secondary">{{ analytics.active_users }}</div>
+                <div class="metric-change">With notifications</div>
             </div>
         </div>
         <div class="stats shadow">
-            <div class="stat">
-                <div class="stat-title">Commands (7d)</div>
-                <div class="stat-value text-accent">{{ analytics.stats_7d.total_commands }}</div>
-                <div class="stat-desc">Last 7 days</div>
+            <div class="metric-card">
+                <div class="metric-label">Commands (7d)</div>
+                <div class="metric-value text-accent">{{ analytics.stats_7d.total_commands }}</div>
+                <div class="metric-change">Last 7 days</div>
             </div>
         </div>
         <div class="stats shadow">
-            <div class="stat">
-                <div class="stat-title">Commands (30d)</div>
-                <div class="stat-value text-info">{{ analytics.stats_30d.total_commands }}</div>
-                <div class="stat-desc">Last 30 days</div>
+            <div class="metric-card">
+                <div class="metric-label">Commands (30d)</div>
+                <div class="metric-value text-info">{{ analytics.stats_30d.total_commands }}</div>
+                <div class="metric-change">Last 30 days</div>
             </div>
         </div>
     </div>
@@ -52,17 +53,17 @@
     <!-- Charts Row -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <!-- Command Distribution Chart -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <h2 class="card-title">Command Distribution (7 days)</h2>
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">Command Distribution (7 days)</h2>
                 <canvas id="commandChart"></canvas>
             </div>
         </div>
 
         <!-- Activity Comparison Chart -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <h2 class="card-title">Activity Comparison</h2>
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">Activity Comparison</h2>
                 <canvas id="activityChart"></canvas>
             </div>
         </div>
@@ -70,7 +71,7 @@
 
     <!-- Command Details Table -->
     <div class="card bg-base-100 shadow-xl mb-6">
-        <div class="card-body">
+        <div class="p-6">
             <h2 class="card-title text-xl mb-4">Command Usage Details</h2>
             <div class="tabs tabs-boxed mb-4">
                 <a class="tab tab-active" onclick="showPeriod('7d')">Last 7 Days</a>
@@ -142,8 +143,8 @@
     <!-- User Activity Analysis -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <!-- Most Active Users -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
                 <h2 class="card-title text-xl mb-4">Most Active Users (30 days)</h2>
                 {% if analytics.stats_30d.top_users %}
                 <div class="overflow-x-auto">
@@ -171,7 +172,7 @@
                                 </td>
                                 <td>@{{ username or 'Unknown' }}</td>
                                 <td>
-                                    <span class="badge badge-primary">{{ count }}</span>
+                                    <span class="badge-pro badge-primary">{{ count }}</span>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -185,8 +186,8 @@
         </div>
 
         <!-- User Engagement -->
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
+        <div class="bg-base-100 border border-base-300 rounded-lg">
+            <div class="p-6">
                 <h2 class="card-title text-xl mb-4">User Engagement</h2>
                 <div class="space-y-4">
                     <div>
@@ -213,15 +214,15 @@
                     </div>
                     <div class="divider"></div>
                     <div class="stats stats-vertical w-full">
-                        <div class="stat">
-                            <div class="stat-title">Avg Commands/User (7d)</div>
-                            <div class="stat-value text-lg">
+                        <div class="metric-card">
+                            <div class="metric-label">Avg Commands/User (7d)</div>
+                            <div class="metric-value text-lg">
                                 {{ "%.1f"|format(analytics.stats_7d.total_commands / analytics.stats_7d.active_users) if analytics.stats_7d.active_users > 0 else 0 }}
                             </div>
                         </div>
-                        <div class="stat">
-                            <div class="stat-title">Avg Commands/User (30d)</div>
-                            <div class="stat-value text-lg">
+                        <div class="metric-card">
+                            <div class="metric-label">Avg Commands/User (30d)</div>
+                            <div class="metric-value text-lg">
                                 {{ "%.1f"|format(analytics.stats_30d.total_commands / analytics.stats_30d.active_users) if analytics.stats_30d.active_users > 0 else 0 }}
                             </div>
                         </div>

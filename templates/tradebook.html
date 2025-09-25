@@ -2,156 +2,187 @@
 
 {% block head %}
 <style>
-    .table-container {
-        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg mt-8;
+    /* Professional Tradebook Styles */
+    .trade-stats-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     }
 
-    .table-header {
-        @apply sticky top-0 bg-base-200 z-10;
+    @media (min-width: 1280px) {
+        .trade-stats-grid {
+            grid-template-columns: repeat(4, 1fr);
+        }
     }
 
-    .numeric-cell {
-        @apply font-mono text-right;
+    .trade-table {
+        font-size: 0.875rem;
     }
 
-    .trade-time {
-        @apply text-sm text-base-content/70;
+    .trade-table th {
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.025em;
+    }
+
+    .trade-table td {
+        padding: 0.5rem 0.75rem;
+    }
+
+    .trade-row:hover {
+        background-color: var(--base-200);
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full">
-    <!-- Header Section -->
-    <div class="mb-6 flex justify-between items-center">
+<div class="space-y-4">
+    <!-- Professional Tradebook Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-base-300">
         <div>
-            <h1 class="text-3xl font-bold">Trade Book</h1>
-            <p class="text-base-content/60">View your executed trades</p>
+            <h1 class="text-2xl font-bold text-base-content">Trade Book</h1>
+            <p class="text-sm text-base-content/60 mt-1">Complete record of executed trades</p>
         </div>
-        <a href="{{ url_for('orders_bp.export_tradebook') }}" class="btn btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+        <a href="{{ url_for('orders_bp.export_tradebook') }}" class="btn-pro btn-secondary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Export to CSV
+            <span>Export CSV</span>
         </a>
     </div>
 
-    <!-- Trade Summary -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div class="stat">
-            <div class="stat-title">Total Trades</div>
-            <div class="stat-value">{{ tradebook_data|length }}</div>
-            <div class="stat-desc">All executed trades</div>
-        </div>
-        
-        <div class="stat">
-            <div class="stat-title">Buy Trades</div>
-            <div class="stat-value text-success">
-                {{ tradebook_data|selectattr('action', 'equalto', 'BUY')|list|length }}
+    <!-- Professional Trade Statistics -->
+    <div class="trade-stats-grid">
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Total Trades</span>
+                <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
             </div>
-            <div class="stat-desc">
-                <div class="badge badge-success gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                    </svg>
-                    Long positions
-                </div>
+            <div class="metric-value">
+                <span class="font-mono">{{ tradebook_data|length }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro badge-info">EXECUTED</span>
             </div>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">Sell Trades</div>
-            <div class="stat-value text-error">
-                {{ tradebook_data|selectattr('action', 'equalto', 'SELL')|list|length }}
+
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Buy Trades</span>
+                <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
             </div>
-            <div class="stat-desc">
-                <div class="badge badge-error gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                    </svg>
-                    Short positions
-                </div>
+            <div class="metric-value text-success">
+                <span class="font-mono">{{ tradebook_data|selectattr('action', 'equalto', 'BUY')|list|length }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro badge-success">LONG</span>
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Sell Trades</span>
+                <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                </svg>
+            </div>
+            <div class="metric-value text-error">
+                <span class="font-mono">{{ tradebook_data|selectattr('action', 'equalto', 'SELL')|list|length }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro badge-error">SHORT</span>
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-header">
+                <span class="metric-label">Total Volume</span>
+                <svg class="w-4 h-4 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+            </div>
+            <div class="metric-value">
+                <span class="text-xs">₹</span>
+                <span class="font-mono">{{ tradebook_data|sum(attribute='trade_value')|default('0.00') }}</span>
+            </div>
+            <div class="metric-change">
+                <span class="badge-pro">TRADED</span>
             </div>
         </div>
     </div>
 
-    <!-- Trades Table -->
-    <div class="table-container">
-        <table class="table w-full">
-            <thead class="table-header">
-                <tr>
-                    <th class="cursor-pointer hover:bg-base-300">
-                        Trading Symbol
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                        </svg>
-                    </th>
-                    <th>Exchange</th>
-                    <th>Product Type</th>
-                    <th>Transaction Type</th>
-                    <th>Fill Size</th>
-                    <th>Fill Price</th>
-                    <th>Trade Value</th>
-                    <th>Order ID</th>
-                    <th>Fill Time</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for trade in tradebook_data %}
-                <tr class="hover:bg-base-200">
-                    <td class="font-medium">{{ trade.symbol }}</td>
-                    <td>
-                        {% set exchange_colors = {
-                            'NSE': 'badge-accent',
-                            'BSE': 'badge-neutral',
-                            'NFO': 'badge-secondary',
-                            'MCX': 'badge-primary'
-                        } %}
-                        <div class="badge {{ exchange_colors.get(trade.exchange, 'badge-ghost') }}">
-                            {{ trade.exchange }}
-                        </div>
-                    </td>
-                    <td>
-                        {% set product_type_colors = {
-                            'CNC': 'badge-secondary',
-                            'MIS': 'badge-accent',
-                            'NRML': 'badge-neutral'
-                        } %}
-                        <div class="badge {{ product_type_colors.get(trade.product, 'badge-ghost') }}">
-                            {{ trade.product }}
-                        </div>
-                    </td>
-                    <td>
-                        <div class="badge {% if trade.action == 'BUY' %}badge-success{% else %}badge-error{% endif %} gap-2">
-                            {% if trade.action == 'BUY' %}
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                            </svg>
-                            {% else %}
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                            </svg>
-                            {% endif %}
-                            {{ trade.action }}
-                        </div>
-                    </td>
-                    <td class="numeric-cell">{{ trade.quantity }}</td>
-                    <td class="numeric-cell">{{ trade.average_price }}</td>
-                    <td class="numeric-cell">{{ trade.trade_value }}</td>
-                    <td class="font-mono text-sm">{{ trade.orderid }}</td>
-                    <td class="trade-time">{{ trade.timestamp }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <!-- Professional Trades Table -->
+    <div class="bg-base-100 border border-base-300 rounded-lg overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="data-table trade-table w-full">
+                <thead>
+                    <tr>
+                        <th class="cursor-pointer hover:bg-base-200 transition-colors">
+                            <div class="flex items-center gap-1">
+                                <span>Symbol</span>
+                                <svg class="w-3 h-3 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th>Exchange</th>
+                        <th>Product</th>
+                        <th>Side</th>
+                        <th class="text-right">Qty</th>
+                        <th class="text-right">Price</th>
+                        <th class="text-right">Value</th>
+                        <th>Order ID</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for trade in tradebook_data %}
+                    <tr class="trade-row transition-colors">
+                        <td class="font-medium font-mono">{{ trade.symbol }}</td>
+                        <td>
+                            {% set exchange_colors = {
+                                'NSE': 'badge-info',
+                                'BSE': 'badge-secondary',
+                                'NFO': 'badge-warning',
+                                'MCX': 'badge-primary'
+                            } %}
+                            <span class="badge-pro {{ exchange_colors.get(trade.exchange, '') }}">
+                                {{ trade.exchange }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge-pro bg-base-200 text-base-content">
+                                {{ trade.product }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="font-semibold {% if trade.action == 'BUY' %}text-success{% else %}text-error{% endif %}">
+                                {{ trade.action }}
+                            </span>
+                        </td>
+                        <td class="text-right font-mono text-sm">{{ trade.quantity }}</td>
+                        <td class="text-right font-mono text-sm">{{ trade.average_price }}</td>
+                        <td class="text-right font-mono text-sm font-semibold">{{ trade.trade_value }}</td>
+                        <td class="font-mono text-xs text-base-content/60">{{ trade.orderid }}</td>
+                        <td class="text-xs text-base-content/60">{{ trade.timestamp }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <!-- Pagination -->
-    <div class="flex justify-end mt-6">
-        <div class="join">
-            <button class="join-item btn btn-sm">«</button>
-            <button class="join-item btn btn-sm">Page 1</button>
-            <button class="join-item btn btn-sm">»</button>
+    <!-- Professional Pagination -->
+    <div class="flex justify-center mt-6">
+        <div class="flex gap-2">
+            <button class="btn-pro btn-secondary btn-sm" disabled>Previous</button>
+            <button class="btn-pro btn-primary btn-sm">1</button>
+            <button class="btn-pro btn-secondary btn-sm">Next</button>
         </div>
     </div>
 </div>
