@@ -690,6 +690,8 @@ def unschedule_strategy(strategy_id):
 @python_strategy_bp.route('/')
 def index():
     """Main dashboard"""
+    # Ensure initialization is done when first accessed
+    initialize_with_app_context()
     cleanup_dead_processes()
     
     strategies = []
@@ -790,6 +792,8 @@ def new_strategy():
 @python_strategy_bp.route('/start/<strategy_id>', methods=['POST'])
 def start_strategy(strategy_id):
     """Start a strategy"""
+    # Ensure initialization is done when starting strategies
+    initialize_with_app_context()
     success, message = start_strategy_process(strategy_id)
     return jsonify({'success': success, 'message': message})
 
@@ -1434,23 +1438,44 @@ def restore_strategies_after_login():
     logger.info(f"Post-login strategy restoration: {message}")
     return success, message
 
-# Initialize on import
+# Initialize basic components on import (no database access)
 ensure_directories()
 load_configs()
-restore_strategy_states()  # Restore previous session state
 init_scheduler()
 
-# Restore scheduled strategies on startup
-for strategy_id, config in STRATEGY_CONFIGS.items():
-    if config.get('is_scheduled'):
-        start_time = config.get('schedule_start')
-        stop_time = config.get('schedule_stop')
-        days = config.get('schedule_days', ['mon', 'tue', 'wed', 'thu', 'fri'])
-        if start_time:
-            try:
-                schedule_strategy(strategy_id, start_time, stop_time, days)
-                logger.info(f"Restored schedule for strategy {strategy_id} at {start_time} IST")
-            except Exception as e:
-                logger.error(f"Failed to restore schedule for {strategy_id}: {e}")
+# Flag to track if full initialization has been done
+_initialized = False
 
-logger.info(f"Python Strategy System initialized on {OS_TYPE}")
+def initialize_with_app_context():
+    """Initialize components that require app context/database access"""
+    global _initialized
+    if _initialized:
+        return
+    _initialized = True
+
+    try:
+        # Now safe to restore strategy states (requires database)
+        restore_strategy_states()
+
+        # Restore scheduled strategies
+        for strategy_id, config in STRATEGY_CONFIGS.items():
+            if config.get('is_scheduled'):
+                start_time = config.get('schedule_start')
+                stop_time = config.get('schedule_stop')
+                days = config.get('schedule_days', ['mon', 'tue', 'wed', 'thu', 'fri'])
+                if start_time:
+                    try:
+                        schedule_strategy(strategy_id, start_time, stop_time, days)
+                        logger.info(f"Restored schedule for strategy {strategy_id} at {start_time} IST")
+                    except Exception as e:
+                        logger.error(f"Failed to restore schedule for {strategy_id}: {e}")
+
+        logger.info(f"Python Strategy System fully initialized on {OS_TYPE}")
+    except Exception as e:
+        logger.warning(f"Deferred initialization skipped (likely no app context yet): {e}")
+        _initialized = False  # Reset flag to retry later
+
+# Note: Flask removed before_app_first_request in newer versions
+# The initialization is now handled in the index route and other entry points
+
+logger.info(f"Python Strategy System initialized (basic) on {OS_TYPE}")

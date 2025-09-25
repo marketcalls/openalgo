@@ -35,7 +35,9 @@
       "Bash(copy:*)",
       "Bash(npm run build:css:*)",
       "Read(//d/openalgo/**)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(gunzip:*)",
+      "Read(//d//**)"
     ],
     "deny": []
   }

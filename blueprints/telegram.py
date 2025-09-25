@@ -76,7 +76,7 @@ def configuration():
     """Bot configuration page"""
     if request.method == 'GET':
         config = get_bot_config()
-        logger.info(f"Config loaded for display: broadcast_enabled={config.get('broadcast_enabled')}, bot_token={'present' if config.get('bot_token') else 'absent'}")
+        logger.debug(f"Config loaded for display: broadcast_enabled={config.get('broadcast_enabled')}, bot_token={'[REDACTED]' if config.get('bot_token') else 'absent'}")
         return render_template('telegram/config.html', config=config)
 
     elif request.method == 'POST':
@@ -92,13 +92,15 @@ def configuration():
             if 'rate_limit_per_minute' in data:
                 config_update['rate_limit_per_minute'] = int(data['rate_limit_per_minute'])
 
-            logger.info(f"Saving config: {config_update}")
+            # Log config save without exposing token
+            safe_config = {k: '[REDACTED]' if k == 'bot_token' else v for k, v in config_update.items()}
+            logger.debug(f"Saving config: {safe_config}")
             success = update_bot_config(config_update)
 
             if success:
                 # Verify what was saved
                 saved_config = get_bot_config()
-                logger.info(f"Config after save: broadcast_enabled={saved_config.get('broadcast_enabled')}, bot_token={'present' if saved_config.get('bot_token') else 'absent'}")
+                logger.debug(f"Config after save: broadcast_enabled={saved_config.get('broadcast_enabled')}, bot_token={'[REDACTED]' if saved_config.get('bot_token') else 'absent'}")
                 return jsonify({'status': 'success', 'message': 'Configuration updated'})
             else:
                 return jsonify({'status': 'error', 'message': 'Failed to update configuration'}), 500
@@ -186,7 +188,8 @@ def start_bot():
 def stop_bot():
     """Stop the telegram bot"""
     try:
-        success, message = run_async(telegram_bot_service.stop_bot())
+        # Use the synchronous stop method
+        success, message = telegram_bot_service.stop_bot_sync()
 
         if success:
             return jsonify({'status': 'success', 'message': message})

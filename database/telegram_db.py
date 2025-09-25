@@ -271,7 +271,7 @@ def create_or_update_telegram_user(telegram_id: int, username: str, api_key: str
             db_session.add(preferences)
 
         db_session.commit()
-        logger.info(f"Telegram user {telegram_id} linked to {username}")
+        logger.debug(f"Telegram user {telegram_id} linked successfully")
         return True
 
     except Exception as e:
@@ -291,7 +291,7 @@ def delete_telegram_user(telegram_id: int) -> bool:
             user.is_active = False
             user.updated_at = func.now()
             db_session.commit()
-            logger.info(f"Telegram user {telegram_id} unlinked")
+            logger.debug(f"Telegram user {telegram_id} unlinked")
             return True
 
         return False
@@ -393,7 +393,7 @@ def update_bot_config(config: Dict) -> bool:
                 setattr(bot_config, key, value)
 
         db_session.commit()
-        logger.info("Bot configuration updated")
+        logger.debug("Bot configuration updated")
         return True
 
     except Exception as e:
@@ -547,7 +547,7 @@ def update_user_preferences(telegram_id: int, preferences: Dict) -> bool:
                 setattr(pref, key, value)
 
         db_session.commit()
-        logger.info(f"User preferences updated for {telegram_id}")
+        logger.debug(f"User preferences updated for telegram_id: {telegram_id}")
         return True
 
     except Exception as e:

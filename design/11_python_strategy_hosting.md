@@ -206,6 +206,12 @@ log/strategies/
 - Process recovery for running strategies
 - Error state tracking with timestamps
 
+**Initialization Process (Updated September 2025):**
+- **Deferred Initialization**: Database-dependent operations delayed until app context available
+- **Two-Phase Startup**: Basic setup on import, full initialization on first request
+- **Flask Compatibility**: Handles removal of `before_app_first_request` in newer Flask versions
+- **Graceful Recovery**: Retry mechanism for initialization if app context not ready
+
 ## Security Considerations
 
 ### 1. File System Security

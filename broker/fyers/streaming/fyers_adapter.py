@@ -160,7 +160,7 @@ class FyersAdapter:
                 self.logger.debug(f"\n" + "="*60)
                 self.logger.debug(f"SUBSCRIBING TO {len(symbols)} SYMBOLS")
                 self.logger.debug(f"Data type: {data_type}")
-                self.logger.info(f"Symbols to subscribe: {symbols}")
+                self.logger.debug(f"Symbols to subscribe: {symbols}")
                 self.logger.debug("="*60)
                 
                 # Store callback per symbol to prevent data mixing
@@ -217,7 +217,8 @@ class FyersAdapter:
                 # The tokens are generated in the same order as valid_symbols
                 self.logger.debug(f"\nCreating HSM mappings for {len(hsm_tokens)} tokens...")
                 self.logger.debug(f"HSM Tokens: {hsm_tokens}")
-                self.logger.debug(f"Valid Symbols: {[f'{s['exchange']}:{s['symbol']}' for s in valid_symbols]}")
+                valid_symbol_list = [f"{s['exchange']}:{s['symbol']}" for s in valid_symbols]
+                self.logger.debug(f"Valid Symbols: {valid_symbol_list}")
                 
                 # Primary mapping strategy: Map by order (most reliable)
                 # Since convert_openalgo_symbols_to_hsm processes symbols in order
