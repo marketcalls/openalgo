@@ -45,6 +45,30 @@ class TelegramBotService:
         self.bot_thread = None
         self.bot_loop = None
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
+        self._shutdown_event = threading.Event()  # Event to signal shutdown
+
+    def _is_running_in_async_context(self) -> bool:
+        """Check if we're already running in an async context"""
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def _detect_environment(self) -> str:
+        """Detect the runtime environment"""
+        import os
+        
+        if os.path.exists('/.dockerenv'):
+            return "docker"
+        elif os.environ.get('KUBERNETES_SERVICE_HOST'):
+            return "kubernetes"
+        elif os.environ.get('FLASK_ENV') or os.environ.get('FLASK_APP'):
+            return "flask"
+        elif hasattr(os, 'uname') and 'microsoft' in os.uname().release.lower():
+            return "wsl"
+        else:
+            return "standard"
 
     def _get_sdk_client(self, telegram_id: int) -> Optional[openalgo_api]:
         """Get or create OpenAlgo SDK client for a user"""
@@ -353,25 +377,56 @@ class TelegramBotService:
             logger.error(f"Error generating daily chart: {e}")
             return None
 
-    async def initialize_bot(self, token: str) -> Tuple[bool, str]:
-        """Initialize the Telegram bot with given token"""
+    def initialize_bot_sync(self, token: str) -> Tuple[bool, str]:
+        """Initialize the Telegram bot with given token (synchronous)"""
         try:
+            logger.debug(f"Initializing bot with token: {token[:10]}...")
+            
             # If bot is running, stop it first
             if self.is_running:
-                await self.stop_bot()
-                # Wait a moment for cleanup
-                await asyncio.sleep(1)
+                logger.debug("Bot is running, stopping first...")
+                self.stop_bot_sync()
+                import time
+                time.sleep(1)
 
             self.bot_token = token
 
             # Create a temporary bot just to verify the token
-            temp_app = Application.builder().token(token).build()
-            await temp_app.initialize()
-
-            # Test the token by getting bot info
-            bot_info = await temp_app.bot.get_me()
-
-            await temp_app.shutdown()
+            logger.debug("Creating temporary application for token verification...")
+            
+            # We need to run this in a separate thread to avoid event loop conflicts
+            import concurrent.futures
+            import threading
+            
+            def verify_token():
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    temp_app = (Application.builder()
+                              .token(token)
+                              .read_timeout(30)
+                              .write_timeout(30)
+                              .connect_timeout(30)
+                              .pool_timeout(30)
+                              .build())
+                    
+                    async def test_token():
+                        await temp_app.initialize()
+                        bot_info = await temp_app.bot.get_me()
+                        await temp_app.shutdown()
+                        return bot_info
+                    
+                    return loop.run_until_complete(test_token())
+                finally:
+                    loop.close()
+            
+            # Run verification in separate thread
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(verify_token)
+                bot_info = future.result(timeout=30)  # 30 second timeout
+            
+            logger.debug(f"Bot info retrieved: @{bot_info.username}")
 
             # Update bot config in database
             update_bot_config({
@@ -386,23 +441,140 @@ class TelegramBotService:
             logger.error(f"Failed to initialize bot: {e}")
             return False, str(e)
 
+    async def initialize_bot(self, token: str) -> Tuple[bool, str]:
+        """Initialize the Telegram bot with given token"""
+        try:
+            logger.debug(f"Initializing bot with token: {token[:10]}...")
+            
+            # If bot is running, stop it first
+            if self.is_running:
+                logger.debug("Bot is running, stopping first...")
+                await self.stop_bot()
+                # Wait a moment for cleanup
+                await asyncio.sleep(1)
+
+            self.bot_token = token
+
+            # Create a temporary bot just to verify the token
+            logger.debug("Creating temporary application for token verification...")
+            temp_app = (Application.builder()
+                       .token(token)
+                       .read_timeout(30)
+                       .write_timeout(30)
+                       .connect_timeout(30)
+                       .pool_timeout(30)
+                       .build())
+            
+            try:
+                await temp_app.initialize()
+                logger.debug("Temporary application initialized, getting bot info...")
+
+                # Test the token by getting bot info
+                bot_info = await temp_app.bot.get_me()
+                logger.debug(f"Bot info retrieved: @{bot_info.username}")
+
+                await temp_app.shutdown()
+                logger.debug("Temporary application shutdown complete")
+
+                # Update bot config in database
+                update_bot_config({
+                    'bot_token': token,
+                    'is_active': False,
+                    'bot_username': bot_info.username
+                })
+
+                return True, f"Bot initialized successfully: @{bot_info.username}"
+                
+            except Exception as e:
+                logger.error(f"Error during bot verification: {e}")
+                try:
+                    await temp_app.shutdown()
+                except:
+                    pass
+                raise
+
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {e}")
+            return False, str(e)
+
     def _run_bot_async(self):
         """Run bot in separate thread with its own event loop"""
-        self.bot_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.bot_loop)
         try:
-            self.bot_loop.run_until_complete(self._start_bot())
+            # Ensure we're not in an async context in this thread
+            try:
+                existing_loop = asyncio.get_running_loop()
+                logger.error("Found existing event loop in thread! This indicates a threading issue.")
+                # Try to use the existing loop instead of creating a new one
+                self.bot_loop = existing_loop
+                # Don't set it as the thread's event loop since it already exists
+                logger.debug("Using existing event loop instead of creating new one")
+                
+                # We can't use await in a thread function, so we need to handle this differently
+                logger.error("Cannot handle existing event loop in thread context")
+                self.is_running = False
+                self._shutdown_event.set()
+                return
+                    
+            except RuntimeError:
+                # Good, no existing loop - create our own
+                logger.debug("No existing event loop found, creating new one")
+                
+                # Create new event loop for this thread
+                self.bot_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.bot_loop)
+                
+                logger.debug("Starting bot event loop in thread")
+                
+                # Run the bot
+                self.bot_loop.run_until_complete(self._start_bot())
+            
+        except RuntimeError as e:
+            if "cannot be called from a running event loop" in str(e):
+                logger.error("Event loop conflict detected. This usually happens in Docker/async environments.")
+                logger.error("Try restarting the container or check for conflicting async operations.")
+            else:
+                logger.error(f"Runtime error in bot loop: {e}")
+            self.is_running = False
+            self._shutdown_event.set()
         except Exception as e:
-            logger.debug(f"Bot loop ended: {e}")
+            logger.error(f"Bot loop ended with error: {e}")
+            self.is_running = False
+            self._shutdown_event.set()
         finally:
             # Clean shutdown
-            self.bot_loop.close()
+            try:
+                if self.bot_loop and not self.bot_loop.is_closed():
+                    # Cancel all pending tasks
+                    pending = asyncio.all_tasks(self.bot_loop)
+                    for task in pending:
+                        task.cancel()
+                    
+                    # Wait for tasks to complete cancellation
+                    if pending:
+                        self.bot_loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                    
+                    self.bot_loop.close()
+                    logger.debug("Bot event loop closed")
+            except Exception as e:
+                logger.debug(f"Error closing bot loop: {e}")
+            finally:
+                self.bot_loop = None
 
     async def _start_bot(self):
         """Start the bot with proper handlers"""
         try:
-            # Create application
-            self.application = Application.builder().token(self.bot_token).build()
+            logger.debug("Initializing Telegram bot...")
+            
+            # Create application with proper timeouts
+            self.application = (Application.builder()
+                              .token(self.bot_token)
+                              .read_timeout(30)
+                              .write_timeout(30)
+                              .connect_timeout(30)
+                              .pool_timeout(30)
+                              .build())
 
             # Add command handlers
             self.application.add_handler(CommandHandler("start", self.cmd_start))
@@ -423,22 +595,28 @@ class TelegramBotService:
             # Add callback query handler for inline buttons
             self.application.add_handler(CallbackQueryHandler(self.button_callback))
 
-            # Initialize
+            # Initialize and start
+            logger.debug("Initializing application...")
             await self.application.initialize()
+            
+            logger.debug("Starting application...")
             await self.application.start()
 
-            # Always use polling mode
-            logger.debug("Starting bot in polling mode...")
-            await self.application.updater.start_polling()
+            # Start polling
+            logger.debug("Starting polling...")
+            await self.application.updater.start_polling(
+                drop_pending_updates=True,  # Drop any pending updates
+                allowed_updates=None        # Allow all update types
+            )
 
             self.is_running = True
             update_bot_config({'is_active': True})
+            logger.debug("Bot started successfully and is running")
 
-            # Keep running
-            while self.is_running:
+            # Keep running until stopped
+            while self.is_running and not self._shutdown_event.is_set():
                 await asyncio.sleep(1)
 
-            # Clean shutdown when is_running becomes False
             logger.debug("Bot stopping gracefully...")
 
         except Exception as e:
@@ -446,18 +624,36 @@ class TelegramBotService:
             self.is_running = False
             raise
         finally:
-            # Ensure updater is stopped if it was started
-            if self.application and self.application.updater.running:
-                try:
-                    await self.application.updater.stop()
-                except Exception as e:
-                    logger.debug(f"Error stopping updater in finally: {e}")
+            # Clean shutdown
+            try:
+                if self.application:
+                    if hasattr(self.application, 'updater') and self.application.updater.running:
+                        logger.debug("Stopping updater...")
+                        await self.application.updater.stop()
+                    
+                    logger.debug("Stopping application...")
+                    await self.application.stop()
+                    
+                    logger.debug("Shutting down application...")
+                    await self.application.shutdown()
+                    
+                update_bot_config({'is_active': False})
+                logger.debug("Bot shutdown complete")
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
 
-    async def start_bot(self) -> Tuple[bool, str]:
-        """Start the bot in polling mode"""
+    def start_bot_sync(self) -> Tuple[bool, str]:
+        """Start the bot synchronously (for use from Flask routes)"""
         try:
             if self.is_running:
                 return False, "Bot is already running"
+
+            # Clean up any existing thread
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Existing bot thread found, stopping it first")
+                self.stop_bot_sync()
+                import time
+                time.sleep(1)
 
             config = get_bot_config()
             if not config or not config.get('bot_token'):
@@ -465,17 +661,97 @@ class TelegramBotService:
 
             self.bot_token = config['bot_token']
 
+            # Detect environment and log
+            env = self._detect_environment()
+            logger.debug(f"Environment: {env}")
+            
+            # Reset shutdown event
+            self._shutdown_event.clear()
+
             # Start bot in separate thread
-            self.bot_thread = threading.Thread(target=self._run_bot_async, daemon=True)
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_async, 
+                daemon=True,
+                name="TelegramBotThread"
+            )
             self.bot_thread.start()
 
-            # Wait a bit for the bot to start
-            await asyncio.sleep(2)
+            # Wait a bit for the bot to start and check multiple times
+            import time
+            for i in range(20):  # Check for 10 seconds
+                time.sleep(0.5)
+                if self.is_running:
+                    logger.debug(f"Bot started successfully after {(i+1)*0.5} seconds")
+                    return True, "Bot started successfully"
+                if self._shutdown_event.is_set():
+                    return False, "Bot startup was cancelled"
 
-            if self.is_running:
-                return True, "Bot started successfully"
+            # Check if thread is still alive
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Bot thread is alive but bot not marked as running")
+                return False, "Bot thread started but not responding"
             else:
-                return False, "Bot failed to start"
+                return False, "Bot thread failed to start"
+
+        except Exception as e:
+            logger.error(f"Failed to start bot: {e}")
+            return False, str(e)
+
+    async def start_bot(self) -> Tuple[bool, str]:
+        """Start the bot in polling mode"""
+        try:
+            if self.is_running:
+                return False, "Bot is already running"
+
+            # Clean up any existing thread
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Existing bot thread found, stopping it first")
+                self.stop_bot_sync()
+                await asyncio.sleep(1)
+
+            config = get_bot_config()
+            if not config or not config.get('bot_token'):
+                return False, "Bot token not configured"
+
+            self.bot_token = config['bot_token']
+
+            # Detect environment and log
+            env = self._detect_environment()
+            async_context = self._is_running_in_async_context()
+            logger.debug(f"Environment: {env}, Async context: {async_context}")
+            
+            # Check if we're in an async context (common in Docker/web environments)
+            if async_context:
+                logger.debug("Detected async context, starting bot in thread...")
+            else:
+                logger.debug("No async context detected, starting bot normally...")
+
+            # Reset shutdown event
+            self._shutdown_event.clear()
+
+            # Start bot in separate thread
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_async, 
+                daemon=True,
+                name="TelegramBotThread"
+            )
+            self.bot_thread.start()
+
+            # Wait a bit for the bot to start and check multiple times
+            for i in range(20):  # Check for 10 seconds
+                await asyncio.sleep(0.5)
+                if self.is_running:
+                    logger.debug(f"Bot started successfully after {(i+1)*0.5} seconds")
+                    return True, "Bot started successfully"
+                if self._shutdown_event.is_set():
+                    return False, "Bot startup was cancelled"
+
+            # Check if thread is still alive
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Bot thread is alive but bot not marked as running")
+                return False, "Bot thread started but not responding"
+            else:
+                return False, "Bot thread failed to start"
 
         except Exception as e:
             logger.error(f"Failed to start bot: {e}")
@@ -487,45 +763,71 @@ class TelegramBotService:
             if not self.is_running:
                 return False, "Bot is not running"
 
+            logger.debug("Initiating bot stop...")
+            
             # Signal the bot to stop
-            logger.debug("Stopping bot...")
             self.is_running = False
+            self._shutdown_event.set()
 
             # If we have a bot loop running in another thread, handle shutdown properly
-            if self.bot_loop and self.bot_loop.is_running() and self.application:
-                # Schedule the shutdown in the bot's event loop
-                async def shutdown():
-                    try:
-                        if self.application.updater.running:
-                            await self.application.updater.stop()
-                        await self.application.stop()
-                        await self.application.shutdown()
-                    except Exception as e:
-                        logger.error(f"Error during shutdown: {e}")
-
-                # Run the shutdown in the bot's event loop
-                future = asyncio.run_coroutine_threadsafe(shutdown(), self.bot_loop)
-                # Wait for shutdown to complete (max 10 seconds)
+            if self.bot_loop and not self.bot_loop.is_closed() and self.application:
                 try:
-                    future.result(timeout=10)
-                    logger.debug("Bot shutdown completed")
-                except concurrent.futures.TimeoutError:
-                    logger.warning("Shutdown timeout - forcing stop")
+                    # Schedule the shutdown in the bot's event loop
+                    async def shutdown():
+                        try:
+                            if hasattr(self.application, 'updater') and self.application.updater.running:
+                                logger.debug("Stopping updater from sync method...")
+                                await self.application.updater.stop()
+                            
+                            logger.debug("Stopping application from sync method...")
+                            await self.application.stop()
+                            
+                            logger.debug("Shutting down application from sync method...")
+                            await self.application.shutdown()
+                        except Exception as e:
+                            logger.error(f"Error during async shutdown: {e}")
+
+                    # Run the shutdown in the bot's event loop
+                    if self.bot_loop.is_running():
+                        future = asyncio.run_coroutine_threadsafe(shutdown(), self.bot_loop)
+                        # Wait for shutdown to complete (max 15 seconds)
+                        try:
+                            future.result(timeout=15)
+                            logger.debug("Async shutdown completed")
+                        except concurrent.futures.TimeoutError:
+                            logger.warning("Async shutdown timeout - continuing with cleanup")
+                        except Exception as e:
+                            logger.warning(f"Async shutdown error: {e}")
+                    else:
+                        logger.debug("Bot loop not running, skipping async shutdown")
+                        
                 except Exception as e:
-                    logger.warning(f"Shutdown error: {e}")
+                    logger.error(f"Error during shutdown scheduling: {e}")
 
             # Wait for the thread to finish (with timeout)
             if self.bot_thread and self.bot_thread.is_alive():
-                self.bot_thread.join(timeout=5.0)
+                logger.debug("Waiting for bot thread to finish...")
+                self.bot_thread.join(timeout=10.0)
                 if self.bot_thread.is_alive():
-                    logger.warning("Thread did not stop cleanly")
+                    logger.warning("Bot thread did not stop cleanly within timeout")
+                else:
+                    logger.debug("Bot thread finished successfully")
                 self.bot_thread = None
 
-            # Clean up
+            # Clean up references
             self.application = None
+            if self.bot_loop and not self.bot_loop.is_closed():
+                try:
+                    self.bot_loop.close()
+                except Exception as e:
+                    logger.debug(f"Error closing bot loop: {e}")
             self.bot_loop = None
 
+            # Clear SDK client cache
+            self.sdk_clients.clear()
+
             update_bot_config({'is_active': False})
+            logger.debug("Bot stop completed")
 
             return True, "Bot stopped successfully"
 
