@@ -1449,30 +1449,501 @@ class TelegramBotService:
         query = update.callback_query
         await query.answer()
 
-        # Map callback data to commands
-        command_map = {
-            'orderbook': self.cmd_orderbook,
-            'tradebook': self.cmd_tradebook,
-            'positions': self.cmd_positions,
-            'holdings': self.cmd_holdings,
-            'funds': self.cmd_funds,
-            'pnl': self.cmd_pnl,
-            'menu': self.cmd_menu
-        }
+        user = query.from_user
+        telegram_user = get_telegram_user(user.id)
 
-        handler = command_map.get(query.data)
-        if handler:
-            # Create a fake update with message for the handler
-            fake_update = Update(
-                update_id=update.update_id,
-                message=query.message,
-                callback_query=query
+        if not telegram_user:
+            await query.edit_message_text("❌ Please link your account first using /link")
+            return
+
+        # Handle each callback action directly instead of creating fake updates
+        try:
+            if query.data == 'orderbook':
+                await self._handle_orderbook_callback(query, user.id)
+            elif query.data == 'tradebook':
+                await self._handle_tradebook_callback(query, user.id)
+            elif query.data == 'positions':
+                await self._handle_positions_callback(query, user.id)
+            elif query.data == 'holdings':
+                await self._handle_holdings_callback(query, user.id)
+            elif query.data == 'funds':
+                await self._handle_funds_callback(query, user.id)
+            elif query.data == 'pnl':
+                await self._handle_pnl_callback(query, user.id)
+            elif query.data == 'menu':
+                await self._handle_menu_callback(query, user.id)
+            else:
+                await query.edit_message_text("❌ Unknown option selected")
+        except Exception as e:
+            logger.error(f"Error in button callback: {e}")
+            await query.edit_message_text("❌ An error occurred. Please try again.")
+    
+    async def _handle_orderbook_callback(self, query, telegram_id: int):
+        """Handle orderbook callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.orderbook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch orderbook")
+            return
+
+        orders = response.get('data', {}).get('orders', [])
+        statistics = response.get('data', {}).get('statistics', {})
+
+        if not orders:
+            message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders"
+        else:
+            message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\n"
+
+            for order in orders[:10]:  # Limit to 10 orders
+                status = order.get('order_status', 'unknown')
+                status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
+                action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
+
+                try:
+                    price = float(order.get('price', 0))
+                    price_str = "Market" if price == 0 and order.get('pricetype') == 'MARKET' else f"₹{price}"
+                except (ValueError, TypeError):
+                    price_str = f"₹{order.get('price', 0)}"
+
+                try:
+                    quantity = int(order.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = order.get('quantity', 0)
+
+                message += (
+                    f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
+                    f"{action_emoji} {order.get('action', 'N/A')} {quantity} @ {price_str}\n"
+                    f"├ Type: {order.get('pricetype', 'N/A')}\n"
+                    f"├ Product: {order.get('product', 'N/A')}\n"
+                    f"├ Status: {status.title()}\n"
+                    f"├ Time: {order.get('timestamp', 'N/A')}\n"
+                )
+
+                try:
+                    trigger_price = float(order.get('trigger_price', 0))
+                    if trigger_price > 0:
+                        message += f"├ Trigger: ₹{trigger_price}\n"
+                except (ValueError, TypeError):
+                    pass
+
+                message += f"└ Order ID: `{order.get('orderid', 'N/A')}`\n\n"
+
+            if len(orders) > 10:
+                message += f"_... and {len(orders) - 10} more orders_\n\n"
+
+            # Add statistics summary
+            if statistics:
+                try:
+                    total_open = int(statistics.get('total_open_orders', 0))
+                except (ValueError, TypeError):
+                    total_open = 0
+
+                try:
+                    total_completed = int(statistics.get('total_completed_orders', 0))
+                except (ValueError, TypeError):
+                    total_completed = 0
+
+                try:
+                    total_rejected = int(statistics.get('total_rejected_orders', 0))
+                except (ValueError, TypeError):
+                    total_rejected = 0
+
+                try:
+                    total_buy = int(statistics.get('total_buy_orders', 0))
+                except (ValueError, TypeError):
+                    total_buy = 0
+
+                try:
+                    total_sell = int(statistics.get('total_sell_orders', 0))
+                except (ValueError, TypeError):
+                    total_sell = 0
+
+                message += (
+                    "📈 *Summary*\n"
+                    f"├ Total Orders: {len(orders)}\n"
+                    f"├ Open: {total_open}\n"
+                    f"├ Completed: {total_completed}\n"
+                    f"├ Rejected: {total_rejected}\n"
+                    f"├ Buy Orders: {total_buy}\n"
+                    f"└ Sell Orders: {total_sell}"
+                )
+
+        # Add back to menu button
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    
+    async def _handle_tradebook_callback(self, query, telegram_id: int):
+        """Handle tradebook callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.tradebook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch tradebook")
+            return
+
+        trades = response.get('data', [])
+
+        if not trades:
+            message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today"
+        else:
+            message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\n"
+            total_buy_value = 0
+            total_sell_value = 0
+
+            for trade in trades[:10]:  # Limit to 10 trades
+                action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
+
+                try:
+                    trade_value = float(trade.get('trade_value', 0))
+                except (ValueError, TypeError):
+                    trade_value = 0.0
+
+                if trade.get('action') == 'BUY':
+                    total_buy_value += trade_value
+                else:
+                    total_sell_value += trade_value
+
+                try:
+                    quantity = int(trade.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = trade.get('quantity', 0)
+
+                try:
+                    avg_price = float(trade.get('average_price', 0))
+                    avg_price_str = f"₹{avg_price:,.2f}"
+                except (ValueError, TypeError):
+                    avg_price_str = f"₹{trade.get('average_price', 0)}"
+
+                message += (
+                    f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
+                    f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
+                    f"├ Product: {trade.get('product', 'N/A')}\n"
+                    f"├ Value: ₹{trade_value:,.2f}\n"
+                    f"├ Time: {trade.get('timestamp', 'N/A')}\n"
+                    f"└ Order ID: `{trade.get('orderid', 'N/A')}`\n\n"
+                )
+
+            if len(trades) > 10:
+                message += f"_... and {len(trades) - 10} more trades_\n\n"
+
+            message += (
+                "📊 *Summary*\n"
+                f"├ Total Trades: {len(trades)}\n"
+                f"├ Buy Value: ₹{total_buy_value:,.2f}\n"
+                f"└ Sell Value: ₹{total_sell_value:,.2f}"
             )
-            fake_update.effective_user = query.from_user
-            fake_update.effective_chat = query.message.chat
 
-            await handler(fake_update, context)
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
+    async def _handle_positions_callback(self, query, telegram_id: int):
+        """Handle positions callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.positionbook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch positions")
+            return
+
+        positions = response.get('data', [])
+        active_positions = [pos for pos in positions if pos.get('quantity', 0) != 0]
+
+        if not active_positions:
+            message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions"
+        else:
+            message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\n"
+            total_long = 0
+            total_short = 0
+
+            for pos in active_positions[:10]:
+                try:
+                    quantity = int(pos.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = 0
+
+                try:
+                    avg_price = float(pos.get('average_price', '0.00') or 0)
+                except (ValueError, TypeError):
+                    avg_price = 0.0
+
+                if quantity > 0:
+                    position_type = "LONG 📈"
+                    position_emoji = "🟢"
+                    total_long += 1
+                else:
+                    position_type = "SHORT 📉"
+                    position_emoji = "🔴"
+                    total_short += 1
+
+                message += (
+                    f"{position_emoji} *{pos.get('symbol', 'N/A')}* ({pos.get('exchange', 'N/A')})\n"
+                    f"├ Position: {position_type}\n"
+                    f"├ Qty: {abs(quantity)} ({pos.get('product', 'N/A')})\n"
+                )
+
+                if avg_price > 0:
+                    message += f"├ Avg Price: ₹{avg_price:,.2f}\n"
+
+                message += "\n"
+
+            if len(active_positions) > 10:
+                message += f"_... and {len(active_positions) - 10} more positions_\n\n"
+
+            message += (
+                "📊 *Summary*\n"
+                f"├ Active Positions: {len(active_positions)}\n"
+                f"├ Long Positions: {total_long}\n"
+                f"└ Short Positions: {total_short}"
+            )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_holdings_callback(self, query, telegram_id: int):
+        """Handle holdings callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.holdings)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch holdings")
+            return
+
+        holdings = response.get('data', {}).get('holdings', [])
+        statistics = response.get('data', {}).get('statistics', {})
+
+        if not holdings:
+            message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found"
+        else:
+            message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
+
+            for holding in holdings[:10]:
+                try:
+                    pnl = float(holding.get('pnl', 0))
+                except (ValueError, TypeError):
+                    pnl = 0.0
+
+                try:
+                    pnl_percent = float(holding.get('pnlpercent', 0))
+                except (ValueError, TypeError):
+                    pnl_percent = 0.0
+
+                try:
+                    quantity = int(holding.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = 0
+
+                pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
+
+                message += (
+                    f"{pnl_emoji} *{holding.get('symbol', 'N/A')}* ({holding.get('exchange', 'N/A')})\n"
+                    f"├ Product: {holding.get('product', 'CNC')}\n"
+                    f"├ Qty: {quantity}\n"
+                    f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
+                )
+
+            if len(holdings) > 10:
+                message += f"_... and {len(holdings) - 10} more holdings_\n\n"
+
+            if statistics:
+                try:
+                    total_holding_value = float(statistics.get('totalholdingvalue', 0))
+                except (ValueError, TypeError):
+                    total_holding_value = 0.0
+
+                try:
+                    total_inv_value = float(statistics.get('totalinvvalue', 0))
+                except (ValueError, TypeError):
+                    total_inv_value = 0.0
+
+                try:
+                    total_pnl = float(statistics.get('totalprofitandloss', 0))
+                except (ValueError, TypeError):
+                    total_pnl = 0.0
+
+                try:
+                    total_pnl_percent = float(statistics.get('totalpnlpercentage', 0))
+                except (ValueError, TypeError):
+                    total_pnl_percent = 0.0
+
+                stats_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+
+                message += (
+                    f"📊 *Portfolio Summary*\n"
+                    f"├ Current Value: ₹{total_holding_value:,.2f}\n"
+                    f"├ Investment: ₹{total_inv_value:,.2f}\n"
+                    f"└ {stats_emoji} P&L: ₹{total_pnl:,.2f} ({total_pnl_percent:+.2f}%)"
+                )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_funds_callback(self, query, telegram_id: int):
+        """Handle funds callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.funds)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch funds")
+            return
+
+        funds = response.get('data', {})
+
+        try:
+            available = float(funds.get('availablecash', 0))
+        except (ValueError, TypeError):
+            available = 0.0
+
+        try:
+            collateral = float(funds.get('collateral', 0))
+        except (ValueError, TypeError):
+            collateral = 0.0
+
+        try:
+            utilized = float(funds.get('utiliseddebits', 0))
+        except (ValueError, TypeError):
+            utilized = 0.0
+
+        message = (
+            "💰 *FUNDS*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            f"💵 *Available Cash*\n"
+            f"└ ₹{available:,.2f}\n\n"
+            f"🔒 *Collateral*\n"
+            f"└ ₹{collateral:,.2f}\n\n"
+            f"📊 *Utilized Margin*\n"
+            f"└ ₹{utilized:,.2f}\n\n"
+            f"💼 *Total Balance*\n"
+            f"└ ₹{(available + collateral):,.2f}"
+        )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_pnl_callback(self, query, telegram_id: int):
+        """Handle P&L callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.funds)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch P&L")
+            return
+
+        funds = response.get('data', {})
+
+        try:
+            realized_pnl = float(funds.get('m2mrealized', 0))
+        except (ValueError, TypeError):
+            realized_pnl = 0.0
+
+        try:
+            unrealized_pnl = float(funds.get('m2munrealized', 0))
+        except (ValueError, TypeError):
+            unrealized_pnl = 0.0
+
+        total_pnl = realized_pnl + unrealized_pnl
+
+        realized_emoji = "🟢" if realized_pnl > 0 else "🔴" if realized_pnl < 0 else "⚪"
+        unrealized_emoji = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
+        total_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+
+        message = (
+            "💹 *PROFIT & LOSS*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            f"{realized_emoji} *Realized P&L*\n"
+            f"└ ₹{realized_pnl:,.2f}\n\n"
+            f"{unrealized_emoji} *Unrealized P&L*\n"
+            f"└ ₹{unrealized_pnl:,.2f}\n\n"
+            f"{total_emoji} *Total P&L*\n"
+            f"└ ₹{total_pnl:,.2f}"
+        )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_menu_callback(self, query, telegram_id: int):
+        """Handle menu callback (refresh menu)"""
+        from datetime import datetime
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Orderbook", callback_data='orderbook'),
+                InlineKeyboardButton("📈 Tradebook", callback_data='tradebook'),
+            ],
+            [
+                InlineKeyboardButton("💼 Positions", callback_data='positions'),
+                InlineKeyboardButton("🏦 Holdings", callback_data='holdings'),
+            ],
+            [
+                InlineKeyboardButton("💰 Funds", callback_data='funds'),
+                InlineKeyboardButton("💹 P&L", callback_data='pnl'),
+            ],
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data='menu'),
+            ]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Add timestamp to make content different each time
+        current_time = datetime.now().strftime("%H:%M:%S")
+        
+        try:
+            await query.edit_message_text(
+                f"📱 *OpenAlgo Trading Menu*\n"
+                f"Select an option below:\n\n"
+                f"_Last updated: {current_time}_",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            # If edit fails (e.g., message is identical), just answer the callback
+            logger.debug(f"Menu refresh edit failed: {e}")
+            # Just acknowledge the callback without error
+            pass
+    
     async def send_notification(self, telegram_id: int, message: str) -> bool:
         """Send a notification to a specific Telegram user."""
         try:
