@@ -131,9 +131,9 @@ class AliceBlueMessageMapper:
                 # Log the raw symbol for debugging
                 import logging
                 logger = logging.getLogger("aliceblue_mapping")
-                logger.info(f"Raw symbol from AliceBlue: '{raw_symbol}'")
+                logger.debug(f"Raw symbol from AliceBlue: '{raw_symbol}'")
                 clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
-                logger.info(f"Cleaned symbol: '{clean_symbol}'")
+                logger.debug(f"Cleaned symbol: '{clean_symbol}'")
                 parsed.update({
                     "symbol": clean_symbol,
                     "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,

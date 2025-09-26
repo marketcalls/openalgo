@@ -221,9 +221,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             susertoken = hashlib.sha256(sha256_encryption1.encode('utf-8')).hexdigest()
             
             self.logger.info(f"Generating susertoken from session_id (JWT)")
-            self.logger.info(f"Session ID length: {len(self.session_id)}")
-            self.logger.info(f"First SHA256: {sha256_encryption1}")
-            self.logger.info(f"Final susertoken: {susertoken}")
+            self.logger.debug(f"Session ID length: {len(self.session_id)}")
+            self.logger.debug(f"First SHA256: {sha256_encryption1}")
+            self.logger.debug(f"Final susertoken: {susertoken}")
             
             auth_msg = {
                 "susertoken": susertoken,
@@ -291,7 +291,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # This is important for indices where NSE_INDEX/BSE_INDEX are stored in DB
             self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, exchange: {exchange}")
             token = get_token(symbol, exchange)
-            self.logger.info(f"Subscribe: Token lookup result: {token}")
+            self.logger.debug(f"Subscribe: Token lookup result: {token}")
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
@@ -563,9 +563,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             elif msg_type == 'tk':
                 # Acknowledgment message - contains initial market data
-                self.logger.info(f"Received acknowledgment with data: {data}")
+                self.logger.debug(f"Received acknowledgment with data: {data}")
                 parsed_data = self.message_mapper.parse_tick_data(data)
-                self.logger.info(f"Parsed acknowledgment data: {parsed_data}")
+                self.logger.debug(f"Parsed acknowledgment data: {parsed_data}")
                 if parsed_data.get('type') != 'error':
                     self._on_data_received(parsed_data)
                 else:
