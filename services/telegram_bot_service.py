@@ -766,19 +766,35 @@ class TelegramBotService:
             status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
             action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
 
-            price_str = "Market" if order.get('price', 0) == 0 and order.get('pricetype') == 'MARKET' else f"₹{order.get('price', 0)}"
+            # Handle price and quantity (might be strings from some brokers)
+            try:
+                price = float(order.get('price', 0))
+                price_str = "Market" if price == 0 and order.get('pricetype') == 'MARKET' else f"₹{price}"
+            except (ValueError, TypeError):
+                price_str = f"₹{order.get('price', 0)}"
+
+            try:
+                quantity = int(order.get('quantity', 0))
+            except (ValueError, TypeError):
+                quantity = order.get('quantity', 0)
 
             message += (
                 f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
-                f"{action_emoji} {order.get('action', 'N/A')} {order.get('quantity', 0)} @ {price_str}\n"
+                f"{action_emoji} {order.get('action', 'N/A')} {quantity} @ {price_str}\n"
                 f"├ Type: {order.get('pricetype', 'N/A')}\n"
                 f"├ Product: {order.get('product', 'N/A')}\n"
                 f"├ Status: {status.title()}\n"
                 f"├ Time: {order.get('timestamp', 'N/A')}\n"
             )
 
-            if order.get('trigger_price', 0) > 0:
-                message += f"├ Trigger: ₹{order.get('trigger_price', 0)}\n"
+            # Handle trigger price (might be string from some brokers)
+            try:
+                trigger_price = float(order.get('trigger_price', 0))
+                if trigger_price > 0:
+                    message += f"├ Trigger: ₹{trigger_price}\n"
+            except (ValueError, TypeError):
+                # If conversion fails, skip trigger price
+                pass
 
             message += f"└ Order ID: `{order.get('orderid', 'N/A')}`\n\n"
 
@@ -787,14 +803,40 @@ class TelegramBotService:
 
         # Add statistics summary
         if statistics:
+            # Handle statistics that might be strings from some brokers
+            try:
+                total_open = int(statistics.get('total_open_orders', 0))
+            except (ValueError, TypeError):
+                total_open = 0
+
+            try:
+                total_completed = int(statistics.get('total_completed_orders', 0))
+            except (ValueError, TypeError):
+                total_completed = 0
+
+            try:
+                total_rejected = int(statistics.get('total_rejected_orders', 0))
+            except (ValueError, TypeError):
+                total_rejected = 0
+
+            try:
+                total_buy = int(statistics.get('total_buy_orders', 0))
+            except (ValueError, TypeError):
+                total_buy = 0
+
+            try:
+                total_sell = int(statistics.get('total_sell_orders', 0))
+            except (ValueError, TypeError):
+                total_sell = 0
+
             message += (
                 "📈 *Summary*\n"
                 f"├ Total Orders: {len(orders)}\n"
-                f"├ Open: {statistics.get('total_open_orders', 0)}\n"
-                f"├ Completed: {statistics.get('total_completed_orders', 0)}\n"
-                f"├ Rejected: {statistics.get('total_rejected_orders', 0)}\n"
-                f"├ Buy Orders: {statistics.get('total_buy_orders', 0)}\n"
-                f"└ Sell Orders: {statistics.get('total_sell_orders', 0)}"
+                f"├ Open: {total_open}\n"
+                f"├ Completed: {total_completed}\n"
+                f"├ Rejected: {total_rejected}\n"
+                f"├ Buy Orders: {total_buy}\n"
+                f"└ Sell Orders: {total_sell}"
             )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -834,16 +876,33 @@ class TelegramBotService:
 
         for trade in trades[:10]:  # Limit to 10 trades
             action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
-            trade_value = float(trade.get('trade_value', 0))
+
+            # Handle trade_value (might be string from some brokers)
+            try:
+                trade_value = float(trade.get('trade_value', 0))
+            except (ValueError, TypeError):
+                trade_value = 0.0
 
             if trade.get('action') == 'BUY':
                 total_buy_value += trade_value
             else:
                 total_sell_value += trade_value
 
+            # Handle quantity and average_price formatting
+            try:
+                quantity = int(trade.get('quantity', 0))
+            except (ValueError, TypeError):
+                quantity = trade.get('quantity', 0)
+
+            try:
+                avg_price = float(trade.get('average_price', 0))
+                avg_price_str = f"₹{avg_price:,.2f}"
+            except (ValueError, TypeError):
+                avg_price_str = f"₹{trade.get('average_price', 0)}"
+
             message += (
                 f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
-                f"├ {trade.get('action', 'N/A')} {trade.get('quantity', 0)} @ ₹{trade.get('average_price', 0)}\n"
+                f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
                 f"├ Product: {trade.get('product', 'N/A')}\n"
                 f"├ Value: ₹{trade_value:,.2f}\n"
                 f"├ Time: {trade.get('timestamp', 'N/A')}\n"
@@ -904,8 +963,16 @@ class TelegramBotService:
         total_short = 0
 
         for pos in active_positions[:10]:  # Limit to 10 positions
-            quantity = int(pos.get('quantity', 0))
-            avg_price = float(pos.get('average_price', '0.00') or 0)
+            # Handle quantity and average_price (might be strings from some brokers)
+            try:
+                quantity = int(pos.get('quantity', 0))
+            except (ValueError, TypeError):
+                quantity = 0
+
+            try:
+                avg_price = float(pos.get('average_price', '0.00') or 0)
+            except (ValueError, TypeError):
+                avg_price = 0.0
 
             # Determine position type
             if quantity > 0:
@@ -974,14 +1041,28 @@ class TelegramBotService:
         message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
 
         for holding in holdings[:10]:
-            pnl = float(holding.get('pnl', 0))
-            pnl_percent = float(holding.get('pnlpercent', 0))
+            # Handle numeric values that might be strings from some brokers
+            try:
+                pnl = float(holding.get('pnl', 0))
+            except (ValueError, TypeError):
+                pnl = 0.0
+
+            try:
+                pnl_percent = float(holding.get('pnlpercent', 0))
+            except (ValueError, TypeError):
+                pnl_percent = 0.0
+
+            try:
+                quantity = int(holding.get('quantity', 0))
+            except (ValueError, TypeError):
+                quantity = 0
+
             pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
 
             message += (
                 f"{pnl_emoji} *{holding.get('symbol', 'N/A')}* ({holding.get('exchange', 'N/A')})\n"
                 f"├ Product: {holding.get('product', 'CNC')}\n"
-                f"├ Qty: {holding.get('quantity', 0)}\n"
+                f"├ Qty: {quantity}\n"
                 f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
             )
 
@@ -990,10 +1071,26 @@ class TelegramBotService:
 
         # Add statistics
         if statistics:
-            total_holding_value = float(statistics.get('totalholdingvalue', 0))
-            total_inv_value = float(statistics.get('totalinvvalue', 0))
-            total_pnl = float(statistics.get('totalprofitandloss', 0))
-            total_pnl_percent = float(statistics.get('totalpnlpercentage', 0))
+            # Handle statistics that might be strings from some brokers
+            try:
+                total_holding_value = float(statistics.get('totalholdingvalue', 0))
+            except (ValueError, TypeError):
+                total_holding_value = 0.0
+
+            try:
+                total_inv_value = float(statistics.get('totalinvvalue', 0))
+            except (ValueError, TypeError):
+                total_inv_value = 0.0
+
+            try:
+                total_pnl = float(statistics.get('totalprofitandloss', 0))
+            except (ValueError, TypeError):
+                total_pnl = 0.0
+
+            try:
+                total_pnl_percent = float(statistics.get('totalpnlpercentage', 0))
+            except (ValueError, TypeError):
+                total_pnl_percent = 0.0
 
             stats_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
 
@@ -1031,9 +1128,21 @@ class TelegramBotService:
 
         funds = response.get('data', {})
 
-        available = float(funds.get('availablecash', 0))
-        collateral = float(funds.get('collateral', 0))
-        utilized = float(funds.get('utiliseddebits', 0))
+        # Handle funds that might be strings from some brokers
+        try:
+            available = float(funds.get('availablecash', 0))
+        except (ValueError, TypeError):
+            available = 0.0
+
+        try:
+            collateral = float(funds.get('collateral', 0))
+        except (ValueError, TypeError):
+            collateral = 0.0
+
+        try:
+            utilized = float(funds.get('utiliseddebits', 0))
+        except (ValueError, TypeError):
+            utilized = 0.0
 
         message = (
             "💰 *FUNDS*\n"
@@ -1075,8 +1184,17 @@ class TelegramBotService:
 
         funds = response.get('data', {})
 
-        realized_pnl = float(funds.get('m2mrealized', 0))
-        unrealized_pnl = float(funds.get('m2munrealized', 0))
+        # Handle P&L values that might be strings from some brokers
+        try:
+            realized_pnl = float(funds.get('m2mrealized', 0))
+        except (ValueError, TypeError):
+            realized_pnl = 0.0
+
+        try:
+            unrealized_pnl = float(funds.get('m2munrealized', 0))
+        except (ValueError, TypeError):
+            unrealized_pnl = 0.0
+
         total_pnl = realized_pnl + unrealized_pnl
 
         # Emojis based on P&L
@@ -1137,23 +1255,53 @@ class TelegramBotService:
 
         quote = response.get('data', {})
 
-        ltp = float(quote.get('ltp', 0))
-        prev_close = float(quote.get('prev_close', ltp))
+        # Handle quote values that might be strings from some brokers
+        try:
+            ltp = float(quote.get('ltp', 0))
+        except (ValueError, TypeError):
+            ltp = 0.0
+
+        try:
+            prev_close = float(quote.get('prev_close', ltp))
+        except (ValueError, TypeError):
+            prev_close = ltp
+
         change = ltp - prev_close
         change_pct = (change / prev_close * 100) if prev_close > 0 else 0
 
         change_emoji = "🟢" if change > 0 else "🔴" if change < 0 else "⚪"
+
+        # Handle other quote values
+        try:
+            open_price = float(quote.get('open', 0))
+        except (ValueError, TypeError):
+            open_price = 0.0
+
+        try:
+            high_price = float(quote.get('high', 0))
+        except (ValueError, TypeError):
+            high_price = 0.0
+
+        try:
+            low_price = float(quote.get('low', 0))
+        except (ValueError, TypeError):
+            low_price = 0.0
+
+        try:
+            volume = int(quote.get('volume', 0))
+        except (ValueError, TypeError):
+            volume = 0
 
         message = (
             f"📊 *{symbol}*\n"
             "━━━━━━━━━━━━━━━\n\n"
             f"{change_emoji} Price: ₹{ltp:,.2f}\n"
             f"├ Change: ₹{change:+.2f} ({change_pct:+.2f}%)\n"
-            f"├ Open: ₹{quote.get('open', 0):,.2f}\n"
-            f"├ High: ₹{quote.get('high', 0):,.2f}\n"
-            f"├ Low: ₹{quote.get('low', 0):,.2f}\n"
+            f"├ Open: ₹{open_price:,.2f}\n"
+            f"├ High: ₹{high_price:,.2f}\n"
+            f"├ Low: ₹{low_price:,.2f}\n"
             f"├ Prev Close: ₹{prev_close:,.2f}\n"
-            f"└ Volume: {quote.get('volume', 0):,}"
+            f"└ Volume: {volume:,}"
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
