@@ -726,6 +726,14 @@
                 setTimeout(() => avgPriceElement.classList.remove('flash'), 500);
             }
 
+            // Last Trade Quantity
+            const lastTradeQtyElement = document.getElementById(`${symbol}-last-trade-quantity`);
+            if (lastTradeQtyElement && marketData.last_trade_quantity !== undefined) {
+                lastTradeQtyElement.textContent = formatVolume(marketData.last_trade_quantity);
+                lastTradeQtyElement.classList.add('flash');
+                setTimeout(() => lastTradeQtyElement.classList.remove('flash'), 500);
+            }
+
             // Buy/Sell quantities
             const buyQtyElement = document.getElementById(`${symbol}-total-buy-quantity`);
             if (buyQtyElement && marketData.total_buy_quantity !== undefined) {
@@ -919,8 +927,8 @@
             if (ltpTimeElement) ltpTimeElement.textContent = '-';
             
             // Clear quote data
-            ['open', 'high', 'low', 'close', 'volume', 'average-price', 
-             'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
+            ['open', 'high', 'low', 'close', 'volume', 'average-price',
+             'last-trade-quantity', 'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
                 const element = document.getElementById(`${symbolId}-${field}`);
                 if (element) element.textContent = '-';
             });
@@ -1187,6 +1195,10 @@
                             <div>
                                 <span class="text-xs text-base-content/50">Avg Price:</span>
                                 <div id="${symbolId}-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Last Qty:</span>
+                                <div id="${symbolId}-last-trade-quantity" class="data-value">-</div>
                             </div>
                             <div>
                                 <span class="text-xs text-base-content/50">Buy Qty:</span>
