@@ -20,13 +20,15 @@ class AliceBlueExchangeMapper(ExchangeMapper):
         # Map from standard exchange codes to AliceBlue exchange codes
         self._exchange_mapping = {
             "NSE": "NSE",
-            "NSE_INDEX": "NSE",  # NSE indices map to NSE
-            "BSE": "BSE", 
-            "NFO": "NFO",  # NSE F&O
-            "BFO": "BFO",  # BSE F&O
-            "CDS": "CDS",  # Currency Derivatives
-            "BCD": "BCD",  # BSE Currency Derivatives
-            "MCX": "MCX"   # Multi Commodity Exchange
+            "NSE_INDEX": "NSE",    # NSE indices map to NSE
+            "BSE": "BSE",
+            "BSE_INDEX": "BSE",    # BSE indices map to BSE
+            "NFO": "NFO",          # NSE F&O
+            "BFO": "BFO",          # BSE F&O
+            "CDS": "CDS",          # Currency Derivatives
+            "BCD": "BCD",          # BSE Currency Derivatives
+            "MCX": "MCX",          # Multi Commodity Exchange
+            "MCX_INDEX": "MCX"     # MCX indices map to MCX
         }
         
         # Reverse mapping for AliceBlue to standard

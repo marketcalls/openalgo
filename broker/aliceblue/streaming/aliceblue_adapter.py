@@ -284,16 +284,24 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Wait a bit for connection to stabilize
                 import time
                 time.sleep(1)
-            # Convert exchange to AliceBlue format
+            # Convert exchange to AliceBlue format for sending to websocket
             ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
-            
-            # Get token for the symbol
-            self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, ab_exchange: {ab_exchange}")
-            token = get_token(symbol, ab_exchange)
+
+            # Get token for the symbol - use original exchange for token lookup
+            # This is important for indices where NSE_INDEX/BSE_INDEX are stored in DB
+            self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, exchange: {exchange}")
+            token = get_token(symbol, exchange)
             self.logger.info(f"Subscribe: Token lookup result: {token}")
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
+
+            # Handle AliceBlue index token format
+            # If token starts with "999" for indices, remove it as websocket expects actual token
+            if exchange in ['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX'] and str(token).startswith('999'):
+                original_token = token
+                token = str(token)[3:]  # Remove '999' prefix
+                self.logger.info(f"Adjusted index token from {original_token} to {token}")
             
             # Determine feed type based on mode
             feed_type = AliceBlueFeedType.DEPTH if mode == 3 else AliceBlueFeedType.MARKET_DATA
@@ -434,14 +442,14 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Dict[str, Any]: Response with status and message
         """
         try:
-            # Convert exchange to AliceBlue format
-            ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
-            
-            # Get token for the symbol
-            token = get_token(symbol, ab_exchange)
+            # Get token for the symbol using original exchange (before conversion)
+            token = get_token(symbol, exchange)
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
+
+            # Convert exchange to AliceBlue format for the unsubscription message
+            ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
             
             # Create unsubscription message
             unsub_msg = self.message_mapper.create_unsubsciption_message(ab_exchange, token)
@@ -795,10 +803,8 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 else:
                     self.logger.debug(f"Subscription not found for key: {sub_key}, using parsed values")
             
-            # Special handling for NIFTY index based on token (26000 is NIFTY token)
-            if token == '26000' and broker_exchange == 'NSE':
-                original_symbol = 'NIFTY'
-                # Update the parsed_data with correct symbol
+            # Update parsed_data with the correct original symbol if we found it
+            if original_symbol and original_symbol != parsed_data.get('symbol'):
                 parsed_data['symbol'] = original_symbol
                 
             # Use the original subscription exchange and symbol for topic generation

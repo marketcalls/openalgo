@@ -220,7 +220,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": trade.get('Nstordno', ''),
-            "timestamp": trade.get('Time', '')
+            "timestamp": trade.get('Filltime', '')  # Use Filltime which contains HH:MM:SS format
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -265,7 +265,7 @@ def map_position_data(position_data):
     
 
 def transform_positions_data(positions_data):
-    transformed_data = [] 
+    transformed_data = []
 
     for position in positions_data:
         netqty = float(position.get('Netqty', 0))
@@ -275,17 +275,30 @@ def transform_positions_data(positions_data):
             net_amount = float(position.get('NetSellavgprc', 0))
         else:
             net_amount = 0
-        
-        average_price = net_amount    
-        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(average_price)
+
+        average_price = net_amount
+
+        # Get LTP (Last Traded Price) from position data
+        ltp = float(position.get('Ltp', 0))
+
+        # Calculate P&L
+        pnl = 0
+        if netqty != 0 and average_price > 0:
+            if netqty > 0:
+                # Long position: (LTP - Avg Buy Price) * Quantity
+                pnl = (ltp - average_price) * netqty
+            else:
+                # Short position: (Avg Sell Price - LTP) * abs(Quantity)
+                pnl = (average_price - ltp) * abs(netqty)
 
         transformed_position = {
             "symbol": position.get('Tsym', ''),
             "exchange": position.get('Exchange', ''),
             "product": position.get('Pcode', ''),
-            "quantity": position.get('Netqty', '0'),
-            "average_price": average_price_formatted,
+            "quantity": netqty,  # Return as numeric value
+            "average_price": average_price,  # Return as numeric value
+            "ltp": ltp,  # Return as numeric value
+            "pnl": pnl  # Return as numeric value
         }
         transformed_data.append(transformed_position)
     return transformed_data
