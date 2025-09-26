@@ -17,6 +17,7 @@ from utils.constants import (
 )
 from restx_api.schemas import OrderSchema
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -173,7 +174,10 @@ def place_order_with_auth(
             'request': analyzer_request,
             'response': response_data
         })
-        
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('placeorder', order_data, response_data, order_data.get('apikey'))
+
         return True, response_data, 200
 
     # If not in analyze mode, proceed with actual order placement
@@ -211,6 +215,8 @@ def place_order_with_auth(
         })
         order_response_data = {'status': 'success', 'orderid': order_id}
         executor.submit(async_log_order, 'placeorder', order_request_data, order_response_data)
+        # Send Telegram alert asynchronously
+        telegram_alert_service.send_order_alert('placeorder', order_data, order_response_data, order_data.get('apikey'))
         return True, order_response_data, 200
     else:
         message = response_data.get('message', 'Failed to place order') if isinstance(response_data, dict) else 'Failed to place order'

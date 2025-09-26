@@ -323,6 +323,10 @@ def verify_api_key(provided_api_key):
         logger.error(f"Error verifying API key: {e}")
         return None
 
+def get_username_by_apikey(provided_api_key):
+    """Get username for a given API key"""
+    return verify_api_key(provided_api_key)
+
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
     # Check if broker name is in cache

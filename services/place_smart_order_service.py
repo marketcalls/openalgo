@@ -18,6 +18,7 @@ from utils.constants import (
     REQUIRED_SMART_ORDER_FIELDS
 )
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -179,7 +180,9 @@ def place_smart_order_with_auth(
             'request': analyzer_request,
             'response': response_data
         })
-        
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('placesmartorder', order_data, response_data, order_data.get('apikey'))
         return True, response_data, 200
 
     # Live Mode - Proceed with actual order placement
@@ -210,12 +213,16 @@ def place_smart_order_with_auth(
                 'status': 'info',
                 'message': ' Positions Already Matched. No Action needed.'
             })
+            # Send Telegram alert
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
         if res and res.status == 200:
             order_response_data = {'status': 'success', 'orderid': order_id}
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
+            # Send Telegram alert
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
             socketio.emit('order_event', {
                 'symbol': order_data.get('symbol'),
                 'action': order_data.get('action'),
