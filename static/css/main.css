@@ -892,6 +892,10 @@ body {
     --tw-border-opacity: 1;
     border-color: var(--fallback-p,oklch(var(--p)/var(--tw-border-opacity)));
   }
+  .checkbox-error:hover {
+    --tw-border-opacity: 1;
+    border-color: var(--fallback-er,oklch(var(--er)/var(--tw-border-opacity)));
+  }
   .label a:hover {
     --tw-text-opacity: 1;
     color: var(--fallback-bc,oklch(var(--bc)/var(--tw-text-opacity)));
@@ -2755,6 +2759,24 @@ input.tab:checked + .tab-content,
   --tw-text-opacity: 1;
   color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
 }
+.checkbox-error {
+  --chkbg: var(--fallback-er,oklch(var(--er)/1));
+  --chkfg: var(--fallback-erc,oklch(var(--erc)/1));
+  --tw-border-opacity: 1;
+  border-color: var(--fallback-er,oklch(var(--er)/var(--tw-border-opacity)));
+}
+.checkbox-error:focus-visible {
+  outline-color: var(--fallback-er,oklch(var(--er)/1));
+}
+.checkbox-error:checked,
+    .checkbox-error[aria-checked="true"] {
+  --tw-border-opacity: 1;
+  border-color: var(--fallback-er,oklch(var(--er)/var(--tw-border-opacity)));
+  --tw-bg-opacity: 1;
+  background-color: var(--fallback-er,oklch(var(--er)/var(--tw-bg-opacity)));
+  --tw-text-opacity: 1;
+  color: var(--fallback-erc,oklch(var(--erc)/var(--tw-text-opacity)));
+}
 @keyframes checkmark {
   0% {
     background-position-y: 5px;
@@ -2996,6 +3018,17 @@ details.collapse summary::-webkit-details-marker {
 }
 .join-item:focus {
   isolation: isolate;
+}
+.link-primary {
+  --tw-text-opacity: 1;
+  color: var(--fallback-p,oklch(var(--p)/var(--tw-text-opacity)));
+}
+@supports (color:color-mix(in oklab,black,black)) {
+  @media (hover:hover) {
+    .link-primary:hover {
+      color: color-mix(in oklab,var(--fallback-p,oklch(var(--p)/1)) 80%,black);
+    }
+  }
 }
 .link:focus {
   outline: 2px solid transparent;
@@ -4900,6 +4933,10 @@ code[class*="language-"] {
   margin-top: 0.25rem;
   margin-bottom: 0.25rem;
 }
+.my-2 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
 .mb-1 {
   margin-bottom: 0.25rem;
 }
@@ -5079,6 +5116,9 @@ code[class*="language-"] {
 }
 .h-full {
   height: 100%;
+}
+.max-h-32 {
+  max-height: 8rem;
 }
 .max-h-60 {
   max-height: 15rem;
@@ -5528,6 +5568,9 @@ code[class*="language-"] {
 .bg-yellow-500 {
   --tw-bg-opacity: 1;
   background-color: rgb(234 179 8 / var(--tw-bg-opacity, 1));
+}
+.bg-opacity-20 {
+  --tw-bg-opacity: 0.2;
 }
 .bg-opacity-90 {
   --tw-bg-opacity: 0.9;

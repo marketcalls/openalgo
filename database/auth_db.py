@@ -305,11 +305,15 @@ def get_api_key_for_tradingview(user_id):
 
 def verify_api_key(provided_api_key):
     """Verify an API key using Argon2"""
+    from flask import request, has_request_context
+    from database.traffic_db import InvalidAPIKeyTracker
+    import hashlib
+
     peppered_key = provided_api_key + PEPPER
     try:
         # Query all API keys
         api_keys = ApiKeys.query.all()
-        
+
         # Try to verify against each stored hash
         for api_key_obj in api_keys:
             try:
@@ -317,7 +321,25 @@ def verify_api_key(provided_api_key):
                 return api_key_obj.user_id
             except VerifyMismatchError:
                 continue
-        
+
+        # If we reach here, the API key is invalid
+        # Track the invalid attempt
+        try:
+            # Check if we're in a request context
+            if has_request_context():
+                client_ip = request.remote_addr
+            else:
+                client_ip = '127.0.0.1'
+
+            # Hash the API key for tracking (don't store plaintext)
+            api_key_hash = hashlib.sha256(provided_api_key.encode()).hexdigest()[:16]
+
+            # Track the invalid API key attempt
+            InvalidAPIKeyTracker.track_invalid_api_key(client_ip, api_key_hash)
+
+        except Exception as track_error:
+            logger.warning(f"Could not track invalid API key attempt: {track_error}")
+
         return None
     except Exception as e:
         logger.error(f"Error verifying API key: {e}")

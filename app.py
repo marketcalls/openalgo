@@ -11,6 +11,7 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
+from utils.security_middleware import init_security_middleware  # Import security middleware
 from utils.logging import get_logger, log_startup_banner  # Import centralized logging
 from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
@@ -36,6 +37,7 @@ from blueprints.websocket_example import websocket_bp  # Import the websocket ex
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
+from blueprints.security import security_bp  # Import the security blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -140,7 +142,10 @@ def create_app():
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
 
-    # Initialize traffic logging middleware after RESTx but before other blueprints
+    # Initialize security middleware before traffic logging
+    init_security_middleware(app)
+
+    # Initialize traffic logging middleware after security
     init_traffic_logging(app)
 
     # Register other blueprints
@@ -164,7 +169,8 @@ def create_app():
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
-    
+    app.register_blueprint(security_bp)  # Register Security blueprint
+
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -237,6 +243,16 @@ def create_app():
     
     @app.errorhandler(404)
     def not_found_error(error):
+        from flask import request
+        from database.traffic_db import Error404Tracker
+
+        # Track the 404 error
+        client_ip = request.remote_addr
+        path = request.path
+
+        # Track 404 error for security monitoring
+        Error404Tracker.track_404(client_ip, path)
+
         return render_template('404.html'), 404
 
     @app.errorhandler(500)
@@ -292,7 +308,34 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
     # Log the OpenAlgo access URL with enhanced styling
-    url = f"http://{host_ip}:{port}"
-    log_startup_banner(logger, "OpenAlgo is running!", url)
+    import socket
+
+    # If binding to all interfaces (0.0.0.0), show all available IPs
+    if host_ip == '0.0.0.0':
+        urls = []
+        urls.append(f"http://localhost:{port}")
+        urls.append(f"http://127.0.0.1:{port}")
+
+        # Get local network IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            urls.append(f"http://{local_ip}:{port}")
+        except:
+            local_ip = "127.0.0.1"
+
+        # Show accessible URLs
+        logger.info("=" * 60)
+        logger.info("OpenAlgo is running!")
+        logger.info(f"Access the application at:")
+        for url in urls:
+            logger.info(f"  → {url}")
+        logger.info("=" * 60)
+    else:
+        # Single IP binding
+        url = f"http://{host_ip}:{port}"
+        log_startup_banner(logger, "OpenAlgo is running!", url)
 
     socketio.run(app, host=host_ip, port=port, debug=debug)
