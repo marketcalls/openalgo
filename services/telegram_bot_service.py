@@ -45,6 +45,30 @@ class TelegramBotService:
         self.bot_thread = None
         self.bot_loop = None
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
+        self._shutdown_event = threading.Event()  # Event to signal shutdown
+
+    def _is_running_in_async_context(self) -> bool:
+        """Check if we're already running in an async context"""
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def _detect_environment(self) -> str:
+        """Detect the runtime environment"""
+        import os
+        
+        if os.path.exists('/.dockerenv'):
+            return "docker"
+        elif os.environ.get('KUBERNETES_SERVICE_HOST'):
+            return "kubernetes"
+        elif os.environ.get('FLASK_ENV') or os.environ.get('FLASK_APP'):
+            return "flask"
+        elif hasattr(os, 'uname') and 'microsoft' in os.uname().release.lower():
+            return "wsl"
+        else:
+            return "standard"
 
     def _get_sdk_client(self, telegram_id: int) -> Optional[openalgo_api]:
         """Get or create OpenAlgo SDK client for a user"""
@@ -353,25 +377,56 @@ class TelegramBotService:
             logger.error(f"Error generating daily chart: {e}")
             return None
 
-    async def initialize_bot(self, token: str) -> Tuple[bool, str]:
-        """Initialize the Telegram bot with given token"""
+    def initialize_bot_sync(self, token: str) -> Tuple[bool, str]:
+        """Initialize the Telegram bot with given token (synchronous)"""
         try:
+            logger.debug(f"Initializing bot with token: {token[:10]}...")
+            
             # If bot is running, stop it first
             if self.is_running:
-                await self.stop_bot()
-                # Wait a moment for cleanup
-                await asyncio.sleep(1)
+                logger.debug("Bot is running, stopping first...")
+                self.stop_bot_sync()
+                import time
+                time.sleep(1)
 
             self.bot_token = token
 
             # Create a temporary bot just to verify the token
-            temp_app = Application.builder().token(token).build()
-            await temp_app.initialize()
-
-            # Test the token by getting bot info
-            bot_info = await temp_app.bot.get_me()
-
-            await temp_app.shutdown()
+            logger.debug("Creating temporary application for token verification...")
+            
+            # We need to run this in a separate thread to avoid event loop conflicts
+            import concurrent.futures
+            import threading
+            
+            def verify_token():
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    temp_app = (Application.builder()
+                              .token(token)
+                              .read_timeout(30)
+                              .write_timeout(30)
+                              .connect_timeout(30)
+                              .pool_timeout(30)
+                              .build())
+                    
+                    async def test_token():
+                        await temp_app.initialize()
+                        bot_info = await temp_app.bot.get_me()
+                        await temp_app.shutdown()
+                        return bot_info
+                    
+                    return loop.run_until_complete(test_token())
+                finally:
+                    loop.close()
+            
+            # Run verification in separate thread
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(verify_token)
+                bot_info = future.result(timeout=30)  # 30 second timeout
+            
+            logger.debug(f"Bot info retrieved: @{bot_info.username}")
 
             # Update bot config in database
             update_bot_config({
@@ -386,23 +441,140 @@ class TelegramBotService:
             logger.error(f"Failed to initialize bot: {e}")
             return False, str(e)
 
+    async def initialize_bot(self, token: str) -> Tuple[bool, str]:
+        """Initialize the Telegram bot with given token"""
+        try:
+            logger.debug(f"Initializing bot with token: {token[:10]}...")
+            
+            # If bot is running, stop it first
+            if self.is_running:
+                logger.debug("Bot is running, stopping first...")
+                await self.stop_bot()
+                # Wait a moment for cleanup
+                await asyncio.sleep(1)
+
+            self.bot_token = token
+
+            # Create a temporary bot just to verify the token
+            logger.debug("Creating temporary application for token verification...")
+            temp_app = (Application.builder()
+                       .token(token)
+                       .read_timeout(30)
+                       .write_timeout(30)
+                       .connect_timeout(30)
+                       .pool_timeout(30)
+                       .build())
+            
+            try:
+                await temp_app.initialize()
+                logger.debug("Temporary application initialized, getting bot info...")
+
+                # Test the token by getting bot info
+                bot_info = await temp_app.bot.get_me()
+                logger.debug(f"Bot info retrieved: @{bot_info.username}")
+
+                await temp_app.shutdown()
+                logger.debug("Temporary application shutdown complete")
+
+                # Update bot config in database
+                update_bot_config({
+                    'bot_token': token,
+                    'is_active': False,
+                    'bot_username': bot_info.username
+                })
+
+                return True, f"Bot initialized successfully: @{bot_info.username}"
+                
+            except Exception as e:
+                logger.error(f"Error during bot verification: {e}")
+                try:
+                    await temp_app.shutdown()
+                except:
+                    pass
+                raise
+
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {e}")
+            return False, str(e)
+
     def _run_bot_async(self):
         """Run bot in separate thread with its own event loop"""
-        self.bot_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.bot_loop)
         try:
-            self.bot_loop.run_until_complete(self._start_bot())
+            # Ensure we're not in an async context in this thread
+            try:
+                existing_loop = asyncio.get_running_loop()
+                logger.error("Found existing event loop in thread! This indicates a threading issue.")
+                # Try to use the existing loop instead of creating a new one
+                self.bot_loop = existing_loop
+                # Don't set it as the thread's event loop since it already exists
+                logger.debug("Using existing event loop instead of creating new one")
+                
+                # We can't use await in a thread function, so we need to handle this differently
+                logger.error("Cannot handle existing event loop in thread context")
+                self.is_running = False
+                self._shutdown_event.set()
+                return
+                    
+            except RuntimeError:
+                # Good, no existing loop - create our own
+                logger.debug("No existing event loop found, creating new one")
+                
+                # Create new event loop for this thread
+                self.bot_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.bot_loop)
+                
+                logger.debug("Starting bot event loop in thread")
+                
+                # Run the bot
+                self.bot_loop.run_until_complete(self._start_bot())
+            
+        except RuntimeError as e:
+            if "cannot be called from a running event loop" in str(e):
+                logger.error("Event loop conflict detected. This usually happens in Docker/async environments.")
+                logger.error("Try restarting the container or check for conflicting async operations.")
+            else:
+                logger.error(f"Runtime error in bot loop: {e}")
+            self.is_running = False
+            self._shutdown_event.set()
         except Exception as e:
-            logger.debug(f"Bot loop ended: {e}")
+            logger.error(f"Bot loop ended with error: {e}")
+            self.is_running = False
+            self._shutdown_event.set()
         finally:
             # Clean shutdown
-            self.bot_loop.close()
+            try:
+                if self.bot_loop and not self.bot_loop.is_closed():
+                    # Cancel all pending tasks
+                    pending = asyncio.all_tasks(self.bot_loop)
+                    for task in pending:
+                        task.cancel()
+                    
+                    # Wait for tasks to complete cancellation
+                    if pending:
+                        self.bot_loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                    
+                    self.bot_loop.close()
+                    logger.debug("Bot event loop closed")
+            except Exception as e:
+                logger.debug(f"Error closing bot loop: {e}")
+            finally:
+                self.bot_loop = None
 
     async def _start_bot(self):
         """Start the bot with proper handlers"""
         try:
-            # Create application
-            self.application = Application.builder().token(self.bot_token).build()
+            logger.debug("Initializing Telegram bot...")
+            
+            # Create application with proper timeouts
+            self.application = (Application.builder()
+                              .token(self.bot_token)
+                              .read_timeout(30)
+                              .write_timeout(30)
+                              .connect_timeout(30)
+                              .pool_timeout(30)
+                              .build())
 
             # Add command handlers
             self.application.add_handler(CommandHandler("start", self.cmd_start))
@@ -423,22 +595,28 @@ class TelegramBotService:
             # Add callback query handler for inline buttons
             self.application.add_handler(CallbackQueryHandler(self.button_callback))
 
-            # Initialize
+            # Initialize and start
+            logger.debug("Initializing application...")
             await self.application.initialize()
+            
+            logger.debug("Starting application...")
             await self.application.start()
 
-            # Always use polling mode
-            logger.debug("Starting bot in polling mode...")
-            await self.application.updater.start_polling()
+            # Start polling
+            logger.debug("Starting polling...")
+            await self.application.updater.start_polling(
+                drop_pending_updates=True,  # Drop any pending updates
+                allowed_updates=None        # Allow all update types
+            )
 
             self.is_running = True
             update_bot_config({'is_active': True})
+            logger.debug("Bot started successfully and is running")
 
-            # Keep running
-            while self.is_running:
+            # Keep running until stopped
+            while self.is_running and not self._shutdown_event.is_set():
                 await asyncio.sleep(1)
 
-            # Clean shutdown when is_running becomes False
             logger.debug("Bot stopping gracefully...")
 
         except Exception as e:
@@ -446,18 +624,36 @@ class TelegramBotService:
             self.is_running = False
             raise
         finally:
-            # Ensure updater is stopped if it was started
-            if self.application and self.application.updater.running:
-                try:
-                    await self.application.updater.stop()
-                except Exception as e:
-                    logger.debug(f"Error stopping updater in finally: {e}")
+            # Clean shutdown
+            try:
+                if self.application:
+                    if hasattr(self.application, 'updater') and self.application.updater.running:
+                        logger.debug("Stopping updater...")
+                        await self.application.updater.stop()
+                    
+                    logger.debug("Stopping application...")
+                    await self.application.stop()
+                    
+                    logger.debug("Shutting down application...")
+                    await self.application.shutdown()
+                    
+                update_bot_config({'is_active': False})
+                logger.debug("Bot shutdown complete")
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
 
-    async def start_bot(self) -> Tuple[bool, str]:
-        """Start the bot in polling mode"""
+    def start_bot_sync(self) -> Tuple[bool, str]:
+        """Start the bot synchronously (for use from Flask routes)"""
         try:
             if self.is_running:
                 return False, "Bot is already running"
+
+            # Clean up any existing thread
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Existing bot thread found, stopping it first")
+                self.stop_bot_sync()
+                import time
+                time.sleep(1)
 
             config = get_bot_config()
             if not config or not config.get('bot_token'):
@@ -465,17 +661,97 @@ class TelegramBotService:
 
             self.bot_token = config['bot_token']
 
+            # Detect environment and log
+            env = self._detect_environment()
+            logger.debug(f"Environment: {env}")
+            
+            # Reset shutdown event
+            self._shutdown_event.clear()
+
             # Start bot in separate thread
-            self.bot_thread = threading.Thread(target=self._run_bot_async, daemon=True)
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_async, 
+                daemon=True,
+                name="TelegramBotThread"
+            )
             self.bot_thread.start()
 
-            # Wait a bit for the bot to start
-            await asyncio.sleep(2)
+            # Wait a bit for the bot to start and check multiple times
+            import time
+            for i in range(20):  # Check for 10 seconds
+                time.sleep(0.5)
+                if self.is_running:
+                    logger.debug(f"Bot started successfully after {(i+1)*0.5} seconds")
+                    return True, "Bot started successfully"
+                if self._shutdown_event.is_set():
+                    return False, "Bot startup was cancelled"
 
-            if self.is_running:
-                return True, "Bot started successfully"
+            # Check if thread is still alive
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Bot thread is alive but bot not marked as running")
+                return False, "Bot thread started but not responding"
             else:
-                return False, "Bot failed to start"
+                return False, "Bot thread failed to start"
+
+        except Exception as e:
+            logger.error(f"Failed to start bot: {e}")
+            return False, str(e)
+
+    async def start_bot(self) -> Tuple[bool, str]:
+        """Start the bot in polling mode"""
+        try:
+            if self.is_running:
+                return False, "Bot is already running"
+
+            # Clean up any existing thread
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Existing bot thread found, stopping it first")
+                self.stop_bot_sync()
+                await asyncio.sleep(1)
+
+            config = get_bot_config()
+            if not config or not config.get('bot_token'):
+                return False, "Bot token not configured"
+
+            self.bot_token = config['bot_token']
+
+            # Detect environment and log
+            env = self._detect_environment()
+            async_context = self._is_running_in_async_context()
+            logger.debug(f"Environment: {env}, Async context: {async_context}")
+            
+            # Check if we're in an async context (common in Docker/web environments)
+            if async_context:
+                logger.debug("Detected async context, starting bot in thread...")
+            else:
+                logger.debug("No async context detected, starting bot normally...")
+
+            # Reset shutdown event
+            self._shutdown_event.clear()
+
+            # Start bot in separate thread
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_async, 
+                daemon=True,
+                name="TelegramBotThread"
+            )
+            self.bot_thread.start()
+
+            # Wait a bit for the bot to start and check multiple times
+            for i in range(20):  # Check for 10 seconds
+                await asyncio.sleep(0.5)
+                if self.is_running:
+                    logger.debug(f"Bot started successfully after {(i+1)*0.5} seconds")
+                    return True, "Bot started successfully"
+                if self._shutdown_event.is_set():
+                    return False, "Bot startup was cancelled"
+
+            # Check if thread is still alive
+            if self.bot_thread and self.bot_thread.is_alive():
+                logger.warning("Bot thread is alive but bot not marked as running")
+                return False, "Bot thread started but not responding"
+            else:
+                return False, "Bot thread failed to start"
 
         except Exception as e:
             logger.error(f"Failed to start bot: {e}")
@@ -487,45 +763,71 @@ class TelegramBotService:
             if not self.is_running:
                 return False, "Bot is not running"
 
+            logger.debug("Initiating bot stop...")
+            
             # Signal the bot to stop
-            logger.debug("Stopping bot...")
             self.is_running = False
+            self._shutdown_event.set()
 
             # If we have a bot loop running in another thread, handle shutdown properly
-            if self.bot_loop and self.bot_loop.is_running() and self.application:
-                # Schedule the shutdown in the bot's event loop
-                async def shutdown():
-                    try:
-                        if self.application.updater.running:
-                            await self.application.updater.stop()
-                        await self.application.stop()
-                        await self.application.shutdown()
-                    except Exception as e:
-                        logger.error(f"Error during shutdown: {e}")
-
-                # Run the shutdown in the bot's event loop
-                future = asyncio.run_coroutine_threadsafe(shutdown(), self.bot_loop)
-                # Wait for shutdown to complete (max 10 seconds)
+            if self.bot_loop and not self.bot_loop.is_closed() and self.application:
                 try:
-                    future.result(timeout=10)
-                    logger.debug("Bot shutdown completed")
-                except concurrent.futures.TimeoutError:
-                    logger.warning("Shutdown timeout - forcing stop")
+                    # Schedule the shutdown in the bot's event loop
+                    async def shutdown():
+                        try:
+                            if hasattr(self.application, 'updater') and self.application.updater.running:
+                                logger.debug("Stopping updater from sync method...")
+                                await self.application.updater.stop()
+                            
+                            logger.debug("Stopping application from sync method...")
+                            await self.application.stop()
+                            
+                            logger.debug("Shutting down application from sync method...")
+                            await self.application.shutdown()
+                        except Exception as e:
+                            logger.error(f"Error during async shutdown: {e}")
+
+                    # Run the shutdown in the bot's event loop
+                    if self.bot_loop.is_running():
+                        future = asyncio.run_coroutine_threadsafe(shutdown(), self.bot_loop)
+                        # Wait for shutdown to complete (max 15 seconds)
+                        try:
+                            future.result(timeout=15)
+                            logger.debug("Async shutdown completed")
+                        except concurrent.futures.TimeoutError:
+                            logger.warning("Async shutdown timeout - continuing with cleanup")
+                        except Exception as e:
+                            logger.warning(f"Async shutdown error: {e}")
+                    else:
+                        logger.debug("Bot loop not running, skipping async shutdown")
+                        
                 except Exception as e:
-                    logger.warning(f"Shutdown error: {e}")
+                    logger.error(f"Error during shutdown scheduling: {e}")
 
             # Wait for the thread to finish (with timeout)
             if self.bot_thread and self.bot_thread.is_alive():
-                self.bot_thread.join(timeout=5.0)
+                logger.debug("Waiting for bot thread to finish...")
+                self.bot_thread.join(timeout=10.0)
                 if self.bot_thread.is_alive():
-                    logger.warning("Thread did not stop cleanly")
+                    logger.warning("Bot thread did not stop cleanly within timeout")
+                else:
+                    logger.debug("Bot thread finished successfully")
                 self.bot_thread = None
 
-            # Clean up
+            # Clean up references
             self.application = None
+            if self.bot_loop and not self.bot_loop.is_closed():
+                try:
+                    self.bot_loop.close()
+                except Exception as e:
+                    logger.debug(f"Error closing bot loop: {e}")
             self.bot_loop = None
 
+            # Clear SDK client cache
+            self.sdk_clients.clear()
+
             update_bot_config({'is_active': False})
+            logger.debug("Bot stop completed")
 
             return True, "Bot stopped successfully"
 
@@ -1449,30 +1751,501 @@ class TelegramBotService:
         query = update.callback_query
         await query.answer()
 
-        # Map callback data to commands
-        command_map = {
-            'orderbook': self.cmd_orderbook,
-            'tradebook': self.cmd_tradebook,
-            'positions': self.cmd_positions,
-            'holdings': self.cmd_holdings,
-            'funds': self.cmd_funds,
-            'pnl': self.cmd_pnl,
-            'menu': self.cmd_menu
-        }
+        user = query.from_user
+        telegram_user = get_telegram_user(user.id)
 
-        handler = command_map.get(query.data)
-        if handler:
-            # Create a fake update with message for the handler
-            fake_update = Update(
-                update_id=update.update_id,
-                message=query.message,
-                callback_query=query
+        if not telegram_user:
+            await query.edit_message_text("❌ Please link your account first using /link")
+            return
+
+        # Handle each callback action directly instead of creating fake updates
+        try:
+            if query.data == 'orderbook':
+                await self._handle_orderbook_callback(query, user.id)
+            elif query.data == 'tradebook':
+                await self._handle_tradebook_callback(query, user.id)
+            elif query.data == 'positions':
+                await self._handle_positions_callback(query, user.id)
+            elif query.data == 'holdings':
+                await self._handle_holdings_callback(query, user.id)
+            elif query.data == 'funds':
+                await self._handle_funds_callback(query, user.id)
+            elif query.data == 'pnl':
+                await self._handle_pnl_callback(query, user.id)
+            elif query.data == 'menu':
+                await self._handle_menu_callback(query, user.id)
+            else:
+                await query.edit_message_text("❌ Unknown option selected")
+        except Exception as e:
+            logger.error(f"Error in button callback: {e}")
+            await query.edit_message_text("❌ An error occurred. Please try again.")
+    
+    async def _handle_orderbook_callback(self, query, telegram_id: int):
+        """Handle orderbook callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.orderbook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch orderbook")
+            return
+
+        orders = response.get('data', {}).get('orders', [])
+        statistics = response.get('data', {}).get('statistics', {})
+
+        if not orders:
+            message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders"
+        else:
+            message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\n"
+
+            for order in orders[:10]:  # Limit to 10 orders
+                status = order.get('order_status', 'unknown')
+                status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
+                action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
+
+                try:
+                    price = float(order.get('price', 0))
+                    price_str = "Market" if price == 0 and order.get('pricetype') == 'MARKET' else f"₹{price}"
+                except (ValueError, TypeError):
+                    price_str = f"₹{order.get('price', 0)}"
+
+                try:
+                    quantity = int(order.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = order.get('quantity', 0)
+
+                message += (
+                    f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
+                    f"{action_emoji} {order.get('action', 'N/A')} {quantity} @ {price_str}\n"
+                    f"├ Type: {order.get('pricetype', 'N/A')}\n"
+                    f"├ Product: {order.get('product', 'N/A')}\n"
+                    f"├ Status: {status.title()}\n"
+                    f"├ Time: {order.get('timestamp', 'N/A')}\n"
+                )
+
+                try:
+                    trigger_price = float(order.get('trigger_price', 0))
+                    if trigger_price > 0:
+                        message += f"├ Trigger: ₹{trigger_price}\n"
+                except (ValueError, TypeError):
+                    pass
+
+                message += f"└ Order ID: `{order.get('orderid', 'N/A')}`\n\n"
+
+            if len(orders) > 10:
+                message += f"_... and {len(orders) - 10} more orders_\n\n"
+
+            # Add statistics summary
+            if statistics:
+                try:
+                    total_open = int(statistics.get('total_open_orders', 0))
+                except (ValueError, TypeError):
+                    total_open = 0
+
+                try:
+                    total_completed = int(statistics.get('total_completed_orders', 0))
+                except (ValueError, TypeError):
+                    total_completed = 0
+
+                try:
+                    total_rejected = int(statistics.get('total_rejected_orders', 0))
+                except (ValueError, TypeError):
+                    total_rejected = 0
+
+                try:
+                    total_buy = int(statistics.get('total_buy_orders', 0))
+                except (ValueError, TypeError):
+                    total_buy = 0
+
+                try:
+                    total_sell = int(statistics.get('total_sell_orders', 0))
+                except (ValueError, TypeError):
+                    total_sell = 0
+
+                message += (
+                    "📈 *Summary*\n"
+                    f"├ Total Orders: {len(orders)}\n"
+                    f"├ Open: {total_open}\n"
+                    f"├ Completed: {total_completed}\n"
+                    f"├ Rejected: {total_rejected}\n"
+                    f"├ Buy Orders: {total_buy}\n"
+                    f"└ Sell Orders: {total_sell}"
+                )
+
+        # Add back to menu button
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    
+    async def _handle_tradebook_callback(self, query, telegram_id: int):
+        """Handle tradebook callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.tradebook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch tradebook")
+            return
+
+        trades = response.get('data', [])
+
+        if not trades:
+            message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today"
+        else:
+            message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\n"
+            total_buy_value = 0
+            total_sell_value = 0
+
+            for trade in trades[:10]:  # Limit to 10 trades
+                action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
+
+                try:
+                    trade_value = float(trade.get('trade_value', 0))
+                except (ValueError, TypeError):
+                    trade_value = 0.0
+
+                if trade.get('action') == 'BUY':
+                    total_buy_value += trade_value
+                else:
+                    total_sell_value += trade_value
+
+                try:
+                    quantity = int(trade.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = trade.get('quantity', 0)
+
+                try:
+                    avg_price = float(trade.get('average_price', 0))
+                    avg_price_str = f"₹{avg_price:,.2f}"
+                except (ValueError, TypeError):
+                    avg_price_str = f"₹{trade.get('average_price', 0)}"
+
+                message += (
+                    f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
+                    f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
+                    f"├ Product: {trade.get('product', 'N/A')}\n"
+                    f"├ Value: ₹{trade_value:,.2f}\n"
+                    f"├ Time: {trade.get('timestamp', 'N/A')}\n"
+                    f"└ Order ID: `{trade.get('orderid', 'N/A')}`\n\n"
+                )
+
+            if len(trades) > 10:
+                message += f"_... and {len(trades) - 10} more trades_\n\n"
+
+            message += (
+                "📊 *Summary*\n"
+                f"├ Total Trades: {len(trades)}\n"
+                f"├ Buy Value: ₹{total_buy_value:,.2f}\n"
+                f"└ Sell Value: ₹{total_sell_value:,.2f}"
             )
-            fake_update.effective_user = query.from_user
-            fake_update.effective_chat = query.message.chat
 
-            await handler(fake_update, context)
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
+    async def _handle_positions_callback(self, query, telegram_id: int):
+        """Handle positions callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.positionbook)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch positions")
+            return
+
+        positions = response.get('data', [])
+        active_positions = [pos for pos in positions if pos.get('quantity', 0) != 0]
+
+        if not active_positions:
+            message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions"
+        else:
+            message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\n"
+            total_long = 0
+            total_short = 0
+
+            for pos in active_positions[:10]:
+                try:
+                    quantity = int(pos.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = 0
+
+                try:
+                    avg_price = float(pos.get('average_price', '0.00') or 0)
+                except (ValueError, TypeError):
+                    avg_price = 0.0
+
+                if quantity > 0:
+                    position_type = "LONG 📈"
+                    position_emoji = "🟢"
+                    total_long += 1
+                else:
+                    position_type = "SHORT 📉"
+                    position_emoji = "🔴"
+                    total_short += 1
+
+                message += (
+                    f"{position_emoji} *{pos.get('symbol', 'N/A')}* ({pos.get('exchange', 'N/A')})\n"
+                    f"├ Position: {position_type}\n"
+                    f"├ Qty: {abs(quantity)} ({pos.get('product', 'N/A')})\n"
+                )
+
+                if avg_price > 0:
+                    message += f"├ Avg Price: ₹{avg_price:,.2f}\n"
+
+                message += "\n"
+
+            if len(active_positions) > 10:
+                message += f"_... and {len(active_positions) - 10} more positions_\n\n"
+
+            message += (
+                "📊 *Summary*\n"
+                f"├ Active Positions: {len(active_positions)}\n"
+                f"├ Long Positions: {total_long}\n"
+                f"└ Short Positions: {total_short}"
+            )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_holdings_callback(self, query, telegram_id: int):
+        """Handle holdings callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.holdings)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch holdings")
+            return
+
+        holdings = response.get('data', {}).get('holdings', [])
+        statistics = response.get('data', {}).get('statistics', {})
+
+        if not holdings:
+            message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found"
+        else:
+            message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
+
+            for holding in holdings[:10]:
+                try:
+                    pnl = float(holding.get('pnl', 0))
+                except (ValueError, TypeError):
+                    pnl = 0.0
+
+                try:
+                    pnl_percent = float(holding.get('pnlpercent', 0))
+                except (ValueError, TypeError):
+                    pnl_percent = 0.0
+
+                try:
+                    quantity = int(holding.get('quantity', 0))
+                except (ValueError, TypeError):
+                    quantity = 0
+
+                pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
+
+                message += (
+                    f"{pnl_emoji} *{holding.get('symbol', 'N/A')}* ({holding.get('exchange', 'N/A')})\n"
+                    f"├ Product: {holding.get('product', 'CNC')}\n"
+                    f"├ Qty: {quantity}\n"
+                    f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
+                )
+
+            if len(holdings) > 10:
+                message += f"_... and {len(holdings) - 10} more holdings_\n\n"
+
+            if statistics:
+                try:
+                    total_holding_value = float(statistics.get('totalholdingvalue', 0))
+                except (ValueError, TypeError):
+                    total_holding_value = 0.0
+
+                try:
+                    total_inv_value = float(statistics.get('totalinvvalue', 0))
+                except (ValueError, TypeError):
+                    total_inv_value = 0.0
+
+                try:
+                    total_pnl = float(statistics.get('totalprofitandloss', 0))
+                except (ValueError, TypeError):
+                    total_pnl = 0.0
+
+                try:
+                    total_pnl_percent = float(statistics.get('totalpnlpercentage', 0))
+                except (ValueError, TypeError):
+                    total_pnl_percent = 0.0
+
+                stats_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+
+                message += (
+                    f"📊 *Portfolio Summary*\n"
+                    f"├ Current Value: ₹{total_holding_value:,.2f}\n"
+                    f"├ Investment: ₹{total_inv_value:,.2f}\n"
+                    f"└ {stats_emoji} P&L: ₹{total_pnl:,.2f} ({total_pnl_percent:+.2f}%)"
+                )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_funds_callback(self, query, telegram_id: int):
+        """Handle funds callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.funds)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch funds")
+            return
+
+        funds = response.get('data', {})
+
+        try:
+            available = float(funds.get('availablecash', 0))
+        except (ValueError, TypeError):
+            available = 0.0
+
+        try:
+            collateral = float(funds.get('collateral', 0))
+        except (ValueError, TypeError):
+            collateral = 0.0
+
+        try:
+            utilized = float(funds.get('utiliseddebits', 0))
+        except (ValueError, TypeError):
+            utilized = 0.0
+
+        message = (
+            "💰 *FUNDS*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            f"💵 *Available Cash*\n"
+            f"└ ₹{available:,.2f}\n\n"
+            f"🔒 *Collateral*\n"
+            f"└ ₹{collateral:,.2f}\n\n"
+            f"📊 *Utilized Margin*\n"
+            f"└ ₹{utilized:,.2f}\n\n"
+            f"💼 *Total Balance*\n"
+            f"└ ₹{(available + collateral):,.2f}"
+        )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_pnl_callback(self, query, telegram_id: int):
+        """Handle P&L callback"""
+        client = self._get_sdk_client(telegram_id)
+        if not client:
+            await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+            return
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, client.funds)
+
+        if not response or response.get('status') != 'success':
+            await query.edit_message_text("❌ Failed to fetch P&L")
+            return
+
+        funds = response.get('data', {})
+
+        try:
+            realized_pnl = float(funds.get('m2mrealized', 0))
+        except (ValueError, TypeError):
+            realized_pnl = 0.0
+
+        try:
+            unrealized_pnl = float(funds.get('m2munrealized', 0))
+        except (ValueError, TypeError):
+            unrealized_pnl = 0.0
+
+        total_pnl = realized_pnl + unrealized_pnl
+
+        realized_emoji = "🟢" if realized_pnl > 0 else "🔴" if realized_pnl < 0 else "⚪"
+        unrealized_emoji = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
+        total_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+
+        message = (
+            "💹 *PROFIT & LOSS*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            f"{realized_emoji} *Realized P&L*\n"
+            f"└ ₹{realized_pnl:,.2f}\n\n"
+            f"{unrealized_emoji} *Unrealized P&L*\n"
+            f"└ ₹{unrealized_pnl:,.2f}\n\n"
+            f"{total_emoji} *Total P&L*\n"
+            f"└ ₹{total_pnl:,.2f}"
+        )
+
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+    async def _handle_menu_callback(self, query, telegram_id: int):
+        """Handle menu callback (refresh menu)"""
+        from datetime import datetime
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Orderbook", callback_data='orderbook'),
+                InlineKeyboardButton("📈 Tradebook", callback_data='tradebook'),
+            ],
+            [
+                InlineKeyboardButton("💼 Positions", callback_data='positions'),
+                InlineKeyboardButton("🏦 Holdings", callback_data='holdings'),
+            ],
+            [
+                InlineKeyboardButton("💰 Funds", callback_data='funds'),
+                InlineKeyboardButton("💹 P&L", callback_data='pnl'),
+            ],
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data='menu'),
+            ]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Add timestamp to make content different each time
+        current_time = datetime.now().strftime("%H:%M:%S")
+        
+        try:
+            await query.edit_message_text(
+                f"📱 *OpenAlgo Trading Menu*\n"
+                f"Select an option below:\n\n"
+                f"_Last updated: {current_time}_",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            # If edit fails (e.g., message is identical), just answer the callback
+            logger.debug(f"Menu refresh edit failed: {e}")
+            # Just acknowledge the callback without error
+            pass
+    
     async def send_notification(self, telegram_id: int, message: str) -> bool:
         """Send a notification to a specific Telegram user."""
         try:
