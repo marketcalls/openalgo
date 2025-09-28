@@ -3,66 +3,30 @@
 ## Overview
 This guide will help you set up the Telegram bot integration for OpenAlgo, enabling read-only access to trading data through Telegram.
 
-## Prerequisites
-1. Python 3.8 or higher
-2. OpenAlgo application running
-3. Telegram account
+## Setup Steps
 
-## Installation Steps
-
-### 1. Install Dependencies
-```bash
-# Using uv (recommended)
-uv pip install python-telegram-bot==21.3
-
-# Or using pip
-pip install python-telegram-bot==21.3
-```
-
-### 2. Run Database Migration
-The migration script will create all necessary tables for the Telegram integration.
-
-```bash
-# Navigate to the openalgo directory
-cd openalgo
-
-# Run the migration using uv
-uv run upgrade/migrate_telegram_bot.py
-
-# Or using python directly
-python upgrade/migrate_telegram_bot.py
-```
-
-You should see output confirming the creation of tables:
-- `telegram_users` - Stores linked Telegram users
-- `bot_config` - Bot configuration settings
-- `command_logs` - Command usage analytics
-- `notification_queue` - Message queue
-- `user_preferences` - User notification preferences
-
-### 3. Create Your Telegram Bot
+### 1. Create Your Telegram Bot
 1. Open Telegram and search for **@BotFather**
 2. Send the command `/newbot`
 3. Choose a name for your bot (e.g., "OpenAlgo Trading Bot")
 4. Choose a username (must end with 'bot', e.g., "openalgo_trading_bot")
 5. Copy the bot token provided by BotFather
 
-### 4. Configure the Bot in OpenAlgo
+### 2. Configure the Bot in OpenAlgo
 1. Start your OpenAlgo application
 2. Log in to the web interface
 3. Click on your profile icon (top right)
 4. Select **"Telegram Bot"** from the dropdown menu
 5. Click on **"Configuration"**
 6. Paste your bot token
-7. Select **Polling** mode (recommended for local setups)
-8. Save the configuration
+7. Save the configuration
 
-### 5. Start the Bot
+### 3. Start the Bot
 1. Return to the Telegram dashboard
 2. Click the **"Start Bot"** button
 3. The status should change to "Running"
 
-### 6. Link Your Account
+### 4. Link Your Account
 1. Open Telegram and search for your bot username
 2. Send `/start` to the bot
 3. Send `/link <your_api_key> <host_url> [username]` to link your account
@@ -128,28 +92,18 @@ Access the control panel from the Profile dropdown menu → Telegram Bot
 
 ## Database Management
 
-### View Migration Status
-```bash
-uv run upgrade/migrate_telegram_bot.py --status
-```
+The Telegram bot tables are automatically created when you first configure the bot. If you need to manage the database:
 
-### Apply Migration
 ```bash
-uv run upgrade/migrate_telegram_bot.py
-```
+# Check status
+cd upgrade
+python migrate_telegram_bot.py --status
 
-### Rollback Migration (Remove Tables)
-```bash
-uv run upgrade/migrate_telegram_bot.py --downgrade
+# Rollback/Remove tables
+python migrate_telegram_bot.py --downgrade
 ```
 
 ## Advanced Configuration
-
-### Webhook Mode (For Production)
-1. Requires HTTPS domain
-2. Set webhook URL in configuration
-3. Configure reverse proxy (nginx/Apache)
-4. Restart bot after configuration
 
 ### Rate Limiting
 - Default: 30 commands per minute per user
