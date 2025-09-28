@@ -499,8 +499,17 @@ class TelegramBotService:
                 while not self._stop_event.is_set():
                     await asyncio.sleep(1)
 
-                # Stop signal received
+                # Stop signal received - clean shutdown
+                logger.debug("Stop signal received, shutting down bot...")
                 self.is_running = False
+
+                # Stop the updater and wait for tasks to complete
+                if self.application and self.application.updater.running:
+                    await self.application.updater.stop()
+                    await self.application.stop()
+                    await self.application.shutdown()
+                    # Give tasks a moment to clean up
+                    await asyncio.sleep(0.5)
 
                 # Clean shutdown when is_running becomes False
                 logger.debug("Bot stopping gracefully...")
