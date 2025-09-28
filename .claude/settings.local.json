@@ -38,7 +38,8 @@
       "Bash(netstat:*)",
       "Bash(gunzip:*)",
       "Read(//d//**)",
-      "Read(//c/Users/Admin1/Downloads/**)"
+      "Read(//c/Users/Admin1/Downloads/**)",
+      "Bash(docker exec:*)"
     ],
     "deny": []
   }

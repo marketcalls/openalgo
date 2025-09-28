@@ -156,16 +156,29 @@ def start_bot():
                 'message': 'Bot token not configured'
             }), 400
 
-        # Initialize bot using asyncio.run in a separate thread
+        # Initialize bot - handle existing event loop in Docker/eventlet environments
         def init_bot():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                return loop.run_until_complete(
+                # Try to get the current event loop
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If there's a running loop (e.g., in Docker with eventlet),
+                    # schedule the coroutine in that loop
+                    future = asyncio.run_coroutine_threadsafe(
+                        telegram_bot_service.initialize_bot(token=config['bot_token']),
+                        loop
+                    )
+                    return future.result(timeout=10)
+                else:
+                    # No running loop, create a new one
+                    return asyncio.run(
+                        telegram_bot_service.initialize_bot(token=config['bot_token'])
+                    )
+            except RuntimeError:
+                # No event loop exists, create one
+                return asyncio.run(
                     telegram_bot_service.initialize_bot(token=config['bot_token'])
                 )
-            finally:
-                loop.close()
 
         import threading
         result = [None]
