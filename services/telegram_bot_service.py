@@ -9,6 +9,7 @@ import httpx
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
+import telegram.error
 import json
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -398,60 +399,121 @@ class TelegramBotService:
             # Clean shutdown
             self.bot_loop.close()
 
-    async def _start_bot(self):
-        """Start the bot with proper handlers"""
-        try:
-            # Create application
-            self.application = Application.builder().token(self.bot_token).build()
+    async def handle_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle errors in telegram bot operations"""
+        import telegram.error
 
-            # Add command handlers
-            self.application.add_handler(CommandHandler("start", self.cmd_start))
-            self.application.add_handler(CommandHandler("help", self.cmd_help))
-            self.application.add_handler(CommandHandler("link", self.cmd_link))
-            self.application.add_handler(CommandHandler("unlink", self.cmd_unlink))
-            self.application.add_handler(CommandHandler("status", self.cmd_status))
-            self.application.add_handler(CommandHandler("orderbook", self.cmd_orderbook))
-            self.application.add_handler(CommandHandler("tradebook", self.cmd_tradebook))
-            self.application.add_handler(CommandHandler("positions", self.cmd_positions))
-            self.application.add_handler(CommandHandler("holdings", self.cmd_holdings))
-            self.application.add_handler(CommandHandler("funds", self.cmd_funds))
-            self.application.add_handler(CommandHandler("pnl", self.cmd_pnl))
-            self.application.add_handler(CommandHandler("quote", self.cmd_quote))
-            self.application.add_handler(CommandHandler("chart", self.cmd_chart))
-            self.application.add_handler(CommandHandler("menu", self.cmd_menu))
+        error = context.error
 
-            # Add callback query handler for inline buttons
-            self.application.add_handler(CallbackQueryHandler(self.button_callback))
-
-            # Initialize
-            await self.application.initialize()
-            await self.application.start()
-
-            # Always use polling mode
-            logger.debug("Starting bot in polling mode...")
-            await self.application.updater.start_polling()
-
-            self.is_running = True
-            update_bot_config({'is_active': True})
-
-            # Keep running
-            while self.is_running:
-                await asyncio.sleep(1)
-
-            # Clean shutdown when is_running becomes False
-            logger.debug("Bot stopping gracefully...")
-
-        except Exception as e:
-            logger.error(f"Error in bot operation: {e}")
+        # Handle specific Telegram API errors
+        if isinstance(error, telegram.error.NetworkError):
+            logger.warning(f"Telegram NetworkError: {error}. Will retry automatically.")
+        elif isinstance(error, telegram.error.Conflict):
+            logger.error("Another instance of the bot is running! Please stop other instances.")
             self.is_running = False
-            raise
-        finally:
-            # Ensure updater is stopped if it was started
-            if self.application and self.application.updater.running:
-                try:
-                    await self.application.updater.stop()
-                except Exception as e:
-                    logger.debug(f"Error stopping updater in finally: {e}")
+        elif isinstance(error, telegram.error.TimedOut):
+            logger.warning("Request to Telegram timed out. Will retry automatically.")
+        elif isinstance(error, telegram.error.BadRequest):
+            logger.error(f"Bad request to Telegram API: {error}")
+        else:
+            logger.error(f"Unhandled error in Telegram bot: {error}", exc_info=error)
+
+        # If we have an update, try to inform the user (if possible)
+        if update and hasattr(update, 'effective_chat'):
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⚠️ An error occurred. Please try again later."
+                )
+            except:
+                pass  # If we can't send the message, just ignore
+
+    async def _start_bot(self):
+        """Start the bot with proper handlers and network error handling"""
+        retry_count = 0
+        max_retries = 5
+        base_delay = 5  # seconds
+
+        while retry_count < max_retries:
+            try:
+                # Create application
+                self.application = Application.builder().token(self.bot_token).build()
+
+                # Add command handlers
+                self.application.add_handler(CommandHandler("start", self.cmd_start))
+                self.application.add_handler(CommandHandler("help", self.cmd_help))
+                self.application.add_handler(CommandHandler("link", self.cmd_link))
+                self.application.add_handler(CommandHandler("unlink", self.cmd_unlink))
+                self.application.add_handler(CommandHandler("status", self.cmd_status))
+                self.application.add_handler(CommandHandler("orderbook", self.cmd_orderbook))
+                self.application.add_handler(CommandHandler("tradebook", self.cmd_tradebook))
+                self.application.add_handler(CommandHandler("positions", self.cmd_positions))
+                self.application.add_handler(CommandHandler("holdings", self.cmd_holdings))
+                self.application.add_handler(CommandHandler("funds", self.cmd_funds))
+                self.application.add_handler(CommandHandler("pnl", self.cmd_pnl))
+                self.application.add_handler(CommandHandler("quote", self.cmd_quote))
+                self.application.add_handler(CommandHandler("chart", self.cmd_chart))
+                self.application.add_handler(CommandHandler("menu", self.cmd_menu))
+
+                # Add callback query handler for inline buttons
+                self.application.add_handler(CallbackQueryHandler(self.button_callback))
+
+                # Add error handler for network issues
+                self.application.add_error_handler(self.handle_error)
+
+                # Initialize
+                await self.application.initialize()
+                await self.application.start()
+
+                # Configure polling with better error handling
+                logger.debug("Starting bot in polling mode...")
+                await self.application.updater.start_polling(
+                    drop_pending_updates=True,  # Ignore old messages
+                    allowed_updates=Update.ALL_TYPES
+                )
+
+                self.is_running = True
+                update_bot_config({'is_active': True})
+                logger.info("Telegram bot started successfully and is polling for updates")
+
+                # Reset retry count on successful connection
+                retry_count = 0
+
+                # Keep running
+                while self.is_running:
+                    await asyncio.sleep(1)
+
+                # Clean shutdown when is_running becomes False
+                logger.debug("Bot stopping gracefully...")
+                break
+
+            except (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException, telegram.error.NetworkError) as e:
+                retry_count += 1
+                delay = base_delay * (2 ** retry_count)  # Exponential backoff
+                logger.warning(f"Network error while connecting to Telegram (attempt {retry_count}/{max_retries}): {type(e).__name__}")
+                logger.debug(f"Network error details: {str(e)}")
+
+                if retry_count < max_retries:
+                    logger.info(f"Retrying in {delay} seconds...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error("Max retries reached. Unable to connect to Telegram servers.")
+                    logger.info("This might be due to: 1) No internet connection, 2) Telegram blocked by firewall/ISP, 3) DNS issues")
+                    self.is_running = False
+                    break
+
+            except Exception as e:
+                # For non-network errors, log and stop
+                logger.error(f"Unexpected error in bot operation: {e}")
+                self.is_running = False
+                break
+
+        # Cleanup after the retry loop
+        if self.application and hasattr(self.application, 'updater') and self.application.updater.running:
+            try:
+                await self.application.updater.stop()
+            except Exception as e:
+                logger.debug(f"Error stopping updater: {e}")
 
     async def start_bot(self) -> Tuple[bool, str]:
         """Start the bot in polling mode"""
