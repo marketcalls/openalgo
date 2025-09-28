@@ -48,7 +48,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Kolkata \
-    DOCKER_CONTAINER=true
+    APP_MODE=standalone
 # --------------------------------------------------------------------------- #
 
 USER appuser

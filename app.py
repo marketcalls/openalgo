@@ -12,7 +12,7 @@ from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
 from utils.security_middleware import init_security_middleware  # Import security middleware
-from utils.logging import get_logger, log_startup_banner  # Import centralized logging
+from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
@@ -298,7 +298,15 @@ app = create_app()
 setup_environment(app)
 
 # Integrate the WebSocket proxy server with the Flask app
-start_websocket_proxy(app)
+# Check if running in Docker (standalone mode) or local (integrated mode)
+# Docker is detected by checking for /.dockerenv file or APP_MODE override
+is_docker = os.path.exists('/.dockerenv') or os.environ.get('APP_MODE', '').strip().strip("'\"") == 'standalone'
+
+if is_docker:
+    logger.info("Running in Docker/standalone mode - WebSocket server started separately by start.sh")
+else:
+    logger.info("Running in local/integrated mode - Starting WebSocket proxy in Flask")
+    start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
@@ -326,12 +334,15 @@ if __name__ == '__main__':
         except:
             local_ip = "127.0.0.1"
 
-        # Show accessible URLs
+        # Show accessible URLs (excluding localhost) with blue highlighting
         logger.info("=" * 60)
         logger.info("OpenAlgo is running!")
         logger.info(f"Access the application at:")
         for url in urls:
-            logger.info(f"  → {url}")
+            # Skip localhost URL
+            if "localhost" not in url:
+                highlighted = highlight_url(url)
+                logger.info(f"  → {highlighted}")
         logger.info("=" * 60)
     else:
         # Single IP binding
