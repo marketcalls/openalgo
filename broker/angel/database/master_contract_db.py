@@ -180,7 +180,19 @@ def process_angel_json(path):
     # Options Symbol Update in CDS and MCX Exchanges
     df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]
     df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]
-    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]  
+    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]
+
+    # BFO SENSEX Futures Symbol Update
+    # Format: SENSEX[DDMMMYY]FUT
+    # Example: SENSEX28MAR24FUT
+    df.loc[(df['instrumenttype'] == 'FUTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
+
+    # BFO SENSEX Options Symbol Update
+    # Format: SENSEX[DDMMMYY][StrikePrice][CE/PE]
+    # Example: SENSEX28MAR2475000CE
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)) & (df['symbol'].str.endswith('CE', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)) & (df['symbol'].str.endswith('PE', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'PE'
+
     # Common Index Symbol Formats
 
     df['symbol'] = df['symbol'].replace({
