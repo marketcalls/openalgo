@@ -389,8 +389,117 @@ class TelegramBotService:
             logger.error(f"Failed to initialize bot: {e}")
             return False, str(e)
 
+    def initialize_bot_sync(self, token: str) -> Tuple[bool, str]:
+        """Synchronous initialization for eventlet environments"""
+        import sys
+
+        # Check if we're in eventlet environment
+        if 'eventlet' in sys.modules:
+            logger.info("Using synchronous initialization for eventlet environment")
+            # Use synchronous requests to validate token
+            import requests
+
+            try:
+                response = requests.get(
+                    f"https://api.telegram.org/bot{token}/getMe",
+                    timeout=10
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('ok'):
+                        bot_info = data.get('result', {})
+                        bot_username = bot_info.get('username', 'unknown')
+
+                        # Store token and update config
+                        self.bot_token = token
+                        update_bot_config({
+                            'bot_token': token,
+                            'is_active': False,
+                            'bot_username': bot_username
+                        })
+
+                        logger.info(f"Bot validated: @{bot_username}")
+                        return True, f"Bot initialized successfully: @{bot_username}"
+                    else:
+                        return False, f"Invalid response: {data.get('description', 'Unknown error')}"
+                else:
+                    return False, f"HTTP {response.status_code}: Failed to validate token"
+
+            except Exception as e:
+                logger.error(f"Sync initialization error: {e}")
+                # Store token anyway for retry later
+                self.bot_token = token
+                return True, "Token stored (will validate on start)"
+
+        else:
+            # Non-eventlet environment, use regular async initialization
+            logger.info("Using async initialization (non-eventlet environment)")
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self.initialize_bot(token))
+            finally:
+                loop.close()
+
     def _run_bot_in_thread(self):
         """Run bot in separate thread with its own isolated event loop"""
+        import sys
+
+        # Check if eventlet is active
+        if 'eventlet' in sys.modules:
+            logger.info("Eventlet detected - using eventlet.tpool for native thread execution")
+            # Use eventlet's tpool to run in a real OS thread, bypassing all monkey-patching
+            try:
+                from eventlet import tpool
+
+                def run_bot_in_native_thread():
+                    """Run bot in a native OS thread via eventlet.tpool"""
+                    # In tpool, we get real threading, not green threads
+                    # Create a fresh event loop in this native thread
+                    import asyncio
+
+                    # Force use of selector event loop (most compatible)
+                    if hasattr(asyncio, 'WindowsSelectorEventLoopPolicy'):
+                        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    else:
+                        # On Linux/Unix
+                        import selectors
+                        selector = selectors.SelectSelector()
+                        loop = asyncio.SelectorEventLoop(selector)
+                        asyncio.set_event_loop(loop)
+
+                    self.bot_loop = loop
+
+                    try:
+                        # Create HTTP client
+                        self.http_client = httpx.AsyncClient(timeout=30.0)
+                        # Run the bot
+                        loop.run_until_complete(self._start_bot_isolated())
+                    finally:
+                        if self.http_client:
+                            loop.run_until_complete(self.http_client.aclose())
+                        loop.close()
+                        self.bot_loop = None
+                        self.is_running = False
+
+                # Execute in native thread pool
+                tpool.execute(run_bot_in_native_thread)
+                return  # tpool.execute blocks until complete
+
+            except ImportError:
+                logger.warning("eventlet.tpool not available, falling back to standard approach")
+                # Fall through to standard approach
+            except Exception as e:
+                logger.error(f"Error using eventlet.tpool: {e}")
+                # Fall through to standard approach
+
+        # Standard approach for non-eventlet environments (or if eventlet.tpool fails)
+        logger.info("Using standard event loop in thread")
+
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

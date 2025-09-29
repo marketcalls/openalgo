@@ -186,34 +186,41 @@ def create_app():
 
         # Auto-start Telegram bot if it was active
         try:
-            import asyncio
+            import sys
             bot_config = get_bot_config()
             if bot_config.get('is_active') and bot_config.get('bot_token'):
                 logger.info("Auto-starting Telegram bot...")
 
-                # Initialize the bot in a separate thread
-                import asyncio
-                import threading
+                # Check if we're in eventlet environment
+                if 'eventlet' in sys.modules:
+                    logger.info("Eventlet detected during auto-start - using synchronous initialization")
+                    # Use synchronous initialization for eventlet
+                    success, message = telegram_bot_service.initialize_bot_sync(token=bot_config['bot_token'])
+                else:
+                    # Initialize the bot in a separate thread for non-eventlet environments
+                    logger.info("Standard environment during auto-start - using async initialization")
+                    import asyncio
+                    import threading
 
-                def init_bot():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        return loop.run_until_complete(
-                            telegram_bot_service.initialize_bot(token=bot_config['bot_token'])
-                        )
-                    finally:
-                        loop.close()
+                    def init_bot():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(
+                                telegram_bot_service.initialize_bot(token=bot_config['bot_token'])
+                            )
+                        finally:
+                            loop.close()
 
-                result = [None]
-                def run_init():
-                    result[0] = init_bot()
+                    result = [None]
+                    def run_init():
+                        result[0] = init_bot()
 
-                thread = threading.Thread(target=run_init)
-                thread.start()
-                thread.join(timeout=10)
+                    thread = threading.Thread(target=run_init)
+                    thread.start()
+                    thread.join(timeout=10)
 
-                success, message = result[0] if result[0] else (False, "Initialization timeout")
+                    success, message = result[0] if result[0] else (False, "Initialization timeout")
 
                 if success:
                     # Start the bot (now synchronous)
