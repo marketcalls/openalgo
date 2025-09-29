@@ -254,9 +254,10 @@ def create_app():
     def not_found_error(error):
         from flask import request
         from database.traffic_db import Error404Tracker
+        from utils.ip_helper import get_real_ip
 
         # Track the 404 error
-        client_ip = request.remote_addr
+        client_ip = get_real_ip()
         path = request.path
 
         # Track 404 error for security monitoring

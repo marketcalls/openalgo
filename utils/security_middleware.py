@@ -1,6 +1,7 @@
 from flask import request, abort, jsonify
 from database.traffic_db import IPBan, Error404Tracker, logs_session
 from functools import wraps
+from utils.ip_helper import get_real_ip, get_real_ip_from_environ
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,8 +13,8 @@ class SecurityMiddleware:
         self.app = app
 
     def __call__(self, environ, start_response):
-        # Get client IP
-        client_ip = environ.get('REMOTE_ADDR', '')
+        # Get real client IP (handles proxies)
+        client_ip = get_real_ip_from_environ(environ)
 
         # Check if IP is banned
         if IPBan.is_ip_banned(client_ip):
@@ -31,7 +32,7 @@ def check_ip_ban(f):
     """Decorator to check if IP is banned before processing request"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        client_ip = request.remote_addr
+        client_ip = get_real_ip()
 
         if IPBan.is_ip_banned(client_ip):
             logger.warning(f"Blocked banned IP in decorator: {client_ip}")

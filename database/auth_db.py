@@ -306,6 +306,7 @@ def get_api_key_for_tradingview(user_id):
 def verify_api_key(provided_api_key):
     """Verify an API key using Argon2"""
     from flask import request, has_request_context
+    from utils.ip_helper import get_real_ip
     from database.traffic_db import InvalidAPIKeyTracker
     import hashlib
 
@@ -327,7 +328,7 @@ def verify_api_key(provided_api_key):
         try:
             # Check if we're in a request context
             if has_request_context():
-                client_ip = request.remote_addr
+                client_ip = get_real_ip()
             else:
                 client_ip = '127.0.0.1'
 
