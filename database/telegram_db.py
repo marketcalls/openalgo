@@ -20,10 +20,11 @@ logger = get_logger(__name__)
 
 # Database configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///db/telegram.db')
-if DATABASE_URL.startswith('sqlite:///'):
-    # Ensure the directory exists for SQLite
+if DATABASE_URL.startswith('sqlite:///') and ':memory:' not in DATABASE_URL:
+    # Ensure the directory exists for file-based SQLite, but not for in-memory
     db_path = DATABASE_URL.replace('sqlite:///', '')
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    if os.path.dirname(db_path): # Only create if a directory is specified
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
 # Encryption setup for API keys
 TELEGRAM_KEY_SALT = os.getenv('TELEGRAM_KEY_SALT', 'telegram-openalgo-salt').encode()
