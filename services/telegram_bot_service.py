@@ -109,18 +109,40 @@ class TelegramBotService:
 
             logger.debug(f"Generating intraday chart for {symbol} on {exchange} with interval {interval}")
 
-            # Get historical data
-            loop = asyncio.get_event_loop()
-            history_data = await loop.run_in_executor(
-                None,
-                lambda: client.history(
-                    symbol=symbol,
-                    exchange=exchange,
-                    interval=interval,
-                    start_date=start_date.strftime("%Y-%m-%d"),
-                    end_date=end_date.strftime("%Y-%m-%d")
-                )
-            )
+            # Get historical data - be robust about event loops
+            history_data = None
+
+            # Try async first if we have a loop
+            if hasattr(self, 'bot_loop') and self.bot_loop:
+                try:
+                    logger.debug("Using bot's event loop for intraday history")
+                    history_data = await self.bot_loop.run_in_executor(
+                        None,
+                        lambda: client.history(
+                            symbol=symbol,
+                            exchange=exchange,
+                            interval=interval,
+                            start_date=start_date.strftime("%Y-%m-%d"),
+                            end_date=end_date.strftime("%Y-%m-%d")
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to fetch via bot loop: {e}")
+
+            # If that didn't work, try direct sync call
+            if history_data is None:
+                try:
+                    logger.debug("Using synchronous history fetch for intraday")
+                    history_data = client.history(
+                        symbol=symbol,
+                        exchange=exchange,
+                        interval=interval,
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                except Exception as e:
+                    logger.error(f"Synchronous history fetch failed: {e}")
+                    return None
 
             # Check if we got data
             if history_data is None or (isinstance(history_data, pd.DataFrame) and history_data.empty):
@@ -238,18 +260,40 @@ class TelegramBotService:
 
             logger.debug(f"Generating daily chart for {symbol} on {exchange} with interval {interval}")
 
-            # Get historical data
-            loop = asyncio.get_event_loop()
-            history_data = await loop.run_in_executor(
-                None,
-                lambda: client.history(
-                    symbol=symbol,
-                    exchange=exchange,
-                    interval=interval,
-                    start_date=start_date.strftime("%Y-%m-%d"),
-                    end_date=end_date.strftime("%Y-%m-%d")
-                )
-            )
+            # Get historical data - be robust about event loops
+            history_data = None
+
+            # Try async first if we have a loop
+            if hasattr(self, 'bot_loop') and self.bot_loop:
+                try:
+                    logger.debug("Using bot's event loop for daily history")
+                    history_data = await self.bot_loop.run_in_executor(
+                        None,
+                        lambda: client.history(
+                            symbol=symbol,
+                            exchange=exchange,
+                            interval=interval,
+                            start_date=start_date.strftime("%Y-%m-%d"),
+                            end_date=end_date.strftime("%Y-%m-%d")
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to fetch daily via bot loop: {e}")
+
+            # If that didn't work, try direct sync call
+            if history_data is None:
+                try:
+                    logger.debug("Using synchronous history fetch for daily")
+                    history_data = client.history(
+                        symbol=symbol,
+                        exchange=exchange,
+                        interval=interval,
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                except Exception as e:
+                    logger.error(f"Synchronous daily history fetch failed: {e}")
+                    return None
 
             # Check if we got data
             if history_data is None or (isinstance(history_data, pd.DataFrame) and history_data.empty):
@@ -449,56 +493,24 @@ class TelegramBotService:
 
         # Check if eventlet is active
         if 'eventlet' in sys.modules:
-            logger.info("Eventlet detected - using eventlet.tpool for native thread execution")
-            # Use eventlet's tpool to run in a real OS thread, bypassing all monkey-patching
+            logger.info("Eventlet detected - using special handling for asyncio")
+            # For eventlet, we need to be very careful with asyncio
+            import asyncio
+
+            # Reset the event loop policy to avoid eventlet's monkey-patching
             try:
-                from eventlet import tpool
-
-                def run_bot_in_native_thread():
-                    """Run bot in a native OS thread via eventlet.tpool"""
-                    # In tpool, we get real threading, not green threads
-                    # Create a fresh event loop in this native thread
-                    import asyncio
-
-                    # Force use of selector event loop (most compatible)
-                    if hasattr(asyncio, 'WindowsSelectorEventLoopPolicy'):
-                        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    else:
-                        # On Linux/Unix
-                        import selectors
-                        selector = selectors.SelectSelector()
-                        loop = asyncio.SelectorEventLoop(selector)
-                        asyncio.set_event_loop(loop)
-
-                    self.bot_loop = loop
-
-                    try:
-                        # Create HTTP client
-                        self.http_client = httpx.AsyncClient(timeout=30.0)
-                        # Run the bot
-                        loop.run_until_complete(self._start_bot_isolated())
-                    finally:
-                        if self.http_client:
-                            loop.run_until_complete(self.http_client.aclose())
-                        loop.close()
-                        self.bot_loop = None
-                        self.is_running = False
-
-                # Execute in native thread pool
-                tpool.execute(run_bot_in_native_thread)
-                return  # tpool.execute blocks until complete
-
-            except ImportError:
-                logger.warning("eventlet.tpool not available, falling back to standard approach")
-                # Fall through to standard approach
+                # Use the default, unpatched event loop policy
+                from asyncio import DefaultEventLoopPolicy, SelectorEventLoop
+                policy = DefaultEventLoopPolicy()
+                asyncio.set_event_loop_policy(policy)
+                logger.info("Reset to default event loop policy")
             except Exception as e:
-                logger.error(f"Error using eventlet.tpool: {e}")
-                # Fall through to standard approach
+                logger.warning(f"Could not reset event loop policy: {e}")
+        else:
+            import asyncio
 
-        # Standard approach for non-eventlet environments (or if eventlet.tpool fails)
-        logger.info("Using standard event loop in thread")
+        # Create new event loop in this thread
+        logger.info("Creating new event loop in bot thread")
 
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()

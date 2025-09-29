@@ -245,16 +245,28 @@ class TelegramAlertService:
 
             # Get username from API key
             username = None
-            if api_key:
-                username = get_username_by_apikey(api_key)
-                logger.debug(f"Username from api_key: {username}")
-            elif order_data.get('apikey'):
-                username = get_username_by_apikey(order_data.get('apikey'))
-                logger.debug(f"Username from order_data: {username}")
+            api_key_used = api_key or order_data.get('apikey')
+
+            if api_key_used:
+                logger.debug(f"Looking up username for API key (first 10 chars): {api_key_used[:10] if api_key_used else 'None'}...")
+                username = get_username_by_apikey(api_key_used)
+                logger.debug(f"Username lookup result: {username}")
+            else:
+                logger.warning("No API key provided for telegram alert")
 
             if not username:
-                logger.warning(f"No username found for telegram alert - api_key present: {bool(api_key or order_data.get('apikey'))}")
-                return
+                logger.warning(f"No username found for telegram alert - api_key present: {bool(api_key_used)}, api_key_length: {len(api_key_used) if api_key_used else 0}")
+                # Try to get username from session if available
+                try:
+                    from flask import has_request_context, session
+                    if has_request_context() and session.get('user'):
+                        username = session.get('user')
+                        logger.info(f"Using username from session: {username}")
+                except:
+                    pass
+
+                if not username:
+                    return
 
             # Get telegram user
             telegram_user = get_telegram_user_by_username(username)
