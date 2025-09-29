@@ -4,95 +4,104 @@
 def transform_data(data,token):
     """
     Transforms the OpenAlgo API request structure to Dhan v2 API structure.
-    
-    Parameters required by Dhan v2:
-    - dhanClientId (required): string
-    - correlationId: string
-    - transactionType (required): BUY/SELL
-    - exchangeSegment (required): Exchange segment enum
-    - productType (required): Product type enum
-    - orderType (required): Order type enum
-    - validity (required): DAY/IOC
-    - securityId (required): string
-    - quantity (required): int
-    - disclosedQuantity: int
-    - price (required): float
-    - triggerPrice: float (required for SL orders)
-    - afterMarketOrder: boolean
-    - amoTime: string (OPEN/OPEN_30/OPEN_60)
-    - boProfitValue: float
-    - boStopLossValue: float
+    Based on the exact structure from Dhan documentation.
     """
-    # Basic mapping
+    # Build payload exactly as shown in Dhan documentation
     transformed = {
-        "dhanClientId": data["apikey"],
+        "dhanClientId": data.get("dhan_client_id", data["apikey"]),
+        "correlationId": "",  # Empty as shown in docs
         "transactionType": data["action"].upper(),
         "exchangeSegment": map_exchange_type(data["exchange"]),
         "productType": map_product_type(data["product"]),
         "orderType": map_order_type(data["pricetype"]),
-        "validity": "DAY",  # Default to DAY, can be overridden if IOC is needed
+        "validity": "DAY",
         "securityId": token,
-        "quantity": int(data["quantity"]),
-        "disclosedQuantity": int(data.get("disclosed_quantity", 0)),
-        "price": float(data.get("price", 0)),
-        "triggerPrice": float(data.get("trigger_price", 0)),
-        "afterMarketOrder": data.get("after_market_order", False)
+        "quantity": str(int(data["quantity"])),
+        "disclosedQuantity": "",
+        "price": "",
+        "triggerPrice": "",
+        "afterMarketOrder": False,
+        "amoTime": "",
+        "boProfitValue": "",
+        "boStopLossValue": ""
     }
-    
-    # Add correlationId - Dhan API seems to require this field even if optional in docs
-    correlation_id = data.get("correlation_id")
-    if correlation_id is not None and correlation_id != "":
-        transformed["correlationId"] = correlation_id
-    else:
-        # Use a default correlation ID if not provided
-        import uuid
-        transformed["correlationId"] = str(uuid.uuid4())[:8]  # Short UUID for tracking
-    
-    # Handle amoTime - required for after market orders, default for regular orders
-    if data.get("after_market_order", False):
-        amo_time = data.get("amo_time")
-        if amo_time and amo_time in ["OPEN", "OPEN_30", "OPEN_60"]:
-            transformed["amoTime"] = amo_time
-        else:
-            transformed["amoTime"] = "OPEN"  # Default for after market orders
-    else:
-        # Even for regular orders, Dhan API seems to require amoTime field
-        transformed["amoTime"] = "OPEN"
-    
-    # Add bracket order fields only if they have valid values
-    bo_profit = data.get("bo_profit_value")
-    if bo_profit is not None and bo_profit != 0:
-        transformed["boProfitValue"] = float(bo_profit)
-    
-    bo_stop_loss = data.get("bo_stop_loss_value")
-    if bo_stop_loss is not None and bo_stop_loss != 0:
-        transformed["boStopLossValue"] = float(bo_stop_loss)
 
-    # Handle validity for IOC orders if specified
+    # Set price for non-market orders
+    if data["pricetype"] != "MARKET":
+        price = float(data.get("price", 0))
+        transformed["price"] = str(price)
+
+    # Set disclosed quantity if provided
+    disclosed_qty = int(data.get("disclosed_quantity", 0))
+    if disclosed_qty > 0:
+        transformed["disclosedQuantity"] = str(disclosed_qty)
+
+    # Set trigger price for SL orders
+    if data["pricetype"] in ["SL", "SL-M"]:
+        trigger_price = float(data.get("trigger_price", 0))
+        if trigger_price > 0:
+            transformed["triggerPrice"] = str(trigger_price)
+        else:
+            raise ValueError("Trigger price is required for Stop Loss orders")
+
+    # Set correlation ID if provided
+    correlation_id = data.get("correlation_id")
+    if correlation_id:
+        transformed["correlationId"] = correlation_id
+
+    # Handle after market orders
+    if data.get("after_market_order", False):
+        transformed["afterMarketOrder"] = True
+        amo_time = data.get("amo_time", "")
+        if amo_time in ["PRE_OPEN", "OPEN", "OPEN_30", "OPEN_60"]:
+            transformed["amoTime"] = amo_time
+
+    # Handle bracket order values
+    if data.get("product") == "BO":
+        bo_profit = data.get("bo_profit_value")
+        bo_stop_loss = data.get("bo_stop_loss_value")
+        if bo_profit:
+            transformed["boProfitValue"] = str(bo_profit)
+        if bo_stop_loss:
+            transformed["boStopLossValue"] = str(bo_stop_loss)
+
+    # Handle IOC validity
     if data.get("validity") == "IOC":
         transformed["validity"] = "IOC"
-
-    # For SL and SL-M orders, trigger price is required
-    if data["pricetype"] in ["SL", "SL-M"] and not transformed["triggerPrice"]:
-        raise ValueError("Trigger price is required for Stop Loss orders")
 
 
     return transformed
 
 
 def transform_modify_order_data(data):
-    return {
-        "dhanClientId": data["apikey"],
+    modified = {
+        "dhanClientId": data.get("dhan_client_id", data["apikey"]),  # Use provided client_id or fallback to apikey
         "orderId": data["orderid"],
         "orderType": map_order_type(data["pricetype"]),
         "legName":"ENTRY_LEG",
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "disclosedQuantity": data.get("disclosed_quantity", "0"),
-        "triggerPrice": data.get("trigger_price", "0"),
+        "quantity": str(data["quantity"]),
+        "price": str(data["price"]) if data.get("pricetype") != "MARKET" else "",
         "validity": "DAY"
-
     }
+
+    # Only add optional fields if they have values
+    disclosed_qty = int(data.get("disclosed_quantity", 0))
+    if disclosed_qty > 0:
+        modified["disclosedQuantity"] = str(disclosed_qty)
+    else:
+        modified["disclosedQuantity"] = ""
+
+    # Handle trigger price for SL orders
+    if data["pricetype"] in ["SL", "SL-M"]:
+        trigger_price = float(data.get("trigger_price", 0))
+        if trigger_price > 0:
+            modified["triggerPrice"] = str(trigger_price)
+        else:
+            modified["triggerPrice"] = ""
+    else:
+        modified["triggerPrice"] = ""
+
+    return modified
 
 
 def map_order_type(pricetype):

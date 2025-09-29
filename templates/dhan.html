@@ -1,0 +1,168 @@
+{% extends "layout.html" %}
+
+{% block title %}Dhan Authentication - OpenAlgo{% endblock %}
+
+{% block content %}
+<div class="min-h-[calc(100vh-8rem)] flex items-center justify-center py-8">
+    <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-16">
+            <!-- Right side login form - Shown first on mobile -->
+            <div class="card flex-shrink-0 w-full max-w-md shadow-2xl bg-base-100 order-1 lg:order-2">
+                <div class="card-body">
+                    <div class="flex justify-center mb-6">
+                        <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+                    </div>
+
+                    <form id="dhan-form" action="/dhan/initiate-oauth" method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+                        <!-- Tab selector -->
+                        <div class="tabs tabs-boxed w-full">
+                            <a class="tab tab-active" onclick="switchTab('oauth')">OAuth Login</a>
+                            <a class="tab" onclick="switchTab('direct')">Direct Token</a>
+                        </div>
+
+                        <!-- OAuth Login Tab -->
+                        <div id="oauth-tab" class="tab-content">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Dhan Client ID</span>
+                                </label>
+                                <input type="text"
+                                       id="clientid"
+                                       name="clientid"
+                                       class="input input-bordered"
+                                       placeholder="Enter your Dhan Client ID (e.g., 1000000001)"
+                                       pattern="[0-9]+"
+                                       title="Client ID should only contain numbers" />
+                                <label class="label">
+                                    <span class="label-text-alt text-info">Your Dhan Client ID (10-digit number)</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Direct Token Tab -->
+                        <div id="direct-tab" class="tab-content" style="display: none;">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Access Token</span>
+                                </label>
+                                <textarea
+                                       id="access_token"
+                                       name="access_token"
+                                       class="textarea textarea-bordered h-24"
+                                       placeholder="Paste your access token from web.dhan.co"></textarea>
+                                <label class="label">
+                                    <span class="label-text-alt text-info">Get from web.dhan.co → My Profile → Access DhanHQ APIs</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        {% if error_message %}
+                        <div class="alert alert-error">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ error_message }}</span>
+                        </div>
+                        {% endif %}
+
+                        <div class="form-control mt-6">
+                            <button type="submit" class="btn btn-primary w-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                </svg>
+                                Connect to Dhan
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="divider">OR</div>
+
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
+                        </svg>
+                        Back to Broker Selection
+                    </a>
+                </div>
+            </div>
+
+            <!-- Left side content - Shown second on mobile -->
+            <div class="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
+                <h1 class="text-4xl lg:text-5xl font-bold mb-6">Connect <span class="text-primary">Dhan</span></h1>
+                <p class="text-lg lg:text-xl mb-8 opacity-80">
+                    Enter your Dhan Client ID to initiate the authentication process. You'll be redirected to Dhan's login page to complete the secure OAuth authentication.
+                </p>
+                <div class="flex flex-col gap-4">
+                    <div class="alert alert-info shadow-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">Where to find Client ID?</h3>
+                            <div class="text-sm">Login to web.dhan.co and check your profile section for your 10-digit Client ID.</div>
+                        </div>
+                    </div>
+                    <div class="alert shadow-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">API Key Required</h3>
+                            <div class="text-sm">Make sure you have generated API Key & Secret from Dhan's DhanHQ Trading APIs section.</div>
+                        </div>
+                    </div>
+                    <div class="flex justify-center lg:justify-start gap-4">
+                        <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" class="btn btn-outline gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                            </svg>
+                            Documentation
+                        </a>
+                        <a href="/auth/broker" class="btn btn-outline gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"></path>
+                            </svg>
+                            Back to Brokers
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function switchTab(tabName) {
+    // Update tab active states
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => tab.classList.remove('tab-active'));
+
+    // Update content visibility
+    const oauthTab = document.getElementById('oauth-tab');
+    const directTab = document.getElementById('direct-tab');
+    const clientIdInput = document.getElementById('clientid');
+    const accessTokenInput = document.getElementById('access_token');
+    const form = document.getElementById('dhan-form');
+
+    if (tabName === 'oauth') {
+        tabs[0].classList.add('tab-active');
+        oauthTab.style.display = 'block';
+        directTab.style.display = 'none';
+        clientIdInput.required = true;
+        accessTokenInput.required = false;
+        // Set form action for OAuth flow
+        form.action = '/dhan/initiate-oauth';
+    } else {
+        tabs[1].classList.add('tab-active');
+        oauthTab.style.display = 'none';
+        directTab.style.display = 'block';
+        clientIdInput.required = false;
+        accessTokenInput.required = true;
+        // Set form action for direct token flow
+        form.action = '/dhan/callback';
+    }
+}
+</script>
+{% endblock %}

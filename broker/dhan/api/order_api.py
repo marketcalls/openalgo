@@ -9,6 +9,8 @@ from broker.dhan.mapping.transform_data import map_exchange_type, map_exchange
 from utils.httpx_client import get_httpx_client
 from broker.dhan.api.baseurl import get_url
 from utils.logging import get_logger
+from flask import session
+from database.auth_db import Auth
 
 logger = get_logger(__name__)
 
@@ -102,10 +104,60 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
     return net_qty
 
+def get_dhan_client_id(auth):
+    """
+    Get the Dhan client ID for API requests.
+    First tries to get it from the database, then from the API if not found.
+    """
+    # Get the username from the session
+    username = session.get('username')
+    logger.debug(f"Session username: {username}")
+
+    # Get client_id from auth database
+    client_id = None
+    if username:
+        auth_obj = Auth.query.filter_by(name=username, broker='dhan').first()
+        if auth_obj and auth_obj.user_id:
+            client_id = auth_obj.user_id
+            logger.debug(f"Got client_id from database: {client_id}")
+
+    # If client_id not in database, try to get it from profile API
+    if not client_id:
+        logger.debug("Client ID not in database, fetching from profile API")
+        profile_response = get_api_response("/v2/profile", auth)
+        if profile_response and isinstance(profile_response, dict) and not profile_response.get('errorType'):
+            client_id = profile_response.get('dhanClientId')
+            if client_id:
+                logger.info(f"Got client_id from profile API: {client_id}")
+                # Store it in database for future use if we have username
+                if username:
+                    auth_obj = Auth.query.filter_by(name=username, broker='dhan').first()
+                    if auth_obj:
+                        auth_obj.user_id = client_id
+                        from database import db
+                        db.session.commit()
+                        logger.info(f"Stored client_id in database for user {username}")
+
+    return client_id
+
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+    # Get the Dhan client ID
+    dhan_client_id = get_dhan_client_id(AUTH_TOKEN)
+    if not dhan_client_id:
+        logger.error("Failed to get Dhan Client ID")
+        return None, {"errorType": "ClientError", "errorMessage": "Failed to get Dhan Client ID"}, None
+
+    # Optional: Check funds before placing order
+    funds_response = get_api_response("/v2/fundlimit", AUTH_TOKEN)
+    if funds_response and not funds_response.get('errorType'):
+        logger.info(f"Available funds: {funds_response}")
+
     data['apikey'] = BROKER_API_KEY
+    data['dhan_client_id'] = dhan_client_id  # Add client ID to data
+
     token = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token)  
     headers = {
@@ -115,7 +167,7 @@ def place_order_api(data,auth):
     }
     payload = json.dumps(newdata)
 
-    logger.debug(f"Placing order with payload: {payload}")
+    logger.info(f"Placing order with payload: {payload}")  # Changed to INFO for debugging
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -130,18 +182,33 @@ def place_order_api(data,auth):
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON response: {e}")
         return res, {"error": "Invalid JSON response"}, None
-    
-    logger.debug(f"Place order response: {response_data}")
-    
+
+    logger.info(f"Place order response status: {res.status_code}")
+    logger.info(f"Place order response: {response_data}")
+
     # Check if the API call was successful before accessing orderId
     orderid = None
     if res.status_code == 200 or res.status_code == 201:
         if response_data and 'orderId' in response_data:
             orderid = response_data['orderId']
+            logger.info(f"Order placed successfully with ID: {orderid}")
         else:
             logger.error(f"orderId not found in response: {response_data}")
     else:
-        logger.error(f"API call failed with status {res.status_code}: {response_data}")
+        # Enhanced error logging
+        error_type = response_data.get('errorType', 'Unknown')
+        error_code = response_data.get('errorCode', 'Unknown')
+        error_msg = response_data.get('errorMessage', 'Unknown error')
+
+        logger.error(f"Order placement failed:")
+        logger.error(f"  Status: {res.status_code}")
+        logger.error(f"  Error Type: {error_type}")
+        logger.error(f"  Error Code: {error_code}")
+        logger.error(f"  Error Message: {error_msg}")
+
+        # Provide more specific error messages based on common issues
+        if "DH-905" in error_code:
+            logger.error("  Possible causes: Insufficient funds, invalid security ID, market closed, product type not enabled")
     
     return res, response_data, orderid
 
@@ -315,12 +382,20 @@ def cancel_order(orderid,auth):
 
 def modify_order(data,auth):
 
-    
+
 
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+    # Get the Dhan client ID
+    dhan_client_id = get_dhan_client_id(AUTH_TOKEN)
+    if not dhan_client_id:
+        logger.error("Failed to get Dhan Client ID for modify order")
+        return {"status": "error", "message": "Failed to get Dhan Client ID"}, 400
+
     data['apikey'] = BROKER_API_KEY
+    data['dhan_client_id'] = dhan_client_id  # Add client ID to data
 
     orderid = data["orderid"];
     transformed_order_data = transform_modify_order_data(data)  # You need to implement this function
