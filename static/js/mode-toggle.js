@@ -109,9 +109,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Ensure UI matches server response
                 updateBadge(Boolean(data.analyze_mode));
                 showToast(data.message, 'success');
-                
-                // Reload page to ensure all components update
-                setTimeout(() => window.location.reload(), 1000);
+
+                // No page reload needed - mode will be checked dynamically on next API call
+                console.log('[Mode] Mode switched successfully without page reload');
             } else {
                 throw new Error(data.error || 'Unknown error');
             }

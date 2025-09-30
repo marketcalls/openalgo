@@ -56,7 +56,7 @@ def get_tradebook_with_auth(auth_token: str, broker: str, original_data: Dict[st
     Args:
         auth_token: Authentication token for the broker API
         broker: Name of the broker
-        original_data: Original request data (for sandbox mode)
+        original_data: Original request data (for sandbox mode, optional for internal calls)
 
     Returns:
         Tuple containing:
@@ -64,27 +64,21 @@ def get_tradebook_with_auth(auth_token: str, broker: str, original_data: Dict[st
         - Response data (dict)
         - HTTP status code (int)
     """
-    # If in analyze mode, route to sandbox
+    # If in analyze mode AND we have original_data (API call), route to sandbox
+    # If original_data is None (internal call), use live broker
     from database.settings_db import get_analyze_mode
-    if get_analyze_mode():
+    if get_analyze_mode() and original_data:
         from services.sandbox_service import sandbox_get_tradebook
 
-        if original_data:
-            api_key = original_data.get('apikey')
-            if not api_key:
-                return False, {
-                    'status': 'error',
-                    'message': 'API key required for sandbox mode',
-                    'mode': 'analyze'
-                }, 400
-
-            return sandbox_get_tradebook(api_key, original_data)
-        else:
+        api_key = original_data.get('apikey')
+        if not api_key:
             return False, {
                 'status': 'error',
-                'message': 'Original data required for sandbox mode',
+                'message': 'API key required for sandbox mode',
                 'mode': 'analyze'
             }, 400
+
+        return sandbox_get_tradebook(api_key, original_data)
 
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
