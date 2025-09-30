@@ -515,17 +515,20 @@ class OrderManager:
         return f"{date_prefix}{sequence}"
 
     def _calculate_order_statistics(self, orders):
-        """Calculate order statistics"""
-        total_orders = len(orders)
-        completed_orders = sum(1 for o in orders if o.order_status == 'complete')
-        open_orders = sum(1 for o in orders if o.order_status == 'open')
-        rejected_orders = sum(1 for o in orders if o.order_status == 'rejected')
-        cancelled_orders = sum(1 for o in orders if o.order_status == 'cancelled')
+        """Calculate order statistics matching broker API format"""
+        # Count orders by action
+        total_buy_orders = sum(1 for o in orders if o.action == 'BUY')
+        total_sell_orders = sum(1 for o in orders if o.action == 'SELL')
+
+        # Count orders by status
+        total_completed_orders = sum(1 for o in orders if o.order_status == 'complete')
+        total_open_orders = sum(1 for o in orders if o.order_status == 'open')
+        total_rejected_orders = sum(1 for o in orders if o.order_status == 'rejected')
 
         return {
-            'total_orders': total_orders,
-            'completed': completed_orders,
-            'open': open_orders,
-            'rejected': rejected_orders,
-            'cancelled': cancelled_orders
+            'total_buy_orders': total_buy_orders,
+            'total_sell_orders': total_sell_orders,
+            'total_completed_orders': total_completed_orders,
+            'total_open_orders': total_open_orders,
+            'total_rejected_orders': total_rejected_orders
         }

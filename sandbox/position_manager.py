@@ -328,6 +328,10 @@ class PositionManager:
 
             tradebook = []
             for trade in trades:
+                price = float(trade.price)
+                quantity = abs(trade.quantity)  # Use absolute value for trade_value calculation
+                trade_value = price * quantity
+
                 tradebook.append({
                     'tradeid': trade.tradeid,
                     'orderid': trade.orderid,
@@ -335,7 +339,9 @@ class PositionManager:
                     'exchange': trade.exchange,
                     'action': trade.action,
                     'quantity': trade.quantity,
-                    'price': float(trade.price),
+                    'average_price': price,  # Field name expected by frontend
+                    'price': price,  # Keep for backward compatibility
+                    'trade_value': trade_value,  # Calculate trade value
                     'product': trade.product,
                     'strategy': trade.strategy or '',
                     'timestamp': trade.trade_timestamp.strftime('%Y-%m-%d %H:%M:%S')
