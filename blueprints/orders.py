@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request, render_template, session, redirect, url_for, Response
 from importlib import import_module
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token, get_api_key_for_tradingview
+from database.settings_db import get_analyze_mode
 from utils.session import check_session_validity
 from services.place_smart_order_service import place_smart_order
 from services.close_position_service import close_position
@@ -114,7 +115,7 @@ def generate_positions_csv(positions_data):
 def orderbook():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
-    
+
     if auth_token is None:
         logger.warning(f"No auth token found for user {login_username}")
         return redirect(url_for('auth.logout'))
@@ -123,16 +124,26 @@ def orderbook():
     if not broker:
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
-    
-    # Use the centralized orderbook service
-    success, response, status_code = get_orderbook(auth_token=auth_token, broker=broker)
-    
+
+    # Check if in analyze mode and route accordingly
+    if get_analyze_mode():
+        # Get API key for sandbox mode
+        api_key = get_api_key_for_tradingview(login_username)
+        if api_key:
+            success, response, status_code = get_orderbook(api_key=api_key)
+        else:
+            logger.error("No API key found for analyze mode")
+            return "API key required for analyze mode", 400
+    else:
+        # Use live broker
+        success, response, status_code = get_orderbook(auth_token=auth_token, broker=broker)
+
     if not success:
         logger.error(f"Failed to get orderbook data: {response.get('message', 'Unknown error')}")
         if status_code == 404:
             return "Failed to import broker module", 500
         return redirect(url_for('auth.logout'))
-    
+
     data = response.get('data', {})
     order_data = data.get('orders', [])
     order_stats = data.get('statistics', {})
@@ -144,7 +155,7 @@ def orderbook():
 def tradebook():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
-    
+
     if auth_token is None:
         logger.warning(f"No auth token found for user {login_username}")
         return redirect(url_for('auth.logout'))
@@ -153,16 +164,26 @@ def tradebook():
     if not broker:
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
-    
-    # Use the centralized tradebook service
-    success, response, status_code = get_tradebook(auth_token=auth_token, broker=broker)
-    
+
+    # Check if in analyze mode and route accordingly
+    if get_analyze_mode():
+        # Get API key for sandbox mode
+        api_key = get_api_key_for_tradingview(login_username)
+        if api_key:
+            success, response, status_code = get_tradebook(api_key=api_key)
+        else:
+            logger.error("No API key found for analyze mode")
+            return "API key required for analyze mode", 400
+    else:
+        # Use live broker
+        success, response, status_code = get_tradebook(auth_token=auth_token, broker=broker)
+
     if not success:
         logger.error(f"Failed to get tradebook data: {response.get('message', 'Unknown error')}")
         if status_code == 404:
             return "Failed to import broker module", 500
         return redirect(url_for('auth.logout'))
-    
+
     tradebook_data = response.get('data', [])
 
     return render_template('tradebook.html', tradebook_data=tradebook_data)
@@ -172,7 +193,7 @@ def tradebook():
 def positions():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
-    
+
     if auth_token is None:
         logger.warning(f"No auth token found for user {login_username}")
         return redirect(url_for('auth.logout'))
@@ -181,18 +202,28 @@ def positions():
     if not broker:
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
-    
-    # Use the centralized positionbook service
-    success, response, status_code = get_positionbook(auth_token=auth_token, broker=broker)
-    
+
+    # Check if in analyze mode and route accordingly
+    if get_analyze_mode():
+        # Get API key for sandbox mode
+        api_key = get_api_key_for_tradingview(login_username)
+        if api_key:
+            success, response, status_code = get_positionbook(api_key=api_key)
+        else:
+            logger.error("No API key found for analyze mode")
+            return "API key required for analyze mode", 400
+    else:
+        # Use live broker
+        success, response, status_code = get_positionbook(auth_token=auth_token, broker=broker)
+
     if not success:
         logger.error(f"Failed to get positions data: {response.get('message', 'Unknown error')}")
         if status_code == 404:
             return "Failed to import broker module", 500
         return redirect(url_for('auth.logout'))
-    
+
     positions_data = response.get('data', [])
-    
+
     return render_template('positions.html', positions_data=positions_data)
 
 @orders_bp.route('/holdings')
@@ -200,7 +231,7 @@ def positions():
 def holdings():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
-    
+
     if auth_token is None:
         logger.warning(f"No auth token found for user {login_username}")
         return redirect(url_for('auth.logout'))
@@ -209,20 +240,30 @@ def holdings():
     if not broker:
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
-    
-    # Use the centralized holdings service
-    success, response, status_code = get_holdings(auth_token=auth_token, broker=broker)
-    
+
+    # Check if in analyze mode and route accordingly
+    if get_analyze_mode():
+        # Get API key for sandbox mode
+        api_key = get_api_key_for_tradingview(login_username)
+        if api_key:
+            success, response, status_code = get_holdings(api_key=api_key)
+        else:
+            logger.error("No API key found for analyze mode")
+            return "API key required for analyze mode", 400
+    else:
+        # Use live broker
+        success, response, status_code = get_holdings(auth_token=auth_token, broker=broker)
+
     if not success:
         logger.error(f"Failed to get holdings data: {response.get('message', 'Unknown error')}")
         if status_code == 404:
             return "Failed to import broker module", 500
         return redirect(url_for('auth.logout'))
-    
+
     data = response.get('data', {})
     holdings_data = data.get('holdings', [])
     portfolio_stats = data.get('statistics', {})
-    
+
     return render_template('holdings.html', holdings_data=holdings_data, portfolio_stats=portfolio_stats)
 
 @orders_bp.route('/orderbook/export')

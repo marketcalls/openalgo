@@ -54,6 +54,7 @@ class HoldingsManager:
             holdings_list = []
             total_pnl = Decimal('0.00')
             total_value = Decimal('0.00')
+            total_investment = Decimal('0.00')
 
             for holding in holdings:
                 pnl = Decimal(str(holding.pnl))
@@ -61,6 +62,9 @@ class HoldingsManager:
 
                 current_value = abs(holding.quantity) * holding.ltp if holding.ltp else Decimal('0.00')
                 total_value += current_value
+
+                investment_value = abs(holding.quantity) * holding.average_price
+                total_investment += investment_value
 
                 holdings_list.append({
                     'symbol': holding.symbol,
@@ -74,11 +78,20 @@ class HoldingsManager:
                     'settlement_date': holding.settlement_date.strftime('%Y-%m-%d')
                 })
 
+            # Calculate overall P&L percentage
+            pnl_percent = (total_pnl / total_investment * 100) if total_investment > 0 else Decimal('0.00')
+
             return True, {
                 'status': 'success',
-                'data': holdings_list,
-                'total_pnl': float(total_pnl),
-                'total_value': float(total_value),
+                'data': {
+                    'holdings': holdings_list,
+                    'statistics': {
+                        'totalholdingvalue': float(total_value),
+                        'totalinvvalue': float(total_investment),
+                        'totalprofitandloss': float(total_pnl),
+                        'totalpnlpercentage': float(pnl_percent)
+                    }
+                },
                 'mode': 'analyze'
             }, 200
 

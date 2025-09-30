@@ -354,9 +354,15 @@ class OrderManager:
                     'strategy': order.strategy or ''
                 })
 
+            # Calculate statistics
+            statistics = self._calculate_order_statistics(orders)
+
             return True, {
                 'status': 'success',
-                'data': orderbook,
+                'data': {
+                    'orders': orderbook,
+                    'statistics': statistics
+                },
                 'mode': 'analyze'
             }, 200
 
@@ -477,3 +483,19 @@ class OrderManager:
         timestamp = now.strftime('%Y%m%d-%H%M%S')
         unique_id = str(uuid.uuid4())[:8]
         return f"SANDBOX-{timestamp}-{unique_id}"
+
+    def _calculate_order_statistics(self, orders):
+        """Calculate order statistics"""
+        total_orders = len(orders)
+        completed_orders = sum(1 for o in orders if o.order_status == 'complete')
+        open_orders = sum(1 for o in orders if o.order_status == 'open')
+        rejected_orders = sum(1 for o in orders if o.order_status == 'rejected')
+        cancelled_orders = sum(1 for o in orders if o.order_status == 'cancelled')
+
+        return {
+            'total_orders': total_orders,
+            'completed': completed_orders,
+            'open': open_orders,
+            'rejected': rejected_orders,
+            'cancelled': cancelled_orders
+        }
