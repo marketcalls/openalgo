@@ -72,6 +72,11 @@
 // Track modified configs
 const modifiedConfigs = new Set();
 
+// Get CSRF token from meta tag
+function getCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+}
+
 function formatConfigLabel(key) {
     // Format config key to readable label
     return key
@@ -100,6 +105,7 @@ async function saveConfig(configKey) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
             },
             body: JSON.stringify({
                 config_key: configKey,
@@ -130,7 +136,7 @@ async function saveConfig(configKey) {
 }
 
 async function resetConfiguration() {
-    if (!confirm('Are you sure you want to reset all configurations to default values? This cannot be undone.')) {
+    if (!confirm('⚠️ WARNING: This will reset ALL sandbox data!\n\nThis action will:\n✗ Delete all orders, trades, positions, and holdings\n✗ Reset funds to starting capital (₹1.00Cr)\n✗ Reset all configuration values to defaults\n\nThis cannot be undone. Are you sure you want to continue?')) {
         return;
     }
 
@@ -139,6 +145,7 @@ async function resetConfiguration() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
             }
         });
 
@@ -147,10 +154,10 @@ async function resetConfiguration() {
         if (data.status === 'success') {
             showToast(data.message, 'success');
 
-            // Reload page after 1 second
+            // Reload page after 2 seconds to show the message
             setTimeout(() => {
                 window.location.reload();
-            }, 1000);
+            }, 2000);
         } else {
             showToast(data.message, 'error');
         }

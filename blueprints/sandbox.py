@@ -1,5 +1,9 @@
-from flask import Blueprint, render_template, jsonify, request, flash, redirect, url_for
-from database.sandbox_db import get_config, set_config, get_all_configs
+from flask import Blueprint, render_template, jsonify, request, flash, redirect, url_for, session
+from database.sandbox_db import (
+    get_config, set_config, get_all_configs,
+    SandboxOrders, SandboxTrades, SandboxPositions,
+    SandboxHoldings, SandboxFunds, db_session
+)
 from utils.session import check_session_validity
 from utils.logging import get_logger
 import traceback
@@ -117,8 +121,10 @@ def update_config():
 @sandbox_bp.route('/reset', methods=['POST'])
 @check_session_validity
 def reset_config():
-    """Reset sandbox configuration to defaults"""
+    """Reset sandbox configuration to defaults and clear all sandbox data"""
     try:
+        user_id = session.get('user')
+
         # Default configurations
         default_configs = {
             'starting_capital': '10000000.00',
@@ -145,10 +151,71 @@ def reset_config():
         for key, value in default_configs.items():
             set_config(key, value)
 
-        logger.info("Sandbox configuration reset to defaults")
+        # Clear all sandbox data for the current user
+        try:
+            # Delete all orders
+            deleted_orders = SandboxOrders.query.filter_by(user_id=user_id).delete()
+            logger.info(f"Deleted {deleted_orders} sandbox orders for user {user_id}")
+
+            # Delete all trades
+            deleted_trades = SandboxTrades.query.filter_by(user_id=user_id).delete()
+            logger.info(f"Deleted {deleted_trades} sandbox trades for user {user_id}")
+
+            # Delete all positions
+            deleted_positions = SandboxPositions.query.filter_by(user_id=user_id).delete()
+            logger.info(f"Deleted {deleted_positions} sandbox positions for user {user_id}")
+
+            # Delete all holdings
+            deleted_holdings = SandboxHoldings.query.filter_by(user_id=user_id).delete()
+            logger.info(f"Deleted {deleted_holdings} sandbox holdings for user {user_id}")
+
+            # Reset funds to starting capital
+            from decimal import Decimal
+            from datetime import datetime
+            import pytz
+
+            fund = SandboxFunds.query.filter_by(user_id=user_id).first()
+            starting_capital = Decimal(default_configs['starting_capital'])
+
+            if fund:
+                # Reset existing fund
+                fund.total_capital = starting_capital
+                fund.available_balance = starting_capital
+                fund.used_margin = Decimal('0.00')
+                fund.unrealized_pnl = Decimal('0.00')
+                fund.realized_pnl = Decimal('0.00')
+                fund.total_pnl = Decimal('0.00')
+                fund.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
+                fund.reset_count = (fund.reset_count or 0) + 1
+                logger.info(f"Reset sandbox funds for user {user_id}")
+            else:
+                # Create new fund record
+                fund = SandboxFunds(
+                    user_id=user_id,
+                    total_capital=starting_capital,
+                    available_balance=starting_capital,
+                    used_margin=Decimal('0.00'),
+                    unrealized_pnl=Decimal('0.00'),
+                    realized_pnl=Decimal('0.00'),
+                    total_pnl=Decimal('0.00'),
+                    last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
+                    reset_count=1
+                )
+                db_session.add(fund)
+                logger.info(f"Created new sandbox funds for user {user_id}")
+
+            db_session.commit()
+            logger.info(f"Successfully reset all sandbox data for user {user_id}")
+
+        except Exception as e:
+            db_session.rollback()
+            logger.error(f"Error clearing sandbox data: {str(e)}\n{traceback.format_exc()}")
+            raise
+
+        logger.info("Sandbox configuration and data reset to defaults")
         return jsonify({
             'status': 'success',
-            'message': 'Configuration reset to defaults successfully'
+            'message': 'Configuration and data reset to defaults successfully. All orders, trades, positions, and holdings have been cleared.'
         })
 
     except Exception as e:
