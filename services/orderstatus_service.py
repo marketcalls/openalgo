@@ -77,44 +77,21 @@ def get_order_status_with_auth(
     orderid = status_data.get('orderid')
     logger.info(f"[OrderStatus] Processing order status request - Mode: {'ANALYZE' if is_analyze_mode else 'LIVE'}, OrderID: {orderid}, Broker: {broker}")
     
-    # In analyze mode, return hardcoded response for any order ID
+    # In analyze mode, route to sandbox for real order status
     if is_analyze_mode and orderid:
-        # Return hardcoded response for any order ID in analyzer mode
-        logger.info(f"[OrderStatus] Returning hardcoded response for order ID {orderid} in analyzer mode")
-        
-        response_data = {
-            'mode': 'analyze',
-            'status': 'success',
-            'data': {
-                'action': 'BUY',
-                'average_price': 100.00,
-                'exchange': 'NSE',
-                'order_status': 'complete',
-                'orderid': str(orderid),  # Use the actual order ID from request
-                'price': 100.00,
-                'pricetype': 'MARKET',
-                'product': 'MIS',
-                'quantity': '1',
-                'symbol': 'SBIN',
-                'timestamp': '28-Aug-2025 09:59:10',
-                'trigger_price': 99.75
-            }
-        }
-        
-        # Store complete request data without apikey
-        analyzer_request = request_data.copy()
-        analyzer_request['api_type'] = 'orderstatus'
-        
-        # Log to analyzer database
-        log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'orderstatus')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
-        
-        return True, response_data, 200
+        from services.sandbox_service import sandbox_get_order_status
+
+        logger.info(f"[OrderStatus] Routing to sandbox for order ID {orderid} in analyzer mode")
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        return sandbox_get_order_status(status_data, api_key, original_data)
     
     # For live mode or real orders in analyze mode, fetch from orderbook
     # Both analyze mode and live mode use the same logic - fetch from orderbook

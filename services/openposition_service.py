@@ -73,26 +73,51 @@ def get_open_position_with_auth(
     if 'apikey' in request_data:
         request_data.pop('apikey', None)
     
-    # If in analyze mode, return simulated response
+    # If in analyze mode, route to sandbox for real position data
     if get_analyze_mode():
+        from services.sandbox_service import sandbox_get_positions
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        # Get all positions from sandbox
+        success, positions_response, status_code = sandbox_get_positions(api_key, original_data)
+
+        if not success:
+            return False, positions_response, status_code
+
+        # Find the specific position for the requested symbol/exchange/product
+        symbol = position_data.get('symbol')
+        exchange = position_data.get('exchange')
+        product = position_data.get('product')
+
+        positions = positions_response.get('data', [])
+        quantity = 0
+
+        for pos in positions:
+            if (pos.get('symbol') == symbol and
+                pos.get('exchange') == exchange and
+                pos.get('product') == product):
+                quantity = pos.get('quantity', 0)
+                break
+
         response_data = {
-            'quantity': 0,
-            'status': 'success'
+            'quantity': quantity,
+            'status': 'success',
+            'mode': 'analyze'
         }
 
-        # Store complete request data without apikey
+        # Log and emit
         analyzer_request = request_data.copy()
         analyzer_request['api_type'] = 'openposition'
-        
-        # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'openposition')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
-        
+        socketio.emit('analyzer_update', {'request': analyzer_request, 'response': response_data})
+
         return True, response_data, 200
 
     # Live mode - get position from positionbook
