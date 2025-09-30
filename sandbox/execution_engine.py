@@ -311,8 +311,11 @@ class ExecutionEngine:
                             f"Position closed: {order.symbol}"
                         )
 
-                    # Delete position
-                    db_session.delete(position)
+                    # Keep position with 0 quantity to show it was closed
+                    position.quantity = 0
+                    position.ltp = execution_price
+                    position.pnl = Decimal('0.00')
+                    position.pnl_percent = Decimal('0.00')
                     logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}")
 
                 elif (old_quantity > 0 and final_quantity > 0) or (old_quantity < 0 and final_quantity < 0):
