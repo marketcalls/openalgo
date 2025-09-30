@@ -21,7 +21,7 @@ import uuid
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import (
-    SandboxOrders, SandboxTrades, db_session
+    SandboxOrders, SandboxTrades, SandboxPositions, db_session
 )
 from sandbox.fund_manager import FundManager
 from database.symbol import SymToken
@@ -96,11 +96,29 @@ class OrderManager:
                         'mode': 'analyze'
                     }, 400
 
-            # For market orders, we need to get current quote for margin calculation
+            # For market orders, get current LTP for accurate margin calculation
             if price_type == 'MARKET':
-                # Use a reference price for margin calculation (will be filled at actual LTP)
-                # Get last close price or use a default
-                price = Decimal('100')  # Placeholder - will be replaced by execution engine
+                try:
+                    from sandbox.execution_engine import ExecutionEngine
+                    engine = ExecutionEngine()
+                    quote = engine._fetch_quote(symbol, exchange)
+                    if quote and quote.get('ltp'):
+                        price = Decimal(str(quote['ltp']))
+                        logger.debug(f"Using LTP {price} for MARKET order margin calculation")
+                    else:
+                        # Cannot place order without live price data
+                        return False, {
+                            'status': 'error',
+                            'message': f'Could not fetch live price for {symbol}. Please try again.',
+                            'mode': 'analyze'
+                        }, 503
+                except Exception as e:
+                    logger.error(f"Error fetching quote for margin calculation: {e}")
+                    return False, {
+                        'status': 'error',
+                        'message': f'Error fetching live price: {str(e)}',
+                        'mode': 'analyze'
+                    }, 503
 
             # Calculate required margin
             margin_required, margin_msg = self.fund_manager.calculate_margin_required(
@@ -114,27 +132,48 @@ class OrderManager:
                     'mode': 'analyze'
                 }, 400
 
-            # Check margin availability (only for BUY orders and SELL orders for options)
-            if action == 'BUY' or (action == 'SELL' and symbol_obj.instrumenttype in ['OPTIDX', 'OPTSTK', 'OPTCUR', 'OPTCOM']):
-                can_trade, margin_check_msg = self.fund_manager.check_margin_available(margin_required)
-                if not can_trade:
-                    return False, {
-                        'status': 'error',
-                        'message': margin_check_msg,
-                        'mode': 'analyze'
-                    }, 400
+            # Check if this order will close/reduce an existing position
+            existing_position = SandboxPositions.query.filter_by(
+                user_id=self.user_id,
+                symbol=symbol,
+                exchange=exchange,
+                product=product
+            ).first()
 
-                # Block margin
-                success, block_msg = self.fund_manager.block_margin(
-                    margin_required,
-                    f"Order: {symbol} {action} {quantity}"
-                )
-                if not success:
-                    return False, {
-                        'status': 'error',
-                        'message': block_msg,
-                        'mode': 'analyze'
-                    }, 400
+            will_reduce_position = False
+            if existing_position and existing_position.quantity != 0:
+                # Check if order is opposite to position direction
+                # (ignore closed positions with quantity=0)
+                if (existing_position.quantity > 0 and action == 'SELL') or \
+                   (existing_position.quantity < 0 and action == 'BUY'):
+                    will_reduce_position = True
+
+            # Check margin availability (only for BUY orders and SELL orders for options)
+            # But skip margin blocking if this will reduce an existing position
+            if action == 'BUY' or (action == 'SELL' and symbol_obj.instrumenttype in ['OPTIDX', 'OPTSTK', 'OPTCUR', 'OPTCOM']):
+                if not will_reduce_position:
+                    # Only check and block margin if opening/adding to position
+                    can_trade, margin_check_msg = self.fund_manager.check_margin_available(margin_required)
+                    if not can_trade:
+                        return False, {
+                            'status': 'error',
+                            'message': margin_check_msg,
+                            'mode': 'analyze'
+                        }, 400
+
+                    # Block margin
+                    success, block_msg = self.fund_manager.block_margin(
+                        margin_required,
+                        f"Order: {symbol} {action} {quantity}"
+                    )
+                    if not success:
+                        return False, {
+                            'status': 'error',
+                            'message': block_msg,
+                            'mode': 'analyze'
+                        }, 400
+                else:
+                    logger.info(f"Skipping margin block for {symbol} {action} - will reduce existing position")
 
             # Generate unique order ID
             orderid = self._generate_order_id()
@@ -314,10 +353,28 @@ class OrderManager:
 
             # Release blocked margin
             if order.action == 'BUY':
+                # For orders that had margin blocked, we need the price to calculate it
+                if not order.price:
+                    # If price is not set (old MARKET orders), fetch current LTP
+                    try:
+                        from sandbox.execution_engine import ExecutionEngine
+                        engine = ExecutionEngine()
+                        quote = engine._fetch_quote(order.symbol, order.exchange)
+                        if quote and quote.get('ltp'):
+                            order_price = Decimal(str(quote['ltp']))
+                        else:
+                            logger.error(f"Cannot fetch LTP for {order.symbol} to calculate margin release")
+                            order_price = Decimal('0')
+                    except Exception as e:
+                        logger.error(f"Error fetching quote for margin release: {e}")
+                        order_price = Decimal('0')
+                else:
+                    order_price = order.price
+
                 # Calculate margin that was blocked
                 margin_blocked, _ = self.fund_manager.calculate_margin_required(
                     order.symbol, order.exchange, order.product,
-                    order.quantity, order.price or Decimal('100')
+                    order.quantity, order_price
                 )
                 if margin_blocked:
                     self.fund_manager.release_margin(

@@ -290,7 +290,17 @@ class ExecutionEngine:
                 new_quantity = order.quantity if order.action == 'BUY' else -order.quantity
                 final_quantity = old_quantity + new_quantity
 
-                if final_quantity == 0:
+                # Special case: Reopening a closed position (old_quantity = 0)
+                if old_quantity == 0:
+                    # Treat as opening new position
+                    position.quantity = new_quantity
+                    position.average_price = execution_price
+                    position.ltp = execution_price
+                    position.pnl = Decimal('0.00')
+                    position.pnl_percent = Decimal('0.00')
+                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity}")
+
+                elif final_quantity == 0:
                     # Position closed completely
                     # Calculate realized P&L
                     realized_pnl = self._calculate_realized_pnl(
