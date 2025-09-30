@@ -165,6 +165,24 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
+            # Execute MARKET orders immediately
+            if price_type == 'MARKET':
+                try:
+                    from sandbox.execution_engine import ExecutionEngine
+                    engine = ExecutionEngine()
+
+                    # Fetch current quote
+                    quote = engine._fetch_quote(symbol, exchange)
+                    if quote:
+                        # Process the order immediately
+                        engine._process_order(order, quote)
+                        logger.info(f"Market order {orderid} executed immediately")
+                    else:
+                        logger.warning(f"Could not fetch quote for {symbol} on {exchange}, order remains open")
+                except Exception as e:
+                    logger.error(f"Error executing market order immediately: {e}")
+                    # Order remains in 'open' status if execution fails
+
             return True, {
                 'status': 'success',
                 'orderid': orderid,

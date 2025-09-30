@@ -320,6 +320,21 @@ app = create_app()
 # Explicitly call the setup environment function
 setup_environment(app)
 
+# Auto-start execution engine if in analyzer mode
+with app.app_context():
+    try:
+        from database.settings_db import get_analyze_mode
+        from sandbox.execution_thread import start_execution_engine
+
+        if get_analyze_mode():
+            success, message = start_execution_engine()
+            if success:
+                logger.info("Execution engine auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start execution engine: {message}")
+    except Exception as e:
+        logger.error(f"Error checking analyzer mode on startup: {e}")
+
 # Integrate the WebSocket proxy server with the Flask app
 # Check if running in Docker (standalone mode) or local (integrated mode)
 # Docker is detected by checking for /.dockerenv file or APP_MODE override

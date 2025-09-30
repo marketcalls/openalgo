@@ -25,7 +25,6 @@ from database.sandbox_db import (
 )
 from sandbox.fund_manager import FundManager
 from services.quotes_service import get_quotes
-from database.auth_db import Auth
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -231,21 +230,24 @@ class PositionManager:
             return Decimal('0.00')
 
     def _fetch_quote(self, symbol, exchange):
-        """Fetch real-time quote for a symbol"""
+        """Fetch real-time quote for a symbol using API key"""
         try:
-            # Get any active user's auth token for fetching quotes
-            auth_obj = Auth.query.filter_by(is_revoked=False).first()
+            # Get any user's API key for fetching quotes
+            from database.auth_db import ApiKeys, decrypt_token
+            api_key_obj = ApiKeys.query.first()
 
-            if not auth_obj:
-                logger.warning("No active auth tokens found for fetching quotes")
+            if not api_key_obj:
+                logger.warning("No API keys found for fetching quotes")
                 return None
 
-            # Use quotes service to get real market data
+            # Decrypt the API key
+            api_key = decrypt_token(api_key_obj.api_key_encrypted)
+
+            # Use quotes service with API key authentication
             success, response, status_code = get_quotes(
                 symbol=symbol,
                 exchange=exchange,
-                auth_token=auth_obj.auth,
-                broker=auth_obj.broker
+                api_key=api_key
             )
 
             if success and 'data' in response:

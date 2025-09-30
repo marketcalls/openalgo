@@ -101,27 +101,26 @@ class ExecutionEngine:
 
     def _fetch_quote(self, symbol, exchange):
         """
-        Fetch real-time quote for a symbol
+        Fetch real-time quote for a symbol using API key
         Returns dict with ltp, high, low, open, close, etc.
         """
         try:
-            # For sandbox mode, we need to get quotes using the first available user's credentials
-            # In production, this would use a dedicated market data feed
+            # Get any user's API key for fetching quotes
+            from database.auth_db import ApiKeys, decrypt_token
+            api_key_obj = ApiKeys.query.first()
 
-            # Get any active user's auth token for fetching quotes
-            from database.auth_db import Auth
-            auth_obj = Auth.query.filter_by(is_revoked=False).first()
-
-            if not auth_obj:
-                logger.warning("No active auth tokens found for fetching quotes")
+            if not api_key_obj:
+                logger.warning("No API keys found for fetching quotes")
                 return None
 
-            # Use quotes service to get real market data
+            # Decrypt the API key
+            api_key = decrypt_token(api_key_obj.api_key_encrypted)
+
+            # Use quotes service with API key authentication
             success, response, status_code = get_quotes(
                 symbol=symbol,
                 exchange=exchange,
-                auth_token=auth_obj.auth,
-                broker=auth_obj.broker
+                api_key=api_key
             )
 
             if success and 'data' in response:
