@@ -87,6 +87,10 @@ def create_app():
     # Initialize Socket.IO error handling
     init_socketio_error_handling(socketio)
 
+    # Register custom Jinja2 filters
+    from utils.number_formatter import format_indian_number
+    app.jinja_env.filters['indian_number'] = format_indian_number
+
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')

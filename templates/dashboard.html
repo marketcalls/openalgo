@@ -26,7 +26,7 @@
         <div class="stat">
             <div class="stat-title">Available Balance</div>
             <div class="stat-value text-primary">
-                {{ margin_data.get('availablecash', '0.00') }}
+                {{ margin_data.get('availablecash', '0.00')|indian_number }}
             </div>
             <div class="stat-desc mt-2">
                 <div class="badge badge-neutral">Cash Balance</div>
@@ -39,7 +39,7 @@
         <div class="stat">
             <div class="stat-title">Collateral</div>
             <div class="stat-value text-secondary">
-                {{ margin_data.get('collateral', '0.00') }}
+                {{ margin_data.get('collateral', '0.00')|indian_number }}
             </div>
             <div class="stat-desc mt-2">
                 <div class="badge badge-neutral">Total Collateral</div>
@@ -52,7 +52,7 @@
         <div class="stat">
             <div class="stat-title">Unrealized P&L</div>
             <div class="stat-value {% if margin_data.get('m2munrealized', '0.00')|float > 0 %}text-success{% elif margin_data.get('m2munrealized', '0.00')|float < 0 %}text-error{% else %}text-neutral{% endif %}">
-                {{ margin_data.get('m2munrealized', '0.00') }}
+                {{ margin_data.get('m2munrealized', '0.00')|indian_number }}
             </div>
             <div class="stat-desc mt-2">
                 <div class="badge {% if margin_data.get('m2munrealized', '0.00')|float > 0 %}badge-success{% elif margin_data.get('m2munrealized', '0.00')|float < 0 %}badge-error{% else %}badge-neutral{% endif %}">
@@ -67,7 +67,7 @@
         <div class="stat">
             <div class="stat-title">Realized P&L</div>
             <div class="stat-value {% if margin_data.get('m2mrealized', '0.00')|float > 0 %}text-success{% elif margin_data.get('m2mrealized', '0.00')|float < 0 %}text-error{% else %}text-neutral{% endif %}">
-                {{ margin_data.get('m2mrealized', '0.00') }}
+                {{ margin_data.get('m2mrealized', '0.00')|indian_number }}
             </div>
             <div class="stat-desc mt-2">
                 <div class="badge {% if margin_data.get('m2mrealized', '0.00')|float > 0 %}badge-success{% elif margin_data.get('m2mrealized', '0.00')|float < 0 %}badge-error{% else %}badge-neutral{% endif %}">
@@ -82,7 +82,7 @@
         <div class="stat">
             <div class="stat-title">Utilised Margin</div>
             <div class="stat-value text-accent">
-                {{ margin_data.get('utiliseddebits', '0.00') }}
+                {{ margin_data.get('utiliseddebits', '0.00')|indian_number }}
             </div>
             <div class="stat-desc mt-2">
                 <div class="badge badge-accent">Used Margin</div>
