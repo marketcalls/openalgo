@@ -184,9 +184,15 @@
                     </li>
                     <div class="divider"></div>
                     <li>
-                        <a href="{{ url_for('auth.change_password') }}" 
+                        <a href="{{ url_for('auth.change_password') }}"
                            class="{{ 'active' if request.endpoint == 'auth.change_password' }}">
                             Profile
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('sandbox_bp.sandbox_config') }}"
+                           class="{{ 'active' if request.endpoint.startswith('sandbox_bp.') }}">
+                            Sandbox Config
                         </a>
                     </li>
                     <li>
