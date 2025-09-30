@@ -73,7 +73,8 @@ def sandbox_place_order(
         # Initialize order manager for user
         order_manager = OrderManager(user_id)
 
-        # Convert order_data to sandbox format (product_type -> product)
+        # Convert order_data to sandbox format
+        # API uses 'pricetype' and 'product', sandbox uses 'price_type' and 'product'
         sandbox_order_data = {
             'symbol': order_data.get('symbol'),
             'exchange': order_data.get('exchange'),
@@ -81,8 +82,8 @@ def sandbox_place_order(
             'quantity': order_data.get('quantity'),
             'price': order_data.get('price', 0),
             'trigger_price': order_data.get('trigger_price', 0),
-            'price_type': order_data.get('price_type'),
-            'product': order_data.get('product_type', 'MIS'),  # product_type -> product
+            'price_type': order_data.get('pricetype') or order_data.get('price_type', 'MARKET'),
+            'product': order_data.get('product') or order_data.get('product_type', 'MIS'),
             'strategy': order_data.get('strategy', '')
         }
 

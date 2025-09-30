@@ -344,9 +344,9 @@ class OrderManager:
                     'quantity': order.quantity,
                     'price': float(order.price) if order.price else 0.0,
                     'trigger_price': float(order.trigger_price) if order.trigger_price else 0.0,
-                    'price_type': order.price_type,
+                    'pricetype': order.price_type,  # Match broker API format
                     'product': order.product,
-                    'status': order.order_status,
+                    'order_status': order.order_status,  # Match broker API format
                     'average_price': float(order.average_price) if order.average_price else 0.0,
                     'filled_quantity': order.filled_quantity,
                     'pending_quantity': order.pending_quantity,
@@ -477,12 +477,24 @@ class OrderManager:
         return True, 'Validation passed'
 
     def _generate_order_id(self):
-        """Generate unique order ID"""
-        # Format: SANDBOX-YYYYMMDD-HHMMSS-UUID
+        """
+        Generate unique order ID in format: YYMMDD + 8-digit sequence
+        Example: 25100100000001 (Year 2025, Oct 1st, sequence 00000001)
+        """
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        timestamp = now.strftime('%Y%m%d-%H%M%S')
-        unique_id = str(uuid.uuid4())[:8]
-        return f"SANDBOX-{timestamp}-{unique_id}"
+        date_prefix = now.strftime('%y%m%d')  # YYMMDD format
+
+        # Get the count of orders for today to generate sequence number
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_orders = SandboxOrders.query.filter(
+            SandboxOrders.user_id == self.user_id,
+            SandboxOrders.order_timestamp >= today_start
+        ).count()
+
+        # Sequence is orders count + 1, padded to 8 digits
+        sequence = str(today_orders + 1).zfill(8)
+
+        return f"{date_prefix}{sequence}"
 
     def _calculate_order_statistics(self, orders):
         """Calculate order statistics"""
