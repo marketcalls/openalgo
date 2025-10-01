@@ -394,44 +394,81 @@ def export_positions():
 @orders_bp.route('/close_position', methods=['POST'])
 @check_session_validity
 def close_position():
-    """Close a specific position directly using the broker API"""
+    """Close a specific position - uses broker API in live mode, placesmartorder service in analyze mode"""
     try:
         # Get data from request
         data = request.json
         symbol = data.get('symbol')
         exchange = data.get('exchange')
         product = data.get('product')
-        
+
         if not all([symbol, exchange, product]):
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameters (symbol, exchange, product)'
             }), 400
-        
+
         # Get auth token from session
         login_username = session['user']
         auth_token = get_auth_token(login_username)
         broker_name = session.get('broker')
-        
+
+        # Check if in analyze mode
+        if get_analyze_mode():
+            # In analyze mode, use placesmartorder service with quantity=0 and position_size=0
+            api_key = get_api_key_for_tradingview(login_username)
+
+            if not api_key:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'API key not found for analyze mode'
+                }), 401
+
+            # Prepare order data for placesmartorder service (without apikey in data)
+            order_data = {
+                "strategy": "UI Exit Position",
+                "exchange": exchange,
+                "symbol": symbol,
+                "action": "BUY",  # Will be determined by smart order logic
+                "product_type": product,
+                "pricetype": "MARKET",
+                "quantity": "0",
+                "price": "0",
+                "trigger_price": "0",
+                "disclosed_quantity": "0",
+                "position_size": "0"  # Setting to 0 to close the position
+            }
+
+            # Use placesmartorder service for analyze mode
+            from services.place_smart_order_service import place_smart_order
+
+            # Pass api_key as a separate parameter for analyze mode
+            success, response_data, status_code = place_smart_order(
+                order_data=order_data,
+                api_key=api_key
+            )
+            return jsonify(response_data), status_code
+
+        # Live mode - continue with existing logic
         if not auth_token or not broker_name:
             return jsonify({
                 'status': 'error',
                 'message': 'Authentication error'
             }), 401
-        
+
         # Dynamically import broker-specific modules for API
         api_funcs = dynamic_import(broker_name, 'api.order_api', ['place_smartorder_api', 'get_open_position'])
-        
+
         if not api_funcs:
             logger.error(f"Error loading broker-specific modules for {broker_name}")
             return jsonify({
                 'status': 'error',
                 'message': 'Error loading broker modules'
             }), 500
-        
+
         # Get the functions we need
         place_smartorder_api = api_funcs['place_smartorder_api']
-        
+
         # Prepare order data for direct broker API call
         order_data = {
             "strategy": "UI Exit Position",
@@ -446,7 +483,7 @@ def close_position():
             "disclosed_quantity": "0",
             "position_size": "0"  # Setting to 0 to close the position
         }
-        
+
         # Call the broker API directly
         res, response, orderid = place_smartorder_api(order_data, auth_token)
         

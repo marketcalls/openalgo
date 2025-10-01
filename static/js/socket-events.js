@@ -432,12 +432,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 message = data.response.message;
                 type = 'info'; // Change type to info for these cases
             } else {
-                message = `${action} Order Placed for Symbol: ${symbol}`;
-                if (quantity) message += `, Qty: ${quantity}`;
-                if (orderid) message += `, Order ID: ${orderid}`;
+                // Check if we have valid data before constructing the message
+                if (!action && !symbol && !orderid) {
+                    // Skip toast for empty/undefined responses
+                    return;
+                }
 
-                if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
-                    message += `, Size: ${data.request.position_size}`;
+                if (action && symbol) {
+                    message = `${action} Order Placed for Symbol: ${symbol}`;
+                    if (quantity) message += `, Qty: ${quantity}`;
+                    if (orderid) message += `, Order ID: ${orderid}`;
+
+                    if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
+                        message += `, Size: ${data.request.position_size}`;
+                    }
+                } else if (orderid) {
+                    // Fallback if we have orderid but missing other data
+                    message = `Order Placed - ID: ${orderid}`;
+                } else {
+                    // Skip toast if we don't have meaningful data
+                    return;
                 }
             }
         }
