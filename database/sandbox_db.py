@@ -8,13 +8,17 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, DECIMAL
 from sqlalchemy.sql import func
 from datetime import datetime
 from utils.logging import get_logger
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = get_logger(__name__)
 
+# Load environment variables
+load_dotenv()
+
 # Sandbox database URL - separate database for isolation
-SANDBOX_DATABASE_URL = os.path.join(os.path.dirname(__file__), '../sandbox/sandbox.db')
-SANDBOX_DATABASE_URL = f"sqlite:///{SANDBOX_DATABASE_URL}"
+# Get from environment variable or use default path in /db directory
+SANDBOX_DATABASE_URL = os.getenv('SANDBOX_DATABASE_URL', 'sqlite:///db/sandbox.db')
 
 engine = create_engine(
     SANDBOX_DATABASE_URL,

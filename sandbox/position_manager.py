@@ -403,7 +403,7 @@ class PositionManager:
             for trade in trades:
                 price = float(trade.price)
                 quantity = abs(trade.quantity)  # Use absolute value for trade_value calculation
-                trade_value = price * quantity
+                trade_value = round(price * quantity, 2)  # Round to 2 decimal places
 
                 tradebook.append({
                     'tradeid': trade.tradeid,
@@ -412,9 +412,9 @@ class PositionManager:
                     'exchange': trade.exchange,
                     'action': trade.action,
                     'quantity': trade.quantity,
-                    'average_price': price,  # Field name expected by frontend
-                    'price': price,  # Keep for backward compatibility
-                    'trade_value': trade_value,  # Calculate trade value
+                    'average_price': round(price, 2),  # Round to 2 decimal places
+                    'price': round(price, 2),  # Round to 2 decimal places
+                    'trade_value': trade_value,  # Trade value already rounded above
                     'product': trade.product,
                     'strategy': trade.strategy or '',
                     'timestamp': trade.trade_timestamp.strftime('%Y-%m-%d %H:%M:%S')
