@@ -50,20 +50,20 @@ async function refreshTradebook() {
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        
-        // Update stats
-        const newStats = tempDiv.querySelector('.stats');
+
+        // Update stats grid
+        const newStats = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
         if (newStats) {
-            const currentStats = document.querySelector('.stats');
+            const currentStats = document.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
             if (currentStats) {
                 currentStats.innerHTML = newStats.innerHTML;
             }
         }
-        
-        // Update table
-        const newContent = tempDiv.querySelector('#tradebook-table-container');
+
+        // Update table container
+        const newContent = tempDiv.querySelector('.table-container');
         if (newContent) {
-            const currentContainer = document.querySelector('#tradebook-table-container');
+            const currentContainer = document.querySelector('.table-container');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
@@ -95,9 +95,9 @@ async function refreshDashboard() {
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        const newContent = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
+        const newContent = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-3.lg\\:grid-cols-5');
         if (newContent) {
-            const currentContainer = document.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
+            const currentContainer = document.querySelector('.grid-cols-1.sm\\:grid-cols-3.lg\\:grid-cols-5');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
@@ -375,6 +375,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (data.request.api_type === 'cancelorder') {
             message = `Cancel Order - Order ID: ${data.request.orderid}`;
+            if (!isOnAnalyzerPage && data.response.status === 'success') {
+                setTimeout(() => {
+                    refreshOrderbook();
+                }, 1000);
+            }
         } else if (data.request.api_type === 'cancelallorder') {
             if (data.response.status === 'error') {
                 message = `Error: ${data.response.message}`;
@@ -382,6 +387,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 message = 'Cancel All Orders';
                 if (data.response.canceled_orders) {
                     message += ` - Canceled ${data.response.canceled_orders.length} orders`;
+                }
+                if (!isOnAnalyzerPage) {
+                    setTimeout(() => {
+                        refreshOrderbook();
+                    }, 1000);
                 }
             }
         } else if (data.request.api_type === 'closeposition') {
@@ -424,10 +434,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         }
-        
+
         showToast(message, type);
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
+        } else {
+            // Refresh current page content for order placements in analyze mode
+            if (data.request.api_type === 'placeorder' ||
+                data.request.api_type === 'placesmartorder' ||
+                data.request.api_type === 'placebasketorder' ||
+                data.request.api_type === 'placesplitorder') {
+                if (data.response.status === 'success') {
+                    setTimeout(() => {
+                        refreshCurrentPageContent();
+                    }, 1000);
+                }
+            }
         }
     });
 
