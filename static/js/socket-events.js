@@ -424,11 +424,18 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.response.status === 'error') {
                 message = `Error: ${data.response.message}`;
                 if (symbol) message = `${symbol} - ${message}`;
+            } else if (data.request.api_type === 'placesmartorder' &&
+                       data.response.message &&
+                       (data.response.message.includes('Positions Already Matched') ||
+                        data.response.message.includes('No OpenPosition Found'))) {
+                // Handle special cases for placesmartorder
+                message = data.response.message;
+                type = 'info'; // Change type to info for these cases
             } else {
                 message = `${action} Order Placed for Symbol: ${symbol}`;
                 if (quantity) message += `, Qty: ${quantity}`;
                 if (orderid) message += `, Order ID: ${orderid}`;
-                
+
                 if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
                     message += `, Size: ${data.request.position_size}`;
                 }

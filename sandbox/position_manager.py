@@ -74,10 +74,9 @@ class PositionManager:
                 # Last session expired today at 3 AM
                 last_session_expiry = datetime.combine(today, session_expiry_time)
 
-            # Get all positions with non-zero quantity
+            # Get all positions (including zero quantity ones from current session)
             positions_query = SandboxPositions.query.filter(
-                SandboxPositions.user_id == self.user_id,
-                SandboxPositions.quantity != 0
+                SandboxPositions.user_id == self.user_id
             )
 
             # Check if we need to filter positions based on product type
@@ -88,10 +87,11 @@ class PositionManager:
 
             for position in all_positions:
                 # If position was updated after last session expiry, include it
+                # This includes positions that went to zero during current session
                 if position.updated_at >= last_session_expiry:
                     positions.append(position)
-                # If position was updated before last session expiry, only include NRML
-                elif position.product == 'NRML':
+                # If position was updated before last session expiry, only include NRML with non-zero quantity
+                elif position.product == 'NRML' and position.quantity != 0:
                     positions.append(position)
                 # Skip MIS and CNC positions from previous session
 

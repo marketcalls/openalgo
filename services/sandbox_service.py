@@ -492,6 +492,8 @@ def sandbox_place_smart_order(
         exchange = order_data.get('exchange')
         product = order_data.get('product_type', 'MIS')
         target_quantity = int(order_data.get('position_size', 0))
+        original_quantity = int(order_data.get('quantity', 0))
+        original_action = order_data.get('action')
 
         # Get current position
         success, positions_response, status_code = position_manager.get_open_positions()
@@ -508,24 +510,43 @@ def sandbox_place_smart_order(
                 current_quantity = pos.get('quantity', 0)
                 break
 
-        # Calculate the required action
-        quantity_diff = target_quantity - current_quantity
-
-        # If position already matches, no action needed
-        if quantity_diff == 0:
+        # Special case: position_size=0 with quantity!=0 means fresh trade
+        if target_quantity == 0 and current_quantity == 0 and original_quantity != 0:
+            # Use the original action and quantity for fresh trade
+            action = original_action
+            quantity = original_quantity
+        elif target_quantity == current_quantity:
+            # Position already matches
+            if original_quantity == 0:
+                message = 'No OpenPosition Found. Not placing Exit order.'
+            else:
+                message = 'Positions Already Matched. No Action needed.'
             return True, {
                 'status': 'success',
-                'message': 'Positions Already Matched. No Action needed.',
+                'message': message,
                 'mode': 'analyze'
             }, 200
-
-        # Determine action based on quantity difference
-        if quantity_diff > 0:
-            action = 'BUY'
-            quantity = abs(quantity_diff)
-        else:
+        elif target_quantity == 0 and current_quantity > 0:
+            # Close long position
             action = 'SELL'
-            quantity = abs(quantity_diff)
+            quantity = abs(current_quantity)
+        elif target_quantity == 0 and current_quantity < 0:
+            # Close short position
+            action = 'BUY'
+            quantity = abs(current_quantity)
+        elif current_quantity == 0:
+            # Open new position
+            action = 'BUY' if target_quantity > 0 else 'SELL'
+            quantity = abs(target_quantity)
+        else:
+            # Adjust existing position
+            quantity_diff = target_quantity - current_quantity
+            if quantity_diff > 0:
+                action = 'BUY'
+                quantity = abs(quantity_diff)
+            else:
+                action = 'SELL'
+                quantity = abs(quantity_diff)
 
         # Place the order to reach target position
         sandbox_order_data = {
