@@ -641,3 +641,76 @@ def sandbox_cancel_all_orders(
             'message': f'Error canceling all orders: {str(e)}',
             'mode': 'analyze'
         }, 500
+
+
+def sandbox_reload_squareoff_schedule() -> Tuple[bool, Dict[str, Any], int]:
+    """
+    Reload square-off schedule from config without restarting the app
+    Useful when square-off times are changed in sandbox settings
+
+    Returns:
+        Tuple containing:
+        - Success status (bool)
+        - Response data (dict)
+        - HTTP status code (int)
+    """
+    try:
+        from sandbox.squareoff_thread import reload_squareoff_schedule, get_squareoff_scheduler_status
+
+        # Reload the schedule from config
+        success, message = reload_squareoff_schedule()
+
+        if success:
+            # Get updated status
+            status = get_squareoff_scheduler_status()
+
+            return True, {
+                'status': 'success',
+                'message': message,
+                'scheduler_status': status,
+                'mode': 'analyze'
+            }, 200
+        else:
+            return False, {
+                'status': 'error',
+                'message': message,
+                'mode': 'analyze'
+            }, 500
+
+    except Exception as e:
+        logger.error(f"Error reloading square-off schedule: {e}")
+        return False, {
+            'status': 'error',
+            'message': f'Error reloading schedule: {str(e)}',
+            'mode': 'analyze'
+        }, 500
+
+
+def sandbox_get_squareoff_status() -> Tuple[bool, Dict[str, Any], int]:
+    """
+    Get current square-off scheduler status and job details
+
+    Returns:
+        Tuple containing:
+        - Success status (bool)
+        - Response data (dict)
+        - HTTP status code (int)
+    """
+    try:
+        from sandbox.squareoff_thread import get_squareoff_scheduler_status
+
+        status = get_squareoff_scheduler_status()
+
+        return True, {
+            'status': 'success',
+            'data': status,
+            'mode': 'analyze'
+        }, 200
+
+    except Exception as e:
+        logger.error(f"Error getting square-off status: {e}")
+        return False, {
+            'status': 'error',
+            'message': f'Error getting status: {str(e)}',
+            'mode': 'analyze'
+        }, 500

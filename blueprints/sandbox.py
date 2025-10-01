@@ -101,6 +101,19 @@ def update_config():
 
         if success:
             logger.info(f"Sandbox config updated: {config_key} = {config_value}")
+
+            # If square-off time was updated, reload the schedule automatically
+            if config_key.endswith('square_off_time'):
+                try:
+                    from services.sandbox_service import sandbox_reload_squareoff_schedule
+                    reload_success, reload_response, reload_status = sandbox_reload_squareoff_schedule()
+                    if reload_success:
+                        logger.info(f"Square-off schedule reloaded after {config_key} update")
+                    else:
+                        logger.warning(f"Failed to reload square-off schedule: {reload_response.get('message')}")
+                except Exception as e:
+                    logger.error(f"Error auto-reloading square-off schedule: {e}")
+
             return jsonify({
                 'status': 'success',
                 'message': f'Configuration {config_key} updated successfully'
@@ -224,6 +237,50 @@ def reset_config():
             'status': 'error',
             'message': f'Error resetting configuration: {str(e)}'
         }), 500
+
+@sandbox_bp.route('/reload-squareoff', methods=['POST'])
+@check_session_validity
+def reload_squareoff():
+    """Manually reload square-off schedule from config"""
+    try:
+        from services.sandbox_service import sandbox_reload_squareoff_schedule
+
+        success, response, status_code = sandbox_reload_squareoff_schedule()
+
+        if success:
+            return jsonify(response), status_code
+        else:
+            return jsonify(response), status_code
+
+    except Exception as e:
+        logger.error(f"Error reloading square-off schedule: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error reloading square-off schedule: {str(e)}'
+        }), 500
+
+
+@sandbox_bp.route('/squareoff-status')
+@check_session_validity
+def squareoff_status():
+    """Get current square-off scheduler status"""
+    try:
+        from services.sandbox_service import sandbox_get_squareoff_status
+
+        success, response, status_code = sandbox_get_squareoff_status()
+
+        if success:
+            return jsonify(response), status_code
+        else:
+            return jsonify(response), status_code
+
+    except Exception as e:
+        logger.error(f"Error getting square-off status: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error getting square-off status: {str(e)}'
+        }), 500
+
 
 def validate_config(config_key, config_value):
     """Validate configuration values"""

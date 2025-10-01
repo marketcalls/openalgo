@@ -64,7 +64,10 @@ class SquareOffManager:
             now = datetime.now(self.ist)
             current_time = now.time()
 
-            # Get all MIS positions
+            # Step 1: Cancel all open MIS orders past square-off time
+            self._cancel_open_mis_orders(current_time)
+
+            # Step 2: Get all MIS positions
             mis_positions = SandboxPositions.query.filter_by(product='MIS').all()
 
             if not mis_positions:
@@ -94,6 +97,51 @@ class SquareOffManager:
 
         except Exception as e:
             logger.error(f"Error checking square-off conditions: {e}")
+
+    def _cancel_open_mis_orders(self, current_time):
+        """Cancel all open MIS orders past their exchange's square-off time"""
+        try:
+            from database.sandbox_db import SandboxOrders
+            from sandbox.order_manager import OrderManager
+
+            # Get all open MIS orders
+            open_orders = SandboxOrders.query.filter_by(
+                product='MIS',
+                order_status='open'
+            ).all()
+
+            if not open_orders:
+                return
+
+            cancelled_count = 0
+
+            for order in open_orders:
+                exchange = order.exchange
+                square_off_time = self.square_off_times.get(exchange)
+
+                if not square_off_time:
+                    continue
+
+                # Check if current time has passed square-off time for this exchange
+                if current_time >= square_off_time:
+                    try:
+                        order_manager = OrderManager(order.user_id)
+                        success, response, status_code = order_manager.cancel_order(order.orderid)
+
+                        if success:
+                            logger.info(f"Auto-cancelled MIS order {order.orderid} for {order.symbol} past square-off time")
+                            cancelled_count += 1
+                        else:
+                            logger.error(f"Failed to cancel MIS order {order.orderid}: {response.get('message', 'Unknown error')}")
+
+                    except Exception as e:
+                        logger.error(f"Error cancelling MIS order {order.orderid}: {e}")
+
+            if cancelled_count > 0:
+                logger.info(f"Auto-cancelled {cancelled_count} open MIS orders past square-off time")
+
+        except Exception as e:
+            logger.error(f"Error in _cancel_open_mis_orders: {e}")
 
     def _square_off_positions(self, positions):
         """Square-off a list of positions"""

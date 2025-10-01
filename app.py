@@ -322,18 +322,27 @@ app = create_app()
 # Explicitly call the setup environment function
 setup_environment(app)
 
-# Auto-start execution engine if in analyzer mode
+# Auto-start execution engine and squareoff scheduler if in analyzer mode
 with app.app_context():
     try:
         from database.settings_db import get_analyze_mode
         from sandbox.execution_thread import start_execution_engine
+        from sandbox.squareoff_thread import start_squareoff_scheduler
 
         if get_analyze_mode():
+            # Start execution engine for order processing
             success, message = start_execution_engine()
             if success:
                 logger.info("Execution engine auto-started (Analyzer mode is ON)")
             else:
                 logger.warning(f"Failed to auto-start execution engine: {message}")
+
+            # Start squareoff scheduler for MIS auto-squareoff
+            success, message = start_squareoff_scheduler()
+            if success:
+                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start square-off scheduler: {message}")
     except Exception as e:
         logger.error(f"Error checking analyzer mode on startup: {e}")
 
