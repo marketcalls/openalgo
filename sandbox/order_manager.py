@@ -96,6 +96,46 @@ class OrderManager:
                         'mode': 'analyze'
                     }, 400
 
+            # Track validation for CNC SELL orders
+            cnc_sell_rejection_reason = None
+
+            # Validate SELL orders based on product type
+            # CNC (delivery) requires existing positions/holdings, MIS (intraday) allows short selling
+            if action == 'SELL':
+                if product == 'CNC':
+                    # CNC SELL orders require existing long positions or holdings
+                    # Check existing position
+                    existing_position = SandboxPositions.query.filter_by(
+                        user_id=self.user_id,
+                        symbol=symbol,
+                        exchange=exchange,
+                        product=product
+                    ).first()
+
+                    # Check holdings (T+1 settled positions)
+                    from database.sandbox_db import SandboxHoldings
+                    existing_holdings = SandboxHoldings.query.filter_by(
+                        user_id=self.user_id,
+                        symbol=symbol,
+                        exchange=exchange
+                    ).first()
+
+                    # Calculate total available quantity
+                    position_qty = existing_position.quantity if existing_position and existing_position.quantity > 0 else 0
+                    holdings_qty = existing_holdings.quantity if existing_holdings and existing_holdings.quantity > 0 else 0
+                    total_available = position_qty + holdings_qty
+
+                    if total_available <= 0:
+                        cnc_sell_rejection_reason = f'Cannot sell {symbol} in CNC. No positions or holdings available. CNC (delivery) requires existing shares. Use MIS for intraday short selling.'
+                    elif quantity > total_available:
+                        cnc_sell_rejection_reason = f'Cannot sell {quantity} shares of {symbol} in CNC. Only {total_available} shares available (Position: {position_qty}, Holdings: {holdings_qty})'
+                    else:
+                        logger.info(f"CNC SELL validation passed: {symbol} - Available: {total_available} (Pos: {position_qty}, Hold: {holdings_qty}), Requested: {quantity}")
+
+                elif product == 'MIS':
+                    # MIS allows short selling (negative positions) since it's intraday
+                    logger.info(f"MIS SELL order: {symbol} - Short selling allowed for intraday")
+
             # For market orders, get current LTP for accurate margin calculation
             if price_type == 'MARKET':
                 try:
@@ -197,7 +237,43 @@ class OrderManager:
             # Generate unique order ID
             orderid = self._generate_order_id()
 
-            # Create order record
+            # Check if order should be rejected (CNC SELL validation failed)
+            if cnc_sell_rejection_reason:
+                # Create rejected order for audit trail
+                order = SandboxOrders(
+                    orderid=orderid,
+                    user_id=self.user_id,
+                    strategy=strategy,
+                    symbol=symbol,
+                    exchange=exchange,
+                    action=action,
+                    quantity=quantity,
+                    price=price,
+                    trigger_price=trigger_price,
+                    price_type=price_type,
+                    product=product,
+                    order_status='rejected',
+                    average_price=None,
+                    filled_quantity=0,
+                    pending_quantity=0,
+                    rejection_reason=cnc_sell_rejection_reason,
+                    margin_blocked=Decimal('0'),  # No margin blocked for rejected orders
+                    order_timestamp=datetime.now(pytz.timezone('Asia/Kolkata'))
+                )
+
+                db_session.add(order)
+                db_session.commit()
+
+                logger.info(f"Order rejected: {orderid} - {symbol} {action} {quantity} - Reason: {cnc_sell_rejection_reason}")
+
+                return False, {
+                    'status': 'error',
+                    'orderid': orderid,
+                    'message': cnc_sell_rejection_reason,
+                    'mode': 'analyze'
+                }, 400
+
+            # Create order record (for accepted orders)
             order = SandboxOrders(
                 orderid=orderid,
                 user_id=self.user_id,
@@ -453,6 +529,7 @@ class OrderManager:
                     'average_price': float(order.average_price) if order.average_price else 0.0,
                     'filled_quantity': order.filled_quantity,
                     'pending_quantity': order.pending_quantity,
+                    'rejection_reason': order.rejection_reason or '',  # Include rejection reason
                     'timestamp': order.order_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                     'strategy': order.strategy or ''
                 })
