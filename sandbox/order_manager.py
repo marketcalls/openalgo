@@ -507,9 +507,37 @@ class OrderManager:
             }, 500
 
     def get_orderbook(self):
-        """Get all orders for the user"""
+        """Get all orders for the user for current session only"""
         try:
-            orders = SandboxOrders.query.filter_by(user_id=self.user_id).order_by(
+            from datetime import datetime, time, timedelta
+            import os
+
+            # Get session expiry time from config (e.g., '03:00')
+            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
+
+            # Get current time
+            now = datetime.now()
+            today = now.date()
+
+            # Calculate session start time
+            # If current time is before session expiry (e.g., before 3 AM),
+            # session started yesterday at expiry time
+            session_expiry_time = time(expiry_hour, expiry_minute)
+
+            if now.time() < session_expiry_time:
+                # We're in the early morning before session expiry
+                # Session started yesterday at expiry time
+                session_start = datetime.combine(today - timedelta(days=1), session_expiry_time)
+            else:
+                # We're after session expiry time
+                # Session started today at expiry time
+                session_start = datetime.combine(today, session_expiry_time)
+
+            orders = SandboxOrders.query.filter(
+                SandboxOrders.user_id == self.user_id,
+                SandboxOrders.order_timestamp >= session_start
+            ).order_by(
                 SandboxOrders.order_timestamp.desc()
             ).all()
 

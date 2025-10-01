@@ -40,6 +40,8 @@ class PositionManager:
     def get_open_positions(self, update_mtm=True):
         """
         Get all open positions for the user
+        - After session expiry, only NRML positions carry forward
+        - MIS and CNC positions are settled at session expiry
 
         Args:
             update_mtm: bool - Whether to update MTM with live prices
@@ -48,7 +50,50 @@ class PositionManager:
             tuple: (success: bool, response: dict, status_code: int)
         """
         try:
-            positions = SandboxPositions.query.filter_by(user_id=self.user_id).all()
+            from datetime import datetime, time, timedelta
+            import os
+
+            # Get session expiry time from config (e.g., '03:00')
+            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
+
+            # Get current time
+            now = datetime.now()
+            today = now.date()
+
+            # Calculate if we're in a new session
+            session_expiry_time = time(expiry_hour, expiry_minute)
+
+            # Determine last session expiry
+            if now.time() < session_expiry_time:
+                # We're before today's session expiry (e.g., before 3 AM)
+                # Last session expired yesterday at 3 AM
+                last_session_expiry = datetime.combine(today - timedelta(days=1), session_expiry_time)
+            else:
+                # We're after today's session expiry (e.g., after 3 AM)
+                # Last session expired today at 3 AM
+                last_session_expiry = datetime.combine(today, session_expiry_time)
+
+            # Get all positions with non-zero quantity
+            positions_query = SandboxPositions.query.filter(
+                SandboxPositions.user_id == self.user_id,
+                SandboxPositions.quantity != 0
+            )
+
+            # Check if we need to filter positions based on product type
+            # If position was created before last session expiry and it's not NRML,
+            # it should have been settled
+            all_positions = positions_query.all()
+            positions = []
+
+            for position in all_positions:
+                # If position was updated after last session expiry, include it
+                if position.updated_at >= last_session_expiry:
+                    positions.append(position)
+                # If position was updated before last session expiry, only include NRML
+                elif position.product == 'NRML':
+                    positions.append(position)
+                # Skip MIS and CNC positions from previous session
 
             if update_mtm:
                 self._update_positions_mtm(positions)
@@ -320,9 +365,37 @@ class PositionManager:
             }, 500
 
     def get_tradebook(self):
-        """Get all executed trades for the user"""
+        """Get all executed trades for the user for current session only"""
         try:
-            trades = SandboxTrades.query.filter_by(user_id=self.user_id).order_by(
+            from datetime import datetime, time, timedelta
+            import os
+
+            # Get session expiry time from config (e.g., '03:00')
+            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
+
+            # Get current time
+            now = datetime.now()
+            today = now.date()
+
+            # Calculate session start time
+            # If current time is before session expiry (e.g., before 3 AM),
+            # session started yesterday at expiry time
+            session_expiry_time = time(expiry_hour, expiry_minute)
+
+            if now.time() < session_expiry_time:
+                # We're in the early morning before session expiry
+                # Session started yesterday at expiry time
+                session_start = datetime.combine(today - timedelta(days=1), session_expiry_time)
+            else:
+                # We're after session expiry time
+                # Session started today at expiry time
+                session_start = datetime.combine(today, session_expiry_time)
+
+            trades = SandboxTrades.query.filter(
+                SandboxTrades.user_id == self.user_id,
+                SandboxTrades.trade_timestamp >= session_start
+            ).order_by(
                 SandboxTrades.trade_timestamp.desc()
             ).all()
 
@@ -358,6 +431,103 @@ class PositionManager:
             return False, {
                 'status': 'error',
                 'message': f'Error getting tradebook: {str(e)}',
+                'mode': 'analyze'
+            }, 500
+
+    def process_session_settlement(self):
+        """
+        Process session expiry settlement (at SESSION_EXPIRY_TIME):
+        1. Auto square-off MIS positions
+        2. Move CNC positions to holdings (T+1 settlement)
+        3. Keep NRML positions as carry forward
+
+        This should be called at session expiry time (e.g., 3:00 AM IST)
+        """
+        try:
+            from datetime import datetime, date
+            from database.sandbox_db import SandboxHoldings
+            from database import db
+            import os
+
+            # Get session expiry time from config
+            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+            logger.info(f"Processing session settlement at {session_expiry_str}")
+
+            # Get all open positions
+            positions = SandboxPositions.query.filter_by(user_id=self.user_id).all()
+
+            for position in positions:
+                if position.quantity == 0:
+                    continue  # Skip closed positions
+
+                if position.product == 'MIS':
+                    # Auto square-off MIS positions at market close
+                    # Create a reverse order to square off
+                    action = 'SELL' if position.quantity > 0 else 'BUY'
+                    quantity = abs(position.quantity)
+
+                    # Use last traded price or average price for square-off
+                    price = float(position.average_price) if position.average_price else 0
+
+                    # Update position to closed
+                    position.quantity = 0
+                    position.pnl = float(position.realized_pnl)
+                    db.session.commit()
+
+                    logger.info(f"Auto squared-off MIS position: {position.symbol} qty: {quantity}")
+
+                elif position.product == 'CNC' and position.quantity > 0:
+                    # Move CNC buy positions to holdings (T+1 settlement)
+                    # CNC sell positions are already closed (no short delivery allowed)
+
+                    # Check if holdings exist
+                    holdings = SandboxHoldings.query.filter_by(
+                        user_id=self.user_id,
+                        symbol=position.symbol,
+                        exchange=position.exchange
+                    ).first()
+
+                    if holdings:
+                        # Update existing holdings
+                        holdings.quantity += position.quantity
+                        holdings.average_price = (
+                            (holdings.average_price * holdings.quantity +
+                             position.average_price * position.quantity) /
+                            (holdings.quantity + position.quantity)
+                        )
+                    else:
+                        # Create new holdings
+                        holdings = SandboxHoldings(
+                            user_id=self.user_id,
+                            symbol=position.symbol,
+                            exchange=position.exchange,
+                            quantity=position.quantity,
+                            average_price=position.average_price,
+                            settlement_date=date.today()
+                        )
+                        db.session.add(holdings)
+
+                    # Clear the CNC position
+                    position.quantity = 0
+                    position.pnl = float(position.realized_pnl)
+                    db.session.commit()
+
+                    logger.info(f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}")
+
+                # NRML positions remain as-is (carry forward)
+
+            return True, {
+                'status': 'success',
+                'message': 'Session settlement completed',
+                'mode': 'analyze'
+            }, 200
+
+        except Exception as e:
+            logger.error(f"Error in EOD settlement: {e}")
+            db.session.rollback()
+            return False, {
+                'status': 'error',
+                'message': f'Error in EOD settlement: {str(e)}',
                 'mode': 'analyze'
             }, 500
 
