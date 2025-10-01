@@ -288,18 +288,23 @@ def modify_order(data,auth):
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
     data["apikey"] = api_key
 
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    transformed_data = transform_modify_order_data(data, token)
     # Set up the request headers
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
+    logger.info(f"Modify Order Payload: {payload}")
+    logger.info(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client
     client = get_httpx_client()
-    
+
     url = "https://piconnect.flattrade.in/PiConnectTP/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()
+
+    logger.info(f"Modify Order Response: {response}")
+    logger.info(f"Modify Order Status Code: {res.status_code}")
 
     if response.get("stat")=='Ok':
         return {"status": "success", "orderid": data["orderid"]}, 200
