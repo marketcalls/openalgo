@@ -14,6 +14,51 @@ python upgrade/<migration_script>.py
 
 ## Latest Migrations
 
+### Sandbox Mode Migrations (v2.0.0)
+**New Feature** - Complete virtual trading environment with margin tracking
+
+#### How to Apply
+```bash
+# Navigate to openalgo directory
+cd openalgo
+
+# Apply all sandbox migrations at once
+uv run upgrade/run_sandbox_migrations.py upgrade
+
+# Or apply individual migrations
+uv run upgrade/002_add_margin_blocked_field.py upgrade
+
+# Check migration status
+uv run upgrade/run_sandbox_migrations.py status
+
+# Rollback if needed
+uv run upgrade/002_add_margin_blocked_field.py rollback
+```
+
+#### Available Sandbox Migrations
+1. **001_create_sandbox_tables.py** - Initial sandbox database schema
+   - Creates all required tables (orders, trades, positions, holdings, funds, config)
+   - Sets up indexes and constraints
+
+2. **002_add_margin_blocked_field.py** - Enhanced margin tracking
+   - Adds margin_blocked field to orders table
+   - Tracks exact margin blocked per order
+   - Fixes margin calculation issues in various scenarios
+
+3. **003_sandbox_complete_setup.py** - Complete setup verification
+   - Ensures all tables and fields exist
+   - Adds missing columns to existing tables
+   - Inserts default configuration values
+
+#### What It Does
+- Creates complete sandbox trading environment
+- Tracks margin accurately across all trading scenarios
+- Handles partial position closures correctly
+- Manages position reversals properly
+- Provides fallback for API failures in sandbox mode
+
+---
+
 ### Telegram Bot Integration (v1.0.0)
 **New Feature** - Telegram bot for read-only trading data access
 
@@ -96,4 +141,75 @@ When you first use the feature, these will be created automatically:
 
 ---
 
-*For the full documentation, see [Python Strategies Documentation](../docs/python_strategies/)*
+## Core Database Migrations
+
+### Available Migrations
+- **add_feed_token.py** - Adds feed token support for data feeds
+- **add_user_id.py** - Adds user ID column to various tables
+- **migrate_security_columns.py** - Migrates security-related columns
+- **migrate_smtp_simple.py** - SMTP configuration migration
+
+---
+
+## Creating New Migrations
+
+### Naming Convention
+- Sandbox migrations: `00X_descriptive_name.py` (numbered sequence)
+- Core migrations: `descriptive_name.py`
+
+### Required Functions
+```python
+def upgrade():
+    """Apply the migration"""
+    pass
+
+def rollback():
+    """Reverse the migration (optional but recommended)"""
+    pass
+
+def status():
+    """Check if migration is applied"""
+    pass
+```
+
+### Best Practices
+1. Make migrations idempotent (safe to run multiple times)
+2. Include rollback functionality where possible
+3. Add proper logging
+4. Test both upgrade and rollback
+5. Document changes clearly
+6. Handle missing columns/tables gracefully
+
+### Testing Migrations
+```bash
+# Test upgrade
+python your_migration.py upgrade
+python your_migration.py status
+
+# Test rollback
+python your_migration.py rollback
+python your_migration.py status
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Module not found errors**: Ensure you're running from the OpenAlgo directory with virtual environment:
+   ```bash
+   cd /path/to/openalgo
+   source .venv/bin/activate  # or use uv run
+   python upgrade/migration_name.py
+   ```
+
+2. **Database locked errors**: Ensure no other processes are using the database
+
+3. **Index already exists**: Migrations handle this with `CREATE INDEX IF NOT EXISTS`
+
+4. **Rollback issues**: Some SQLite operations require table recreation
+
+---
+
+*For full documentation, see [OpenAlgo Documentation](../docs/)*

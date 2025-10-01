@@ -328,8 +328,8 @@ class ExecutionEngine:
                     position.pnl_percent = Decimal('0.00')
                     logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}")
 
-                elif (old_quantity > 0 and final_quantity > 0) or (old_quantity < 0 and final_quantity < 0):
-                    # Adding to existing position (same direction)
+                elif (old_quantity > 0 and final_quantity > old_quantity) or (old_quantity < 0 and final_quantity < old_quantity):
+                    # Adding to existing position (same direction, position size increasing)
                     # Calculate new average price
                     total_value = (abs(old_quantity) * position.average_price) + (abs(new_quantity) * execution_price)
                     total_quantity = abs(old_quantity) + abs(new_quantity)
@@ -339,17 +339,7 @@ class ExecutionEngine:
                     position.average_price = new_average_price
                     position.ltp = execution_price
 
-                    # Block additional margin for the new quantity
-                    additional_margin, _ = fund_manager.calculate_margin_required(
-                        order.symbol, order.exchange, order.product,
-                        abs(new_quantity), execution_price
-                    )
-                    if additional_margin:
-                        fund_manager.block_margin(
-                            additional_margin,
-                            f"Added to position: {order.symbol}"
-                        )
-
+                    # No margin operation here - already blocked at order time
                     logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price}")
 
                 else:
@@ -363,6 +353,7 @@ class ExecutionEngine:
                     )
 
                     # Release margin for reduced quantity
+                    # Use position's average price for consistency (same price used when margin was blocked)
                     margin_to_release, _ = fund_manager.calculate_margin_required(
                         order.symbol, order.exchange, order.product,
                         reduced_quantity, position.average_price
@@ -374,6 +365,7 @@ class ExecutionEngine:
                             realized_pnl,
                             f"Position reduced: {order.symbol}"
                         )
+                        logger.info(f"Released margin ₹{margin_to_release} for reduced position")
 
                     # If position reversed, recalculate average price for new position
                     if abs(new_quantity) > abs(old_quantity):
@@ -381,17 +373,7 @@ class ExecutionEngine:
                         remaining_quantity = abs(new_quantity) - abs(old_quantity)
                         position.quantity = remaining_quantity if order.action == 'BUY' else -remaining_quantity
                         position.average_price = execution_price
-
-                        # Block margin for reversed position
-                        new_margin, _ = fund_manager.calculate_margin_required(
-                            order.symbol, order.exchange, order.product,
-                            remaining_quantity, execution_price
-                        )
-                        if new_margin:
-                            fund_manager.block_margin(
-                                new_margin,
-                                f"Position reversed: {order.symbol}"
-                            )
+                        # No margin operation here - already blocked at order time for excess quantity
                     else:
                         # Position reduced but not reversed
                         position.quantity = final_quantity
