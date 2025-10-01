@@ -110,8 +110,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateBadge(Boolean(data.analyze_mode));
                 showToast(data.message, 'success');
 
-                // No page reload needed - mode will be checked dynamically on next API call
-                console.log('[Mode] Mode switched successfully without page reload');
+                // Refresh current page content to reflect the mode change
+                console.log('[Mode] Mode switched successfully, refreshing content');
+
+                // Use the refreshCurrentPageContent function if available
+                if (typeof refreshCurrentPageContent === 'function') {
+                    setTimeout(() => {
+                        refreshCurrentPageContent();
+                    }, 500); // Small delay to ensure mode is properly set
+                } else {
+                    // Fallback: reload the page if refresh function is not available
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 500);
+                }
             } else {
                 throw new Error(data.error || 'Unknown error');
             }
