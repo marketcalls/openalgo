@@ -157,27 +157,27 @@ class ExecutionEngine:
                 execution_price = ltp
 
             elif order.price_type == 'LIMIT':
-                # Limit BUY: Execute if LTP <= Limit Price
-                # Limit SELL: Execute if LTP >= Limit Price
+                # Limit BUY: Execute if LTP <= Limit Price (you get filled at LTP or better)
+                # Limit SELL: Execute if LTP >= Limit Price (you get filled at LTP or better)
                 if order.action == 'BUY' and ltp <= order.price:
                     should_execute = True
-                    execution_price = order.price  # Execute at limit price
+                    execution_price = ltp  # Execute at current market price (LTP), which is better than limit
                 elif order.action == 'SELL' and ltp >= order.price:
                     should_execute = True
-                    execution_price = order.price  # Execute at limit price
+                    execution_price = ltp  # Execute at current market price (LTP), which is better than limit
 
             elif order.price_type == 'SL':
                 # Stop Loss Limit order
-                # BUY: Execute at limit price when LTP >= trigger price
-                # SELL: Execute at limit price when LTP <= trigger price
+                # SL BUY: When LTP >= trigger price, order activates. Execute at LTP if LTP <= limit price
+                # SL SELL: When LTP <= trigger price, order activates. Execute at LTP if LTP >= limit price
                 if order.action == 'BUY' and ltp >= order.trigger_price:
                     if ltp <= order.price:
                         should_execute = True
-                        execution_price = order.price
+                        execution_price = ltp  # Execute at current market price (LTP)
                 elif order.action == 'SELL' and ltp <= order.trigger_price:
                     if ltp >= order.price:
                         should_execute = True
-                        execution_price = order.price
+                        execution_price = ltp  # Execute at current market price (LTP)
 
             elif order.price_type == 'SL-M':
                 # Stop Loss Market order
