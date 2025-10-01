@@ -27,6 +27,20 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def is_option(symbol, exchange):
+    """Check if symbol is an option based on exchange and symbol suffix"""
+    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
+        return symbol.endswith('CE') or symbol.endswith('PE')
+    return False
+
+
+def is_future(symbol, exchange):
+    """Check if symbol is a future based on exchange and symbol suffix"""
+    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
+        return symbol.endswith('FUT')
+    return False
+
+
 class FundManager:
     """Manages virtual funds for sandbox mode"""
 
@@ -272,17 +286,16 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
-            instrument_type = (symbol_obj.instrumenttype or '').upper()
             trade_value = quantity * price
 
-            # Determine leverage based on product and instrument type
-            leverage = self._get_leverage(exchange, product, instrument_type)
+            # Determine leverage based on product and symbol type
+            leverage = self._get_leverage(exchange, product, symbol)
 
             if leverage is None:
                 return None, "Unable to determine leverage"
 
             # Calculate margin
-            if instrument_type in ['OPTIDX', 'OPTSTK', 'OPTCUR', 'OPTCOM']:
+            if is_option(symbol, exchange):
                 # Options
                 if product in ['MIS', 'NRML']:
                     # Selling options - use futures margin (leverage-based)
@@ -302,8 +315,8 @@ class FundManager:
             logger.error(f"Error calculating margin: {e}")
             return None, f"Error calculating margin: {str(e)}"
 
-    def _get_leverage(self, exchange, product, instrument_type):
-        """Get leverage multiplier based on exchange, product, and instrument type"""
+    def _get_leverage(self, exchange, product, symbol):
+        """Get leverage multiplier based on exchange, product, and symbol type"""
         try:
             # Equity exchanges
             if exchange in ['NSE', 'BSE']:
@@ -314,12 +327,12 @@ class FundManager:
                 else:  # NRML
                     return Decimal(get_config('equity_cnc_leverage', '1'))
 
-            # Futures
-            elif instrument_type in ['FUTIDX', 'FUTSTK', 'FUTCUR', 'FUTCOM']:
+            # Futures (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with FUT suffix)
+            elif is_future(symbol, exchange):
                 return Decimal(get_config('futures_leverage', '10'))
 
-            # Options
-            elif instrument_type in ['OPTIDX', 'OPTSTK', 'OPTCUR', 'OPTCOM']:
+            # Options (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with CE/PE suffix)
+            elif is_option(symbol, exchange):
                 if product in ['MIS', 'NRML']:
                     # Selling options
                     return Decimal(get_config('option_sell_leverage', '10'))

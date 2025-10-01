@@ -255,6 +255,10 @@ class ExecutionEngine:
         """
         Update or create position after trade execution
         Handle netting for opposite positions
+
+        Note: Margin was already blocked when order was placed (for pending orders like LIMIT/SL/SL-M)
+        or during immediate execution (for MARKET orders). We only need to release margin when
+        positions are closed/reduced.
         """
         try:
             fund_manager = FundManager(order.user_id)
@@ -269,6 +273,7 @@ class ExecutionEngine:
 
             if not position:
                 # Create new position
+                # Margin already blocked at order placement time
                 position = SandboxPositions(
                     user_id=order.user_id,
                     symbol=order.symbol,
@@ -282,7 +287,7 @@ class ExecutionEngine:
                     created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
                 )
                 db_session.add(position)
-                logger.info(f"Created new position: {order.symbol} {order.action} {order.quantity}")
+                logger.info(f"Created new position: {order.symbol} {order.action} {order.quantity} (margin already blocked: ₹{order.margin_blocked})")
 
             else:
                 # Update existing position (netting logic)
@@ -293,12 +298,13 @@ class ExecutionEngine:
                 # Special case: Reopening a closed position (old_quantity = 0)
                 if old_quantity == 0:
                     # Treat as opening new position
+                    # Margin already blocked at order placement time
                     position.quantity = new_quantity
                     position.average_price = execution_price
                     position.ltp = execution_price
                     position.pnl = Decimal('0.00')
                     position.pnl_percent = Decimal('0.00')
-                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity}")
+                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (margin already blocked: ₹{order.margin_blocked})")
 
                 elif final_quantity == 0:
                     # Position closed completely
@@ -308,18 +314,34 @@ class ExecutionEngine:
                         abs(new_quantity), execution_price
                     )
 
-                    # Release all margin for this position
-                    margin_to_release, _ = fund_manager.calculate_margin_required(
-                        order.symbol, order.exchange, order.product,
-                        abs(old_quantity), position.average_price
-                    )
+                    # Determine what margin to release
+                    # If this order had margin blocked (order.margin_blocked), it means order was opening/adding position
+                    # If order had no margin blocked (0), it means order was reducing an existing position
+                    order_margin_blocked = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0')
 
-                    if margin_to_release:
+                    if order_margin_blocked == Decimal('0'):
+                        # This order was reducing/closing existing position - no margin was blocked for it
+                        # We need to release margin for the old position that's now closed
+                        margin_to_release, _ = fund_manager.calculate_margin_required(
+                            order.symbol, order.exchange, order.product,
+                            abs(old_quantity), position.average_price
+                        )
+                        if margin_to_release:
+                            fund_manager.release_margin(
+                                margin_to_release,
+                                realized_pnl,
+                                f"Position closed: {order.symbol}"
+                            )
+                            logger.info(f"Released margin ₹{margin_to_release} for closed position (old position margin)")
+                    else:
+                        # This order had margin blocked at placement time
+                        # Release the exact margin that was blocked for this order
                         fund_manager.release_margin(
-                            margin_to_release,
+                            order_margin_blocked,
                             realized_pnl,
                             f"Position closed: {order.symbol}"
                         )
+                        logger.info(f"Released margin ₹{order_margin_blocked} for closed position (order margin)")
 
                     # Keep position with 0 quantity to show it was closed
                     position.quantity = 0
@@ -339,8 +361,8 @@ class ExecutionEngine:
                     position.average_price = new_average_price
                     position.ltp = execution_price
 
-                    # No margin operation here - already blocked at order time
-                    logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price}")
+                    # Margin already blocked at order placement time - no action needed
+                    logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price} (margin already blocked: ₹{order.margin_blocked})")
 
                 else:
                     # Reducing position (opposite direction)
@@ -373,7 +395,8 @@ class ExecutionEngine:
                         remaining_quantity = abs(new_quantity) - abs(old_quantity)
                         position.quantity = remaining_quantity if order.action == 'BUY' else -remaining_quantity
                         position.average_price = execution_price
-                        # No margin operation here - already blocked at order time for excess quantity
+                        # Margin for excess quantity already blocked at order time - no action needed
+                        logger.info(f"Position reversed: {order.symbol}, New qty: {position.quantity} (excess margin already blocked: ₹{order.margin_blocked})")
                     else:
                         # Position reduced but not reversed
                         position.quantity = final_quantity

@@ -30,6 +30,20 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def is_option(symbol, exchange):
+    """Check if symbol is an option based on exchange and symbol suffix"""
+    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
+        return symbol.endswith('CE') or symbol.endswith('PE')
+    return False
+
+
+def is_future(symbol, exchange):
+    """Check if symbol is a future based on exchange and symbol suffix"""
+    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
+        return symbol.endswith('FUT')
+    return False
+
+
 class OrderManager:
     """Manages virtual orders for sandbox mode"""
 
@@ -136,38 +150,60 @@ class OrderManager:
                     # MIS allows short selling (negative positions) since it's intraday
                     logger.info(f"MIS SELL order: {symbol} - Short selling allowed for intraday")
 
-            # For market orders, get current LTP for accurate margin calculation
+            # Determine price for margin calculation based on order type
+            margin_calculation_price = None
+
             if price_type == 'MARKET':
+                # For MARKET orders, fetch current LTP for margin calculation
                 try:
                     from sandbox.execution_engine import ExecutionEngine
                     engine = ExecutionEngine()
                     quote = engine._fetch_quote(symbol, exchange)
                     if quote and quote.get('ltp'):
-                        price = Decimal(str(quote['ltp']))
-                        logger.debug(f"Using LTP {price} for MARKET order margin calculation")
+                        margin_calculation_price = Decimal(str(quote['ltp']))
+                        logger.debug(f"Using LTP {margin_calculation_price} for MARKET order margin calculation")
                     else:
                         # In sandbox mode, use a default price if API fails
                         # Try to get last execution price from positions
                         if existing_position and existing_position.ltp:
-                            price = existing_position.ltp
-                            logger.warning(f"API failed, using last known price {price} for {symbol}")
+                            margin_calculation_price = existing_position.ltp
+                            logger.warning(f"API failed, using last known price {margin_calculation_price} for {symbol}")
                         else:
                             # Use a reasonable default for sandbox testing
-                            price = Decimal('112.37')  # Default ZEEL price for testing
-                            logger.warning(f"API failed, using default sandbox price {price} for {symbol}")
+                            margin_calculation_price = Decimal('112.37')  # Default ZEEL price for testing
+                            logger.warning(f"API failed, using default sandbox price {margin_calculation_price} for {symbol}")
                 except Exception as e:
                     logger.error(f"Error fetching quote for margin calculation: {e}")
                     # In sandbox mode, use a fallback price
                     if existing_position and existing_position.ltp:
-                        price = existing_position.ltp
-                        logger.warning(f"API error, using last known price {price} for {symbol}")
+                        margin_calculation_price = existing_position.ltp
+                        logger.warning(f"API error, using last known price {margin_calculation_price} for {symbol}")
                     else:
-                        price = Decimal('112.37')  # Default ZEEL price for testing
-                        logger.warning(f"API error, using default sandbox price {price} for {symbol}")
+                        margin_calculation_price = Decimal('112.37')  # Default ZEEL price for testing
+                        logger.warning(f"API error, using default sandbox price {margin_calculation_price} for {symbol}")
 
-            # Calculate required margin
+            elif price_type == 'LIMIT':
+                # For LIMIT orders, use the limit price for margin calculation
+                margin_calculation_price = price
+                logger.debug(f"Using LIMIT price {margin_calculation_price} for margin calculation")
+
+            elif price_type in ['SL', 'SL-M']:
+                # For SL/SL-M orders, use trigger price for margin calculation
+                # This represents the worst-case price at which order will be triggered
+                margin_calculation_price = trigger_price
+                logger.debug(f"Using trigger price {margin_calculation_price} for {price_type} order margin calculation")
+
+            # Validate that we have a valid price for margin calculation
+            if not margin_calculation_price or margin_calculation_price <= 0:
+                return False, {
+                    'status': 'error',
+                    'message': f'Invalid price for margin calculation. Please provide valid price/trigger_price for {price_type} order',
+                    'mode': 'analyze'
+                }, 400
+
+            # Calculate required margin using the appropriate price
             margin_required, margin_msg = self.fund_manager.calculate_margin_required(
-                symbol, exchange, product, quantity, price
+                symbol, exchange, product, quantity, margin_calculation_price
             )
 
             if margin_required is None:
@@ -204,12 +240,36 @@ class OrderManager:
                         # Order will reverse position - only block margin for excess quantity
                         excess_qty = order_qty - existing_qty
                         actual_margin_to_block, _ = self.fund_manager.calculate_margin_required(
-                            symbol, exchange, product, excess_qty, price
+                            symbol, exchange, product, excess_qty, margin_calculation_price
                         )
                         logger.info(f"Order will reverse position - margin for {excess_qty} shares: ₹{actual_margin_to_block}")
 
-            # Check margin availability (only for BUY orders and SELL orders for options)
-            if action == 'BUY' or (action == 'SELL' and symbol_obj.instrumenttype in ['OPTIDX', 'OPTSTK', 'OPTCUR', 'OPTCOM']):
+            # Check margin availability and block margin if needed
+            # Margin is required for:
+            # - All BUY orders (long positions)
+            # - SELL orders for options (selling options requires margin)
+            # - SELL orders for futures (short selling futures requires margin)
+            # - SELL orders for equity in MIS (intraday short selling requires margin)
+            # - SELL orders for equity in NRML (if short selling is allowed)
+            # Note: SELL orders for equity in CNC don't need margin blocking (selling owned shares)
+            should_block_margin = False
+
+            if action == 'BUY':
+                # All BUY orders require margin
+                should_block_margin = True
+            elif action == 'SELL':
+                if is_option(symbol, exchange):
+                    # Selling options requires margin
+                    should_block_margin = True
+                elif is_future(symbol, exchange):
+                    # Short selling futures requires margin
+                    should_block_margin = True
+                elif product in ['MIS', 'NRML']:
+                    # Intraday/margin short selling of equity requires margin
+                    should_block_margin = True
+                # CNC SELL doesn't need margin (selling owned shares)
+
+            if should_block_margin:
                 if actual_margin_to_block > 0:
                     # Check and block margin only for new exposure
                     can_trade, margin_check_msg = self.fund_manager.check_margin_available(actual_margin_to_block)
@@ -231,8 +291,11 @@ class OrderManager:
                             'message': block_msg,
                             'mode': 'analyze'
                         }, 400
+                    logger.info(f"Blocked margin ₹{actual_margin_to_block} for {symbol} {action} {quantity} order")
                 else:
                     logger.info(f"No margin to block for {symbol} {action} - will reduce existing position")
+            else:
+                logger.info(f"No margin blocking required for {symbol} {action} {product} (CNC SELL of owned shares)")
 
             # Generate unique order ID
             orderid = self._generate_order_id()
@@ -240,6 +303,9 @@ class OrderManager:
             # Check if order should be rejected (CNC SELL validation failed)
             if cnc_sell_rejection_reason:
                 # Create rejected order for audit trail
+                # For MARKET orders, store the LTP we used for margin calculation as reference price
+                order_price_to_store = margin_calculation_price if price_type == 'MARKET' else price
+
                 order = SandboxOrders(
                     orderid=orderid,
                     user_id=self.user_id,
@@ -248,7 +314,7 @@ class OrderManager:
                     exchange=exchange,
                     action=action,
                     quantity=quantity,
-                    price=price,
+                    price=order_price_to_store,
                     trigger_price=trigger_price,
                     price_type=price_type,
                     product=product,
@@ -274,6 +340,9 @@ class OrderManager:
                 }, 400
 
             # Create order record (for accepted orders)
+            # For MARKET orders, store the LTP we used for margin calculation as reference price
+            order_price_to_store = margin_calculation_price if price_type == 'MARKET' else price
+
             order = SandboxOrders(
                 orderid=orderid,
                 user_id=self.user_id,
@@ -282,7 +351,7 @@ class OrderManager:
                 exchange=exchange,
                 action=action,
                 quantity=quantity,
-                price=price,
+                price=order_price_to_store,
                 trigger_price=trigger_price,
                 price_type=price_type,
                 product=product,
@@ -454,37 +523,60 @@ class OrderManager:
                     f"Order cancelled: {orderid}"
                 )
                 logger.info(f"Released margin ₹{order.margin_blocked} for cancelled order {orderid}")
-            elif order.action == 'BUY':
+            else:
                 # Fallback for old orders without margin_blocked field
-                # For orders that had margin blocked, we need the price to calculate it
-                if not order.price:
-                    # If price is not set (old MARKET orders), fetch current LTP
-                    try:
-                        from sandbox.execution_engine import ExecutionEngine
-                        engine = ExecutionEngine()
-                        quote = engine._fetch_quote(order.symbol, order.exchange)
-                        if quote and quote.get('ltp'):
-                            order_price = Decimal(str(quote['ltp']))
-                        else:
-                            logger.error(f"Cannot fetch LTP for {order.symbol} to calculate margin release")
-                            order_price = Decimal('0')
-                    except Exception as e:
-                        logger.error(f"Error fetching quote for margin release: {e}")
-                        order_price = Decimal('0')
-                else:
-                    order_price = order.price
+                # Need to recalculate margin that was blocked based on order parameters
+                # Get symbol info to determine if margin was blocked for this order
+                symbol_obj = SymToken.query.filter_by(
+                    symbol=order.symbol,
+                    exchange=order.exchange
+                ).first()
 
-                # Calculate margin that was blocked
-                margin_blocked, _ = self.fund_manager.calculate_margin_required(
-                    order.symbol, order.exchange, order.product,
-                    order.quantity, order_price
-                )
-                if margin_blocked:
-                    self.fund_manager.release_margin(
-                        margin_blocked, 0,
-                        f"Order cancelled: {orderid}"
-                    )
-                    logger.info(f"Released calculated margin ₹{margin_blocked} for cancelled order {orderid}")
+                if symbol_obj:
+                    # Determine if this order would have had margin blocked
+                    should_release_margin = False
+
+                    if order.action == 'BUY':
+                        should_release_margin = True
+                    elif order.action == 'SELL':
+                        if is_option(order.symbol, order.exchange) or is_future(order.symbol, order.exchange):
+                            should_release_margin = True
+                        elif order.product in ['MIS', 'NRML']:
+                            should_release_margin = True
+
+                    if should_release_margin:
+                        # Get price for margin calculation
+                        if not order.price:
+                            # If price is not set (old MARKET orders), fetch current LTP
+                            try:
+                                from sandbox.execution_engine import ExecutionEngine
+                                engine = ExecutionEngine()
+                                quote = engine._fetch_quote(order.symbol, order.exchange)
+                                if quote and quote.get('ltp'):
+                                    order_price = Decimal(str(quote['ltp']))
+                                else:
+                                    logger.error(f"Cannot fetch LTP for {order.symbol} to calculate margin release")
+                                    order_price = Decimal('0')
+                            except Exception as e:
+                                logger.error(f"Error fetching quote for margin release: {e}")
+                                order_price = Decimal('0')
+                        else:
+                            order_price = order.price
+
+                        # Calculate margin that was blocked
+                        if order_price > 0:
+                            margin_blocked, _ = self.fund_manager.calculate_margin_required(
+                                order.symbol, order.exchange, order.product,
+                                order.quantity, order_price
+                            )
+                            if margin_blocked:
+                                self.fund_manager.release_margin(
+                                    margin_blocked, 0,
+                                    f"Order cancelled: {orderid}"
+                                )
+                                logger.info(f"Released calculated margin ₹{margin_blocked} for cancelled order {orderid}")
+                    else:
+                        logger.info(f"No margin to release for cancelled order {orderid} ({order.action} {order.product})")
 
             db_session.commit()
 
