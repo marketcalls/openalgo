@@ -9,7 +9,7 @@
             <p class="text-base-content/60 mt-2">Configure virtual trading environment settings</p>
         </div>
         <div class="flex gap-3">
-            <button onclick="resetConfiguration()" class="btn btn-warning">
+            <button onclick="openResetModal()" class="btn btn-warning">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
@@ -135,9 +135,19 @@ async function saveConfig(configKey) {
     }
 }
 
+function openResetModal() {
+    document.getElementById('reset-config-modal').checked = true;
+}
+
 async function resetConfiguration() {
-    if (!confirm('⚠️ WARNING: This will reset ALL sandbox data!\n\nThis action will:\n✗ Delete all orders, trades, positions, and holdings\n✗ Reset funds to starting capital (₹1.00Cr)\n✗ Reset all configuration values to defaults\n\nThis cannot be undone. Are you sure you want to continue?')) {
-        return;
+    // Close the modal
+    document.getElementById('reset-config-modal').checked = false;
+
+    // Disable the confirm button and show loading state
+    const confirmBtn = document.getElementById('reset-confirm-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<span class="loading loading-spinner"></span> Resetting...';
     }
 
     try {
@@ -160,10 +170,20 @@ async function resetConfiguration() {
             }, 2000);
         } else {
             showToast(data.message, 'error');
+            // Re-enable button on error
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = 'Yes, Reset Everything';
+            }
         }
     } catch (error) {
         console.error('Error resetting config:', error);
         showToast('Failed to reset configuration', 'error');
+        // Re-enable button on error
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = 'Yes, Reset Everything';
+        }
     }
 }
 
@@ -209,6 +229,43 @@ document.addEventListener('DOMContentLoaded', () => {
     // So we handle label formatting in the template itself
 });
 </script>
+
+<!-- DaisyUI Modal for Reset Configuration -->
+<input type="checkbox" id="reset-config-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg text-error mb-4">⚠️ WARNING: Reset ALL Sandbox Data</h3>
+
+        <div class="alert alert-warning mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span>This action cannot be undone!</span>
+        </div>
+
+        <div class="space-y-2 text-base-content">
+            <p class="font-semibold">This action will:</p>
+            <ul class="list-disc list-inside space-y-1 ml-4">
+                <li>Delete all orders, trades, positions, and holdings</li>
+                <li>Reset funds to starting capital (₹1.00 Crore)</li>
+                <li>Reset all configuration values to defaults</li>
+                <li>Clear all historical data</li>
+            </ul>
+        </div>
+
+        <div class="divider"></div>
+
+        <p class="text-base-content/70">Are you absolutely sure you want to reset everything?</p>
+
+        <div class="modal-action">
+            <label for="reset-config-modal" class="btn btn-ghost">Cancel</label>
+            <button id="reset-confirm-btn" onclick="resetConfiguration()" class="btn btn-error">
+                Yes, Reset Everything
+            </button>
+        </div>
+    </div>
+    <label class="modal-backdrop" for="reset-config-modal"></label>
+</div>
 
 {% endblock %}
 
