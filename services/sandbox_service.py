@@ -410,9 +410,53 @@ def sandbox_close_position(
         exchange = position_data.get('exchange')
         product = position_data.get('product_type') or position_data.get('product')
 
-        success, response, status_code = position_manager.close_position(symbol, exchange, product)
+        # If no specific position specified, close all positions
+        if not symbol and not exchange:
+            # Get all open positions
+            success, positions_response, status_code = position_manager.get_open_positions()
+            if not success:
+                return False, positions_response, status_code
 
-        return success, response, status_code
+            positions = positions_response.get('data', [])
+
+            if not positions:
+                return True, {
+                    'status': 'success',
+                    'message': 'No open positions to close',
+                    'mode': 'analyze'
+                }, 200
+
+            closed_count = 0
+            failed_count = 0
+
+            # Close each position
+            for pos in positions:
+                pos_symbol = pos.get('symbol')
+                pos_exchange = pos.get('exchange')
+                pos_product = pos.get('product')
+
+                if pos.get('quantity', 0) != 0:
+                    success, _, _ = position_manager.close_position(pos_symbol, pos_exchange, pos_product)
+                    if success:
+                        closed_count += 1
+                    else:
+                        failed_count += 1
+
+            message = f'Closed {closed_count} positions'
+            if failed_count > 0:
+                message += f' (Failed to close {failed_count} positions)'
+
+            return True, {
+                'status': 'success',
+                'message': message,
+                'closed_positions': closed_count,
+                'failed_closures': failed_count,
+                'mode': 'analyze'
+            }, 200
+        else:
+            # Close specific position
+            success, response, status_code = position_manager.close_position(symbol, exchange, product)
+            return success, response, status_code
 
     except Exception as e:
         logger.error(f"Error in sandbox_close_position: {e}")
@@ -450,7 +494,11 @@ def sandbox_place_smart_order(
         target_quantity = int(order_data.get('position_size', 0))
 
         # Get current position
-        positions = position_manager.get_positions()
+        success, positions_response, status_code = position_manager.get_open_positions()
+        if not success:
+            return False, positions_response, status_code
+
+        positions = positions_response.get('data', [])
         current_quantity = 0
 
         for pos in positions:
@@ -522,9 +570,13 @@ def sandbox_cancel_all_orders(
 
         order_manager = OrderManager(user_id)
 
-        # Get all open orders
-        orders = order_manager.get_orders()
-        open_orders = [order for order in orders if order.get('status') in ['open', 'pending', 'trigger_pending']]
+        # Get all open orders from orderbook
+        success, orderbook_response, status_code = order_manager.get_orderbook()
+        if not success:
+            return False, orderbook_response, status_code
+
+        orders = orderbook_response.get('data', {}).get('orders', [])
+        open_orders = [order for order in orders if order.get('order_status') in ['open', 'pending', 'trigger_pending']]
 
         if not open_orders:
             return True, {

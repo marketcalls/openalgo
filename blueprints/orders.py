@@ -487,39 +487,39 @@ def close_all_positions():
         login_username = session['user']
         auth_token = get_auth_token(login_username)
         broker_name = session.get('broker')
-        
+
         if not auth_token or not broker_name:
             return jsonify({
                 'status': 'error',
                 'message': 'Authentication error'
             }), 401
-        
-        # Dynamically import broker-specific modules for API
-        api_funcs = dynamic_import(broker_name, 'api.order_api', ['close_all_positions'])
-        
-        if not api_funcs or 'close_all_positions' not in api_funcs:
-            logger.error(f"Error loading broker-specific modules for {broker_name}")
+
+        # Import necessary functions
+        from services.close_position_service import close_position
+        from database.auth_db import get_api_key_for_tradingview
+        from database.settings_db import get_analyze_mode
+
+        # Get API key for analyze mode
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        # Call the service with appropriate parameters
+        success, response_data, status_code = close_position(
+            position_data={},
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker_name
+        )
+
+        # Format the response for UI
+        if success and status_code == 200:
             return jsonify({
-                'status': 'error',
-                'message': 'Error loading broker modules'
-            }), 500
-        
-        # Use the broker's close_all_positions function directly
-        response_code, status_code = api_funcs['close_all_positions']('', auth_token)
-        
-        if status_code == 200:
-            response_data = {
                 'status': 'success',
-                'message': 'All Open Positions Squared Off'
-            }
-            return jsonify(response_data), 200
+                'message': response_data.get('message', 'All Open Positions Squared Off')
+            }), 200
         else:
-            message = response_code.get('message', 'Failed to close positions') if isinstance(response_code, dict) else 'Failed to close positions'
-            error_response = {
-                'status': 'error',
-                'message': message
-            }
-            return jsonify(error_response), status_code
+            return jsonify(response_data), status_code
         
     except Exception as e:
         logger.error(f"Error in close_all_positions endpoint: {str(e)}")
@@ -537,19 +537,27 @@ def cancel_all_orders_ui():
         login_username = session['user']
         auth_token = get_auth_token(login_username)
         broker_name = session.get('broker')
-        
+
         if not auth_token or not broker_name:
             return jsonify({
                 'status': 'error',
                 'message': 'Authentication error'
             }), 401
-        
-        # Import the cancel_all_orders service
+
+        # Import necessary functions
         from services.cancel_all_order_service import cancel_all_orders
-        
-        # Call the service with auth_token and broker
+        from database.auth_db import get_api_key_for_tradingview
+        from database.settings_db import get_analyze_mode
+
+        # Get API key for analyze mode
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        # Call the service with appropriate parameters
         success, response_data, status_code = cancel_all_orders(
             order_data={},
+            api_key=api_key,
             auth_token=auth_token,
             broker=broker_name
         )
