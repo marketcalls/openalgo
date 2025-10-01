@@ -1,68 +1,73 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Complete Sandbox Mode Setup and Verification
+Sandbox Complete Setup Migration Script for OpenAlgo
+
+This migration ensures the complete sandbox/analyzer mode setup:
+- Creates all sandbox tables if they don't exist
+- Adds any missing columns (like margin_blocked)
+- Creates all required indexes
+- Sets up default configuration values
+- Updates database path to /db directory
+
+Usage:
+    cd upgrade
+    uv run migrate_sandbox_complete.py           # Apply migration
+    uv run migrate_sandbox_complete.py --status  # Check status
 
 Migration: 003
 Created: 2025-10-01
-Description: Ensures all sandbox tables are properly created and configured
-             with all required fields including recent additions.
-
-This migration:
-1. Creates all sandbox tables if they don't exist
-2. Adds any missing columns to existing tables
-3. Creates all required indexes
-4. Sets up default configuration values
 """
 
 import sys
 import os
+import argparse
 from datetime import datetime
-from decimal import Decimal
-from dotenv import load_dotenv
+from pathlib import Path
 
-# Add parent directory to path
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(parent_dir)
-
-# Load environment variables
-dotenv_path = os.path.join(parent_dir, '.env')
-load_dotenv(dotenv_path)
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, text, inspect
-from sqlalchemy.orm import sessionmaker
-import logging
+from sqlalchemy.exc import OperationalError, IntegrityError
+from utils.logging import get_logger
+from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Migration metadata
+MIGRATION_NAME = "sandbox_complete_setup"
+MIGRATION_VERSION = "003"
+
+# Load environment
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(parent_dir, '.env'))
 
 
-def get_sandbox_db_path():
-    """Get the path to sandbox database"""
+def get_sandbox_db_engine():
+    """Get sandbox database engine"""
     # Get from environment variable or use default
     sandbox_db_url = os.getenv('SANDBOX_DATABASE_URL', 'sqlite:///db/sandbox.db')
 
-    # Extract path from URL
+    # Extract path from URL and make absolute
     if sandbox_db_url.startswith('sqlite:///'):
         db_path = sandbox_db_url.replace('sqlite:///', '')
 
-        # Make it absolute if it's relative
         if not os.path.isabs(db_path):
             db_path = os.path.join(parent_dir, db_path)
 
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-        return db_path
+        sandbox_db_url = f"sqlite:///{db_path}"
+        logger.info(f"Sandbox DB path: {db_path}")
 
-    # Fallback to default
-    default_path = os.path.join(parent_dir, 'db', 'sandbox.db')
-    os.makedirs(os.path.dirname(default_path), exist_ok=True)
-    return default_path
+    return create_engine(sandbox_db_url)
 
 
 def create_all_tables(conn):
     """Create all sandbox tables"""
+
+    logger.info("Creating sandbox tables...")
 
     # 1. SandboxOrders table
     conn.execute(text("""
@@ -182,6 +187,8 @@ def create_all_tables(conn):
 def create_all_indexes(conn):
     """Create all required indexes"""
 
+    logger.info("Creating indexes...")
+
     # Indexes for sandbox_orders
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_orderid ON sandbox_orders(orderid)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_id ON sandbox_orders(user_id)"))
@@ -218,6 +225,8 @@ def create_all_indexes(conn):
 def add_missing_columns(conn):
     """Add any missing columns to existing tables"""
 
+    logger.info("Checking for missing columns...")
+
     # Check and add margin_blocked to sandbox_orders if missing
     result = conn.execute(text("PRAGMA table_info(sandbox_orders)"))
     columns = [row[1] for row in result]
@@ -234,6 +243,8 @@ def add_missing_columns(conn):
 
 def insert_default_config(conn):
     """Insert default configuration values"""
+
+    logger.info("Inserting default configuration...")
 
     default_configs = [
         ('starting_capital', '10000000.00', 'Starting virtual capital in INR (₹1 Crore)'),
@@ -256,6 +267,7 @@ def insert_default_config(conn):
         ('smart_order_delay', '0.5', 'Delay between multi-leg smart orders (seconds)'),
     ]
 
+    added_count = 0
     for key, value, description in default_configs:
         # Check if config exists
         result = conn.execute(text("SELECT 1 FROM sandbox_config WHERE config_key = :key"), {'key': key})
@@ -264,21 +276,18 @@ def insert_default_config(conn):
                 INSERT INTO sandbox_config (config_key, config_value, description)
                 VALUES (:key, :value, :description)
             """), {'key': key, 'value': value, 'description': description})
-            logger.info(f"✅ Added config: {key} = {value}")
+            added_count += 1
 
     conn.commit()
+    logger.info(f"✅ Added {added_count} default configuration entries")
 
 
 def upgrade():
     """Apply complete sandbox setup"""
     try:
-        sandbox_db_path = get_sandbox_db_path()
-        sandbox_db_url = f"sqlite:///{sandbox_db_path}"
+        logger.info(f"Starting migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})")
 
-        logger.info(f"Setting up complete sandbox database at: {sandbox_db_path}")
-
-        # Create engine
-        engine = create_engine(sandbox_db_url)
+        engine = get_sandbox_db_engine()
 
         with engine.connect() as conn:
             # Create all tables
@@ -293,27 +302,22 @@ def upgrade():
             # Insert default config
             insert_default_config(conn)
 
-        logger.info("✅ Complete sandbox setup finished successfully")
+        logger.info(f"✅ Migration {MIGRATION_NAME} completed successfully")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Setup failed: {e}")
+        logger.error(f"❌ Migration failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def status():
-    """Check complete sandbox setup status"""
+    """Check migration status"""
     try:
-        sandbox_db_path = get_sandbox_db_path()
+        logger.info(f"Checking status of migration: {MIGRATION_NAME}")
 
-        if not os.path.exists(sandbox_db_path):
-            logger.info("❌ Sandbox database does not exist")
-            return False
-
-        sandbox_db_url = f"sqlite:///{sandbox_db_path}"
-        engine = create_engine(sandbox_db_url)
+        engine = get_sandbox_db_engine()
 
         required_tables = [
             'sandbox_orders', 'sandbox_trades', 'sandbox_positions',
@@ -333,6 +337,7 @@ def status():
 
             if missing_tables:
                 logger.info(f"❌ Missing tables: {', '.join(missing_tables)}")
+                logger.info("   Migration needed")
                 return False
 
             # Check critical columns
@@ -341,6 +346,7 @@ def status():
 
             if 'margin_blocked' not in columns:
                 logger.info("⚠️  Missing margin_blocked column in sandbox_orders")
+                logger.info("   Migration needed")
                 return False
 
             # Show statistics
@@ -369,17 +375,18 @@ def status():
 
 
 if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Migration 003: Complete Sandbox Setup')
-    parser.add_argument('command', choices=['upgrade', 'status'],
-                        help='Migration command to execute')
+    parser = argparse.ArgumentParser(
+        description=f'Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('--status', action='store_true',
+                        help='Check migration status')
 
     args = parser.parse_args()
 
-    if args.command == 'upgrade':
-        success = upgrade()
-        sys.exit(0 if success else 1)
-    elif args.command == 'status':
+    if args.status:
         success = status()
-        sys.exit(0 if success else 1)
+    else:
+        success = upgrade()
+
+    sys.exit(0 if success else 1)
