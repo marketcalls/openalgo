@@ -204,7 +204,12 @@ def process_basket_order_with_auth(
         analyze_results = []
         total_orders = len(basket_data['orders'])
 
-        for i, order in enumerate(basket_data['orders']):
+        # Sort orders to prioritize BUY orders before SELL orders (same as live mode)
+        buy_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'BUY']
+        sell_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'SELL']
+        sorted_orders = buy_orders + sell_orders
+
+        for i, order in enumerate(sorted_orders):
             # Create order data with common fields from basket order
             order_with_auth = order.copy()
             order_with_auth['apikey'] = api_key
