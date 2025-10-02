@@ -114,8 +114,7 @@ class OrderManager:
             # Exception: Allow orders that reduce/close existing positions
             if product == 'MIS':
                 from sandbox.squareoff_manager import SquareOffManager
-                from datetime import datetime, time
-                import pytz
+                from datetime import time
 
                 som = SquareOffManager()
                 square_off_time = som.square_off_times.get(exchange)
