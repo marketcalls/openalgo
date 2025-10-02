@@ -324,10 +324,11 @@ class FundManager:
 
             # Options (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with CE/PE suffix)
             elif is_option(symbol, exchange):
-                # For options, use 1x leverage (full premium) for both BUY and SELL
-                # This is simpler and easier to manage than futures-based margin
-                # Use option_buy_leverage config (which defaults to 1) for both BUY and SELL
-                return Decimal(get_config('option_buy_leverage', '1'))
+                # Options use different leverage based on BUY vs SELL
+                if action == 'BUY':
+                    return Decimal(get_config('option_buy_leverage', '1'))
+                else:  # SELL
+                    return Decimal(get_config('option_sell_leverage', '1'))
 
             # Default to 1x leverage
             return Decimal('1')
