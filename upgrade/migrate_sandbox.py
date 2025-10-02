@@ -126,6 +126,7 @@ def create_all_tables(conn):
             ltp DECIMAL(10, 2),
             pnl DECIMAL(10, 2) DEFAULT 0.00,
             pnl_percent DECIMAL(10, 4) DEFAULT 0.00,
+            accumulated_realized_pnl DECIMAL(10, 2) DEFAULT 0.00,
             created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
             updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
             UNIQUE(user_id, symbol, exchange, product)

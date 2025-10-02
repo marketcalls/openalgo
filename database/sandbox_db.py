@@ -104,8 +104,9 @@ class SandboxPositions(Base):
 
     # MTM tracking
     ltp = Column(DECIMAL(10, 2), nullable=True)  # Last traded price
-    pnl = Column(DECIMAL(10, 2), default=0.00)  # Unrealized P&L
+    pnl = Column(DECIMAL(10, 2), default=0.00)  # Current P&L (unrealized for open, realized for closed)
     pnl_percent = Column(DECIMAL(10, 4), default=0.00)  # P&L percentage
+    accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Accumulated realized P&L for the day
 
     # Timestamps
     created_at = Column(DateTime, nullable=False, default=func.now())

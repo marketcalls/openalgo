@@ -195,16 +195,28 @@ class PositionManager:
 
             # Update MTM for each position
             for position in positions:
+                # Skip MTM update for closed positions (quantity = 0)
+                # They already have accumulated realized P&L stored in position.pnl
+                if position.quantity == 0:
+                    continue
+
                 quote = quote_cache.get((position.symbol, position.exchange))
                 if quote:
                     ltp = Decimal(str(quote.get('ltp', 0)))
                     if ltp > 0:
                         position.ltp = ltp
-                        position.pnl = self._calculate_position_pnl(
+
+                        # Calculate current unrealized P&L for open position
+                        current_unrealized_pnl = self._calculate_position_pnl(
                             position.quantity,
                             position.average_price,
                             ltp
                         )
+
+                        # Display = accumulated realized P&L + current unrealized P&L
+                        accumulated_realized = position.accumulated_realized_pnl if position.accumulated_realized_pnl else Decimal('0.00')
+                        position.pnl = accumulated_realized + current_unrealized_pnl
+
                         position.pnl_percent = self._calculate_pnl_percent(
                             position.average_price,
                             ltp,
@@ -220,6 +232,11 @@ class PositionManager:
     def _update_single_position_mtm(self, position):
         """Update MTM for a single position"""
         try:
+            # Skip MTM update for closed positions (quantity = 0)
+            # They already have realized P&L stored from when position was closed
+            if position.quantity == 0:
+                return
+
             quote = self._fetch_quote(position.symbol, position.exchange)
             if quote:
                 ltp = Decimal(str(quote.get('ltp', 0)))

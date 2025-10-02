@@ -292,6 +292,7 @@ class ExecutionEngine:
                     ltp=execution_price,
                     pnl=Decimal('0.00'),
                     pnl_percent=Decimal('0.00'),
+                    accumulated_realized_pnl=Decimal('0.00'),
                     created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
                 )
                 db_session.add(position)
@@ -305,14 +306,14 @@ class ExecutionEngine:
 
                 # Special case: Reopening a closed position (old_quantity = 0)
                 if old_quantity == 0:
-                    # Treat as opening new position
-                    # Margin already blocked at order placement time
+                    # Keep accumulated realized P&L from previous trades, start fresh unrealized P&L
                     position.quantity = new_quantity
                     position.average_price = execution_price
                     position.ltp = execution_price
-                    position.pnl = Decimal('0.00')
+                    position.pnl = Decimal('0.00')  # Reset current P&L (will be updated by MTM)
                     position.pnl_percent = Decimal('0.00')
-                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (margin already blocked: ₹{order.margin_blocked})")
+                    # accumulated_realized_pnl stays as is from previous closed trades
+                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (accumulated realized P&L: ₹{position.accumulated_realized_pnl}) (margin already blocked: ₹{order.margin_blocked})")
 
                 elif final_quantity == 0:
                     # Position closed completely
@@ -354,12 +355,14 @@ class ExecutionEngine:
                         logger.info(f"Released margin ₹{order_margin_blocked} for closed position (order margin)")
 
                     # Keep position with 0 quantity to show it was closed
-                    # Store the realized P&L in pnl field so it displays in position book
+                    # Add realized P&L to accumulated realized P&L (for day's trading)
+                    position.accumulated_realized_pnl += realized_pnl
+
                     position.quantity = 0
                     position.ltp = execution_price
-                    position.pnl = realized_pnl  # Store realized P&L for closed position
+                    position.pnl = position.accumulated_realized_pnl  # Display total accumulated P&L
                     position.pnl_percent = Decimal('0.00')
-                    logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}")
+                    logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}, Total Accumulated P&L: ₹{position.accumulated_realized_pnl}")
 
                 elif (old_quantity > 0 and final_quantity > old_quantity) or (old_quantity < 0 and final_quantity < old_quantity):
                     # Adding to existing position (same direction, position size increasing)
