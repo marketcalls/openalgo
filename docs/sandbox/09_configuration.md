@@ -2,7 +2,7 @@
 
 ## Overview
 
-All sandbox settings are stored in the `sandbox_config` table and can be configured through the web interface or programmatically. Settings control capital, leverage, square-off times, intervals, and rate limits.
+All sandbox settings are stored in the `sandbox_config` table and can be configured through the web interface or programmatically. Settings control capital, leverage, square-off times, and update intervals.
 
 **Settings Page**: `http://127.0.0.1:5000/sandbox`
 
@@ -12,7 +12,6 @@ All sandbox settings are stored in the `sandbox_config` table and can be configu
 ### 2. Leverage Settings
 ### 3. Square-Off Times
 ### 4. Update Intervals
-### 5. Rate Limits
 
 ---
 
@@ -302,54 +301,7 @@ set_config('mtm_update_interval', '0')
 
 ---
 
-## 5. Rate Limits
-
-### Order Rate Limit
-
-**Config Key**: `order_rate_limit`
-**Default**: `10` orders per second
-**Range**: 1-100 orders/second
-**Input Type**: Number (integer)
-
-**Description**: Maximum number of regular orders allowed per second.
-
-**Purpose**: Simulate broker API rate limits.
-
-### API Rate Limit
-
-**Config Key**: `api_rate_limit`
-**Default**: `50` calls per second
-**Range**: 1-1000 calls/second
-**Input Type**: Number with step 10
-
-**Description**: Maximum API calls allowed per second (all endpoints combined).
-
-### Smart Order Rate Limit
-
-**Config Key**: `smart_order_rate_limit`
-**Default**: `2` orders per second
-**Range**: 1-50 orders/second
-
-**Description**: Maximum smart orders (multi-leg) allowed per second.
-
-**Lower Than Regular**: Smart orders generate multiple child orders, so rate is lower.
-
-### Smart Order Delay
-
-**Config Key**: `smart_order_delay`
-**Default**: `0.5` seconds
-**Range**: 0.1-10 seconds
-**Input Type**: Number with step 0.1
-
-**Description**: Delay between legs of a multi-leg smart order.
-
-**Example**:
-```python
-# Bracket Order with 0.5s delay:
-1. Main order placed at T+0s
-2. Target order placed at T+0.5s
-3. Stop-loss order placed at T+1.0s
-```
+**Note**: Rate limiting for API endpoints is controlled by `.env` file settings (`ORDER_RATE_LIMIT`, `API_RATE_LIMIT`, `SMART_ORDER_RATE_LIMIT`), not sandbox configuration. These apply to all API requests regardless of sandbox mode.
 
 ---
 
@@ -377,11 +329,10 @@ Navigate to: `http://127.0.0.1:5000/sandbox`
    - Time format: HH:MM (24-hour)
    - Click "Update Square-Off Times"
 
-4. **Intervals & Rate Limits**:
+4. **Update Intervals**:
    - Adjust order check interval (1-30 seconds)
    - Set MTM update interval (0-60 seconds)
-   - Configure rate limits
-   - Click "Update Intervals and Rate Limits"
+   - Click "Update Intervals"
 
 ---
 
@@ -552,13 +503,11 @@ When sandbox database is initialized, these defaults are set:
     'equity_cnc_leverage': '1',
     'futures_leverage': '10',
     'option_buy_leverage': '1',
-    'option_sell_leverage': '1',
-    'order_rate_limit': '10',
-    'api_rate_limit': '50',
-    'smart_order_rate_limit': '2',
-    'smart_order_delay': '0.5'
+    'option_sell_leverage': '1'
 }
 ```
+
+**Note**: Rate limits (`ORDER_RATE_LIMIT`, `API_RATE_LIMIT`, `SMART_ORDER_RATE_LIMIT`, `SMART_ORDER_DELAY`) are configured in `.env` file and apply globally to all API endpoints.
 
 ---
 

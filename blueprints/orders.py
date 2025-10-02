@@ -10,13 +10,26 @@ from services.tradebook_service import get_tradebook
 from services.positionbook_service import get_positionbook
 from services.holdings_service import get_holdings
 from utils.logging import get_logger
+from limiter import limiter
 import csv
 import io
+import os
 
 logger = get_logger(__name__)
 
+# Use existing rate limits from .env
+API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "50 per second")
+
 # Define the blueprint
 orders_bp = Blueprint('orders_bp', __name__, url_prefix='/')
+
+@orders_bp.errorhandler(429)
+def ratelimit_handler(e):
+    """Handle rate limit exceeded errors"""
+    return jsonify({
+        'status': 'error',
+        'message': 'Rate limit exceeded. Please try again later.'
+    }), 429
 
 def dynamic_import(broker, module_name, function_names):
     module_functions = {}
@@ -112,6 +125,7 @@ def generate_positions_csv(positions_data):
 
 @orders_bp.route('/orderbook')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def orderbook():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
@@ -152,6 +166,7 @@ def orderbook():
 
 @orders_bp.route('/tradebook')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def tradebook():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
@@ -190,6 +205,7 @@ def tradebook():
 
 @orders_bp.route('/positions')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def positions():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
@@ -228,6 +244,7 @@ def positions():
 
 @orders_bp.route('/holdings')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def holdings():
     login_username = session['user']
     auth_token = get_auth_token(login_username)
@@ -268,6 +285,7 @@ def holdings():
 
 @orders_bp.route('/orderbook/export')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def export_orderbook():
     try:
         broker = session.get('broker')
@@ -309,6 +327,7 @@ def export_orderbook():
 
 @orders_bp.route('/tradebook/export')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def export_tradebook():
     try:
         broker = session.get('broker')
@@ -350,6 +369,7 @@ def export_tradebook():
 
 @orders_bp.route('/positions/export')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def export_positions():
     try:
         broker = session.get('broker')
@@ -393,6 +413,7 @@ def export_positions():
 
 @orders_bp.route('/close_position', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def close_position():
     """Close a specific position - uses broker API in live mode, placesmartorder service in analyze mode"""
     try:
@@ -517,6 +538,7 @@ def close_position():
 
 @orders_bp.route('/close_all_positions', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def close_all_positions():
     """Close all open positions using the broker API"""
     try:
@@ -567,6 +589,7 @@ def close_all_positions():
 
 @orders_bp.route('/cancel_all_orders', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def cancel_all_orders_ui():
     """Cancel all open orders using the broker API from UI"""
     try:

@@ -6,14 +6,28 @@ from database.sandbox_db import (
 )
 from utils.session import check_session_validity
 from utils.logging import get_logger
+from limiter import limiter
 import traceback
+import os
 
 logger = get_logger(__name__)
 
+# Use existing rate limits from .env (same as API endpoints)
+API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "50 per second")
+
 sandbox_bp = Blueprint('sandbox_bp', __name__, url_prefix='/sandbox')
+
+@sandbox_bp.errorhandler(429)
+def ratelimit_handler(e):
+    """Handle rate limit exceeded errors"""
+    return jsonify({
+        'status': 'error',
+        'message': 'Rate limit exceeded. Please try again later.'
+    }), 429
 
 @sandbox_bp.route('/')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def sandbox_config():
     """Render the sandbox configuration page"""
     try:
@@ -55,15 +69,6 @@ def sandbox_config():
                     'order_check_interval': configs.get('order_check_interval', {}),
                     'mtm_update_interval': configs.get('mtm_update_interval', {})
                 }
-            },
-            'rate_limits': {
-                'title': 'Rate Limits',
-                'configs': {
-                    'order_rate_limit': configs.get('order_rate_limit', {}),
-                    'api_rate_limit': configs.get('api_rate_limit', {}),
-                    'smart_order_rate_limit': configs.get('smart_order_rate_limit', {}),
-                    'smart_order_delay': configs.get('smart_order_delay', {})
-                }
             }
         }
 
@@ -75,6 +80,7 @@ def sandbox_config():
 
 @sandbox_bp.route('/update', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def update_config():
     """Update sandbox configuration values"""
     try:
@@ -168,6 +174,7 @@ def update_config():
 
 @sandbox_bp.route('/reset', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def reset_config():
     """Reset sandbox configuration to defaults and clear all sandbox data"""
     try:
@@ -188,11 +195,7 @@ def reset_config():
             'equity_cnc_leverage': '1',
             'futures_leverage': '10',
             'option_buy_leverage': '1',
-            'option_sell_leverage': '10',
-            'order_rate_limit': '10',
-            'api_rate_limit': '50',
-            'smart_order_rate_limit': '2',
-            'smart_order_delay': '0.5'
+            'option_sell_leverage': '1'
         }
 
         # Reset all configurations
@@ -275,6 +278,7 @@ def reset_config():
 
 @sandbox_bp.route('/reload-squareoff', methods=['POST'])
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def reload_squareoff():
     """Manually reload square-off schedule from config"""
     try:
@@ -297,6 +301,7 @@ def reload_squareoff():
 
 @sandbox_bp.route('/squareoff-status')
 @check_session_validity
+@limiter.limit(API_RATE_LIMIT)
 def squareoff_status():
     """Get current square-off scheduler status"""
     try:
@@ -323,8 +328,7 @@ def validate_config(config_key, config_value):
         # Validate numeric values
         if config_key in ['starting_capital', 'equity_mis_leverage', 'equity_cnc_leverage',
                           'futures_leverage', 'option_buy_leverage', 'option_sell_leverage',
-                          'order_check_interval', 'mtm_update_interval', 'order_rate_limit',
-                          'api_rate_limit', 'smart_order_rate_limit', 'smart_order_delay']:
+                          'order_check_interval', 'mtm_update_interval']:
             try:
                 value = float(config_value)
                 if value < 0:
@@ -350,23 +354,6 @@ def validate_config(config_key, config_value):
                 if config_key == 'mtm_update_interval':
                     if value < 0 or value > 60:
                         return 'MTM update interval must be between 0-60 seconds (0 = manual only)'
-
-                # Rate limit validations
-                if config_key == 'order_rate_limit':
-                    if value < 1 or value > 100:
-                        return 'Order rate limit must be between 1-100 orders/second'
-
-                if config_key == 'api_rate_limit':
-                    if value < 1 or value > 1000:
-                        return 'API rate limit must be between 1-1000 calls/second'
-
-                if config_key == 'smart_order_rate_limit':
-                    if value < 1 or value > 50:
-                        return 'Smart order rate limit must be between 1-50 orders/second'
-
-                if config_key == 'smart_order_delay':
-                    if value < 0.1 or value > 10:
-                        return 'Smart order delay must be between 0.1-10 seconds'
 
             except ValueError:
                 return f'{config_key} must be a valid number'

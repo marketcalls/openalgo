@@ -271,23 +271,23 @@ def init_default_config():
         {
             'config_key': 'order_rate_limit',
             'config_value': '10',
-            'description': 'Maximum orders per second - Range: 1-100 orders/sec'
+            'description': 'Maximum orders per second - Range: 1-100 orders/sec (for future use)'
         },
         {
             'config_key': 'api_rate_limit',
             'config_value': '50',
-            'description': 'Maximum API calls per second - Range: 1-1000 calls/sec'
+            'description': 'Maximum API calls per second - Range: 1-1000 calls/sec (for future use)'
         },
         {
             'config_key': 'smart_order_rate_limit',
             'config_value': '2',
-            'description': 'Maximum smart orders per second - Range: 1-50 orders/sec'
+            'description': 'Maximum smart orders per second - Range: 1-50 orders/sec (for future use)'
         },
         {
             'config_key': 'smart_order_delay',
             'config_value': '0.5',
-            'description': 'Delay between multi-leg smart orders - Range: 0.1-10 seconds'
-        },
+            'description': 'Delay between multi-leg smart orders - Range: 0.1-10 seconds (for future use)'
+        }
     ]
 
     for config in default_configs:

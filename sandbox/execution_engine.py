@@ -24,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import (
     SandboxOrders, SandboxTrades, SandboxPositions,
-    db_session, get_config
+    db_session
 )
 from sandbox.fund_manager import FundManager
 from services.quotes_service import get_quotes
@@ -38,8 +38,9 @@ class ExecutionEngine:
     """Executes pending orders based on market data"""
 
     def __init__(self):
-        self.order_rate_limit = int(get_config('order_rate_limit', '10'))
-        self.api_rate_limit = int(get_config('api_rate_limit', '50'))
+        # Read rate limits from .env (same as API protection)
+        self.order_rate_limit = int(os.getenv('ORDER_RATE_LIMIT', '10 per second').split()[0])
+        self.api_rate_limit = int(os.getenv('API_RATE_LIMIT', '50 per second').split()[0])
         self.batch_delay = 1.0  # 1 second between batches
 
     def check_and_execute_pending_orders(self):

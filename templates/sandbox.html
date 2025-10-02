@@ -105,50 +105,6 @@
                             step="1"
                             onchange="updateConfig('{{ config_key }}', this.value)"
                         />
-                        {% elif config_key == 'order_rate_limit' %}
-                        <input
-                            type="number"
-                            id="{{ config_key }}"
-                            value="{{ config_data.value if config_data else '' }}"
-                            class="input input-bordered flex-1"
-                            min="1"
-                            max="100"
-                            step="1"
-                            onchange="updateConfig('{{ config_key }}', this.value)"
-                        />
-                        {% elif config_key == 'api_rate_limit' %}
-                        <input
-                            type="number"
-                            id="{{ config_key }}"
-                            value="{{ config_data.value if config_data else '' }}"
-                            class="input input-bordered flex-1"
-                            min="1"
-                            max="1000"
-                            step="10"
-                            onchange="updateConfig('{{ config_key }}', this.value)"
-                        />
-                        {% elif config_key == 'smart_order_rate_limit' %}
-                        <input
-                            type="number"
-                            id="{{ config_key }}"
-                            value="{{ config_data.value if config_data else '' }}"
-                            class="input input-bordered flex-1"
-                            min="1"
-                            max="50"
-                            step="1"
-                            onchange="updateConfig('{{ config_key }}', this.value)"
-                        />
-                        {% elif config_key == 'smart_order_delay' %}
-                        <input
-                            type="number"
-                            id="{{ config_key }}"
-                            value="{{ config_data.value if config_data else '' }}"
-                            class="input input-bordered flex-1"
-                            min="0.1"
-                            max="10"
-                            step="0.1"
-                            onchange="updateConfig('{{ config_key }}', this.value)"
-                        />
                         {% else %}
                         <input
                             type="text"
