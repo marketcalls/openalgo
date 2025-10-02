@@ -260,7 +260,7 @@ def insert_default_config(conn):
         ('equity_cnc_leverage', '1', 'Leverage multiplier for equity CNC (NSE/BSE)'),
         ('futures_leverage', '10', 'Leverage multiplier for all futures (NFO/BFO/CDS/BCD/MCX/NCDEX)'),
         ('option_buy_leverage', '1', 'Leverage multiplier for buying options (full premium)'),
-        ('option_sell_leverage', '10', 'Leverage multiplier for selling options'),
+        ('option_sell_leverage', '1', 'Leverage multiplier for selling options (same as buying - full premium)'),
         ('order_rate_limit', '10', 'Maximum orders per second'),
         ('api_rate_limit', '50', 'Maximum API calls per second'),
         ('smart_order_rate_limit', '2', 'Maximum smart orders per second'),

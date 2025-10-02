@@ -286,6 +286,7 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
+            # Calculate trade value (quantity × price)
             trade_value = quantity * price
 
             # Determine leverage based on action, product and symbol type
@@ -323,17 +324,10 @@ class FundManager:
 
             # Options (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with CE/PE suffix)
             elif is_option(symbol, exchange):
-                # For options, leverage depends on BUY vs SELL action
-                if action == 'BUY':
-                    # Buying options - full premium required (1x leverage)
-                    return Decimal(get_config('option_buy_leverage', '1'))
-                elif action == 'SELL':
-                    # Selling options - futures margin (10x leverage)
-                    return Decimal(get_config('option_sell_leverage', '10'))
-                else:
-                    # If action not provided, default to safer option (1x for buying)
-                    logger.warning(f"Action not provided for option {symbol}, defaulting to buy leverage (1x)")
-                    return Decimal(get_config('option_buy_leverage', '1'))
+                # For options, use 1x leverage (full premium) for both BUY and SELL
+                # This is simpler and easier to manage than futures-based margin
+                # Use option_buy_leverage config (which defaults to 1) for both BUY and SELL
+                return Decimal(get_config('option_buy_leverage', '1'))
 
             # Default to 1x leverage
             return Decimal('1')
