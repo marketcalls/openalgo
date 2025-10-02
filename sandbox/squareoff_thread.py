@@ -11,6 +11,7 @@ Manages the square-off manager as a separate daemon thread using APScheduler tha
 """
 
 import threading
+import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -18,6 +19,12 @@ from utils.logging import get_logger
 from database.sandbox_db import get_config
 
 logger = get_logger(__name__)
+
+# Reduce APScheduler logging verbosity
+# APScheduler logs every job execution at INFO level which is too noisy
+# Set it to WARNING to only see errors and warnings
+logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
+logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
 
 # Global scheduler instance
 _scheduler = None
@@ -69,7 +76,13 @@ def _schedule_square_off_jobs(scheduler):
         except Exception as e:
             logger.error(f"Failed to schedule square-off for {config_name}: {e}")
 
-    # Also add a backup job that runs every minute to catch any missed executions
+    # Add a backup job that runs every minute to catch any missed executions
+    # This provides a safety net in case:
+    # - System was restarted during square-off time
+    # - Primary cron job failed to execute
+    # - There were timing issues or delays
+    # Note: The check_and_square_off() function is smart - it only squares off
+    # positions if current time is past the configured square-off time
     backup_job = scheduler.add_job(
         func=som.check_and_square_off,
         trigger='interval',
@@ -81,6 +94,7 @@ def _schedule_square_off_jobs(scheduler):
     )
 
     logger.info(f"  Backup check: Every 1 minute (Job ID: {backup_job.id})")
+    logger.debug("  Note: APScheduler logs have been set to WARNING level to reduce verbosity")
 
 
 def start_squareoff_scheduler():
