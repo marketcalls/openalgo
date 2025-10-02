@@ -343,6 +343,14 @@ with app.app_context():
                 logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
             else:
                 logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+
+            # Run catch-up settlement for any CNC positions that should have been settled while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed on startup")
+            except Exception as e:
+                logger.error(f"Error in startup catch-up settlement: {e}")
     except Exception as e:
         logger.error(f"Error checking analyzer mode on startup: {e}")
 

@@ -62,7 +62,7 @@ The OpenAlgo Sandbox Mode is built as a modular, thread-safe system that runs pa
 │  - Background    │  │  - APScheduler   │  │  - Place orders  │
 │  - Check pending │  │  - Cron jobs     │  │  - Validate      │
 │  - Execute when  │  │  - IST timezone  │  │  - Block margin  │
-│  - conditions    │  │  - Auto reload   │  │  - Release margin│
+│  - conditions    │  │  - T+1 settle    │  │  - Release margin│
 │    met           │  │  - Status check  │  │                  │
 └──────────────────┘  └──────────────────┘  └──────────────────┘
         │                      │                      │
@@ -285,9 +285,9 @@ def _check_and_execute_pending_orders():
 ### 4. Squareoff Thread
 
 **File**: `sandbox/squareoff_thread.py`
-**Lines**: 207 lines
+**Lines**: 218 lines
 
-**Purpose**: Separate thread using APScheduler for time-based MIS square-off.
+**Purpose**: Separate thread using APScheduler for time-based MIS square-off and T+1 settlement.
 
 **Architecture**:
 ```python
@@ -369,6 +369,33 @@ def _load_squareoff_jobs():
             replace_existing=True,
             misfire_grace_time=300  # 5 minutes grace
         )
+```
+
+**T+1 Settlement Job** (lines 99-122):
+```python
+# Schedule T+1 settlement at midnight (00:00 IST)
+from sandbox.position_manager import process_all_users_settlement
+
+settlement_trigger = CronTrigger(
+    hour=0,
+    minute=0,
+    timezone=IST
+)
+
+settlement_job = scheduler.add_job(
+    func=process_all_users_settlement,
+    trigger=settlement_trigger,
+    id='t1_settlement',
+    name='T+1 Settlement (CNC to Holdings)',
+    replace_existing=True,
+    misfire_grace_time=300
+)
+
+# This job:
+# - Runs at midnight (00:00 IST) daily
+# - Moves CNC positions to holdings
+# - Auto squares-off any remaining MIS positions
+# - NRML positions carry forward
 ```
 
 **Reload Without Restart**:

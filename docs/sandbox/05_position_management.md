@@ -241,17 +241,21 @@ response = requests.post(
 
 ### T+1 Settlement Process
 
-**File**: `sandbox/holdings_manager.py` (lines 105-189)
+**File**: `sandbox/position_manager.py` (lines 463-558, 584-619)
 
-CNC positions automatically convert to holdings after T+1 settlement:
+CNC positions automatically convert to holdings at midnight (00:00 IST):
 
 ```python
-# Day 1: BUY 50 TCS in CNC
+# Day 1 (10:00 AM): BUY 50 TCS in CNC
 → Creates position in sandbox_positions
 
-# Day 2 (T+1): Settlement runs
+# Day 1 (00:00 Midnight): Settlement scheduler runs
 → Moves position to sandbox_holdings
-→ Deletes from sandbox_positions
+→ Clears position quantity to 0
+→ Preserves realized P&L
+
+# Settlement runs as APScheduler background task
+# File: sandbox/squareoff_thread.py (lines 99-122)
 ```
 
 ### Get Holdings API

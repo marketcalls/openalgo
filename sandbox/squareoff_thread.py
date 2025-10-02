@@ -96,6 +96,31 @@ def _schedule_square_off_jobs(scheduler):
     logger.info(f"  Backup check: Every 1 minute (Job ID: {backup_job.id})")
     logger.debug("  Note: APScheduler logs have been set to WARNING level to reduce verbosity")
 
+    # Schedule T+1 settlement job at midnight (00:00 IST)
+    # This moves CNC positions to holdings after market close
+    try:
+        from sandbox.position_manager import process_all_users_settlement
+
+        settlement_trigger = CronTrigger(
+            hour=0,
+            minute=0,
+            timezone=IST
+        )
+
+        settlement_job = scheduler.add_job(
+            func=process_all_users_settlement,
+            trigger=settlement_trigger,
+            id='t1_settlement',
+            name='T+1 Settlement (CNC to Holdings)',
+            replace_existing=True,
+            misfire_grace_time=300
+        )
+
+        logger.info(f"  T+1 Settlement: 00:00 IST (Job ID: {settlement_job.id})")
+
+    except Exception as e:
+        logger.error(f"Failed to schedule T+1 settlement: {e}")
+
 
 def start_squareoff_scheduler():
     """

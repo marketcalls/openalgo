@@ -217,7 +217,7 @@ TRIGGERED → Execute immediately at LTP
 **Characteristics**:
 - No leverage (1x)
 - Delivery-based trading
-- T+1 settlement to holdings
+- T+1 settlement to holdings (midnight 00:00 IST)
 - SELL requires existing shares
 
 ## Order Lifecycle

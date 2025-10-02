@@ -581,6 +581,99 @@ def update_all_positions_mtm():
         logger.error(f"Error updating MTM for all positions: {e}")
 
 
+def process_all_users_settlement():
+    """
+    Process T+1 settlement for all users at midnight (00:00 IST)
+    - Moves CNC positions to holdings
+    - Auto squares-off any remaining MIS positions
+    - NRML positions carry forward
+    """
+    try:
+        # Get all unique users with positions
+        positions = SandboxPositions.query.all()
+
+        if not positions:
+            logger.info("No positions to settle")
+            return
+
+        users = set(p.user_id for p in positions)
+        logger.info(f"Processing T+1 settlement for {len(users)} users at midnight")
+
+        for user_id in users:
+            try:
+                pm = PositionManager(user_id)
+                success, response, status_code = pm.process_session_settlement()
+
+                if success:
+                    logger.info(f"Settlement completed for user {user_id}")
+                else:
+                    logger.error(f"Settlement failed for user {user_id}: {response.get('message')}")
+
+            except Exception as e:
+                logger.error(f"Error in settlement for user {user_id}: {e}")
+                continue
+
+        logger.info("T+1 settlement completed for all users")
+
+    except Exception as e:
+        logger.error(f"Error in T+1 settlement process: {e}")
+
+
+def catchup_missed_settlements():
+    """
+    Catch-up settlement for positions that should have been settled while app was stopped.
+    Runs on startup when analyzer mode is enabled.
+
+    Checks for CNC positions older than 1 day and settles them to holdings.
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Get all CNC positions
+        cnc_positions = SandboxPositions.query.filter_by(product='CNC').all()
+
+        if not cnc_positions:
+            logger.info("No CNC positions for catch-up settlement")
+            return
+
+        # Calculate cutoff time (positions older than 1 day should be settled)
+        cutoff_time = datetime.now() - timedelta(days=1)
+
+        # Find positions that should have been settled
+        positions_to_settle = [
+            p for p in cnc_positions
+            if p.quantity != 0 and p.created_at < cutoff_time
+        ]
+
+        if not positions_to_settle:
+            logger.info("No missed settlements to catch up")
+            return
+
+        logger.info(f"Found {len(positions_to_settle)} CNC positions that need catch-up settlement")
+
+        # Group by user
+        users = set(p.user_id for p in positions_to_settle)
+
+        for user_id in users:
+            try:
+                pm = PositionManager(user_id)
+                success, response, status_code = pm.process_session_settlement()
+
+                if success:
+                    logger.info(f"Catch-up settlement completed for user {user_id}")
+                else:
+                    logger.error(f"Catch-up settlement failed for user {user_id}: {response.get('message')}")
+
+            except Exception as e:
+                logger.error(f"Error in catch-up settlement for user {user_id}: {e}")
+                continue
+
+        logger.info("Catch-up settlement process completed")
+
+    except Exception as e:
+        logger.error(f"Error in catch-up settlement: {e}")
+
+
 if __name__ == '__main__':
     """Run MTM updater in standalone mode"""
     logger.info("Starting Sandbox MTM Updater")

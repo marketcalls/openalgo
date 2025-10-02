@@ -80,6 +80,7 @@ When enabled, two daemon threads automatically start:
 - Runs at configured square-off times in IST timezone
 - Cancels pending MIS orders
 - Closes open MIS positions
+- Processes T+1 settlement at midnight (00:00 IST) - moves CNC positions to holdings
 
 ### 3. Place Orders
 All standard OpenAlgo API endpoints work in sandbox mode:
@@ -154,7 +155,8 @@ UPDATE P&L (Real-time MTM)
 ### 6. Holdings (CNC Only)
 
 **T+1 Settlement**:
-- CNC positions automatically move to holdings next day
+- CNC positions automatically move to holdings at midnight (00:00 IST)
+- Settlement runs as background scheduler task
 - Holdings track long-term investments
 - Separate MTM tracking
 - Holdings can be sold using CNC SELL orders

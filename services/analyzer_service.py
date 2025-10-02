@@ -103,6 +103,15 @@ def toggle_analyzer_mode_with_auth(
             # Analyzer mode ON - start both threads
             start_execution_engine()
             start_squareoff_scheduler()
+
+            # Run catch-up settlement for any missed settlements while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed")
+            except Exception as e:
+                logger.error(f"Error in catch-up settlement: {e}")
+
             logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
         else:
             # Analyzer mode OFF - stop both threads
