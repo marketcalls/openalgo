@@ -67,8 +67,9 @@ class SquareOffManager:
             # Step 1: Cancel all open MIS orders past square-off time
             self._cancel_open_mis_orders(current_time)
 
-            # Step 2: Get all MIS positions
-            mis_positions = SandboxPositions.query.filter_by(product='MIS').all()
+            # Step 2: Get all open MIS positions (quantity != 0)
+            mis_positions = SandboxPositions.query.filter_by(product='MIS')\
+                .filter(SandboxPositions.quantity != 0).all()
 
             if not mis_positions:
                 logger.debug("No MIS positions to square-off")
@@ -179,7 +180,8 @@ class SquareOffManager:
     def force_square_off_all_mis(self):
         """Force square-off all MIS positions immediately"""
         try:
-            mis_positions = SandboxPositions.query.filter_by(product='MIS').all()
+            mis_positions = SandboxPositions.query.filter_by(product='MIS')\
+                .filter(SandboxPositions.quantity != 0).all()
 
             if not mis_positions:
                 logger.info("No MIS positions to force square-off")

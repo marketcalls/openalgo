@@ -110,6 +110,62 @@ class OrderManager:
                         'mode': 'analyze'
                     }, 400
 
+            # Validate MIS orders - reject if after square-off time but before market open
+            # Exception: Allow orders that reduce/close existing positions
+            if product == 'MIS':
+                from sandbox.squareoff_manager import SquareOffManager
+                from datetime import datetime, time
+                import pytz
+
+                som = SquareOffManager()
+                square_off_time = som.square_off_times.get(exchange)
+
+                if square_off_time:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    now = datetime.now(ist)
+                    current_time = now.time()
+
+                    # Market opens at 9:00 AM IST
+                    market_open_time = time(9, 0)
+
+                    # Check if we're in the blocked period
+                    # Two scenarios:
+                    # 1. After square-off time same day: e.g., 15:20 (after 15:15 square-off)
+                    # 2. Before market open next day: e.g., 02:00 (before 09:00 market open)
+                    is_blocked = False
+                    if current_time >= square_off_time:
+                        # After square-off time - block until next day
+                        is_blocked = True
+                    elif current_time < market_open_time:
+                        # Before market open - still blocked from yesterday
+                        is_blocked = True
+
+                    if is_blocked:
+                        # Check if this order will reduce/close an existing OPEN position
+                        existing_position = SandboxPositions.query.filter_by(
+                            user_id=self.user_id,
+                            symbol=symbol,
+                            exchange=exchange,
+                            product=product
+                        ).filter(SandboxPositions.quantity != 0).first()
+
+                        # Allow if reducing existing position
+                        # BUY reduces short position (negative qty), SELL reduces long position (positive qty)
+                        is_reducing = False
+                        if existing_position:
+                            if action == 'BUY' and existing_position.quantity < 0:
+                                is_reducing = True  # Covering short
+                            elif action == 'SELL' and existing_position.quantity > 0:
+                                is_reducing = True  # Closing long
+
+                        # Block only if opening/increasing position, allow if closing/reducing
+                        if not is_reducing:
+                            return False, {
+                                'status': 'error',
+                                'message': f'MIS orders cannot be placed after square-off time ({square_off_time.strftime("%H:%M")} IST). Trading resumes at 09:00 AM IST.',
+                                'mode': 'analyze'
+                            }, 400
+
             # Track validation for CNC SELL orders
             cnc_sell_rejection_reason = None
 

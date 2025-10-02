@@ -330,11 +330,13 @@ def _get_leverage(symbol, exchange, product, action):
 | NSE/BSE | Equity | NRML | BUY/SELL | 1x | equity_cnc_leverage | 1 |
 | **Derivatives** | | | | | | |
 | NFO/BFO/etc | Option | Any | BUY | 1x | option_buy_leverage | 1 |
-| NFO/BFO/etc | Option | Any | SELL | 10x | option_sell_leverage | 10 |
+| NFO/BFO/etc | Option | Any | SELL | 1x | option_sell_leverage | 1 |
 | NFO/BFO/etc | Future | MIS | BUY/SELL | 10x | futures_leverage | 10 |
 | NFO/BFO/etc | Future | NRML | BUY/SELL | 10x | futures_leverage | 10 |
 
 **Configurable via**: `/sandbox` settings page or `sandbox_config` table
+
+**Note**: Option selling leverage is set to 1x (full premium) by default for simplicity. Both option buying and selling require full premium amount, avoiding the complexity of futures-based margin calculations.
 
 ## Margin Calculation Methods
 
@@ -1482,6 +1484,187 @@ logger.info(f"Position {symbol} reduced: Qty {old_qty} → {new_qty}, "
            f"Margin released ₹{margin_released:,.2f}")
 ```
 
+## Recent Enhancements
+
+### 1. Market Order Bid/Ask Execution
+
+**Feature**: Market orders now execute at realistic bid/ask prices instead of LTP
+
+**File**: `sandbox/execution_engine.py` (lines 156-165)
+
+```python
+if order.price_type == 'MARKET':
+    # BUY: Execute at ask price (pay seller's asking price)
+    # SELL: Execute at bid price (receive buyer's bid price)
+    # If bid/ask is 0, fall back to LTP
+    if order.action == 'BUY':
+        execution_price = ask if ask > 0 else ltp
+    else:  # SELL
+        execution_price = bid if bid > 0 else ltp
+```
+
+**Example**:
+```python
+Quote Response:
+- LTP: 106.3
+- Bid: 109.4
+- Ask: 109.9
+
+BUY Market Order:
+- Executes at: 109.9 (ask) ✅
+- Not at: 106.3 (LTP) ❌
+
+SELL Market Order:
+- Executes at: 109.4 (bid) ✅
+- Not at: 106.3 (LTP) ❌
+
+Impact: More realistic slippage simulation
+```
+
+### 2. Intraday P&L Accumulation
+
+**Feature**: Position book shows accumulated P&L for multiple trades on same symbol during the day
+
+**Files**:
+- `database/sandbox_db.py` (line 109): Added `accumulated_realized_pnl` column
+- `sandbox/execution_engine.py` (lines 358-364, 307-315)
+- `sandbox/position_manager.py` (lines 217-218)
+
+**Database Schema Addition**:
+```python
+class SandboxPositions(Base):
+    # Existing fields...
+    pnl = Column(DECIMAL(10, 2), default=0.00)
+    accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # NEW
+```
+
+**Behavior**:
+```python
+Trade 1: SELL @ 109.4, BUY @ 109.9
+- Realized P&L: -37.50
+- Position Closed (qty=0)
+- accumulated_realized_pnl: -37.50
+- Display P&L: -37.50
+
+Trade 2: SELL @ 109.4, BUY @ 109.9 (same symbol)
+- Realized P&L: -37.50
+- Position Closed (qty=0)
+- accumulated_realized_pnl: -37.50 + (-37.50) = -75.00
+- Display P&L: -75.00 ✅
+
+Open Position (after trades above):
+- SELL @ 109.4 (still open)
+- Current unrealized P&L: -10.00
+- Display P&L: -75.00 (accumulated) + (-10.00) (unrealized) = -85.00 ✅
+```
+
+**Key Functions**:
+
+Position Closure (accumulation):
+```python
+# When closing position
+position.accumulated_realized_pnl += realized_pnl
+position.pnl = position.accumulated_realized_pnl  # Display total
+```
+
+Position Reopening (preserve accumulation):
+```python
+# When reopening closed position
+position.quantity = new_quantity
+position.pnl = Decimal('0.00')  # Reset current P&L
+# accumulated_realized_pnl preserved from previous trades
+```
+
+MTM Update (open positions):
+```python
+# Calculate display P&L for open positions
+current_unrealized_pnl = calculate_position_pnl(qty, avg_price, ltp)
+accumulated_realized = position.accumulated_realized_pnl or Decimal('0.00')
+position.pnl = accumulated_realized + current_unrealized_pnl
+```
+
+**Benefits**:
+- Track total intraday P&L per symbol
+- See cumulative performance across multiple trades
+- Matches real broker position book behavior
+- Funds show separate realized P&L (cumulative for all symbols)
+
+### 3. Dynamic Starting Capital Updates
+
+**Feature**: Changing starting capital in `/sandbox` settings now updates user funds immediately
+
+**File**: `blueprints/sandbox.py` (lines 105-126)
+
+```python
+# If starting_capital was updated, update all user funds immediately
+if config_key == 'starting_capital':
+    new_capital = Decimal(str(config_value))
+
+    # Update all user funds with new starting capital
+    funds = SandboxFunds.query.all()
+    for fund in funds:
+        # Calculate new available balance
+        # New available = new_capital - used_margin + total_pnl
+        fund.total_capital = new_capital
+        fund.available_balance = new_capital - fund.used_margin + fund.total_pnl
+
+    db_session.commit()
+```
+
+**Example**:
+```python
+Before:
+- Starting Capital: ₹10,000,000
+- Used Margin: ₹200,000
+- Total P&L: -₹5,000
+- Available Balance: ₹9,795,000
+
+Change Starting Capital to: ₹5,000,000
+
+After (Immediate Update):
+- Starting Capital: ₹5,000,000
+- Used Margin: ₹200,000 (preserved)
+- Total P&L: -₹5,000 (preserved)
+- Available Balance: ₹4,795,000 (recalculated) ✅
+
+Formula: available = new_capital - used_margin + total_pnl
+         = 5,000,000 - 200,000 + (-5,000)
+         = 4,795,000
+```
+
+**Benefits**:
+- No need to wait for weekly reset
+- Preserves current positions and P&L
+- Instant capital adjustment for testing different scenarios
+- Realistic capital management simulation
+
+### 4. Configurable Option Leverage
+
+**Feature**: Option selling leverage now reads from config (not hardcoded)
+
+**File**: `sandbox/fund_manager.py` (lines 326-331)
+
+**Before (Hardcoded)**:
+```python
+elif is_option(symbol, exchange):
+    return Decimal(get_config('option_buy_leverage', '1'))  # Always used this
+```
+
+**After (Configurable)**:
+```python
+elif is_option(symbol, exchange):
+    if action == 'BUY':
+        return Decimal(get_config('option_buy_leverage', '1'))
+    else:  # SELL
+        return Decimal(get_config('option_sell_leverage', '1'))
+```
+
+**Benefits**:
+- Can adjust option selling leverage from `/sandbox` settings
+- Defaults to 1x for simplicity (full premium required)
+- Can be increased if you want futures-based margin simulation
+- No code changes needed for leverage adjustments
+
 ## Summary
 
 The Sandbox Margin System provides:
@@ -1490,6 +1673,7 @@ The Sandbox Margin System provides:
    - Instrument-specific calculations
    - Leverage-based margin requirements
    - Order-type specific price selection
+   - Bid/ask price execution for market orders
 
 2. **Complete Margin Release**:
    - On order cancellation
@@ -1501,25 +1685,33 @@ The Sandbox Margin System provides:
    - Real-time available balance
    - Separate realized and unrealized P&L
    - Margin utilization monitoring
+   - Intraday P&L accumulation per symbol
 
 4. **Realistic Behavior**:
    - Matches real broker margin mechanics
+   - Bid/ask spread crossing on market orders
    - Prevents negative balances
    - Proper margin adjustments on partial closures
+   - Accumulated intraday P&L tracking
 
 5. **Configurability**:
    - Customizable leverage values
    - Per-exchange and per-product settings
+   - Dynamic starting capital updates
    - Easy updates without code changes
+   - All leverage settings read from database config
 
 This comprehensive margin system ensures traders understand real-world margin requirements and fund management before deploying strategies with real capital.
 
 ---
 
-**Version**: 1.0.4
+**Version**: 1.1.0
 **Last Updated**: October 2025
 **File References**:
 - `sandbox/order_manager.py` (lines 33-44, 153-262, 477-537)
-- `sandbox/fund_manager.py` (lines 150-349)
-- `sandbox/position_manager.py` (lines 100-300)
+- `sandbox/fund_manager.py` (lines 274-337)
+- `sandbox/execution_engine.py` (lines 138-203, 306-370)
+- `sandbox/position_manager.py` (lines 178-224)
 - `sandbox/squareoff_manager.py` (lines 101-200)
+- `blueprints/sandbox.py` (lines 78-143)
+- `database/sandbox_db.py` (lines 93-117)
