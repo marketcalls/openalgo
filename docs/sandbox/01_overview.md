@@ -4,6 +4,16 @@
 
 OpenAlgo Sandbox Mode (also called **API Analyzer Mode**) is a sophisticated simulated trading environment that allows you to test trading strategies, validate algorithms, and practice trading using real-time market data without risking actual capital.
 
+## Important: Regulatory Compliance
+
+> **⚖️ NOT Virtual/Paper Trading**: OpenAlgo Sandbox is fundamentally different from prohibited "virtual trading" platforms. It is a **personal test environment** that:
+> - Runs on **your own system** with **your own broker APIs**
+> - Has **no contests, prizes, or public competitions**
+> - Serves as a **developer tool** for strategy validation, not a game
+> - Is **aligned with SEBI's Innovation Sandbox principles**
+>
+> For detailed regulatory clarification, see [Regulatory Compliance](12_regulatory_compliance.md).
+
 ## Key Features
 
 ### 1. Simulated Capital Management
@@ -249,9 +259,13 @@ System configuration (leverage, timings, intervals)
 
 All sandbox settings are stored in the database and can be modified from the sandbox settings page:
 
-- **Capital Settings**: Starting capital, reset day/time
+- **Capital Settings**:
+  - Starting capital (₹10,000,000 default)
+  - Auto-reset day (dropdown: Monday-Sunday, default: Sunday)
+  - Auto-reset time (time picker: HH:MM format, default: 00:00)
+  - **Auto-reset runs via APScheduler** - works even if app was stopped during reset time
 - **Leverage Settings**: Equity, futures, options leverage
-- **Square-Off Times**: Exchange-specific closure times
+- **Square-Off Times**: Exchange-specific closure times (time picker)
 - **Intervals**: Order check, MTM update intervals
 - **Rate Limits**: Order, API, smart order limits
 

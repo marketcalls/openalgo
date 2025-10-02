@@ -1,12 +1,18 @@
 # sandbox/fund_manager.py
 """
-Fund Manager - Handles virtual capital and margin calculations
+Fund Manager - Handles simulated capital and margin calculations
 
 Features:
-- ₹10,000,000 (1 Crore) starting capital
-- Automatic Sunday reset at midnight IST
+- ₹10,000,000 (1 Crore) starting capital (configurable)
+- Automatic reset via APScheduler on configured day/time (default: Sunday 00:00 IST)
 - Leverage-based margin calculations
 - Real-time available balance tracking
+
+Auto-Reset:
+- Runs as APScheduler background job (see squareoff_thread.py)
+- Configurable day (Monday-Sunday) and time (HH:MM format)
+- Resets all user funds to starting capital even if app was stopped during reset time
+- Schedule automatically reloads when reset_day or reset_time config is changed
 """
 
 import os
@@ -348,3 +354,38 @@ def initialize_user_funds(user_id):
     """Helper function to initialize user funds"""
     fund_manager = FundManager(user_id)
     return fund_manager.initialize_funds()
+
+
+def reset_all_user_funds():
+    """
+    Reset funds for all users (called by scheduler on configured reset day/time)
+    This is the scheduled auto-reset function that runs independently of user actions.
+    """
+    try:
+        logger.info("=== AUTO-RESET: Starting scheduled fund reset for all users ===")
+
+        # Get all unique user IDs from funds table
+        all_funds = SandboxFunds.query.all()
+
+        if not all_funds:
+            logger.info("No user funds to reset")
+            return
+
+        reset_count = 0
+        for fund in all_funds:
+            try:
+                # Create FundManager for this user
+                fm = FundManager(fund.user_id)
+
+                # Call the internal reset function
+                fm._reset_funds(fund)
+                reset_count += 1
+
+            except Exception as e:
+                logger.error(f"Error resetting funds for user {fund.user_id}: {e}")
+                continue
+
+        logger.info(f"=== AUTO-RESET: Successfully reset {reset_count} user fund accounts ===")
+
+    except Exception as e:
+        logger.error(f"Error in scheduled auto-reset: {e}")

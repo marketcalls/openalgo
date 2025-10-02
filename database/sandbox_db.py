@@ -147,7 +147,7 @@ class SandboxHoldings(Base):
 
 
 class SandboxFunds(Base):
-    """Sandbox funds table - virtual capital and margin tracking"""
+    """Sandbox funds table - simulated capital and margin tracking"""
     __tablename__ = 'sandbox_funds'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -201,7 +201,7 @@ def init_default_config():
         {
             'config_key': 'starting_capital',
             'config_value': '10000000.00',
-            'description': 'Starting virtual capital in INR (₹1 Crore)'
+            'description': 'Starting sandbox capital in INR (₹1 Crore) - Min: ₹1000'
         },
         {
             'config_key': 'reset_day',
@@ -216,12 +216,12 @@ def init_default_config():
         {
             'config_key': 'order_check_interval',
             'config_value': '5',
-            'description': 'Interval in seconds to check pending orders'
+            'description': 'Interval in seconds to check pending orders - Range: 1-30 seconds'
         },
         {
             'config_key': 'mtm_update_interval',
             'config_value': '5',
-            'description': 'Interval in seconds to update MTM (0 = manual only)'
+            'description': 'Interval in seconds to update MTM - Range: 0-60 seconds (0 = manual only)'
         },
         {
             'config_key': 'nse_bse_square_off_time',
@@ -246,47 +246,47 @@ def init_default_config():
         {
             'config_key': 'equity_mis_leverage',
             'config_value': '5',
-            'description': 'Leverage multiplier for equity MIS (NSE/BSE)'
+            'description': 'Leverage multiplier for equity MIS (NSE/BSE) - Range: 1-50x'
         },
         {
             'config_key': 'equity_cnc_leverage',
             'config_value': '1',
-            'description': 'Leverage multiplier for equity CNC (NSE/BSE)'
+            'description': 'Leverage multiplier for equity CNC (NSE/BSE) - Range: 1-50x'
         },
         {
             'config_key': 'futures_leverage',
             'config_value': '10',
-            'description': 'Leverage multiplier for all futures (NFO/BFO/CDS/BCD/MCX/NCDEX)'
+            'description': 'Leverage multiplier for all futures (NFO/BFO/CDS/BCD/MCX/NCDEX) - Range: 1-50x'
         },
         {
             'config_key': 'option_buy_leverage',
             'config_value': '1',
-            'description': 'Leverage for buying options (premium deduction)'
+            'description': 'Leverage for buying options (full premium) - Range: 1-50x'
         },
         {
             'config_key': 'option_sell_leverage',
-            'config_value': '10',
-            'description': 'Leverage for selling options (futures margin)'
+            'config_value': '1',
+            'description': 'Leverage for selling options (same as buying - full premium) - Range: 1-50x'
         },
         {
             'config_key': 'order_rate_limit',
             'config_value': '10',
-            'description': 'Maximum orders per second'
+            'description': 'Maximum orders per second - Range: 1-100 orders/sec'
         },
         {
             'config_key': 'api_rate_limit',
             'config_value': '50',
-            'description': 'Maximum API calls per second'
+            'description': 'Maximum API calls per second - Range: 1-1000 calls/sec'
         },
         {
             'config_key': 'smart_order_rate_limit',
             'config_value': '2',
-            'description': 'Maximum smart orders per second'
+            'description': 'Maximum smart orders per second - Range: 1-50 orders/sec'
         },
         {
             'config_key': 'smart_order_delay',
             'config_value': '0.5',
-            'description': 'Delay between smart order iterations in seconds'
+            'description': 'Delay between multi-leg smart orders - Range: 0.1-10 seconds'
         },
     ]
 

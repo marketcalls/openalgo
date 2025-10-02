@@ -4,6 +4,8 @@
 
 OpenAlgo Sandbox Mode (also known as **API Analyzer Mode**) is a sophisticated simulated trading environment that allows traders and developers to test strategies, validate algorithms, and practice trading with realistic market data without risking real capital.
 
+> **⚖️ Regulatory Note**: OpenAlgo Sandbox is **NOT** a virtual/paper trading platform as prohibited by SEBI. It is a personal test environment that runs with your own broker APIs for strategy validation. See [Regulatory Compliance](12_regulatory_compliance.md) for detailed clarification.
+
 ## Key Features
 
 - **Simulated Capital**: Start with ₹1 Crore (10 million) in sandbox funds
@@ -52,6 +54,9 @@ Complete API endpoints and usage examples.
 
 ### 11. [Troubleshooting](11_troubleshooting.md)
 Common issues and solutions.
+
+### 12. [Regulatory Compliance](12_regulatory_compliance.md)
+Why OpenAlgo Sandbox is NOT virtual/paper trading - SEBI compliance clarification.
 
 ## Quick Start
 
@@ -177,8 +182,9 @@ Access sandbox settings at: `http://localhost:5000/sandbox`
 
 ### Capital Settings
 - Starting Capital: ₹10,000,000
-- Reset Day: Sunday
-- Reset Time: 00:00 IST
+- Auto-Reset Day: Sunday (configurable via dropdown)
+- Auto-Reset Time: 00:00 IST (configurable via time picker)
+- **Automatic Reset**: APScheduler runs auto-reset job at configured day/time even if app was stopped
 
 ### Leverage Settings
 - Equity MIS: 5x
@@ -217,13 +223,14 @@ Access sandbox settings at: `http://localhost:5000/sandbox`
                               │
         ┌─────────────────────┴────────────────┐
         │                                      │
-┌───────▼────────┐                 ┌──────────▼──────┐
-│  Execution     │                 │   Square-Off    │
-│  Engine        │                 │   Scheduler     │
-│  Thread        │                 │   (APScheduler) │
-└───────┬────────┘                 └──────────┬──────┘
-        │                                      │
-        └──────────────┬───────────────────────┘
+┌───────▼────────┐          ┌──────────────────▼──────┐
+│  Execution     │          │   APScheduler (Daemon)  │
+│  Engine        │          │  - MIS Square-Off Jobs  │
+│  Thread        │          │  - T+1 Settlement       │
+└───────┬────────┘          │  - Auto-Reset Funds     │
+        │                   └──────────┬──────────────┘
+        │                              │
+        └──────────────┬───────────────┘
                        │
         ┌──────────────┴──────────────┐
         │                             │

@@ -398,6 +398,45 @@ settlement_job = scheduler.add_job(
 # - NRML positions carry forward
 ```
 
+**Auto-Reset Job** (lines 124-158):
+```python
+# Schedule auto-reset based on configured reset day and time
+from sandbox.fund_manager import reset_all_user_funds
+
+reset_day = get_config('reset_day', 'Sunday')
+reset_time_str = get_config('reset_time', '00:00')
+reset_hour, reset_minute = map(int, reset_time_str.split(':'))
+
+# Map day names to APScheduler day_of_week values
+day_mapping = {
+    'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
+    'Friday': 4, 'Saturday': 5, 'Sunday': 6
+}
+
+reset_trigger = CronTrigger(
+    day_of_week=day_mapping.get(reset_day, 6),  # Default to Sunday
+    hour=reset_hour,
+    minute=reset_minute,
+    timezone=IST
+)
+
+reset_job = scheduler.add_job(
+    func=reset_all_user_funds,
+    trigger=reset_trigger,
+    id='auto_reset',
+    name=f'Auto-Reset Funds ({reset_day} {reset_time_str})',
+    replace_existing=True,
+    misfire_grace_time=300
+)
+
+# This job:
+# - Runs at configured day/time (default: Sunday 00:00 IST)
+# - Resets all user funds to starting capital
+# - Clears all positions, holdings, orders, and trades
+# - Automatically reloads when reset_day or reset_time config changes
+# - Works even if app was stopped during reset time (misfire_grace_time)
+```
+
 **Reload Without Restart**:
 ```python
 def reload_squareoff_schedule():
@@ -755,6 +794,46 @@ def calculate_margin(order_data, ltp):
         margin = trade_value / leverage
 
     return round(margin, 2)
+```
+
+#### Auto-Reset Functions (lines 353-385)
+```python
+def reset_all_user_funds():
+    """
+    Reset funds for all users (called by APScheduler)
+    This runs at configured reset day/time (default: Sunday 00:00 IST)
+    """
+    logger.info("=== AUTO-RESET: Starting scheduled fund reset for all users ===")
+
+    # Get all unique user IDs from funds table
+    all_funds = SandboxFunds.query.all()
+
+    if not all_funds:
+        logger.info("No user funds to reset")
+        return
+
+    reset_count = 0
+    for fund in all_funds:
+        try:
+            # Create FundManager for this user
+            fm = FundManager(fund.user_id)
+
+            # Call the internal reset function
+            fm._reset_funds(fund)
+            reset_count += 1
+
+        except Exception as e:
+            logger.error(f"Error resetting funds for user {fund.user_id}: {e}")
+            continue
+
+    logger.info(f"=== AUTO-RESET: Successfully reset {reset_count} user fund accounts ===")
+
+# This function:
+# - Runs automatically via APScheduler at configured day/time
+# - Resets all user funds to starting capital
+# - Clears all positions and holdings for each user
+# - Increments reset_count for tracking
+# - Works even if app was stopped during reset time (misfire_grace_time=300s)
 ```
 
 ### 8. Execution Engine

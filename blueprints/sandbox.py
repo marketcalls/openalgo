@@ -137,6 +137,18 @@ def update_config():
                 except Exception as e:
                     logger.error(f"Error auto-reloading square-off schedule: {e}")
 
+            # If reset day or reset time was updated, reload the schedule automatically
+            if config_key in ['reset_day', 'reset_time']:
+                try:
+                    from services.sandbox_service import sandbox_reload_squareoff_schedule
+                    reload_success, reload_response, reload_status = sandbox_reload_squareoff_schedule()
+                    if reload_success:
+                        logger.info(f"Schedule reloaded after {config_key} update")
+                    else:
+                        logger.warning(f"Failed to reload schedule: {reload_response.get('message')}")
+                except Exception as e:
+                    logger.error(f"Error auto-reloading schedule: {e}")
+
             return jsonify({
                 'status': 'success',
                 'message': f'Configuration {config_key} updated successfully'
@@ -319,14 +331,42 @@ def validate_config(config_key, config_value):
                     return f'{config_key} must be a positive number'
 
                 # Additional validations
-                if config_key == 'starting_capital' and value < 1000:
-                    return 'Starting capital must be at least ₹1000'
+                if config_key == 'starting_capital':
+                    valid_capitals = [100000, 500000, 1000000, 2500000, 5000000, 10000000]
+                    if value not in valid_capitals:
+                        return 'Starting capital must be one of: ₹1L, ₹5L, ₹10L, ₹25L, ₹50L, or ₹1Cr'
 
-                if config_key.endswith('_leverage') and value < 1:
-                    return 'Leverage must be at least 1'
+                if config_key.endswith('_leverage'):
+                    if value < 1:
+                        return 'Leverage must be at least 1x'
+                    if value > 50:
+                        return 'Leverage cannot exceed 50x'
 
-                if config_key.endswith('_interval') and value < 1:
-                    return 'Interval must be at least 1 second'
+                # Interval validations
+                if config_key == 'order_check_interval':
+                    if value < 1 or value > 30:
+                        return 'Order check interval must be between 1-30 seconds'
+
+                if config_key == 'mtm_update_interval':
+                    if value < 0 or value > 60:
+                        return 'MTM update interval must be between 0-60 seconds (0 = manual only)'
+
+                # Rate limit validations
+                if config_key == 'order_rate_limit':
+                    if value < 1 or value > 100:
+                        return 'Order rate limit must be between 1-100 orders/second'
+
+                if config_key == 'api_rate_limit':
+                    if value < 1 or value > 1000:
+                        return 'API rate limit must be between 1-1000 calls/second'
+
+                if config_key == 'smart_order_rate_limit':
+                    if value < 1 or value > 50:
+                        return 'Smart order rate limit must be between 1-50 orders/second'
+
+                if config_key == 'smart_order_delay':
+                    if value < 0.1 or value > 10:
+                        return 'Smart order delay must be between 0.1-10 seconds'
 
             except ValueError:
                 return f'{config_key} must be a valid number'

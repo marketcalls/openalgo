@@ -259,24 +259,24 @@ def insert_default_config(conn):
     logger.info("Inserting default configuration...")
 
     default_configs = [
-        ('starting_capital', '10000000.00', 'Starting virtual capital in INR (₹1 Crore)'),
+        ('starting_capital', '10000000.00', 'Starting sandbox capital in INR (₹1 Crore) - Min: ₹1000'),
         ('reset_day', 'Sunday', 'Day of week for automatic fund reset'),
         ('reset_time', '00:00', 'Time for automatic fund reset (IST)'),
-        ('order_check_interval', '5', 'Interval in seconds to check pending orders'),
-        ('mtm_update_interval', '5', 'Interval in seconds to update MTM (0 = manual only)'),
+        ('order_check_interval', '5', 'Interval in seconds to check pending orders - Range: 1-30 seconds'),
+        ('mtm_update_interval', '5', 'Interval in seconds to update MTM - Range: 0-60 seconds (0 = manual only)'),
         ('nse_bse_square_off_time', '15:15', 'Square-off time for NSE/BSE MIS positions (IST)'),
         ('cds_bcd_square_off_time', '16:45', 'Square-off time for CDS/BCD MIS positions (IST)'),
         ('mcx_square_off_time', '23:30', 'Square-off time for MCX MIS positions (IST)'),
         ('ncdex_square_off_time', '17:00', 'Square-off time for NCDEX MIS positions (IST)'),
-        ('equity_mis_leverage', '5', 'Leverage multiplier for equity MIS (NSE/BSE)'),
-        ('equity_cnc_leverage', '1', 'Leverage multiplier for equity CNC (NSE/BSE)'),
-        ('futures_leverage', '10', 'Leverage multiplier for all futures (NFO/BFO/CDS/BCD/MCX/NCDEX)'),
-        ('option_buy_leverage', '1', 'Leverage multiplier for buying options (full premium)'),
-        ('option_sell_leverage', '1', 'Leverage multiplier for selling options (same as buying - full premium)'),
-        ('order_rate_limit', '10', 'Maximum orders per second'),
-        ('api_rate_limit', '50', 'Maximum API calls per second'),
-        ('smart_order_rate_limit', '2', 'Maximum smart orders per second'),
-        ('smart_order_delay', '0.5', 'Delay between multi-leg smart orders (seconds)'),
+        ('equity_mis_leverage', '5', 'Leverage multiplier for equity MIS (NSE/BSE) - Range: 1-50x'),
+        ('equity_cnc_leverage', '1', 'Leverage multiplier for equity CNC (NSE/BSE) - Range: 1-50x'),
+        ('futures_leverage', '10', 'Leverage multiplier for all futures (NFO/BFO/CDS/BCD/MCX/NCDEX) - Range: 1-50x'),
+        ('option_buy_leverage', '1', 'Leverage multiplier for buying options (full premium) - Range: 1-50x'),
+        ('option_sell_leverage', '1', 'Leverage multiplier for selling options (same as buying - full premium) - Range: 1-50x'),
+        ('order_rate_limit', '10', 'Maximum orders per second - Range: 1-100 orders/sec'),
+        ('api_rate_limit', '50', 'Maximum API calls per second - Range: 1-1000 calls/sec'),
+        ('smart_order_rate_limit', '2', 'Maximum smart orders per second - Range: 1-50 orders/sec'),
+        ('smart_order_delay', '0.5', 'Delay between multi-leg smart orders - Range: 0.1-10 seconds'),
     ]
 
     added_count = 0

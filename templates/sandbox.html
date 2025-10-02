@@ -39,6 +39,117 @@
                         <span class="label-text font-semibold">{{ format_config_label(config_key) }}</span>
                     </label>
                     <div class="flex gap-2">
+                        {% if config_key == 'reset_day' %}
+                        <select
+                            id="{{ config_key }}"
+                            class="select select-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)">
+                            <option value="Monday" {% if config_data.value == 'Monday' %}selected{% endif %}>Monday</option>
+                            <option value="Tuesday" {% if config_data.value == 'Tuesday' %}selected{% endif %}>Tuesday</option>
+                            <option value="Wednesday" {% if config_data.value == 'Wednesday' %}selected{% endif %}>Wednesday</option>
+                            <option value="Thursday" {% if config_data.value == 'Thursday' %}selected{% endif %}>Thursday</option>
+                            <option value="Friday" {% if config_data.value == 'Friday' %}selected{% endif %}>Friday</option>
+                            <option value="Saturday" {% if config_data.value == 'Saturday' %}selected{% endif %}>Saturday</option>
+                            <option value="Sunday" {% if config_data.value == 'Sunday' %}selected{% endif %}>Sunday</option>
+                        </select>
+                        {% elif config_key == 'reset_time' or config_key.endswith('_square_off_time') %}
+                        <input
+                            type="time"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key.endswith('_leverage') %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="50"
+                            step="0.1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'starting_capital' %}
+                        <select
+                            id="{{ config_key }}"
+                            class="select select-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)">
+                            <option value="100000" {% if config_data.value == '100000' or config_data.value == '100000.00' %}selected{% endif %}>₹1,00,000 (1 Lakh)</option>
+                            <option value="500000" {% if config_data.value == '500000' or config_data.value == '500000.00' %}selected{% endif %}>₹5,00,000 (5 Lakhs)</option>
+                            <option value="1000000" {% if config_data.value == '1000000' or config_data.value == '1000000.00' %}selected{% endif %}>₹10,00,000 (10 Lakhs)</option>
+                            <option value="2500000" {% if config_data.value == '2500000' or config_data.value == '2500000.00' %}selected{% endif %}>₹25,00,000 (25 Lakhs)</option>
+                            <option value="5000000" {% if config_data.value == '5000000' or config_data.value == '5000000.00' %}selected{% endif %}>₹50,00,000 (50 Lakhs)</option>
+                            <option value="10000000" {% if config_data.value == '10000000' or config_data.value == '10000000.00' %}selected{% endif %}>₹1,00,00,000 (1 Crore)</option>
+                        </select>
+                        {% elif config_key == 'order_check_interval' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="30"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'mtm_update_interval' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="0"
+                            max="60"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'order_rate_limit' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="100"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'api_rate_limit' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="1000"
+                            step="10"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'smart_order_rate_limit' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="50"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'smart_order_delay' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="0.1"
+                            max="10"
+                            step="0.1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% else %}
                         <input
                             type="text"
                             id="{{ config_key }}"
@@ -46,6 +157,7 @@
                             class="input input-bordered flex-1"
                             onchange="updateConfig('{{ config_key }}', this.value)"
                         />
+                        {% endif %}
                         <button
                             onclick="saveConfig('{{ config_key }}')"
                             class="btn btn-primary"
