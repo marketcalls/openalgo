@@ -102,6 +102,29 @@ def update_config():
         if success:
             logger.info(f"Sandbox config updated: {config_key} = {config_value}")
 
+            # If starting_capital was updated, update all user funds immediately
+            if config_key == 'starting_capital':
+                try:
+                    from database.sandbox_db import SandboxFunds, db_session
+                    from decimal import Decimal
+
+                    new_capital = Decimal(str(config_value))
+
+                    # Update all user funds with new starting capital
+                    # This resets their balance to the new capital value
+                    funds = SandboxFunds.query.all()
+                    for fund in funds:
+                        # Calculate what the new available balance should be
+                        # New available = new_capital - used_margin + total_pnl
+                        fund.total_capital = new_capital
+                        fund.available_balance = new_capital - fund.used_margin + fund.total_pnl
+
+                    db_session.commit()
+                    logger.info(f"Updated {len(funds)} user funds with new starting capital: ₹{new_capital}")
+                except Exception as e:
+                    logger.error(f"Error updating user funds with new capital: {e}")
+                    db_session.rollback()
+
             # If square-off time was updated, reload the schedule automatically
             if config_key.endswith('square_off_time'):
                 try:
