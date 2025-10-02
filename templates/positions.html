@@ -214,13 +214,19 @@ function exitPosition(symbol, exchange, product) {
     })
     .then(response => response.json())
     .then(data => {
-        // Show only success message, not processing
-        if (data.status === 'success') {
-            showToast(data.message, 'success');
-        } else {
-            showToast(data.message, 'error');
+        // In analyze mode, the socket event will handle the toast
+        // In live mode, show the toast here
+        const isAnalyzeMode = document.getElementById('mode-badge')?.textContent === 'Analyze Mode';
+
+        if (!isAnalyzeMode) {
+            // Only show toast in live mode (analyze mode uses socket events)
+            if (data.status === 'success') {
+                showToast(data.message, 'success');
+            } else {
+                showToast(data.message, 'error');
+            }
         }
-        
+
         // Refresh positions after a delay to avoid rate limiting
         setTimeout(() => {
             refreshCurrentPageContent();

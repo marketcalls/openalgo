@@ -1,0 +1,27 @@
+meta {
+  name: PlaceOrder
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/placeorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+      "strategy": "My Strategy",
+      "exchange": "NSE",
+      "symbol": "M&M",
+      "action": "buy",
+      "product": "MIS",
+      "pricetype": "MARKET",
+      "quantity": "100",
+      "price": "0",
+      "trigger_price": "0",
+      "disclosed_quantity": "0"
+  }
+}

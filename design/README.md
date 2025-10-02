@@ -81,6 +81,10 @@ OpenAlgo is a full-featured trading platform that provides:
 - **[09_websocket_architecture.md](09_websocket_architecture.md)** - Real-time WebSocket infrastructure
 - **[10_logging_system.md](10_logging_system.md)** - Centralized logging system
 
+### Advanced Features
+- **[13_telegram_bot_integration.md](13_telegram_bot_integration.md)** - Telegram bot for mobile trading and monitoring
+- **[14_sandbox_architecture.md](14_sandbox_architecture.md)** - Sandbox Mode (API Analyzer) architecture and design
+
 ## System Architecture Overview
 
 ### High-Level Architecture
@@ -157,6 +161,22 @@ A comprehensive strategy hosting system that enables traders to:
 - **Basket Orders**: Execute multiple orders as a single transaction
 - **Split Orders**: Automatically split large orders into smaller chunks
 - **Order Validation**: Client-side and server-side validation
+
+### Sandbox Mode (API Analyzer)
+- **Simulated Trading**: Test strategies with ₹1 Crore sandbox funds
+- **Realistic Execution**: Orders execute using real-time market data (LTP)
+- **Complete Order Types**: Support for MARKET, LIMIT, SL, and SL-M orders
+- **Accurate Margin System**: Leverage-based margin blocking and release
+- **Auto Square-Off**: Automatic MIS position closure at exchange-specific times
+- **Separate Database**: Isolated sandbox.db for clean data separation
+- **Thread Management**: Background execution and squareoff schedulers
+
+### Telegram Bot Integration
+- **Mobile Trading**: Monitor and interact with trading account via Telegram
+- **Real-time Notifications**: Order and position updates
+- **Chart Generation**: Generate and share charts directly in Telegram
+- **Secure Authentication**: Encrypted API key storage
+- **Command System**: Comprehensive command interface for all trading operations
 
 ### Security Enhancements
 - **API Key Management**: Secure storage with encryption

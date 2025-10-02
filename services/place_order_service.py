@@ -145,40 +145,22 @@ def place_order_with_auth(
     if 'apikey' in order_request_data:
         order_request_data.pop('apikey', None)
     
-    # If in analyze mode, analyze the request and return
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
-        _, analysis = analyze_request(order_data, 'placeorder', True)
-        
-        # Store complete request data without apikey
-        analyzer_request = order_request_data.copy()
-        analyzer_request['api_type'] = 'placeorder'
-        
-        if analysis.get('status') == 'success':
-            response_data = {
-                'mode': 'analyze',
-                'orderid': generate_order_id(),
-                'status': 'success'
-            }
-        else:
-            response_data = {
-                'mode': 'analyze',
+        from services.sandbox_service import sandbox_place_order
+
+        # Get API key from original data
+        api_key = original_data.get('apikey')
+        if not api_key:
+            error_response = {
                 'status': 'error',
-                'message': analysis.get('message', 'Analysis failed')
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
             }
-        
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, 'placeorder')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
+            return False, error_response, 400
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('placeorder', order_data, response_data, order_data.get('apikey'))
-
-        return True, response_data, 200
+        # Route to sandbox
+        return sandbox_place_order(order_data, api_key, original_data)
 
     # If not in analyze mode, proceed with actual order placement
     broker_module = import_broker_module(broker)

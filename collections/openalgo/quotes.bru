@@ -1,0 +1,19 @@
+meta {
+  name: quotes
+  type: http
+  seq: 8
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/quotes
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+      "symbol":"SBIN", 
+      "exchange":"NSE"    
+  }
+}

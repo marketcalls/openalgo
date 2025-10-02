@@ -38,6 +38,7 @@ from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker bluepr
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.security import security_bp  # Import the security blueprint
+from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -53,6 +54,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -86,6 +88,10 @@ def create_app():
     
     # Initialize Socket.IO error handling
     init_socketio_error_handling(socketio)
+
+    # Register custom Jinja2 filters
+    from utils.number_formatter import format_indian_number
+    app.jinja_env.filters['indian_number'] = format_indian_number
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
@@ -170,6 +176,7 @@ def create_app():
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
+    app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -302,6 +309,7 @@ def setup_environment(app):
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
         ensure_strategy_tables_exists()
+        ensure_sandbox_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
@@ -313,6 +321,38 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+# Auto-start execution engine and squareoff scheduler if in analyzer mode
+with app.app_context():
+    try:
+        from database.settings_db import get_analyze_mode
+        from sandbox.execution_thread import start_execution_engine
+        from sandbox.squareoff_thread import start_squareoff_scheduler
+
+        if get_analyze_mode():
+            # Start execution engine for order processing
+            success, message = start_execution_engine()
+            if success:
+                logger.info("Execution engine auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start execution engine: {message}")
+
+            # Start squareoff scheduler for MIS auto-squareoff
+            success, message = start_squareoff_scheduler()
+            if success:
+                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+
+            # Run catch-up settlement for any CNC positions that should have been settled while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed on startup")
+            except Exception as e:
+                logger.error(f"Error in startup catch-up settlement: {e}")
+    except Exception as e:
+        logger.error(f"Error checking analyzer mode on startup: {e}")
 
 # Integrate the WebSocket proxy server with the Flask app
 # Check if running in Docker (standalone mode) or local (integrated mode)
