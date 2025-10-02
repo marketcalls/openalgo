@@ -322,9 +322,11 @@ class ExecutionEngine:
                     if order_margin_blocked == Decimal('0'):
                         # This order was reducing/closing existing position - no margin was blocked for it
                         # We need to release margin for the old position that's now closed
+                        # Determine the original position action (BUY for long, SELL for short)
+                        position_action = 'BUY' if old_quantity > 0 else 'SELL'
                         margin_to_release, _ = fund_manager.calculate_margin_required(
                             order.symbol, order.exchange, order.product,
-                            abs(old_quantity), position.average_price
+                            abs(old_quantity), position.average_price, position_action
                         )
                         if margin_to_release:
                             fund_manager.release_margin(
@@ -376,9 +378,11 @@ class ExecutionEngine:
 
                     # Release margin for reduced quantity
                     # Use position's average price for consistency (same price used when margin was blocked)
+                    # Determine the original position action (BUY for long, SELL for short)
+                    position_action = 'BUY' if old_quantity > 0 else 'SELL'
                     margin_to_release, _ = fund_manager.calculate_margin_required(
                         order.symbol, order.exchange, order.product,
-                        reduced_quantity, position.average_price
+                        reduced_quantity, position.average_price, position_action
                     )
 
                     if margin_to_release:

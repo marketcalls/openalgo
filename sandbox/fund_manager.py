@@ -271,7 +271,7 @@ class FundManager:
             logger.error(f"Error updating unrealized P&L for user {self.user_id}: {e}")
             return False, f"Error updating unrealized P&L: {str(e)}"
 
-    def calculate_margin_required(self, symbol, exchange, product, quantity, price):
+    def calculate_margin_required(self, symbol, exchange, product, quantity, price, action=None):
         """Calculate margin required for a trade based on leverage rules"""
         try:
             from database.symbol import SymToken
@@ -288,26 +288,16 @@ class FundManager:
 
             trade_value = quantity * price
 
-            # Determine leverage based on product and symbol type
-            leverage = self._get_leverage(exchange, product, symbol)
+            # Determine leverage based on action, product and symbol type
+            leverage = self._get_leverage(exchange, product, symbol, action)
 
             if leverage is None:
                 return None, "Unable to determine leverage"
 
-            # Calculate margin
-            if is_option(symbol, exchange):
-                # Options
-                if product in ['MIS', 'NRML']:
-                    # Selling options - use futures margin (leverage-based)
-                    margin = trade_value / Decimal(str(leverage))
-                else:
-                    # Buying options - full premium
-                    margin = trade_value
-            else:
-                # Equity or Futures - leverage-based
-                margin = trade_value / Decimal(str(leverage))
+            # Calculate margin (always use leverage-based calculation)
+            margin = trade_value / Decimal(str(leverage))
 
-            logger.debug(f"Margin for {symbol} {exchange} {product}: ₹{margin} (Trade value: ₹{trade_value}, Leverage: {leverage}x)")
+            logger.debug(f"Margin for {symbol} {exchange} {product} {action}: ₹{margin} (Trade value: ₹{trade_value}, Leverage: {leverage}x)")
 
             return margin, "Margin calculated successfully"
 
@@ -315,8 +305,8 @@ class FundManager:
             logger.error(f"Error calculating margin: {e}")
             return None, f"Error calculating margin: {str(e)}"
 
-    def _get_leverage(self, exchange, product, symbol):
-        """Get leverage multiplier based on exchange, product, and symbol type"""
+    def _get_leverage(self, exchange, product, symbol, action=None):
+        """Get leverage multiplier based on exchange, product, symbol type, and action"""
         try:
             # Equity exchanges
             if exchange in ['NSE', 'BSE']:
@@ -333,11 +323,16 @@ class FundManager:
 
             # Options (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with CE/PE suffix)
             elif is_option(symbol, exchange):
-                if product in ['MIS', 'NRML']:
-                    # Selling options
+                # For options, leverage depends on BUY vs SELL action
+                if action == 'BUY':
+                    # Buying options - full premium required (1x leverage)
+                    return Decimal(get_config('option_buy_leverage', '1'))
+                elif action == 'SELL':
+                    # Selling options - futures margin (10x leverage)
                     return Decimal(get_config('option_sell_leverage', '10'))
                 else:
-                    # Buying options
+                    # If action not provided, default to safer option (1x for buying)
+                    logger.warning(f"Action not provided for option {symbol}, defaulting to buy leverage (1x)")
                     return Decimal(get_config('option_buy_leverage', '1'))
 
             # Default to 1x leverage

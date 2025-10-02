@@ -203,7 +203,7 @@ class OrderManager:
 
             # Calculate required margin using the appropriate price
             margin_required, margin_msg = self.fund_manager.calculate_margin_required(
-                symbol, exchange, product, quantity, margin_calculation_price
+                symbol, exchange, product, quantity, margin_calculation_price, action
             )
 
             if margin_required is None:
@@ -240,7 +240,7 @@ class OrderManager:
                         # Order will reverse position - only block margin for excess quantity
                         excess_qty = order_qty - existing_qty
                         actual_margin_to_block, _ = self.fund_manager.calculate_margin_required(
-                            symbol, exchange, product, excess_qty, margin_calculation_price
+                            symbol, exchange, product, excess_qty, margin_calculation_price, action
                         )
                         logger.info(f"Order will reverse position - margin for {excess_qty} shares: ₹{actual_margin_to_block}")
 
@@ -567,7 +567,7 @@ class OrderManager:
                         if order_price > 0:
                             margin_blocked, _ = self.fund_manager.calculate_margin_required(
                                 order.symbol, order.exchange, order.product,
-                                order.quantity, order_price
+                                order.quantity, order_price, order.action
                             )
                             if margin_blocked:
                                 self.fund_manager.release_margin(
