@@ -87,7 +87,7 @@ class PositionManager:
 
             for position in all_positions:
                 # If position was updated after last session expiry, include it
-                # This includes positions that went to zero during current session
+                # This includes positions that went to zero during current session (closed positions)
                 if position.updated_at >= last_session_expiry:
                     positions.append(position)
                 # If position was updated before last session expiry, only include NRML with non-zero quantity
@@ -99,11 +99,19 @@ class PositionManager:
                 self._update_positions_mtm(positions)
 
             positions_list = []
-            total_pnl = Decimal('0.00')
+            total_unrealized_pnl = Decimal('0.00')  # Only from open positions
+            total_display_pnl = Decimal('0.00')     # For display (includes closed positions)
 
             for position in positions:
                 pnl = Decimal(str(position.pnl))
-                total_pnl += pnl
+
+                # Add to display total (includes all positions)
+                total_display_pnl += pnl
+
+                # Only add to unrealized P&L if position is open (not closed)
+                # Closed positions (qty=0) have their P&L already in realized_pnl in funds
+                if position.quantity != 0:
+                    total_unrealized_pnl += pnl
 
                 positions_list.append({
                     'symbol': position.symbol,
@@ -116,14 +124,15 @@ class PositionManager:
                     'pnl_percent': float(position.pnl_percent),
                 })
 
-            # Update fund unrealized P&L
+            # Update fund unrealized P&L (only from open positions)
+            # Closed position P&L is already in realized_pnl, so don't include it here
             if update_mtm:
-                self.fund_manager.update_unrealized_pnl(total_pnl)
+                self.fund_manager.update_unrealized_pnl(total_unrealized_pnl)
 
             return True, {
                 'status': 'success',
                 'data': positions_list,
-                'total_pnl': float(total_pnl),
+                'total_pnl': float(total_display_pnl),  # Display total includes all positions
                 'mode': 'analyze'
             }, 200
 

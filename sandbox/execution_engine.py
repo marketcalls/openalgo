@@ -346,9 +346,10 @@ class ExecutionEngine:
                         logger.info(f"Released margin ₹{order_margin_blocked} for closed position (order margin)")
 
                     # Keep position with 0 quantity to show it was closed
+                    # Store the realized P&L in pnl field so it displays in position book
                     position.quantity = 0
                     position.ltp = execution_price
-                    position.pnl = Decimal('0.00')
+                    position.pnl = realized_pnl  # Store realized P&L for closed position
                     position.pnl_percent = Decimal('0.00')
                     logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}")
 
