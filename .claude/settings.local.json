@@ -47,7 +47,8 @@
       "Bash(if [ -f sandbox/sandbox.db ])",
       "Bash(then mv sandbox/sandbox.db db/sandbox.db)",
       "Bash(else echo \"sandbox.db not found in sandbox/ directory\")",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(awk:*)"
     ],
     "deny": []
   }

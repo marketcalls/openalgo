@@ -181,7 +181,7 @@ def toggle_analyzer_mode_with_auth(
 **Key Sections**:
 
 #### Order Operations (lines 1-250)
-- `sandbox_place_order()`: Place virtual orders
+- `sandbox_place_order()`: Place sandbox orders
 - `sandbox_modify_order()`: Modify pending orders
 - `sandbox_cancel_order()`: Cancel specific order
 - `sandbox_cancel_all_orders()`: Cancel all pending orders
