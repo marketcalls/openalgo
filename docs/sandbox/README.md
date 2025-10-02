@@ -11,6 +11,8 @@ OpenAlgo Sandbox Mode (also known as **API Analyzer Mode**) is a sophisticated s
 - **Complete Order Types**: Support for MARKET, LIMIT, SL, and SL-M orders
 - **Accurate Margin System**: Leverage-based margin blocking and release
 - **Auto Square-Off**: Automatic MIS position closure at exchange-specific times
+- **T+1 Settlement**: CNC positions automatically move to holdings at midnight (00:00 IST)
+- **Catch-up Settlement**: Automatic settlement of missed CNC positions on app restart
 - **Real-time P&L**: Mark-to-market calculations with live price updates
 - **Separate Database**: Isolated sandbox.db for clean data separation
 - **Intraday P&L Accumulation**: Tracks accumulated P&L across multiple trades on same symbol

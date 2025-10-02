@@ -531,9 +531,9 @@ def cancel_order(orderid, user_id):
 ### 6. Position Manager
 
 **File**: `sandbox/position_manager.py`
-**Lines**: ~450 lines
+**Lines**: ~680 lines
 
-**Purpose**: Manage position updates, P&L calculations, and position closure.
+**Purpose**: Manage position updates, P&L calculations, position closure, and T+1 settlement.
 
 **Key Functions**:
 
@@ -628,9 +628,60 @@ def format_tradebook(trades):
             'product': trade.product,
             'trade_timestamp': trade.trade_timestamp.strftime('%d-%b-%Y %H:%M:%S')
         })
-
-    return formatted_trades
 ```
+
+#### T+1 Settlement (lines 584-619)
+```python
+def process_all_users_settlement():
+    """
+    Process T+1 settlement for all users at midnight (00:00 IST)
+    - Moves CNC positions to holdings
+    - Auto squares-off any remaining MIS positions
+    - NRML positions carry forward
+    """
+    positions = SandboxPositions.query.all()
+    users = set(p.user_id for p in positions)
+
+    for user_id in users:
+        pm = PositionManager(user_id)
+        pm.process_session_settlement()
+
+    # Called by APScheduler at midnight
+    # File: sandbox/squareoff_thread.py (lines 99-122)
+```
+
+#### Catch-up Settlement (lines 622-674)
+```python
+def catchup_missed_settlements():
+    """
+    Catch-up settlement for positions that should have been settled
+    while app was stopped. Runs on startup when analyzer mode is enabled.
+    """
+    # Find CNC positions older than 1 day
+    cutoff_time = datetime.now() - timedelta(days=1)
+
+    cnc_positions = SandboxPositions.query.filter_by(product='CNC').all()
+    positions_to_settle = [
+        p for p in cnc_positions
+        if p.quantity != 0 and p.created_at < cutoff_time
+    ]
+
+    if positions_to_settle:
+        logger.info(f"Found {len(positions_to_settle)} CNC positions for catch-up")
+
+        users = set(p.user_id for p in positions_to_settle)
+        for user_id in users:
+            pm = PositionManager(user_id)
+            pm.process_session_settlement()
+
+    # Called on app startup (app.py:347-353)
+    # Called when toggling analyzer mode (analyzer_service.py:107-113)
+```
+
+**Settlement Layers**:
+1. **Scheduled Settlement**: Midnight (00:00 IST) via APScheduler
+2. **Startup Catch-up**: When app starts with analyzer mode ON
+3. **Toggle Catch-up**: When user enables analyzer mode
 
 ### 7. Fund Manager
 
@@ -882,14 +933,28 @@ def _close_mis_positions(exchanges):
 ### Thread Lifecycle
 
 ```python
-# Application Startup (app.py lines 325-347)
+# Application Startup (app.py lines 325-355)
 if get_analyze_mode():
     logger.info("Analyzer mode is ON - starting background threads")
     from sandbox.execution_thread import start_execution_engine
     from sandbox.squareoff_thread import start_squareoff_scheduler
+    from sandbox.position_manager import catchup_missed_settlements
 
+    # Start execution engine for order processing
     start_execution_engine()
+
+    # Start squareoff scheduler for MIS auto-squareoff and T+1 settlement
     start_squareoff_scheduler()
+
+    # Run catch-up settlement for any CNC positions that missed settlement
+    # while app was stopped (e.g., stopped for days/weeks)
+    catchup_missed_settlements()
+    logger.info("Catch-up settlement check completed on startup")
+
+# Catch-up Settlement Logic:
+# - Finds CNC positions older than 1 day
+# - Automatically settles them to holdings
+# - Ensures holdings are accurate even after extended downtime
 ```
 
 ### Thread Safety

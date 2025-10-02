@@ -241,7 +241,7 @@ response = requests.post(
 
 ### T+1 Settlement Process
 
-**File**: `sandbox/position_manager.py` (lines 463-558, 584-619)
+**File**: `sandbox/position_manager.py` (lines 463-558, 584-674)
 
 CNC positions automatically convert to holdings at midnight (00:00 IST):
 
@@ -257,6 +257,51 @@ CNC positions automatically convert to holdings at midnight (00:00 IST):
 # Settlement runs as APScheduler background task
 # File: sandbox/squareoff_thread.py (lines 99-122)
 ```
+
+### Catch-up Settlement (Missed Settlements)
+
+**File**: `sandbox/position_manager.py` (lines 622-674)
+
+When the app is stopped (e.g., for maintenance or system downtime), the midnight settlement job won't run. To handle this, a catch-up settlement mechanism automatically runs:
+
+**Trigger Points**:
+1. **App Startup**: When app starts with analyzer mode already enabled (app.py:347-353)
+2. **Mode Toggle**: When user enables analyzer mode (analyzer_service.py:107-113)
+
+**Logic**:
+```python
+# Example: User placed CNC order on Day 1, stopped app, restarted on Day 5
+
+def catchup_missed_settlements():
+    """Settle CNC positions that should have been settled while app was stopped"""
+
+    # Find all CNC positions older than 1 day
+    cutoff_time = datetime.now() - timedelta(days=1)
+
+    old_positions = [
+        p for p in SandboxPositions.query.filter_by(product='CNC').all()
+        if p.quantity != 0 and p.created_at < cutoff_time
+    ]
+
+    # Automatically settle them to holdings
+    for position in old_positions:
+        process_session_settlement(position)
+
+    # Result: Old CNC positions appear in /holdings, not /positions
+```
+
+**Use Case Example**:
+
+| Timeline | Event | Result |
+|----------|-------|--------|
+| **Day 1, 10:00 AM** | BUY 100 RELIANCE CNC @ 2500 | Position created |
+| **Day 1, 11:00 PM** | User stops app & logs out | App offline |
+| **Day 2-5** | App remains stopped | Midnight settlement doesn't run |
+| **Day 6, 9:00 AM** | User restarts app | Catch-up settlement runs |
+| **Day 6, 9:00 AM** | Catch-up detects 5-day-old CNC position | Automatically settles to holdings |
+| **Day 6, 9:01 AM** | User views /holdings | Position shows in holdings ✓ |
+
+This ensures **holdings are always accurate** even after extended downtime.
 
 ### Get Holdings API
 

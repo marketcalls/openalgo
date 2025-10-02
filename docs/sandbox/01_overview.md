@@ -157,6 +157,9 @@ UPDATE P&L (Real-time MTM)
 **T+1 Settlement**:
 - CNC positions automatically move to holdings at midnight (00:00 IST)
 - Settlement runs as background scheduler task
+- **Catch-up Settlement**: Automatically settles missed positions on app startup
+  - If app was stopped for days, old CNC positions (>1 day) settle automatically when app restarts
+  - Ensures holdings are always correct even after extended downtime
 - Holdings track long-term investments
 - Separate MTM tracking
 - Holdings can be sold using CNC SELL orders
