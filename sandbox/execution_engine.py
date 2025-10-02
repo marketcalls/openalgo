@@ -142,6 +142,8 @@ class ExecutionEngine:
         """
         try:
             ltp = Decimal(str(quote.get('ltp', 0)))
+            bid = Decimal(str(quote.get('bid', 0)))
+            ask = Decimal(str(quote.get('ask', 0)))
 
             if ltp <= 0:
                 logger.warning(f"Invalid LTP for order {order.orderid}: {ltp}")
@@ -152,9 +154,15 @@ class ExecutionEngine:
             execution_price = None
 
             if order.price_type == 'MARKET':
-                # Market orders execute immediately at LTP
+                # Market orders execute immediately at bid/ask (more realistic)
+                # BUY: Execute at ask price (pay seller's asking price)
+                # SELL: Execute at bid price (receive buyer's bid price)
+                # If bid/ask is 0, fall back to LTP
                 should_execute = True
-                execution_price = ltp
+                if order.action == 'BUY':
+                    execution_price = ask if ask > 0 else ltp
+                else:  # SELL
+                    execution_price = bid if bid > 0 else ltp
 
             elif order.price_type == 'LIMIT':
                 # Limit BUY: Execute if LTP <= Limit Price (you get filled at LTP or better)
