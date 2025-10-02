@@ -158,7 +158,7 @@ import requests
 
 payload = {"apikey": "your_api_key"}
 response = requests.post(
-    "http://localhost:5000/api/v1/positionbook",
+    "http://127.0.0.1:5000/api/v1/positionbook",
     json=payload
 )
 ```
@@ -209,7 +209,7 @@ payload = {
 }
 
 response = requests.post(
-    "http://localhost:5000/api/v1/closeposition",
+    "http://127.0.0.1:5000/api/v1/closeposition",
     json=payload
 )
 ```
@@ -221,7 +221,7 @@ response = requests.post(
 payload = {"apikey": "your_api_key"}
 
 response = requests.post(
-    "http://localhost:5000/api/v1/closeposition",
+    "http://127.0.0.1:5000/api/v1/closeposition",
     json=payload
 )
 ```
@@ -308,7 +308,7 @@ This ensures **holdings are always accurate** even after extended downtime.
 ```python
 payload = {"apikey": "your_api_key"}
 response = requests.post(
-    "http://localhost:5000/api/v1/holdings",
+    "http://127.0.0.1:5000/api/v1/holdings",
     json=payload
 )
 ```

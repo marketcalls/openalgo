@@ -15,47 +15,37 @@ python upgrade/<migration_script>.py
 ## Latest Migrations
 
 ### Sandbox Mode Migrations (v2.0.0)
-**New Feature** - Complete virtual trading environment with margin tracking
+**New Feature** - Complete sandbox testing environment with margin tracking
 
 #### How to Apply
 ```bash
 # Navigate to openalgo directory
 cd openalgo
 
-# Apply all sandbox migrations at once
-uv run upgrade/run_sandbox_migrations.py upgrade
+# Apply sandbox migration
+uv run upgrade/migrate_sandbox.py
 
-# Or apply individual migrations
-uv run upgrade/002_add_margin_blocked_field.py upgrade
-
-# Check migration status
-uv run upgrade/run_sandbox_migrations.py status
-
-# Rollback if needed
-uv run upgrade/002_add_margin_blocked_field.py rollback
+# Or using Python directly
+python upgrade/migrate_sandbox.py
 ```
 
-#### Available Sandbox Migrations
-1. **001_create_sandbox_tables.py** - Initial sandbox database schema
-   - Creates all required tables (orders, trades, positions, holdings, funds, config)
-   - Sets up indexes and constraints
-
-2. **002_add_margin_blocked_field.py** - Enhanced margin tracking
-   - Adds margin_blocked field to orders table
-   - Tracks exact margin blocked per order
-   - Fixes margin calculation issues in various scenarios
-
-3. **003_sandbox_complete_setup.py** - Complete setup verification
-   - Ensures all tables and fields exist
-   - Adds missing columns to existing tables
-   - Inserts default configuration values
-
 #### What It Does
-- Creates complete sandbox trading environment
+The `migrate_sandbox.py` script performs a comprehensive migration:
+- Creates complete sandbox database (`db/sandbox.db`)
+- Sets up all required tables (orders, trades, positions, holdings, funds, config)
+- Adds indexes and constraints for optimal performance
+- Inserts default configuration values
 - Tracks margin accurately across all trading scenarios
 - Handles partial position closures correctly
 - Manages position reversals properly
 - Provides fallback for API failures in sandbox mode
+
+#### Migration Features
+- **Idempotent**: Safe to run multiple times
+- **Non-destructive**: Won't overwrite existing data
+- **Automatic backup**: Creates backup before migration
+- **Status checking**: Shows current migration state
+- **Comprehensive logging**: Detailed progress information
 
 ---
 

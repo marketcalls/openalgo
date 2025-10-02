@@ -703,25 +703,26 @@ When square-off time updated:
 
 ### Migration File
 
-**File**: `upgrade/003_sandbox_complete_setup.py`
+**File**: `upgrade/migrate_sandbox.py`
 
-**Purpose**: Idempotent setup of sandbox database
+**Purpose**: Comprehensive setup of sandbox database
 
 **Features**:
 - Creates all 6 sandbox tables
 - Adds missing columns to existing tables
 - Creates all indexes
-- Inserts 18 default config entries
+- Inserts default config entries
 - Status checking with statistics
+- Automatic backup before migration
 
 **Usage**:
 ```bash
 # Apply migration
-cd upgrade
-uv run 003_sandbox_complete_setup.py upgrade
+cd openalgo
+uv run upgrade/migrate_sandbox.py
 
-# Check status
-uv run 003_sandbox_complete_setup.py status
+# Or using Python directly
+python upgrade/migrate_sandbox.py
 ```
 
 **Idempotency**:
@@ -881,9 +882,9 @@ def test_order_execution_flow():
 
 ### Pre-Deployment
 
-- [ ] Run migration: `upgrade/003_sandbox_complete_setup.py upgrade`
+- [ ] Run migration: `upgrade/migrate_sandbox.py`
 - [ ] Verify database created: `db/sandbox.db`
-- [ ] Check config entries: 18 entries present
+- [ ] Check config entries in `sandbox_config` table
 - [ ] Update `.env`: Set `SANDBOX_DATABASE_URL`
 - [ ] Test analyzer toggle: Enable/disable works
 - [ ] Verify threads start: Execution and squareoff running

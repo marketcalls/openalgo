@@ -6,15 +6,17 @@ OpenAlgo Sandbox Mode is **NOT** a "virtual trading" or "paper trading" platform
 
 ---
 
-## 1. Single-User, Not Public-Facing
+## 1. Open-Source, Single-User Tool
 
-OpenAlgo is designed as a **personal automation tool**. Each installation runs for a single trader, under their own account, on their own system or server.
+OpenAlgo is an **open-source application** designed as a **personal automation tool**. Each installation runs for a single trader, under their own account, on their own system or server.
 
 **Key Points:**
+- ✅ **Open-source software** - transparent, community-driven development
+- ✅ **Self-hosted** - runs on your own machine or server
+- ✅ Sandbox mode makes it **easier for traders to test strategies** without risk
 - ❌ No contests, tournaments, or leaderboards
 - ❌ No public pool of users competing with fake money
-- ✅ Sandbox mode is strictly **individual testing**, not a commercial "stock game"
-- ✅ Personal workspace for strategy development and validation
+- ✅ Strictly **individual testing environment**, not a commercial "stock game"
 
 ---
 
@@ -85,27 +87,27 @@ This approach is **consistent with SEBI's goals** of:
 
 ---
 
-## 5. Alignment with SEBI's Innovation Sandbox
+## 5. Best Practices for Algorithmic Trading
 
-### SEBI Innovation Sandbox Framework (2020)
+OpenAlgo Sandbox embodies industry best practices for algorithmic trading development:
 
-SEBI itself **promotes the concept of sandboxes** for fintech testing through its Innovation Sandbox Framework.
+### Safe Strategy Development
+- ✅ Test algorithms in a **controlled environment** before live deployment
+- ✅ Identify bugs and logic errors **without financial risk**
+- ✅ Validate execution flow, margin calculations, and P&L tracking
+- ✅ Build confidence through realistic simulations
 
-**OpenAlgo Sandbox serves the same objective:**
-- ✅ Safe experimentation in a **controlled environment**
+### Risk Management & Discipline
 - ✅ Does not replace regulated exchanges or brokers
 - ✅ Enhances trader discipline by providing a **risk-free practice layer**
-- ✅ Encourages innovation while maintaining regulatory compliance
+- ✅ Encourages responsible trading through thorough testing
+- ✅ Reduces market impact from untested strategies
 
-### Key Principles Alignment
-
-| SEBI Innovation Sandbox Principle | OpenAlgo Sandbox Implementation |
-|-----------------------------------|----------------------------------|
-| Controlled Testing Environment | Isolated sandbox database, separate from live trading |
-| No Real Market Impact | All orders simulated locally, no exchange routing |
-| Consumer Protection | Clear disclaimers, mode indicators, educational focus |
-| Regulatory Oversight | Works within existing broker-exchange framework |
-| Innovation Promotion | Enables strategy development and algorithmic trading adoption |
+### Developer-Friendly Testing
+- ✅ Isolated sandbox database, separate from live trading
+- ✅ All orders simulated locally, no exchange routing
+- ✅ Clear disclaimers, mode indicators, educational focus
+- ✅ Works within existing broker-exchange framework
 
 ---
 
@@ -144,20 +146,21 @@ OpenAlgo implements multiple layers to ensure compliance:
 **OpenAlgo Sandbox is NOT a "virtual trading" or "paper trading" platform** in the sense that SEBI prohibits.
 
 ### What It IS:
-✅ A **personal test environment** for individual traders
-✅ Running with their **own broker APIs**
-✅ On their **own machines**
-✅ To **simulate strategies safely** before deploying them live
+✅ An **open-source application** that empowers individual traders
+✅ A **personal test environment** that makes strategy testing **easier and safer**
+✅ Running with traders' **own broker APIs**, on their **own machines**
+✅ Designed to **simplify the process** of validating strategies before live deployment
 
 ### Regulatory Compliance:
-✅ **Compliance-aligned feature**, consistent with SEBI's broader push for innovation and safe adoption of algorithmic trading in India
+✅ **Compliance-aligned feature** for safe adoption of algorithmic trading in India
 ✅ **Risk reduction tool** that promotes investor protection
 ✅ **Educational platform** for learning algorithmic trading without real capital risk
-✅ **Testing framework** aligned with SEBI's Innovation Sandbox principles
+✅ **Testing framework** for individual traders to validate strategies safely
 
 ### Key Differentiators:
 | Virtual Trading (Prohibited) | OpenAlgo Sandbox (Compliant) |
 |------------------------------|------------------------------|
+| Commercial/closed platform | Open-source, transparent codebase |
 | Public contests & competitions | Single-user testing environment |
 | Prizes & gamification | No rewards, pure development tool |
 | Shadow exchange simulation | Broker-API integrated testing |
@@ -166,7 +169,7 @@ OpenAlgo implements multiple layers to ensure compliance:
 
 ---
 
-**OpenAlgo Sandbox** empowers traders to develop, test, and refine their strategies responsibly, contributing to a more stable, informed, and disciplined trading ecosystem in India.
+**OpenAlgo** is an **open-source application** that makes it **easier for individual traders** to develop, test, and refine their algorithmic strategies in a **safe sandbox environment**. By providing transparent, self-hosted tools for strategy validation, it contributes to a more stable, informed, and disciplined trading ecosystem in India.
 
 ---
 

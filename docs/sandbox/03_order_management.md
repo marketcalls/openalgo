@@ -417,7 +417,7 @@ modify_data = {
 }
 
 response = requests.post(
-    "http://localhost:5000/api/v1/modifyorder",
+    "http://127.0.0.1:5000/api/v1/modifyorder",
     json=modify_data
 )
 ```
@@ -469,7 +469,7 @@ cancel_data = {
 }
 
 response = requests.post(
-    "http://localhost:5000/api/v1/cancelorder",
+    "http://127.0.0.1:5000/api/v1/cancelorder",
     json=cancel_data
 )
 ```
@@ -482,7 +482,7 @@ cancel_all_data = {
 }
 
 response = requests.post(
-    "http://localhost:5000/api/v1/cancelallorder",
+    "http://127.0.0.1:5000/api/v1/cancelallorder",
     json=cancel_all_data
 )
 ```
@@ -646,7 +646,7 @@ for i in range(0, len(symbols), MAX_API_CALLS):
 ```python
 payload = {"apikey": "your_api_key"}
 response = requests.post(
-    "http://localhost:5000/api/v1/orderbook",
+    "http://127.0.0.1:5000/api/v1/orderbook",
     json=payload
 )
 ```
@@ -693,7 +693,7 @@ payload = {
 }
 
 response = requests.post(
-    "http://localhost:5000/api/v1/orderstatus",
+    "http://127.0.0.1:5000/api/v1/orderstatus",
     json=payload
 )
 ```
@@ -747,4 +747,4 @@ The sandbox order management system provides:
 
 ---
 
-**Previous**: [Getting Started](02_getting_started.md) | **Next**: [Position Management](04_position_management.md)
+**Previous**: [Getting Started](02_getting_started.md) | **Next**: [Margin System](04_margin_system.md)

@@ -1369,12 +1369,12 @@ SMART_ORDER_DELAY=0.5
 ### 2. Database Migrations
 
 ```bash
-# Run migration
-cd upgrade
-uv run 003_sandbox_complete_setup.py upgrade
+# Run sandbox migration
+cd openalgo
+uv run upgrade/migrate_sandbox.py
 
-# Check status
-uv run 003_sandbox_complete_setup.py status
+# Or using Python directly
+python upgrade/migrate_sandbox.py
 ```
 
 ### 3. Monitoring

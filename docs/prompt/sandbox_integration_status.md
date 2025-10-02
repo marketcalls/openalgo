@@ -3,15 +3,15 @@
 ## Completed Core Components ✅
 
 ### 1. Database Layer
-- ✅ 6 tables created in `sandbox.db`:
-  - `sandbox_orders` - All virtual orders
+- ✅ 6 tables created in `db/sandbox.db`:
+  - `sandbox_orders` - All sandbox orders
   - `sandbox_trades` - Executed trades
   - `sandbox_positions` - Open positions with MTM
   - `sandbox_holdings` - T+1 settled CNC holdings
-  - `sandbox_funds` - Virtual capital and margin tracking
+  - `sandbox_funds` - Simulated capital and margin tracking
   - `sandbox_config` - Configurable settings
 - ✅ All timestamps use IST timezone (`Asia/Kolkata`)
-- ✅ Migration script: `upgrade/001_create_sandbox_tables.py`
+- ✅ Migration script: `upgrade/migrate_sandbox.py`
 
 ### 2. Core Managers
 - ✅ `sandbox/fund_manager.py` - Fund and margin management

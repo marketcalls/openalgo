@@ -183,8 +183,8 @@ def service_function(api_key: Optional[str] = None, ...):
 - `sandbox/squareoff_manager.py` - Auto square-off
 
 ### Database Layer ✅
-- `sandbox/sandbox.db` - Separate database with 6 tables
-- `upgrade/001_create_sandbox_tables.py` - Migration script
+- `db/sandbox.db` - Separate database with 6 tables
+- `upgrade/migrate_sandbox.py` - Comprehensive migration script
 - All timestamps in IST timezone
 
 ### Service Layer ✅

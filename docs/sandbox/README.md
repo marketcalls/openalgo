@@ -2,9 +2,9 @@
 
 ## Overview
 
-OpenAlgo Sandbox Mode (also known as **API Analyzer Mode**) is a sophisticated simulated trading environment that allows traders and developers to test strategies, validate algorithms, and practice trading with realistic market data without risking real capital.
+OpenAlgo is an **open-source application** that provides a Sandbox Mode (also known as **API Analyzer Mode**) - a sophisticated simulated trading environment that makes it **easier for traders and developers** to test strategies, validate algorithms, and practice trading with realistic market data without risking real capital.
 
-> **⚖️ Regulatory Note**: OpenAlgo Sandbox is **NOT** a virtual/paper trading platform as prohibited by SEBI. It is a personal test environment that runs with your own broker APIs for strategy validation. See [Regulatory Compliance](12_regulatory_compliance.md) for detailed clarification.
+> **⚖️ Regulatory Note**: OpenAlgo Sandbox is **NOT** a virtual/paper trading platform as prohibited by SEBI. It is an **open-source, self-hosted personal test environment** that runs with your own broker APIs for strategy validation. See [Regulatory Compliance](12_regulatory_compliance.md) for detailed clarification.
 
 ## Key Features
 
@@ -31,11 +31,11 @@ Quick start guide to enable sandbox mode and place your first trade.
 ### 3. [Order Management](03_order_management.md)
 Complete guide to order types, execution, and lifecycle.
 
-### 4. [Position Management](04_position_management.md)
-Understanding positions, P&L calculations, and position closure.
-
-### 5. [Margin System](05_margin_system.md)
+### 4. [Margin System](04_margin_system.md)
 Detailed explanation of margin calculations and leverage rules.
+
+### 5. [Position Management](05_position_management.md)
+Understanding positions, P&L calculations, and position closure.
 
 ### 6. [Auto Square-Off System](06_auto_squareoff.md)
 How MIS positions are automatically squared off at configured times.
@@ -93,7 +93,7 @@ payload = {
     "product": "MIS"
 }
 
-response = requests.post("http://localhost:5000/api/v1/placeorder", json=payload)
+response = requests.post("http://127.0.0.1:5000/api/v1/placeorder", json=payload)
 print(response.json())
 ```
 
@@ -101,7 +101,7 @@ print(response.json())
 
 ```python
 payload = {"apikey": "your_api_key"}
-response = requests.post("http://localhost:5000/api/v1/positionbook", json=payload)
+response = requests.post("http://127.0.0.1:5000/api/v1/positionbook", json=payload)
 print(response.json())
 ```
 
@@ -178,7 +178,7 @@ SANDBOX_DATABASE_URL=sqlite:///db/sandbox.db
 
 ## Configuration
 
-Access sandbox settings at: `http://localhost:5000/sandbox`
+Access sandbox settings at: `http://127.0.0.1:5000/sandbox`
 
 ### Capital Settings
 - Starting Capital: ₹10,000,000

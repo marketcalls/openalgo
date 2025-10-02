@@ -650,7 +650,7 @@ Together, they enable traders to:
 - **Design**: `design/14_sandbox_architecture.md`
 
 ### Setup Guides
-- **Sandbox Migration**: `upgrade/003_sandbox_complete_setup.py`
+- **Sandbox Migration**: `upgrade/migrate_sandbox.py`
 - **Telegram Setup**: `docs/TELEGRAM_SETUP.md`
 
 ### API References

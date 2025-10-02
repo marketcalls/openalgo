@@ -254,7 +254,7 @@ Result: ALLOWED ✅ (closing existing position)
 ```python
 import requests
 
-response = requests.get("http://localhost:5000/sandbox/squareoff-status")
+response = requests.get("http://127.0.0.1:5000/sandbox/squareoff-status")
 print(response.json())
 ```
 
@@ -287,7 +287,7 @@ print(response.json())
 
 ```python
 # After changing square-off time in settings
-response = requests.post("http://localhost:5000/sandbox/reload-squareoff")
+response = requests.post("http://127.0.0.1:5000/sandbox/reload-squareoff")
 ```
 
 **Auto-Reload**: Schedule automatically reloads when square-off time is updated via `/sandbox/update` endpoint.

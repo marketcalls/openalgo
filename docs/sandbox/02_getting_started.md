@@ -25,7 +25,7 @@ This guide will help you enable sandbox mode and place your first trade in under
 ```python
 import requests
 
-url = "http://localhost:5000/api/v1/analyzer"
+url = "http://127.0.0.1:5000/api/v1/analyzer"
 headers = {"Content-Type": "application/json"}
 
 payload = {
@@ -83,7 +83,7 @@ Before placing orders, verify your sandbox capital:
 ```python
 import requests
 
-url = "http://localhost:5000/api/v1/funds"
+url = "http://127.0.0.1:5000/api/v1/funds"
 headers = {"Content-Type": "application/json"}
 
 payload = {
@@ -120,7 +120,7 @@ print(response.json())
 ```python
 import requests
 
-url = "http://localhost:5000/api/v1/placeorder"
+url = "http://127.0.0.1:5000/api/v1/placeorder"
 headers = {"Content-Type": "application/json"}
 
 payload = {
@@ -192,7 +192,7 @@ print(response.json())
 ### View Orderbook
 
 ```python
-url = "http://localhost:5000/api/v1/orderbook"
+url = "http://127.0.0.1:5000/api/v1/orderbook"
 
 payload = {
     "apikey": "your_api_key_here"
@@ -231,7 +231,7 @@ print(response.json())
 ### Check Specific Order
 
 ```python
-url = "http://localhost:5000/api/v1/orderstatus"
+url = "http://127.0.0.1:5000/api/v1/orderstatus"
 
 payload = {
     "apikey": "your_api_key_here",
@@ -245,7 +245,7 @@ print(response.json())
 ## Step 6: View Your Position
 
 ```python
-url = "http://localhost:5000/api/v1/positionbook"
+url = "http://127.0.0.1:5000/api/v1/positionbook"
 
 payload = {
     "apikey": "your_api_key_here"
@@ -278,7 +278,7 @@ print(response.json())
 ## Step 7: Close Your Position
 
 ```python
-url = "http://localhost:5000/api/v1/closeposition"
+url = "http://127.0.0.1:5000/api/v1/closeposition"
 
 payload = {
     "apikey": "your_api_key_here",
@@ -304,7 +304,7 @@ print(response.json())
 ## Step 8: View Tradebook
 
 ```python
-url = "http://localhost:5000/api/v1/tradebook"
+url = "http://127.0.0.1:5000/api/v1/tradebook"
 
 payload = {
     "apikey": "your_api_key_here"
@@ -367,7 +367,7 @@ print(is_execution_engine_running())  # Should be True
 **Solution**: Check margin requirements and available balance
 ```python
 # Get funds
-url = "http://localhost:5000/api/v1/funds"
+url = "http://127.0.0.1:5000/api/v1/funds"
 response = requests.post(url, json={"apikey": "your_key"})
 print(f"Available: ₹{response.json()['data']['availablecash']}")
 ```
@@ -399,7 +399,7 @@ if not api_key:
 
 ### Access Sandbox Settings
 
-Navigate to: `http://localhost:5000/sandbox`
+Navigate to: `http://127.0.0.1:5000/sandbox`
 
 Or programmatically:
 ```python
@@ -492,8 +492,8 @@ payload = {
 Now that you've completed your first trades, explore:
 
 1. **[Order Management](03_order_management.md)**: Learn about all order types
-2. **[Position Management](04_position_management.md)**: Master position tracking
-3. **[Margin System](05_margin_system.md)**: Understand margin calculations
+2. **[Margin System](04_margin_system.md)**: Understand margin calculations
+3. **[Position Management](05_position_management.md)**: Master position tracking
 4. **[Auto Square-Off](06_auto_squareoff.md)**: Configure auto square-off
 
 ## Quick Reference

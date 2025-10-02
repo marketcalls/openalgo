@@ -2,15 +2,16 @@
 
 ## What is Sandbox Mode?
 
-OpenAlgo Sandbox Mode (also called **API Analyzer Mode**) is a sophisticated simulated trading environment that allows you to test trading strategies, validate algorithms, and practice trading using real-time market data without risking actual capital.
+OpenAlgo is an **open-source application** that provides Sandbox Mode (also called **API Analyzer Mode**) - a sophisticated simulated trading environment that makes it **easier for traders** to test strategies, validate algorithms, and practice trading using real-time market data without risking actual capital.
 
 ## Important: Regulatory Compliance
 
-> **⚖️ NOT Virtual/Paper Trading**: OpenAlgo Sandbox is fundamentally different from prohibited "virtual trading" platforms. It is a **personal test environment** that:
+> **⚖️ NOT Virtual/Paper Trading**: OpenAlgo Sandbox is fundamentally different from prohibited "virtual trading" platforms. It is an **open-source, self-hosted personal test environment** that:
+> - **Open-source software** - transparent, community-driven development
 > - Runs on **your own system** with **your own broker APIs**
+> - Makes it **easier to test strategies** safely before live deployment
 > - Has **no contests, prizes, or public competitions**
 > - Serves as a **developer tool** for strategy validation, not a game
-> - Is **aligned with SEBI's Innovation Sandbox principles**
 >
 > For detailed regulatory clarification, see [Regulatory Compliance](12_regulatory_compliance.md).
 
@@ -298,8 +299,8 @@ Track strategy performance over time with realistic execution.
 
 1. **[Getting Started](02_getting_started.md)**: Learn how to enable and use sandbox mode
 2. **[Order Management](03_order_management.md)**: Understand order types and execution
-3. **[Position Management](04_position_management.md)**: Learn about positions and P&L
-4. **[Margin System](05_margin_system.md)**: Understand margin calculations
+3. **[Margin System](04_margin_system.md)**: Understand margin calculations
+4. **[Position Management](05_position_management.md)**: Learn about positions and P&L
 5. **[Auto Square-Off](06_auto_squareoff.md)**: Learn about MIS position closure
 6. **[Database Schema](07_database_schema.md)**: Explore the data model
 7. **[Architecture](08_architecture.md)**: Deep dive into system design
