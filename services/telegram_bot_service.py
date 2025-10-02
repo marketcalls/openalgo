@@ -1,9 +1,18 @@
 import os
 import asyncio
 import logging
-import threading
+import sys
 import concurrent.futures
 from typing import Dict, List, Optional, Tuple, Any
+
+# Import the original threading module to run the bot in a real OS thread,
+# bypassing eventlet's monkey-patching which causes event loop conflicts.
+if 'eventlet' in sys.modules:
+    import eventlet
+    original_threading = eventlet.patcher.original('threading')
+else:
+    import threading as original_threading
+
 from datetime import datetime, timedelta
 import httpx
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -47,7 +56,7 @@ class TelegramBotService:
         self.bot_thread = None
         self.bot_loop = None  # Store the bot's event loop
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
-        self._stop_event = threading.Event()  # Thread-safe stop signal
+        self._stop_event = original_threading.Event()  # Thread-safe stop signal
 
     def _get_sdk_client(self, telegram_id: int) -> Optional[openalgo_api]:
         """Get or create OpenAlgo SDK client for a user"""
@@ -680,7 +689,7 @@ class TelegramBotService:
             self._stop_event.clear()
 
             # Start bot in separate thread with isolated event loop
-            self.bot_thread = threading.Thread(
+            self.bot_thread = original_threading.Thread(
                 target=self._run_bot_in_thread,
                 daemon=True,
                 name="TelegramBotThread"
