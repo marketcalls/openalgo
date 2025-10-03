@@ -255,6 +255,60 @@ class FundManager:
             logger.error(f"Error releasing margin for user {self.user_id}: {e}")
             return False, f"Error releasing margin: {str(e)}"
 
+    def transfer_margin_to_holdings(self, amount, description=""):
+        """
+        Transfer margin to holdings during T+1 settlement
+        Reduces used_margin without crediting available_balance
+        (the money is now represented in holdings value, not available cash)
+        """
+        try:
+            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+
+            if not funds:
+                return False, "Funds not initialized"
+
+            amount = Decimal(str(amount))
+
+            # Reduce used margin (release from used_margin)
+            # But do NOT credit available_balance - money is now in holdings
+            funds.used_margin -= amount
+
+            db_session.commit()
+
+            logger.info(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
+            return True, f"Margin transferred to holdings: ₹{amount}"
+
+        except Exception as e:
+            db_session.rollback()
+            logger.error(f"Error transferring margin to holdings for user {self.user_id}: {e}")
+            return False, f"Error transferring margin to holdings: {str(e)}"
+
+    def credit_sale_proceeds(self, amount, description=""):
+        """
+        Credit sale proceeds from selling CNC holdings
+        Increases available_balance when holdings are sold
+        """
+        try:
+            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+
+            if not funds:
+                return False, "Funds not initialized"
+
+            amount = Decimal(str(amount))
+
+            # Credit sale proceeds to available balance
+            funds.available_balance += amount
+
+            db_session.commit()
+
+            logger.info(f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}")
+            return True, f"Sale proceeds credited: ₹{amount}"
+
+        except Exception as e:
+            db_session.rollback()
+            logger.error(f"Error crediting sale proceeds for user {self.user_id}: {e}")
+            return False, f"Error crediting sale proceeds: {str(e)}"
+
     def update_unrealized_pnl(self, unrealized_pnl):
         """Update unrealized P&L from open positions"""
         try:

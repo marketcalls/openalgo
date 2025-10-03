@@ -45,7 +45,10 @@ class HoldingsManager:
             tuple: (success: bool, response: dict, status_code: int)
         """
         try:
-            holdings = SandboxHoldings.query.filter_by(user_id=self.user_id).all()
+            # Get all holdings, excluding zero-quantity holdings
+            holdings = SandboxHoldings.query.filter_by(user_id=self.user_id).filter(
+                SandboxHoldings.quantity != 0
+            ).all()
 
             if update_mtm:
                 self._update_holdings_mtm(holdings)
@@ -68,11 +71,12 @@ class HoldingsManager:
                 holdings_list.append({
                     'symbol': holding.symbol,
                     'exchange': holding.exchange,
+                    'product': 'CNC',
                     'quantity': holding.quantity,
                     'average_price': float(holding.average_price),
                     'ltp': float(holding.ltp) if holding.ltp else 0.0,
                     'pnl': float(pnl),
-                    'pnl_percent': float(holding.pnl_percent),
+                    'pnlpercent': float(holding.pnl_percent),
                     'current_value': float(current_value),
                     'settlement_date': holding.settlement_date.strftime('%Y-%m-%d')
                 })
@@ -127,6 +131,16 @@ class HoldingsManager:
             settled_count = 0
 
             for position in cnc_positions:
+                # Skip positions with zero quantity (already squared off)
+                if position.quantity == 0:
+                    db_session.delete(position)
+                    logger.debug(f"Deleted zero-quantity position: {position.symbol} {position.exchange}")
+                    continue
+
+                # Initialize fund manager for margin operations
+                from sandbox.fund_manager import FundManager
+                fund_manager = FundManager(self.user_id)
+
                 # Check if holding already exists
                 holding = SandboxHoldings.query.filter_by(
                     user_id=self.user_id,
@@ -136,29 +150,48 @@ class HoldingsManager:
 
                 if holding:
                     # Update existing holding
-                    # Calculate new average price
-                    total_value = (abs(holding.quantity) * holding.average_price) + \
-                                  (abs(position.quantity) * position.average_price)
-                    total_quantity = abs(holding.quantity) + abs(position.quantity)
+                    old_holding_qty = holding.quantity
 
                     if position.quantity > 0:
-                        # Adding to holding
-                        holding.quantity += position.quantity
-                    else:
-                        # Reducing holding (selling from holdings)
-                        holding.quantity += position.quantity
+                        # Adding to holding (BUY)
+                        # Calculate new average price
+                        total_value = (abs(holding.quantity) * holding.average_price) + \
+                                      (abs(position.quantity) * position.average_price)
+                        total_quantity = abs(holding.quantity) + abs(position.quantity)
 
-                    # Only update average price if we're adding (not selling)
-                    if position.quantity > 0:
+                        holding.quantity += position.quantity
                         holding.average_price = total_value / total_quantity if total_quantity > 0 else holding.average_price
+
+                        # Transfer margin from used_margin to holdings (don't credit available_balance)
+                        margin_amount = abs(position.quantity) * position.average_price
+                        fund_manager.transfer_margin_to_holdings(
+                            margin_amount,
+                            f"T+1 settlement: {position.symbol} BUY → Holdings"
+                        )
+                        logger.info(f"Added to holding: {position.symbol}, Qty: {holding.quantity}, Margin transferred: ₹{margin_amount}")
+
+                    else:
+                        # Reducing holding (SELL)
+                        holding.quantity += position.quantity
+
+                        # Credit sale proceeds to available balance
+                        sale_proceeds = abs(position.quantity) * position.average_price
+                        fund_manager.credit_sale_proceeds(
+                            sale_proceeds,
+                            f"T+1 settlement: {position.symbol} SELL from Holdings"
+                        )
+                        logger.info(f"Reduced holding: {position.symbol}, Qty: {holding.quantity}, Sale proceeds: ₹{sale_proceeds}")
 
                     holding.ltp = position.ltp
                     holding.updated_at = datetime.now(ist)
 
-                    logger.info(f"Updated holding: {position.symbol}, New qty: {holding.quantity}")
+                    # If holding quantity becomes 0 after update, delete the holding
+                    if holding.quantity == 0:
+                        db_session.delete(holding)
+                        logger.info(f"Deleted zero-quantity holding: {position.symbol}")
 
                 else:
-                    # Create new holding
+                    # Create new holding (BUY position becoming holding)
                     holding = SandboxHoldings(
                         user_id=self.user_id,
                         symbol=position.symbol,
@@ -172,7 +205,14 @@ class HoldingsManager:
                         created_at=datetime.now(ist)
                     )
                     db_session.add(holding)
-                    logger.info(f"Created new holding: {position.symbol}, Qty: {position.quantity}")
+
+                    # Transfer margin from used_margin to holdings (don't credit available_balance)
+                    margin_amount = abs(position.quantity) * position.average_price
+                    fund_manager.transfer_margin_to_holdings(
+                        margin_amount,
+                        f"T+1 settlement: {position.symbol} → Holdings"
+                    )
+                    logger.info(f"Created new holding: {position.symbol}, Qty: {position.quantity}, Margin transferred: ₹{margin_amount}")
 
                 # Delete the position after settling
                 db_session.delete(position)

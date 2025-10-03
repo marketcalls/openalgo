@@ -99,7 +99,7 @@ def _schedule_square_off_jobs(scheduler):
     # Schedule T+1 settlement job at midnight (00:00 IST)
     # This moves CNC positions to holdings after market close
     try:
-        from sandbox.position_manager import process_all_users_settlement
+        from sandbox.holdings_manager import process_all_t1_settlements
 
         settlement_trigger = CronTrigger(
             hour=0,
@@ -108,7 +108,7 @@ def _schedule_square_off_jobs(scheduler):
         )
 
         settlement_job = scheduler.add_job(
-            func=process_all_users_settlement,
+            func=process_all_t1_settlements,
             trigger=settlement_trigger,
             id='t1_settlement',
             name='T+1 Settlement (CNC to Holdings)',
