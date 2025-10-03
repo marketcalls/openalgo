@@ -143,6 +143,9 @@ class BrokerData:
             '15m': '15minute',
             '30m': '30minute',
             '60m': '60minute',
+            # For flux scan to work for 1h interval
+            '1h': '60minute',
+            
             # Daily
             'D': 'day'
         }
