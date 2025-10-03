@@ -182,16 +182,27 @@ def process_angel_json(path):
     df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['exchange'] == 'CDS'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]
     df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + df['symbol'].str[-2:]
 
-    # BFO SENSEX Futures Symbol Update
-    # Format: SENSEX[DDMMMYY]FUT
+    # BFO Index Futures Symbol Update (SENSEX, BANKEX, etc.)
+    # Format: SYMBOL[DDMMMYY]FUT
     # Example: SENSEX28MAR24FUT
-    df.loc[(df['instrumenttype'] == 'FUTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
+    df.loc[(df['instrumenttype'] == 'FUTIDX') & (df['exchange'] == 'BFO'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    # BFO SENSEX Options Symbol Update
-    # Format: SENSEX[DDMMMYY][StrikePrice][CE/PE]
+    # BFO Stock Futures Symbol Update (RELIANCE, TCS, etc.)
+    # Format: SYMBOL[DDMMMYY]FUT
+    # Example: RELIANCE30OCT25FUT
+    df.loc[(df['instrumenttype'] == 'FUTSTK') & (df['exchange'] == 'BFO'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
+
+    # BFO Index Options Symbol Update (SENSEX, BANKEX, etc.)
+    # Format: SYMBOL[DDMMMYY][StrikePrice][CE/PE]
     # Example: SENSEX28MAR2475000CE
-    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)) & (df['symbol'].str.endswith('CE', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'CE'
-    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['name'].str.contains('SENSEX', na=False)) & (df['symbol'].str.endswith('PE', na=False)), 'symbol'] = 'SENSEX' + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'PE'
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('CE', na=False)), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('PE', na=False)), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'PE'
+
+    # BFO Stock Options Symbol Update (RELIANCE, TCS, etc.)
+    # Format: SYMBOL[DDMMMYY][StrikePrice][CE/PE]
+    # Example: RELIANCE30OCT251330PE
+    df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('CE', na=False)), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('PE', na=False)), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].astype(str).str.replace(r'\.0', '', regex=True) + 'PE'
 
     # Common Index Symbol Formats
 
