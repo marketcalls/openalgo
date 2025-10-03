@@ -13,7 +13,9 @@ OpenAlgo is an **open-source application** that provides a Sandbox Mode (also kn
 - **Complete Order Types**: Support for MARKET, LIMIT, SL, and SL-M orders
 - **Accurate Margin System**: Leverage-based margin blocking and release
 - **Auto Square-Off**: Automatic MIS position closure at exchange-specific times
-- **T+1 Settlement**: CNC positions automatically move to holdings at midnight (00:00 IST)
+- **T+1 Settlement**: CNC positions automatically convert to holdings at midnight with proper fund flow
+  - BUY: Margin transferred to holdings (used_margin ↓, holdings_value ↑)
+  - SELL: Sale proceeds credited to available balance
 - **Catch-up Settlement**: Automatic settlement of missed CNC positions on app restart
 - **Real-time P&L**: Mark-to-market calculations with live price updates
 - **Separate Database**: Isolated sandbox.db for clean data separation
@@ -36,6 +38,9 @@ Detailed explanation of margin calculations and leverage rules.
 
 ### 5. [Position Management](05_position_management.md)
 Understanding positions, P&L calculations, and position closure.
+
+### 5a. [T+1 Settlement & Holdings](05a_holdings_t1_settlement.md)
+Complete guide to CNC lifecycle, T+1 settlement, and holdings fund flow.
 
 ### 6. [Auto Square-Off System](06_auto_squareoff.md)
 How MIS positions are automatically squared off at configured times.

@@ -239,69 +239,42 @@ response = requests.post(
 
 ## Holdings (CNC Product)
 
-### T+1 Settlement Process
+CNC (Cash and Carry / Delivery) positions automatically convert to holdings through **T+1 settlement** at midnight (00:00 IST).
 
-**File**: `sandbox/position_manager.py` (lines 463-558, 584-674)
-
-CNC positions automatically convert to holdings at midnight (00:00 IST):
+### Quick Overview
 
 ```python
-# Day 1 (10:00 AM): BUY 50 TCS in CNC
-→ Creates position in sandbox_positions
+# Day 1 (10:00 AM): BUY 50 TCS @ Rs.3480 (CNC)
+→ Position created in sandbox_positions
+→ Margin blocked: Rs.174,000 (1x leverage)
 
-# Day 1 (00:00 Midnight): Settlement scheduler runs
-→ Moves position to sandbox_holdings
-→ Clears position quantity to 0
-→ Preserves realized P&L
+# Day 2 (00:00 Midnight): T+1 Settlement runs
+→ Position → Holdings
+→ Margin transferred to holdings (used_margin ↓)
+→ Available balance stays same (money now in holdings)
 
-# Settlement runs as APScheduler background task
-# File: sandbox/squareoff_thread.py (lines 99-122)
+# Day 30: SELL 50 TCS @ Rs.3520 (CNC)
+→ SELL position created
+
+# Day 31 (00:00 Midnight): T+1 Settlement runs
+→ Process SELL
+→ Sale proceeds credited (available_balance ↑)
+→ Holding deleted (quantity = 0)
 ```
 
-### Catch-up Settlement (Missed Settlements)
+### Complete T+1 Settlement Documentation
 
-**File**: `sandbox/position_manager.py` (lines 622-674)
+For comprehensive details on T+1 settlement mechanism, fund flow, and holdings management, see:
 
-When the app is stopped (e.g., for maintenance or system downtime), the midnight settlement job won't run. To handle this, a catch-up settlement mechanism automatically runs:
+**➡️ [T+1 Settlement & Holdings - Complete Guide](05a_holdings_t1_settlement.md)**
 
-**Trigger Points**:
-1. **App Startup**: When app starts with analyzer mode already enabled (app.py:347-353)
-2. **Mode Toggle**: When user enables analyzer mode (analyzer_service.py:107-113)
-
-**Logic**:
-```python
-# Example: User placed CNC order on Day 1, stopped app, restarted on Day 5
-
-def catchup_missed_settlements():
-    """Settle CNC positions that should have been settled while app was stopped"""
-
-    # Find all CNC positions older than 1 day
-    cutoff_time = datetime.now() - timedelta(days=1)
-
-    old_positions = [
-        p for p in SandboxPositions.query.filter_by(product='CNC').all()
-        if p.quantity != 0 and p.created_at < cutoff_time
-    ]
-
-    # Automatically settle them to holdings
-    for position in old_positions:
-        process_session_settlement(position)
-
-    # Result: Old CNC positions appear in /holdings, not /positions
-```
-
-**Use Case Example**:
-
-| Timeline | Event | Result |
-|----------|-------|--------|
-| **Day 1, 10:00 AM** | BUY 100 RELIANCE CNC @ 2500 | Position created |
-| **Day 1, 11:00 PM** | User stops app & logs out | App offline |
-| **Day 2-5** | App remains stopped | Midnight settlement doesn't run |
-| **Day 6, 9:00 AM** | User restarts app | Catch-up settlement runs |
-| **Day 6, 9:00 AM** | Catch-up detects 5-day-old CNC position | Automatically settles to holdings |
-| **Day 6, 9:01 AM** | User views /holdings | Position shows in holdings ✓ |
-
-This ensures **holdings are always accurate** even after extended downtime.
+This detailed guide covers:
+- Complete CNC lifecycle (BUY → T+1 → Holdings → SELL → T+1)
+- Fund flow mechanics (margin transfer vs sale proceeds)
+- Scheduler configuration
+- Edge cases and troubleshooting
+- API reference
+- Database schema
 
 ### Get Holdings API
 
@@ -313,35 +286,7 @@ response = requests.post(
 )
 ```
 
-### Holdings Response
-
-```json
-{
-    "status": "success",
-    "data": {
-        "holdings": [
-            {
-                "symbol": "TCS",
-                "exchange": "NSE",
-                "quantity": 50,
-                "average_price": 3480.00,
-                "ltp": 3520.00,
-                "pnl": 2000.00,
-                "pnl_percent": 1.1494,
-                "current_value": 176000.00,
-                "settlement_date": "2025-10-01"
-            }
-        ],
-        "statistics": {
-            "totalholdingvalue": 176000.00,
-            "totalinvvalue": 174000.00,
-            "totalprofitandloss": 2000.00,
-            "totalpnlpercentage": 1.1494
-        }
-    },
-    "mode": "analyze"
-}
-```
+See [T+1 Settlement Guide](05a_holdings_t1_settlement.md) for complete API documentation and examples.
 
 ## Summary
 
