@@ -13,7 +13,7 @@ Features:
 import os
 import sys
 from decimal import Decimal
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import pytz
 
 # Add parent directory to path
@@ -114,14 +114,14 @@ class HoldingsManager:
         try:
             ist = pytz.timezone('Asia/Kolkata')
             today = datetime.now(ist).date()
-            yesterday = today - timedelta(days=1)
+            settlement_cutoff = datetime.combine(today, datetime.min.time())
 
             # Get all CNC positions from yesterday or earlier
             cnc_positions = SandboxPositions.query.filter_by(
                 user_id=self.user_id,
                 product='CNC'
             ).filter(
-                SandboxPositions.created_at < datetime.combine(today, datetime.min.time()).replace(tzinfo=ist)
+                SandboxPositions.created_at < settlement_cutoff
             ).all()
 
             if not cnc_positions:
@@ -339,9 +339,10 @@ def process_all_t1_settlements():
         # Get all unique users with CNC positions
         ist = pytz.timezone('Asia/Kolkata')
         today = datetime.now(ist).date()
+        settlement_cutoff = datetime.combine(today, datetime.min.time())
 
         positions = SandboxPositions.query.filter_by(product='CNC').filter(
-            SandboxPositions.created_at < datetime.combine(today, datetime.min.time()).replace(tzinfo=ist)
+            SandboxPositions.created_at < settlement_cutoff
         ).all()
 
         if not positions:

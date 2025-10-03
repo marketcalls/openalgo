@@ -24,6 +24,7 @@ from database.sandbox_db import (
     SandboxPositions, SandboxTrades, db_session, get_config
 )
 from sandbox.fund_manager import FundManager
+from sandbox.holdings_manager import HoldingsManager
 from services.quotes_service import get_quotes
 from utils.logging import get_logger
 
@@ -601,13 +602,13 @@ def process_all_users_settlement():
 
         for user_id in users:
             try:
-                pm = PositionManager(user_id)
-                success, response, status_code = pm.process_session_settlement()
+                holdings_manager = HoldingsManager(user_id)
+                success, message = holdings_manager.process_t1_settlement()
 
                 if success:
                     logger.info(f"Settlement completed for user {user_id}")
                 else:
-                    logger.error(f"Settlement failed for user {user_id}: {response.get('message')}")
+                    logger.error(f"Settlement failed for user {user_id}: {message}")
 
             except Exception as e:
                 logger.error(f"Error in settlement for user {user_id}: {e}")
@@ -627,42 +628,32 @@ def catchup_missed_settlements():
     Checks for CNC positions older than 1 day and settles them to holdings.
     """
     try:
-        from datetime import datetime, timedelta
+        ist = pytz.timezone('Asia/Kolkata')
+        today = datetime.now(ist).date()
+        cutoff_time = datetime.combine(today, datetime.min.time())
 
-        # Get all CNC positions
-        cnc_positions = SandboxPositions.query.filter_by(product='CNC').all()
+        cnc_positions = SandboxPositions.query.filter_by(product='CNC').filter(
+            SandboxPositions.quantity != 0,
+            SandboxPositions.created_at < cutoff_time
+        ).all()
 
         if not cnc_positions:
             logger.info("No CNC positions for catch-up settlement")
             return
 
-        # Calculate cutoff time (positions older than 1 day should be settled)
-        cutoff_time = datetime.now() - timedelta(days=1)
+        logger.info(f"Found {len(cnc_positions)} CNC positions that need catch-up settlement")
 
-        # Find positions that should have been settled
-        positions_to_settle = [
-            p for p in cnc_positions
-            if p.quantity != 0 and p.created_at < cutoff_time
-        ]
-
-        if not positions_to_settle:
-            logger.info("No missed settlements to catch up")
-            return
-
-        logger.info(f"Found {len(positions_to_settle)} CNC positions that need catch-up settlement")
-
-        # Group by user
-        users = set(p.user_id for p in positions_to_settle)
+        users = set(p.user_id for p in cnc_positions)
 
         for user_id in users:
             try:
-                pm = PositionManager(user_id)
-                success, response, status_code = pm.process_session_settlement()
+                holdings_manager = HoldingsManager(user_id)
+                success, message = holdings_manager.process_t1_settlement()
 
                 if success:
                     logger.info(f"Catch-up settlement completed for user {user_id}")
                 else:
-                    logger.error(f"Catch-up settlement failed for user {user_id}: {response.get('message')}")
+                    logger.error(f"Catch-up settlement failed for user {user_id}: {message}")
 
             except Exception as e:
                 logger.error(f"Error in catch-up settlement for user {user_id}: {e}")
