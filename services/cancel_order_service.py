@@ -91,30 +91,23 @@ def cancel_order_with_auth(
     if 'apikey' in order_request_data:
         order_request_data.pop('apikey', None)
     
-    # If in analyze mode, return success response
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
-        # Store complete request data without apikey
-        analyzer_request = order_request_data.copy()
-        analyzer_request['api_type'] = 'cancelorder'
-        
-        response_data = {
-            'mode': 'analyze',
-            'orderid': orderid,
-            'status': 'success'
-        }
-        
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelorder')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
+        from services.sandbox_service import sandbox_cancel_order
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('cancelorder', {'orderid': orderid}, response_data, original_data.get('apikey'))
-        return True, response_data, 200
+        # Get API key from original data
+        api_key = original_data.get('apikey')
+        if not api_key:
+            error_response = {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }
+            return False, error_response, 400
+
+        # Route to sandbox
+        order_data = {'orderid': orderid}
+        return sandbox_cancel_order(order_data, api_key, original_data)
 
     broker_module = import_broker_module(broker)
     if broker_module is None:

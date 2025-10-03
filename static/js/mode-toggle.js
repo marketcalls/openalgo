@@ -109,9 +109,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Ensure UI matches server response
                 updateBadge(Boolean(data.analyze_mode));
                 showToast(data.message, 'success');
-                
-                // Reload page to ensure all components update
-                setTimeout(() => window.location.reload(), 1000);
+
+                // Show disclaimer toast when enabling analyzer mode
+                if (newModeBoolean === true) {
+                    setTimeout(() => {
+                        showToast('⚠️ Analyzer (Sandbox) mode is for testing purposes only', 'warning', 20000);
+                    }, 2000); // Slight delay to show after success toast
+                }
+
+                // Refresh current page content to reflect the mode change
+                console.log('[Mode] Mode switched successfully, refreshing content');
+
+                // Use the refreshCurrentPageContent function if available
+                if (typeof refreshCurrentPageContent === 'function') {
+                    setTimeout(() => {
+                        refreshCurrentPageContent();
+                    }, 500); // Small delay to ensure mode is properly set
+                } else {
+                    // Fallback: reload the page if refresh function is not available
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 500);
+                }
             } else {
                 throw new Error(data.error || 'Unknown error');
             }

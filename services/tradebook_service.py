@@ -49,20 +49,37 @@ def import_broker_module(broker_name: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error importing broker modules: {error}")
         return None
 
-def get_tradebook_with_auth(auth_token: str, broker: str) -> Tuple[bool, Dict[str, Any], int]:
+def get_tradebook_with_auth(auth_token: str, broker: str, original_data: Dict[str, Any] = None) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get trade book details using provided auth token.
-    
+
     Args:
         auth_token: Authentication token for the broker API
         broker: Name of the broker
-        
+        original_data: Original request data (for sandbox mode, optional for internal calls)
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    # If in analyze mode AND we have original_data (API call), route to sandbox
+    # If original_data is None (internal call), use live broker
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode() and original_data:
+        from services.sandbox_service import sandbox_get_tradebook
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        return sandbox_get_tradebook(api_key, original_data)
+
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
         return False, {
@@ -127,11 +144,12 @@ def get_tradebook(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }, 403
-        return get_tradebook_with_auth(AUTH_TOKEN, broker_name)
-    
+        original_data = {'apikey': api_key}
+        return get_tradebook_with_auth(AUTH_TOKEN, broker_name, original_data)
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_tradebook_with_auth(auth_token, broker)
+        return get_tradebook_with_auth(auth_token, broker, None)
     
     # Case 3: Invalid parameters
     else:

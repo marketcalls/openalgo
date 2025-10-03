@@ -83,12 +83,18 @@ feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
 broker_cache = TTLCache(maxsize=1024, ttl=3000)
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite does not support these pooling options with its default setup
+    engine = create_engine(DATABASE_URL)
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()

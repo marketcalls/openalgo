@@ -39,7 +39,19 @@
       "Bash(gunzip:*)",
       "Read(//d//**)",
       "Read(//c/Users/Admin1/Downloads/**)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(if [ ! -f .env.sample ])",
+      "Bash(then echo \"No .env.sample found\")",
+      "Bash(else echo \".env.sample exists\")",
+      "Bash(fi)",
+      "Bash(if [ -f sandbox/sandbox.db ])",
+      "Bash(then mv sandbox/sandbox.db db/sandbox.db)",
+      "Bash(else echo \"sandbox.db not found in sandbox/ directory\")",
+      "Bash(sqlite3:*)",
+      "Bash(awk:*)",
+      "Bash(for file in *.md)",
+      "Bash(do sed -i 's/localhost/127.0.0.1/g' \"$file\")",
+      "Bash(done)"
     ],
     "deny": []
   }
