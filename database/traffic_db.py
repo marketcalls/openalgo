@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 import os
 import logging
 from datetime import datetime, timedelta
@@ -13,12 +14,22 @@ logger = logging.getLogger(__name__)
 # Use a separate database for logs
 LOGS_DATABASE_URL = os.getenv('LOGS_DATABASE_URL', 'sqlite:///db/logs.db')
 
-logs_engine = create_engine(
-    LOGS_DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if LOGS_DATABASE_URL and 'sqlite' in LOGS_DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    logs_engine = create_engine(
+        LOGS_DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    logs_engine = create_engine(
+        LOGS_DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 logs_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=logs_engine))
 LogBase = declarative_base()

@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -45,7 +46,23 @@ def get_encryption_key():
 fernet = get_encryption_key()
 
 # Create engine and session
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        pool_size=50,
+        max_overflow=100
+    )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 
 Base = declarative_base()

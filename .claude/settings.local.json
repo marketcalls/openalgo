@@ -14,7 +14,8 @@
       "WebFetch(domain:daisyui.com)",
       "WebFetch(domain:www.openalgo.in)",
       "Bash(curl -L \"https://www.openalgo.in/faq\")",
-      "Bash(curl -s \"https://www.openalgo.in/_next/data\")"
+      "Bash(curl -s \"https://www.openalgo.in/_next/data\")",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []
