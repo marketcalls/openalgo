@@ -92,7 +92,7 @@ def _create_http_client() -> httpx.Client:
         client = httpx.Client(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
-            timeout=30.0,
+            timeout=120.0,  # Increased timeout for large historical data requests
             limits=httpx.Limits(
                 max_keepalive_connections=20,  # Balanced for most broker APIs
                 max_connections=50,  # Reasonable max without overloading
