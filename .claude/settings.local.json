@@ -11,7 +11,10 @@
       "Bash(node:*)",
       "Bash(cat:*)",
       "WebSearch",
-      "WebFetch(domain:daisyui.com)"
+      "WebFetch(domain:daisyui.com)",
+      "WebFetch(domain:www.openalgo.in)",
+      "Bash(curl -L \"https://www.openalgo.in/faq\")",
+      "Bash(curl -s \"https://www.openalgo.in/_next/data\")"
     ],
     "deny": [],
     "ask": []
