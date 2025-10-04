@@ -30,7 +30,7 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/kotak/callback" method="POST" class="space-y-4">
+                    <form action="/kotak/callback" method="POST" class="space-y-6">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <!-- Hidden fields for session data -->
                         <input type="hidden" name="access_token" value="{{ para.access_token }}">
@@ -39,7 +39,7 @@
                         <input type="hidden" name="hsServerId" value="{{ para.hsServerId }}">
                         <input type="hidden" name="userid" value="{{ para.userid }}">
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">OTP</span>
                                 <span class="label-text-alt">
@@ -48,15 +48,15 @@
                                     </div>
                                 </span>
                             </label>
-                            <input type="password" 
-                                   id="otp" 
-                                   name="otp" 
-                                   required 
-                                   class="input input-bordered text-center text-2xl tracking-[1em]" 
+                            <input type="password"
+                                   id="otp"
+                                   name="otp"
+                                   required
+                                   class="input input-bordered w-full text-center text-2xl tracking-[1em]"
                                    placeholder="••••"
                                    inputmode="numeric"
                                    autocomplete="one-time-code" />
-                            <label class="label">
+                            <label class="label pt-2">
                                 <span class="label-text-alt text-info">Enter the OTP sent to your registered mobile number</span>
                             </label>
                         </div>
@@ -71,8 +71,8 @@
                         {% endif %}
 
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary w-full">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <button type="submit" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                                 </svg>
                                 Verify OTP
@@ -82,8 +82,8 @@
 
                     <div class="divider">OR</div>
 
-                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
                         </svg>
                         Back to Broker Selection

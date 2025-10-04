@@ -13,41 +13,41 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/fivepaisa/callback" method="POST" class="space-y-4">
+                    <form action="/fivepaisa/callback" method="POST" class="space-y-6">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Client ID/Mobile No</span>
                             </label>
-                            <input type="text" 
-                                   id="clientid" 
-                                   name="clientid" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="text"
+                                   id="clientid"
+                                   name="clientid"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your Client ID or Mobile No" />
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">PIN</span>
                             </label>
-                            <input type="password" 
-                                   id="pin" 
-                                   name="pin" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="password"
+                                   id="pin"
+                                   name="pin"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your PIN" />
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">TOTP</span>
                             </label>
-                            <input type="password" 
-                                   id="totp" 
-                                   name="totp" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="password"
+                                   id="totp"
+                                   name="totp"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your TOTP" />
                         </div>
 
@@ -61,8 +61,8 @@
                         {% endif %}
 
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary w-full">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <button type="submit" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                                 </svg>
                                 Connect Account
