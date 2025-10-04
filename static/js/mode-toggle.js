@@ -84,7 +84,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 const serverMode = Boolean(data.analyze_mode);
                 updateBadge(serverMode);
                 isInitialized = true;
-                console.log('[Mode] Initialized from server:', serverMode ? 'Analyze Mode' : 'Live Mode');
             })
             .catch(error => {
                 console.error('[Mode] Error fetching analyze mode:', error);
@@ -132,8 +131,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 // Refresh current page content to reflect the mode change
-                console.log('[Mode] Mode switched successfully, refreshing content');
-
                 // Use the refreshCurrentPageContent function if available
                 if (typeof refreshCurrentPageContent === 'function') {
                     setTimeout(() => {
@@ -152,7 +149,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .catch(error => {
             console.error('[Mode] Error updating mode:', error);
             showToast('Failed to update mode', 'error');
-            
+
             // Revert to previous state on error
             updateBadge(!newModeBoolean);
         });
@@ -162,16 +159,14 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden && isInitialized) {
             // Re-sync with server when page becomes visible
-            console.log('[Mode] Page visible, re-syncing with server');
             initializeFromServer();
         }
     });
 
-    // Handle storage events for cross-tab consistency  
+    // Handle storage events for cross-tab consistency
     window.addEventListener('storage', function(e) {
         if (e.key === 'analyzeMode' && isInitialized) {
             const isAnalyzeMode = e.newValue === 'true';
-            console.log('[Mode] Storage event received, updating to:', isAnalyzeMode ? 'Analyze Mode' : 'Live Mode');
             updateBadge(isAnalyzeMode, true); // Skip theme change for storage events
         }
     });
