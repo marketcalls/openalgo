@@ -4,10 +4,16 @@
     <!-- Add blocking script to set theme before any content loads -->
     <script>
         (function() {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) {
-                document.documentElement.setAttribute('data-theme', savedTheme);
+            // Check if we're in analyze mode first
+            const analyzeMode = sessionStorage.getItem('analyzeMode') || localStorage.getItem('analyzeMode');
+            if (analyzeMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dracula');
+                return;
             }
+
+            // Otherwise use saved theme or default
+            const savedTheme = sessionStorage.getItem('theme') || localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
         })();
     </script>
     <meta charset="UTF-8">
