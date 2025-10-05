@@ -15,7 +15,8 @@
       "WebFetch(domain:www.openalgo.in)",
       "Bash(curl -L \"https://www.openalgo.in/faq\")",
       "Bash(curl -s \"https://www.openalgo.in/_next/data\")",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Read(//c/Users/Admin1/Downloads/**)"
     ],
     "deny": [],
     "ask": []

@@ -2,84 +2,201 @@
 
 {% block head %}
 <style>
-    .search-results {
-        @apply absolute w-full max-h-[300px] overflow-y-auto bg-base-100 border border-base-200 rounded-lg shadow-lg z-50;
+    /* Autocomplete dropdown container */
+    #searchResults {
+        position: absolute;
+        width: 100%;
+        max-height: 400px;
+        overflow-y: auto;
+        background-color: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
         display: none;
-        top: 100%;
         margin-top: 4px;
     }
 
-    .result-item {
-        @apply p-4 border-b border-base-200 hover:bg-base-200 cursor-pointer transition-all duration-200;
+    [data-theme="dark"] #searchResults {
+        background-color: #1f2937;
+        border-color: #374151;
     }
 
-    .result-item:last-child {
-        @apply border-b-0;
+    /* Individual result item */
+    .search-result-item {
+        padding: 12px 16px;
+        border-bottom: 1px solid #f3f4f6;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
     }
 
-    .loading-indicator {
-        @apply absolute right-3 top-1/2 -translate-y-1/2;
+    [data-theme="dark"] .search-result-item {
+        border-bottom-color: #374151;
+    }
+
+    .search-result-item:hover {
+        background-color: #f9fafb;
+    }
+
+    [data-theme="dark"] .search-result-item:hover {
+        background-color: #374151;
+    }
+
+    .search-result-item:last-child {
+        border-bottom: none;
+    }
+
+    /* Result item content */
+    .result-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .result-left {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .result-symbol {
+        font-weight: 600;
+        font-size: 15px;
+        margin-bottom: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .result-name {
+        font-size: 13px;
+        color: #6b7280;
+        margin-bottom: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    [data-theme="dark"] .result-name {
+        color: #9ca3af;
+    }
+
+    .result-token {
+        font-size: 12px;
+        color: #9ca3af;
+        font-family: monospace;
+    }
+
+    [data-theme="dark"] .result-token {
+        color: #6b7280;
+    }
+
+    .result-badge {
+        background-color: #3b82f6;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    /* No results state */
+    .no-results {
+        padding: 32px 24px;
+        text-align: center;
+        color: #9ca3af;
+    }
+
+    .no-results svg {
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 12px;
+        opacity: 0.5;
+    }
+
+    /* Loading indicator */
+    .search-loading {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
         display: none;
     }
 
-    .search-tips {
-        @apply mt-8 p-4 bg-base-200 rounded-lg;
+    /* Custom scrollbar */
+    #searchResults::-webkit-scrollbar {
+        width: 8px;
     }
 
-    .search-tips ul {
-        @apply mt-2 space-y-2;
+    #searchResults::-webkit-scrollbar-track {
+        background: #f3f4f6;
     }
 
-    .search-tips li {
-        @apply flex items-center gap-2;
+    [data-theme="dark"] #searchResults::-webkit-scrollbar-track {
+        background: #1f2937;
     }
 
-    .search-tips li::before {
-        content: "•";
-        @apply text-primary;
+    #searchResults::-webkit-scrollbar-thumb {
+        background: #d1d5db;
+        border-radius: 4px;
+    }
+
+    [data-theme="dark"] #searchResults::-webkit-scrollbar-thumb {
+        background: #4b5563;
+    }
+
+    #searchResults::-webkit-scrollbar-thumb:hover {
+        background: #9ca3af;
+    }
+
+    /* Input container positioning */
+    .search-input-wrapper {
+        position: relative;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="max-w-3xl mx-auto">
+<div class="max-w-4xl mx-auto py-8">
     <!-- Header -->
-    <div class="section-header text-center">
-        <h1 class="text-3xl font-bold">Symbol Search</h1>
-        <p class="text-base-content/60 mt-2">Search for symbols across different exchanges to get detailed information</p>
+    <div class="text-center mb-8">
+        <h1 class="text-4xl lg:text-5xl font-bold mb-4">Symbol Search</h1>
+        <p class="text-lg text-base-content/70">Search for symbols across different exchanges to get detailed information</p>
     </div>
 
     <!-- Search Form -->
-    <div class="card bg-base-100 shadow-lg">
-        <div class="card-body">
+    <div class="card bg-base-200 shadow-xl mb-6">
+        <div class="card-body p-6 lg:p-8">
             <form action="{{ url_for('search_bp.search') }}" method="get" id="searchForm" class="space-y-6">
                 <!-- Symbol Search -->
                 <div class="form-control w-full">
                     <label class="label">
-                        <span class="label-text">Symbol, Name, or Token</span>
+                        <span class="label-text font-medium text-base">Symbol, Name, or Token</span>
                     </label>
-                    <div class="relative">
-                        <input type="text" 
-                               name="symbol" 
-                               id="symbolSearch" 
-                               required 
-                               class="input input-bordered w-full pr-10" 
-                               placeholder="Enter your search query..."
+                    <div class="search-input-wrapper">
+                        <input type="text"
+                               name="symbol"
+                               id="symbolSearch"
+                               required
+                               class="input input-bordered w-full text-base h-12"
+                               placeholder="e.g., nifty, RELIANCE, 2885"
                                autocomplete="off">
-                        <div class="loading-indicator">
+                        <div class="search-loading">
                             <span class="loading loading-spinner loading-sm"></span>
                         </div>
-                        <div id="searchResults" class="search-results"></div>
+                        <div id="searchResults"></div>
                     </div>
                 </div>
 
                 <!-- Exchange Select -->
                 <div class="form-control w-full">
                     <label class="label">
-                        <span class="label-text">Exchange</span>
+                        <span class="label-text font-medium text-base">Exchange</span>
                     </label>
-                    <select name="exchange" id="exchangeSelect" required class="select select-bordered w-full">
-                        <option value="">Select Exchange</option>
+                    <select name="exchange" id="exchangeSelect" required class="select select-bordered w-full text-base h-12">
+                        <option value="" disabled selected>Select Exchange</option>
                         <option value="NSE">NSE - National Stock Exchange</option>
                         <option value="NFO">NFO - NSE Futures & Options</option>
                         <option value="BSE">BSE - Bombay Stock Exchange</option>
@@ -92,7 +209,7 @@
                 </div>
 
                 <!-- Search Button -->
-                <button type="submit" class="btn btn-primary w-full gap-2">
+                <button type="submit" class="btn btn-primary w-full h-12 text-base gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
@@ -103,96 +220,183 @@
     </div>
 
     <!-- Search Tips -->
-    <div class="search-tips">
-        <div class="flex items-start gap-3">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div>
-                <h3 class="font-bold text-lg">Search Tips</h3>
-                <ul class="text-base-content/70">
-                    <li>Search by symbol name (e.g., RELIANCE, INFY)</li>
-                    <li>Search by company name (e.g., Reliance Industries)</li>
-                    <li>Search by token number</li>
-                    <li>Select appropriate exchange for accurate results</li>
-                </ul>
+    <div role="alert" class="alert">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div>
+            <h3 class="font-bold text-base mb-2">Search Tips</h3>
+            <div class="text-sm space-y-3">
+                <div>
+                    <div class="font-semibold mb-1">Stock Search:</div>
+                    <ul class="ml-2 space-y-0.5">
+                        <li>• By symbol: <code class="bg-base-300 px-2 py-0.5 rounded">RELIANCE</code>, <code class="bg-base-300 px-2 py-0.5 rounded">INFY</code></li>
+                        <li>• By company name: <code class="bg-base-300 px-2 py-0.5 rounded">Reliance Industries</code></li>
+                        <li>• By token number: <code class="bg-base-300 px-2 py-0.5 rounded">2885</code></li>
+                    </ul>
+                </div>
+                <div>
+                    <div class="font-semibold mb-1">Futures & Options:</div>
+                    <ul class="ml-2 space-y-0.5">
+                        <li>• Futures: <code class="bg-base-300 px-2 py-0.5 rounded">nifty oct fut</code>, <code class="bg-base-300 px-2 py-0.5 rounded">banknifty dec fut</code></li>
+                        <li>• Call Options: <code class="bg-base-300 px-2 py-0.5 rounded">nifty 25000 ce</code>, <code class="bg-base-300 px-2 py-0.5 rounded">reliance 3000 ce</code></li>
+                        <li>• Put Options: <code class="bg-base-300 px-2 py-0.5 rounded">nifty 24000 pe</code>, <code class="bg-base-300 px-2 py-0.5 rounded">banknifty 50000 pe</code></li>
+                    </ul>
+                </div>
+                <div class="text-xs opacity-75 mt-2">
+                    💡 <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for accurate results
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-let debounceTimeout;
-const loadingIndicator = document.querySelector('.loading-indicator');
-const symbolInput = document.getElementById('symbolSearch');
-const searchResults = document.getElementById('searchResults');
-const exchangeSelect = document.getElementById('exchangeSelect');
+(function() {
+    'use strict';
 
-symbolInput.addEventListener('input', function(e) {
-    clearTimeout(debounceTimeout);
-    const query = e.target.value.trim();
-    const exchange = exchangeSelect.value;
-    
-    if (query.length < 2) {
-        searchResults.style.display = 'none';
-        return;
+    const symbolInput = document.getElementById('symbolSearch');
+    const searchResults = document.getElementById('searchResults');
+    const exchangeSelect = document.getElementById('exchangeSelect');
+    const searchForm = document.getElementById('searchForm');
+    const loadingIndicator = document.querySelector('.search-loading');
+
+    let debounceTimer = null;
+
+    // Debounced search function
+    function handleInput() {
+        clearTimeout(debounceTimer);
+        const query = symbolInput.value.trim();
+
+        if (query.length < 2) {
+            searchResults.style.display = 'none';
+            return;
+        }
+
+        debounceTimer = setTimeout(() => {
+            performSearch(query, exchangeSelect.value);
+        }, 300);
     }
-    
-    debounceTimeout = setTimeout(() => {
-        fetchSearchResults(query, exchange);
-    }, 300);
-});
 
-exchangeSelect.addEventListener('change', function(e) {
-    const query = symbolInput.value.trim();
-    if (query.length >= 2) {
-        fetchSearchResults(query, e.target.value);
+    // Perform AJAX search
+    async function performSearch(query, exchange) {
+        try {
+            loadingIndicator.style.display = 'block';
+
+            const url = new URL('{{ url_for("search_bp.api_search") }}', window.location.origin);
+            url.searchParams.append('q', query);
+            if (exchange) {
+                url.searchParams.append('exchange', exchange);
+            }
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            displayResults(data.results || []);
+        } catch (error) {
+            console.error('Search error:', error);
+            searchResults.style.display = 'none';
+        } finally {
+            loadingIndicator.style.display = 'none';
+        }
     }
-});
 
-document.addEventListener('click', function(e) {
-    if (!symbolInput.contains(e.target) && !searchResults.contains(e.target)) {
-        searchResults.style.display = 'none';
-    }
-});
-
-async function fetchSearchResults(query, exchange) {
-    try {
-        loadingIndicator.style.display = 'block';
-        const response = await fetch(`{{ url_for('search_bp.api_search') }}?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
-        const data = await response.json();
-        
+    // Display search results
+    function displayResults(results) {
         searchResults.innerHTML = '';
-        
-        if (data.results.length > 0) {
-            data.results.forEach(result => {
-                const div = document.createElement('div');
-                div.className = 'result-item';
-                div.innerHTML = `
-                    <div class="flex items-center justify-between">
-                        <span class="font-medium">${result.symbol}</span>
-                        <span class="badge badge-${result.exchange.toLowerCase()}">${result.exchange}</span>
-                    </div>
-                    <div class="text-sm text-base-content/70 mt-1">${result.name || ''}</div>
-                    <div class="text-xs text-base-content/60 mt-1">Token: ${result.token}</div>
-                `;
-                div.addEventListener('click', () => {
-                    symbolInput.value = result.symbol;
-                    exchangeSelect.value = result.exchange;
-                    searchResults.style.display = 'none';
-                });
-                searchResults.appendChild(div);
-            });
+
+        if (results.length === 0) {
+            searchResults.innerHTML = `
+                <div class="no-results">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <div style="font-size: 14px; font-weight: 500;">No results found</div>
+                    <div style="font-size: 12px; margin-top: 4px;">Try a different search term</div>
+                </div>
+            `;
             searchResults.style.display = 'block';
-        } else {
+            return;
+        }
+
+        // Limit to 10 results for better UX
+        const limitedResults = results.slice(0, 10);
+
+        limitedResults.forEach(result => {
+            const item = document.createElement('div');
+            item.className = 'search-result-item';
+
+            const row = document.createElement('div');
+            row.className = 'result-row';
+
+            const left = document.createElement('div');
+            left.className = 'result-left';
+
+            const symbol = document.createElement('div');
+            symbol.className = 'result-symbol';
+            symbol.textContent = result.symbol || '';
+
+            const name = document.createElement('div');
+            name.className = 'result-name';
+            name.textContent = result.name || '';
+
+            const token = document.createElement('div');
+            token.className = 'result-token';
+            token.textContent = 'Token: ' + (result.token || '');
+
+            left.appendChild(symbol);
+            if (result.name) {
+                left.appendChild(name);
+            }
+            left.appendChild(token);
+
+            const badge = document.createElement('div');
+            badge.className = 'result-badge';
+            badge.textContent = result.exchange || '';
+
+            row.appendChild(left);
+            row.appendChild(badge);
+            item.appendChild(row);
+
+            item.addEventListener('click', () => {
+                symbolInput.value = result.symbol;
+                exchangeSelect.value = result.exchange;
+                searchResults.style.display = 'none';
+            });
+
+            searchResults.appendChild(item);
+        });
+
+        searchResults.style.display = 'block';
+    }
+
+    // Event listeners
+    symbolInput.addEventListener('input', handleInput);
+    exchangeSelect.addEventListener('change', () => {
+        const query = symbolInput.value.trim();
+        if (query.length >= 2) {
+            performSearch(query, exchangeSelect.value);
+        }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!symbolInput.contains(e.target) && !searchResults.contains(e.target)) {
             searchResults.style.display = 'none';
         }
-    } catch (error) {
-        console.error('Error:', error);
-        showToast('Error fetching search results', 'error');
-    } finally {
-        loadingIndicator.style.display = 'none';
-    }
-}
+    });
+
+    // Close dropdown on form submit
+    searchForm.addEventListener('submit', () => {
+        searchResults.style.display = 'none';
+    });
+
+    // Reopen dropdown on focus if there are results
+    symbolInput.addEventListener('focus', () => {
+        if (symbolInput.value.trim().length >= 2 && searchResults.children.length > 0) {
+            searchResults.style.display = 'block';
+        }
+    });
+})();
 </script>
 {% endblock %}

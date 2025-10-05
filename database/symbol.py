@@ -101,9 +101,9 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> List[SymToken]:
             final_query = base_query.filter(and_(*all_conditions))
         else:
             final_query = base_query
-        
-        # Execute query with a reasonable limit
-        results = final_query.limit(50).all()
+
+        # Execute query - no limit to show all matching results
+        results = final_query.all()
         return results
         
     except Exception as e:
