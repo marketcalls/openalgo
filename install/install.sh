@@ -848,7 +848,12 @@ server {
     location / {
         proxy_pass http://unix:$SOCKET_FILE;
         proxy_http_version 1.1;
-        
+
+        # Extended timeouts for broker authentication (cold start can take 60-90s)
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
