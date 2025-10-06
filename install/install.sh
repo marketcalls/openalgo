@@ -791,7 +791,14 @@ if [ "$IS_SUBDOMAIN" = true ]; then
 else
     sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
 fi
-check_status "Failed to obtain SSL certificate"
+
+# Check if certificate was obtained (even if auto-install failed)
+if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    log_message "Failed to obtain SSL certificate" "$RED"
+    exit 1
+else
+    log_message "SSL certificate obtained successfully" "$GREEN"
+fi
 
 # Configure final Nginx setup with SSL and socket
 log_message "\nConfiguring final Nginx setup..." "$BLUE"
