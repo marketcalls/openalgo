@@ -496,19 +496,26 @@ case "$OS_TYPE" in
         # Try to install from package manager first
         CERTBOT_INSTALLED=false
         if ! command -v dnf >/dev/null 2>&1; then
-            sudo yum install -y certbot python3-certbot-nginx 2>/dev/null && CERTBOT_INSTALLED=true
+            if sudo yum install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via yum" "$GREEN"
+            fi
         else
-            sudo dnf install -y certbot python3-certbot-nginx 2>/dev/null && CERTBOT_INSTALLED=true
+            if sudo dnf install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via dnf" "$GREEN"
+            fi
         fi
 
         # If package manager installation failed, try snap
         if [ "$CERTBOT_INSTALLED" = false ]; then
             log_message "Certbot not available in repositories, trying snap installation..." "$YELLOW"
             if command -v snap >/dev/null 2>&1; then
-                sudo snap install --classic certbot 2>/dev/null && CERTBOT_INSTALLED=true
-                if [ "$CERTBOT_INSTALLED" = true ]; then
+                if sudo snap install --classic certbot >/dev/null 2>&1; then
+                    CERTBOT_INSTALLED=true
                     # Create symlink if installed via snap
                     sudo ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+                    log_message "Certbot installed via snap" "$GREEN"
                 fi
             fi
         fi
@@ -516,12 +523,15 @@ case "$OS_TYPE" in
         # If still not installed, use pip as last resort
         if [ "$CERTBOT_INSTALLED" = false ]; then
             log_message "Installing Certbot via pip..." "$YELLOW"
-            sudo $PYTHON_CMD -m pip install certbot certbot-nginx
-            CERTBOT_INSTALLED=true
+            sudo $PYTHON_CMD -m pip install certbot certbot-nginx >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via pip" "$GREEN"
+            fi
         fi
 
         if [ "$CERTBOT_INSTALLED" = false ]; then
-            log_message "Failed to install Certbot" "$RED"
+            log_message "Failed to install Certbot via all methods" "$RED"
             exit 1
         fi
         ;;
