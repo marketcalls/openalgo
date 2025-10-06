@@ -432,6 +432,8 @@ case "$OS_TYPE" in
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
             sudo yum install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         else
+            # Install EPEL repository first for access to additional packages
+            sudo dnf install -y epel-release 2>/dev/null || log_message "EPEL repository already installed or not available" "$YELLOW"
             sudo dnf install -y python3 python3-pip nginx git
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
             sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
@@ -491,18 +493,50 @@ case "$OS_TYPE" in
         check_status "Failed to install Certbot"
         ;;
     centos | fedora | rhel | amzn)
+        # Try to install from package manager first
+        CERTBOT_INSTALLED=false
         if ! command -v dnf >/dev/null 2>&1; then
-            sudo yum install -y certbot python3-certbot-nginx
+            sudo yum install -y certbot python3-certbot-nginx 2>/dev/null && CERTBOT_INSTALLED=true
         else
-            sudo dnf install -y certbot python3-certbot-nginx
+            sudo dnf install -y certbot python3-certbot-nginx 2>/dev/null && CERTBOT_INSTALLED=true
         fi
-        check_status "Failed to install Certbot"
+
+        # If package manager installation failed, try snap
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Certbot not available in repositories, trying snap installation..." "$YELLOW"
+            if command -v snap >/dev/null 2>&1; then
+                sudo snap install --classic certbot 2>/dev/null && CERTBOT_INSTALLED=true
+                if [ "$CERTBOT_INSTALLED" = true ]; then
+                    # Create symlink if installed via snap
+                    sudo ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+                fi
+            fi
+        fi
+
+        # If still not installed, use pip as last resort
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Installing Certbot via pip..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install certbot certbot-nginx
+            CERTBOT_INSTALLED=true
+        fi
+
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Failed to install Certbot" "$RED"
+            exit 1
+        fi
         ;;
     arch)
         sudo pacman -Sy --noconfirm --needed certbot certbot-nginx
         check_status "Failed to install Certbot"
         ;;
 esac
+
+# Verify certbot is accessible
+if ! command -v certbot >/dev/null 2>&1; then
+    log_message "Error: Certbot installation failed - command not found" "$RED"
+    exit 1
+fi
+log_message "Certbot installed successfully" "$GREEN"
 
 # Check and handle existing OpenAlgo installation
 handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
