@@ -67,6 +67,37 @@ check_timezone() {
     fi
 }
 
+# Function to wait for dpkg lock to be released (Ubuntu/Debian)
+wait_for_dpkg_lock() {
+    local max_wait=300  # 5 minutes max wait
+    local waited=0
+
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+
+        if [ $waited -eq 0 ]; then
+            log_message "Package manager is locked (unattended-upgrades running)" "$YELLOW"
+            log_message "Waiting for it to complete... (max 5 minutes)" "$YELLOW"
+        fi
+
+        if [ $waited -ge $max_wait ]; then
+            log_message "Timeout waiting for package manager lock" "$RED"
+            log_message "Please run: sudo killall unattended-upgr && sudo rm /var/lib/dpkg/lock*" "$YELLOW"
+            exit 1
+        fi
+
+        printf "."
+        sleep 5
+        waited=$((waited + 5))
+    done
+
+    if [ $waited -gt 0 ]; then
+        echo ""
+        log_message "Package manager is now available" "$GREEN"
+    fi
+}
+
 # Function to generate random hex string
 generate_hex() {
     $PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))"
@@ -398,6 +429,8 @@ log_message "\nStarting OpenAlgo installation for $DEPLOY_NAME..." "$YELLOW"
 log_message "\nUpdating system packages..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
         sudo apt-get update && sudo apt-get upgrade -y
         check_status "Failed to update system packages"
         ;;
@@ -419,6 +452,8 @@ esac
 log_message "\nInstalling required packages..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
         sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
         # Try to install python3-full if available (Ubuntu 23.04+)
         sudo apt-get install -y python3-full 2>/dev/null || log_message "python3-full not available, skipping" "$YELLOW"
@@ -493,6 +528,8 @@ esac
 log_message "\nInstalling Certbot..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
         sudo apt-get install -y certbot python3-certbot-nginx
         check_status "Failed to install Certbot"
         ;;
@@ -689,6 +726,8 @@ check_status "Failed to start/reload Nginx"
 log_message "\nConfiguring firewall rules..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
         sudo apt-get install -y ufw
         sudo ufw default deny incoming
         sudo ufw default allow outgoing
