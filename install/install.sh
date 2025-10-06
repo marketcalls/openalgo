@@ -516,11 +516,22 @@ case "$OS_TYPE" in
         fi
         check_status "Failed to install uv"
         ;;
-    centos | fedora | rhel | amzn | arch)
-        # Use pip for RHEL/Arch (more reliable than snap)
+    centos | fedora | rhel | amzn)
+        # Use pip for RHEL (more reliable than snap)
         log_message "Installing uv via pip for better compatibility..." "$BLUE"
         sudo $PYTHON_CMD -m pip install uv
         check_status "Failed to install uv"
+        ;;
+    arch)
+        # Try pacman first, then pip with --break-system-packages for Arch
+        log_message "Installing uv for Arch Linux..." "$BLUE"
+        if sudo pacman -Sy --noconfirm --needed python-uv 2>/dev/null; then
+            log_message "uv installed via pacman" "$GREEN"
+        else
+            log_message "uv not available in pacman, using pip..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install --break-system-packages uv
+            check_status "Failed to install uv"
+        fi
         ;;
 esac
 
