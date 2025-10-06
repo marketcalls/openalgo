@@ -6,6 +6,17 @@
   themes: light --default, dark --prefersdark, cupcake, bumblebee, emerald, corporate, synthwave, retro, cyberpunk, valentine, halloween, garden, aqua, lofi, pastel, fantasy, wireframe, luxury, dracula, cmyk, autumn, business, acid, lemonade, night, coffee, winter, dim, nord, sunset;
 }
 
+/* Custom Dracula theme color overrides - Pink for symbol names only */
+[data-theme="dracula"] {
+  /* Keep original primary color */
+  --color-primary: #ff79c6;
+}
+
+/* Target only result-symbol class (used for symbol names in search results) */
+[data-theme="dracula"] .result-symbol {
+  color: #FF79C6 !important;
+}
+
 /* Custom base styles */
 @layer base {
     html {
