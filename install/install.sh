@@ -419,26 +419,38 @@ esac
 log_message "\nInstalling required packages..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
-        sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common snapd
+        sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
         # Try to install python3-full if available (Ubuntu 23.04+)
         sudo apt-get install -y python3-full 2>/dev/null || log_message "python3-full not available, skipping" "$YELLOW"
+        # Try to install snapd, but don't fail if unavailable
+        sudo apt-get install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
         ;;
     centos | fedora | rhel | amzn)
         if ! command -v dnf >/dev/null 2>&1; then
-            sudo yum install -y python3 python3-pip nginx git epel-release snapd
+            sudo yum install -y python3 python3-pip nginx git epel-release
+            # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+            sudo yum install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         else
-            sudo dnf install -y python3 python3-pip nginx git snapd
+            sudo dnf install -y python3 python3-pip nginx git
+            # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+            sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         fi
         check_status "Failed to install required packages"
-        # Enable and start snapd for RHEL-based systems
-        sudo systemctl enable --now snapd.socket
+        # Enable and start snapd if it was successfully installed
+        if command -v snap >/dev/null 2>&1; then
+            sudo systemctl enable --now snapd.socket
+        fi
         ;;
     arch)
-        sudo pacman -Sy --noconfirm --needed python python-pip nginx git snapd
+        sudo pacman -Sy --noconfirm --needed python python-pip nginx git
+        # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+        sudo pacman -Sy --noconfirm --needed snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
-        # Enable and start snapd for Arch
-        sudo systemctl enable --now snapd.socket
+        # Enable and start snapd if it was successfully installed
+        if command -v snap >/dev/null 2>&1; then
+            sudo systemctl enable --now snapd.socket
+        fi
         ;;
 esac
 
