@@ -3,13 +3,13 @@
 {% block content %}
 <!-- Dashboard Header -->
 <div class="mb-6 md:mb-12">
-    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
+    <div class="flex flex-col lg:flex-row lg:items-start gap-4">
+        <div class="flex-1">
             <h1 class="text-2xl md:text-3xl font-bold text-base-content">Trading Dashboard</h1>
             <p class="text-base-content/60 mt-1 md:mt-2 text-sm md:text-base">Overview of your trading account and market positions</p>
         </div>
         <!-- Master Contract Status Indicator -->
-        <div class="flex items-center gap-2 md:gap-3 bg-base-200 rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit">
+        <div class="flex items-center gap-2 md:gap-3 bg-base-200 rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit lg:ml-auto lg:self-start">
             <span class="text-xs md:text-sm font-medium whitespace-nowrap">Master Contract:</span>
             <div class="flex items-center gap-2">
                 <div id="master-contract-led" class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-gray-400 animate-pulse"></div>
