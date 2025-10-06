@@ -665,10 +665,21 @@ else
     sudo rm -f /etc/nginx/conf.d/default.conf
 fi
 
-# Reload Nginx for initial configuration
-log_message "\nTesting and reloading Nginx..." "$BLUE"
-sudo nginx -t && sudo systemctl reload nginx
-check_status "Failed to reload Nginx"
+# Start or reload Nginx for initial configuration
+log_message "\nTesting and starting/reloading Nginx..." "$BLUE"
+sudo nginx -t
+check_status "Failed to validate Nginx configuration"
+
+# Check if nginx is running, start or reload accordingly
+if sudo systemctl is-active --quiet nginx; then
+    sudo systemctl reload nginx
+    log_message "Nginx reloaded successfully" "$GREEN"
+else
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+    log_message "Nginx started successfully" "$GREEN"
+fi
+check_status "Failed to start/reload Nginx"
 
 # Configure firewall
 log_message "\nConfiguring firewall rules..." "$BLUE"
