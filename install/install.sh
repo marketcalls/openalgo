@@ -569,28 +569,28 @@ if [ -d "$VENV_PATH" ]; then
 fi
 # Create directory if it doesn't exist
 sudo mkdir -p $(dirname $VENV_PATH)
-# Create virtual environment using uv
-sudo uv venv $VENV_PATH
+# Create virtual environment using uv (call as Python module for pip installations)
+sudo $PYTHON_CMD -m uv venv $VENV_PATH
 check_status "Failed to create virtual environment with uv"
 
 # Install Python dependencies using uv (faster installation)
 log_message "\nInstalling Python dependencies with uv..." "$BLUE"
 # First activate the virtual environment path for uv
 ACTIVATE_CMD="source $VENV_PATH/bin/activate"
-# Install dependencies using uv within the virtual environment context
-sudo bash -c "$ACTIVATE_CMD && uv pip install -r $OPENALGO_PATH/requirements-nginx.txt"
+# Install dependencies using uv within the virtual environment context (call as Python module)
+sudo bash -c "$ACTIVATE_CMD && $PYTHON_CMD -m uv pip install -r $OPENALGO_PATH/requirements-nginx.txt"
 check_status "Failed to install Python dependencies"
 
 # Verify gunicorn and eventlet installation
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo bash -c "$ACTIVATE_CMD && uv pip install gunicorn"
+    sudo bash -c "$ACTIVATE_CMD && $PYTHON_CMD -m uv pip install gunicorn"
     check_status "Failed to install gunicorn"
 fi
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then
     log_message "Installing eventlet..." "$YELLOW"
-    sudo bash -c "$ACTIVATE_CMD && uv pip install eventlet"
+    sudo bash -c "$ACTIVATE_CMD && $PYTHON_CMD -m uv pip install eventlet"
     check_status "Failed to install eventlet"
 fi
 
