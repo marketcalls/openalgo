@@ -569,30 +569,43 @@ if [ -d "$VENV_PATH" ]; then
 fi
 # Create directory if it doesn't exist
 sudo mkdir -p $(dirname $VENV_PATH)
-# Create virtual environment using uv (call as Python module for pip installations)
-sudo $PYTHON_CMD -m uv venv $VENV_PATH
+
+# Detect how uv is installed and set the appropriate command
+if command -v uv >/dev/null 2>&1; then
+    # uv is available as a standalone command (snap or astral installer)
+    UV_CMD="uv"
+    log_message "Using standalone uv command" "$GREEN"
+elif $PYTHON_CMD -m uv --version >/dev/null 2>&1; then
+    # uv is available as a Python module
+    UV_CMD="$PYTHON_CMD -m uv"
+    log_message "Using uv as Python module" "$GREEN"
+else
+    log_message "Error: uv is not available" "$RED"
+    exit 1
+fi
+
+# Create virtual environment using uv
+sudo $UV_CMD venv $VENV_PATH
 check_status "Failed to create virtual environment with uv"
 
 # Install Python dependencies using uv (faster installation)
 log_message "\nInstalling Python dependencies with uv..." "$BLUE"
 # First activate the virtual environment path for uv
 ACTIVATE_CMD="source $VENV_PATH/bin/activate"
-# Install dependencies using uv - use system python's uv module to install into venv
-# We need to use absolute path to system python, not venv python
-SYSTEM_PYTHON=$(which $PYTHON_CMD)
-sudo $SYSTEM_PYTHON -m uv pip install --python $VENV_PATH/bin/python -r $OPENALGO_PATH/requirements-nginx.txt
+# Install dependencies using uv
+sudo $UV_CMD pip install --python $VENV_PATH/bin/python -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
 
 # Verify gunicorn and eventlet installation
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo $SYSTEM_PYTHON -m uv pip install --python $VENV_PATH/bin/python gunicorn
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python gunicorn
     check_status "Failed to install gunicorn"
 fi
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then
     log_message "Installing eventlet..." "$YELLOW"
-    sudo $SYSTEM_PYTHON -m uv pip install --python $VENV_PATH/bin/python eventlet
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python eventlet
     check_status "Failed to install eventlet"
 fi
 
