@@ -2,25 +2,25 @@
 
 {% block content %}
 <!-- Dashboard Header -->
-<div class="mb-12">
-    <div class="flex items-center justify-between">
+<div class="mb-6 md:mb-12">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-            <h1 class="text-3xl font-bold text-base-content">Trading Dashboard</h1>
-            <p class="text-base-content/60 mt-2">Overview of your trading account and market positions</p>
+            <h1 class="text-2xl md:text-3xl font-bold text-base-content">Trading Dashboard</h1>
+            <p class="text-base-content/60 mt-1 md:mt-2 text-sm md:text-base">Overview of your trading account and market positions</p>
         </div>
         <!-- Master Contract Status Indicator -->
-        <div class="flex items-center gap-3 bg-base-200 rounded-lg px-4 py-3">
-            <span class="text-sm font-medium">Master Contract Status:</span>
+        <div class="flex items-center gap-2 md:gap-3 bg-base-200 rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit">
+            <span class="text-xs md:text-sm font-medium whitespace-nowrap">Master Contract:</span>
             <div class="flex items-center gap-2">
-                <div id="master-contract-led" class="w-3 h-3 rounded-full bg-gray-400 animate-pulse"></div>
-                <span id="master-contract-status-text" class="text-sm">Checking...</span>
+                <div id="master-contract-led" class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-gray-400 animate-pulse"></div>
+                <span id="master-contract-status-text" class="text-xs md:text-sm">Checking...</span>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Stats Grid -->
-<div class="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-6 mb-16">
+<div class="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6 mb-8 md:mb-16">
     <!-- Available Balance -->
     <div class="stat-card">
         <div class="stat">
@@ -92,21 +92,21 @@
 </div>
 
 <!-- Quick Access Tools -->
-<div class="mb-8">
-    <h2 class="text-2xl font-semibold text-base-content mb-6">Quick Access</h2>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+<div class="mb-6 md:mb-8">
+    <h2 class="text-xl md:text-2xl font-semibold text-base-content mb-4 md:mb-6">Quick Access</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
 
         <!-- OpenAlgo Symbols -->
         <a href="{{ url_for('search_bp.token') }}" class="card bg-gradient-to-br from-primary/10 to-primary/5 hover:from-primary/20 hover:to-primary/10 transition-all duration-300 border border-primary/20 hover:border-primary/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-primary/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-primary/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">OpenAlgo Symbols</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">OpenAlgo Symbols</h3>
                         <p class="text-xs text-base-content/60">Universal symbology across brokers</p>
                     </div>
                 </div>
@@ -115,15 +115,15 @@
 
         <!-- Live Logs -->
         <a href="{{ url_for('log_bp.view_logs') }}" class="card bg-gradient-to-br from-secondary/10 to-secondary/5 hover:from-secondary/20 hover:to-secondary/10 transition-all duration-300 border border-secondary/20 hover:border-secondary/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-secondary/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-secondary/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">Live Logs</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">Live Logs</h3>
                         <p class="text-xs text-base-content/60">Real-time trading activity logs</p>
                     </div>
                 </div>
@@ -132,15 +132,15 @@
 
         <!-- Documentation -->
         <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" class="card bg-gradient-to-br from-accent/10 to-accent/5 hover:from-accent/20 hover:to-accent/10 transition-all duration-300 border border-accent/20 hover:border-accent/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-accent/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-accent/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">Documentation</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">Documentation</h3>
                         <p class="text-xs text-base-content/60">Tutorials, API docs & features</p>
                     </div>
                 </div>
@@ -149,15 +149,15 @@
 
         <!-- P&L Tracker -->
         <a href="{{ url_for('pnltracker_bp.pnltracker') }}" class="card bg-gradient-to-br from-success/10 to-success/5 hover:from-success/20 hover:to-success/10 transition-all duration-300 border border-success/20 hover:border-success/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-success/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-success/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">P&L Tracker</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">P&L Tracker</h3>
                         <p class="text-xs text-base-content/60">Live intraday MTM tracker</p>
                     </div>
                 </div>
@@ -166,15 +166,15 @@
 
         <!-- Telegram -->
         <a href="{{ url_for('telegram_bp.index') }}" class="card bg-gradient-to-br from-info/10 to-info/5 hover:from-info/20 hover:to-info/10 transition-all duration-300 border border-info/20 hover:border-info/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-info/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-info" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-info/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-info" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">Telegram Alerts</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">Telegram Alerts</h3>
                         <p class="text-xs text-base-content/60">Configure telegram notifications</p>
                     </div>
                 </div>
@@ -183,15 +183,15 @@
 
         <!-- Latency Monitor -->
         <a href="{{ url_for('latency_bp.latency_dashboard') }}" class="card bg-gradient-to-br from-warning/10 to-warning/5 hover:from-warning/20 hover:to-warning/10 transition-all duration-300 border border-warning/20 hover:border-warning/40 hover:shadow-lg">
-            <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                    <div class="p-2 bg-warning/20 rounded-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="card-body p-3 md:p-4">
+                <div class="flex items-start gap-2.5 md:gap-3">
+                    <div class="p-1.5 md:p-2 bg-warning/20 rounded-lg flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-semibold text-base-content mb-1">Latency Monitor</h3>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-semibold text-base-content mb-0.5 md:mb-1 text-sm md:text-base">Latency Monitor</h3>
                         <p class="text-xs text-base-content/60">Monitor order & API latency</p>
                     </div>
                 </div>
