@@ -429,12 +429,16 @@ case "$OS_TYPE" in
     centos | fedora | rhel | amzn)
         if ! command -v dnf >/dev/null 2>&1; then
             sudo yum install -y python3 python3-pip nginx git epel-release
+            # Install SELinux management tools for RHEL-based systems
+            sudo yum install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
             sudo yum install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         else
             # Install EPEL repository first for access to additional packages
             sudo dnf install -y epel-release 2>/dev/null || log_message "EPEL repository already installed or not available" "$YELLOW"
             sudo dnf install -y python3 python3-pip nginx git
+            # Install SELinux management tools for RHEL-based systems
+            sudo dnf install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
             sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         fi
@@ -936,6 +940,38 @@ sudo systemctl enable $SERVICE_NAME
 sudo systemctl start $SERVICE_NAME
 sudo systemctl restart nginx
 check_status "Failed to start services"
+
+# Configure SELinux for RHEL-based systems
+if [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ] || [ "$OS_TYPE" = "amzn" ]; then
+    if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+        log_message "\nConfiguring SELinux permissions..." "$BLUE"
+
+        # Set SELinux context for the application directory
+        sudo semanage fcontext -a -t httpd_sys_rw_content_t "$BASE_PATH(/.*)?" 2>/dev/null || true
+        sudo restorecon -Rv $BASE_PATH >/dev/null 2>&1
+
+        # Enable httpd network connections
+        sudo setsebool -P httpd_can_network_connect on 2>/dev/null || true
+
+        # Check for SELinux denials and create policy if needed
+        if sudo ausearch -m avc -ts recent 2>/dev/null | grep -q "httpd_t.*initrc_t.*unix_stream_socket"; then
+            log_message "Creating SELinux policy for nginx-gunicorn connection..." "$YELLOW"
+
+            # Generate and install SELinux policy for httpd to connect to gunicorn socket
+            sudo ausearch -m avc -ts recent 2>/dev/null | sudo audit2allow -M httpd_gunicorn 2>/dev/null || true
+            if [ -f httpd_gunicorn.pp ]; then
+                sudo semodule -i httpd_gunicorn.pp 2>/dev/null || true
+                sudo rm -f httpd_gunicorn.pp httpd_gunicorn.te 2>/dev/null || true
+                log_message "SELinux policy installed successfully" "$GREEN"
+
+                # Restart nginx to apply new policy
+                sudo systemctl restart nginx
+            fi
+        fi
+
+        log_message "SELinux configuration completed" "$GREEN"
+    fi
+fi
 
 log_message "\nInstallation completed successfully!" "$GREEN"
 log_message "\nInstallation Summary:" "$YELLOW"
