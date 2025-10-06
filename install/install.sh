@@ -419,6 +419,8 @@ case "$OS_TYPE" in
         NGINX_AVAILABLE="/etc/nginx/conf.d"
         NGINX_ENABLED="/etc/nginx/conf.d"
         NGINX_CONFIG_MODE="confd"
+        # Create conf.d directory if it doesn't exist (Arch Linux)
+        sudo mkdir -p "$NGINX_AVAILABLE"
         ;;
 esac
 NGINX_CONFIG_FILE="$NGINX_AVAILABLE/$DOMAIN.conf"
@@ -774,7 +776,9 @@ case "$OS_TYPE" in
         sudo ufw default deny incoming
         sudo ufw default allow outgoing
         sudo ufw allow ssh
-        sudo ufw allow 'Nginx Full'
+        # Use direct port rules instead of application profile on Arch
+        sudo ufw allow 80/tcp
+        sudo ufw allow 443/tcp
         sudo ufw --force enable
         check_status "Failed to configure firewall"
         ;;
