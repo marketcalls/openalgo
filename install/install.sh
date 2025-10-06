@@ -694,6 +694,15 @@ check_status "Failed to configure environment file"
 # Check and handle existing Nginx configuration
 handle_existing "$NGINX_CONFIG_FILE" "Nginx configuration" "Nginx config file"
 
+# Fix Arch Linux nginx.conf to include conf.d directory
+if [ "$OS_TYPE" = "arch" ]; then
+    if ! grep -q "include.*conf.d/\*.conf" /etc/nginx/nginx.conf; then
+        log_message "Adding conf.d include to nginx.conf for Arch Linux..." "$YELLOW"
+        sudo sed -i '/http {/a\    include /etc/nginx/conf.d/*.conf;' /etc/nginx/nginx.conf
+        log_message "conf.d include added to nginx.conf" "$GREEN"
+    fi
+fi
+
 # Configure initial Nginx for SSL certificate obtention
 log_message "\nConfiguring initial Nginx setup..." "$BLUE"
 sudo tee $NGINX_CONFIG_FILE > /dev/null << EOL
