@@ -1,0 +1,158 @@
+{% extends "layout.html" %}
+
+{% block title %}Motilal Oswal Authentication - OpenAlgo{% endblock %}
+
+{% block content %}
+<div class="min-h-[calc(100vh-8rem)] flex items-center justify-center py-8">
+    <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-16">
+            <!-- Right side login form - Shown first on mobile -->
+            <div class="card flex-shrink-0 w-full max-w-md shadow-2xl bg-base-100 order-1 lg:order-2">
+                <div class="card-body">
+                    <div class="flex justify-center mb-6">
+                        <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
+                    </div>
+
+                    <form action="/motilal/callback" method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">User ID</span>
+                            </label>
+                            <input type="text"
+                                   id="userid"
+                                   name="userid"
+                                   required
+                                   class="input input-bordered"
+                                   placeholder="Enter your User ID"
+                                   pattern="[A-Za-z0-9]+"
+                                   title="User ID should only contain letters and numbers" />
+                            <label class="label">
+                                <span class="label-text-alt text-info">Your Motilal Oswal trading account User ID</span>
+                            </label>
+                        </div>
+
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Password</span>
+                            </label>
+                            <input type="password"
+                                   id="password"
+                                   name="password"
+                                   required
+                                   class="input input-bordered"
+                                   placeholder="Enter your password" />
+                            <label class="label">
+                                <span class="label-text-alt text-info">Your Motilal Oswal trading password</span>
+                            </label>
+                        </div>
+
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Date of Birth (2FA)</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="Format: DD/MM/YYYY">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="text"
+                                   id="dob"
+                                   name="dob"
+                                   required
+                                   class="input input-bordered"
+                                   placeholder="DD/MM/YYYY"
+                                   pattern="\d{2}/\d{2}/\d{4}"
+                                   title="Enter date in DD/MM/YYYY format (e.g., 18/10/1988)" />
+                            <label class="label">
+                                <span class="label-text-alt text-info">Enter your date of birth (e.g., 18/10/1988)</span>
+                            </label>
+                        </div>
+
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">TOTP</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="Leave blank if using OTP instead">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="password"
+                                   id="totp"
+                                   name="totp"
+                                   class="input input-bordered"
+                                   placeholder="Enter TOTP" />
+                            <label class="label">
+                                <span class="label-text-alt text-info">6-digit TOTP from authenticator app (leave blank for OTP)</span>
+                            </label>
+                        </div>
+
+                        {% if error_message %}
+                        <div class="alert alert-error">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{{ error_message }}</span>
+                        </div>
+                        {% endif %}
+
+                        <div class="form-control mt-6">
+                            <button type="submit" class="btn btn-primary w-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                </svg>
+                                Connect Account
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="divider">OR</div>
+
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12" />
+                        </svg>
+                        Choose Another Broker
+                    </a>
+                </div>
+            </div>
+
+            <!-- Left side content - Shown second on mobile -->
+            <div class="prose max-w-xl order-2 lg:order-1">
+                <h1 class="text-4xl font-bold mb-6">Connect Your Motilal Oswal Account</h1>
+                <p class="text-lg mb-4">Link your Motilal Oswal trading account to start automated trading with OpenAlgo.</p>
+                <div class="space-y-4">
+                    <div class="flex items-start">
+                        <svg class="h-6 w-6 text-primary mt-1 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                        <div>
+                            <h3 class="text-lg font-semibold">Secure Authentication</h3>
+                            <p>Your credentials are securely encrypted and never stored.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start">
+                        <svg class="h-6 w-6 text-primary mt-1 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        <div>
+                            <h3 class="text-lg font-semibold">Instant Access</h3>
+                            <p>Start trading immediately after connecting your account.</p>
+                        </div>
+                    </div>
+                    <div class="alert alert-info">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">Authentication Options</h3>
+                            <div class="text-sm">Use TOTP from authenticator app or leave blank to receive OTP via SMS/Email</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
