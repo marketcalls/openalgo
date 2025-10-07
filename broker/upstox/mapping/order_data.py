@@ -159,6 +159,8 @@ def transform_positions_data(positions_data):
             "product": position.get('product', ''),
             "quantity": position.get('quantity', 0),
             "average_price": position.get('average_price', 0.0),
+            "pnl": position.get('pnl', 0.0),
+            "ltp": position.get('last_price', 0.0)
         }
         transformed_data.append(transformed_position)
     return transformed_data

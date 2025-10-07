@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 import os
 import logging
 from datetime import datetime, timedelta
@@ -13,12 +14,22 @@ logger = logging.getLogger(__name__)
 # Use a separate database for logs
 LOGS_DATABASE_URL = os.getenv('LOGS_DATABASE_URL', 'sqlite:///db/logs.db')
 
-logs_engine = create_engine(
-    LOGS_DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if LOGS_DATABASE_URL and 'sqlite' in LOGS_DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    logs_engine = create_engine(
+        LOGS_DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    logs_engine = create_engine(
+        LOGS_DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 logs_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=logs_engine))
 LogBase = declarative_base()
@@ -266,19 +277,20 @@ class Error404Tracker(LogBase):
                 tracker.last_error_at = now
 
                 # Check if threshold reached (configurable, default 20 404s per day)
-                if tracker.error_count >= threshold_404:
-                    # Don't ban localhost IPs
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
-                        # Ban the IP
-                        IPBan.ban_ip(
-                            ip_address=ip_address,
-                            reason=f"Exceeded 404 threshold: {tracker.error_count} errors in 24 hours",
-                            duration_hours=ban_duration_404,
-                            created_by='404_detector'
-                        )
-
-                        # Clean up tracker entry
-                        logs_session.delete(tracker)
+                # AUTOMATED BAN DISABLED - Manual ban only via /security dashboard
+                # if tracker.error_count >= threshold_404:
+                #     # Don't ban localhost IPs
+                #     if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                #         # Ban the IP
+                #         IPBan.ban_ip(
+                #             ip_address=ip_address,
+                #             reason=f"Exceeded 404 threshold: {tracker.error_count} errors in 24 hours",
+                #             duration_hours=ban_duration_404,
+                #             created_by='404_detector'
+                #         )
+                #
+                #         # Clean up tracker entry
+                #         logs_session.delete(tracker)
             else:
                 # Create new tracker
                 tracker = Error404Tracker(
@@ -367,20 +379,21 @@ class InvalidAPIKeyTracker(LogBase):
                 tracker.last_attempt_at = now
 
                 # Check if threshold reached (configurable, default 10 invalid API keys per day)
-                if tracker.attempt_count >= threshold_api:
-                    # Don't ban localhost IPs but keep tracking
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
-                        # Ban the IP
-                        success = IPBan.ban_ip(
-                            ip_address=ip_address,
-                            reason=f"Exceeded invalid API key threshold: {tracker.attempt_count} attempts in 24 hours",
-                            duration_hours=ban_duration_api,  # Configurable hours for API abuse
-                            created_by='api_key_detector'
-                        )
-
-                        # Only delete tracker if ban was successful
-                        if success:
-                            logs_session.delete(tracker)
+                # AUTOMATED BAN DISABLED - Manual ban only via /security dashboard
+                # if tracker.attempt_count >= threshold_api:
+                #     # Don't ban localhost IPs but keep tracking
+                #     if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                #         # Ban the IP
+                #         success = IPBan.ban_ip(
+                #             ip_address=ip_address,
+                #             reason=f"Exceeded invalid API key threshold: {tracker.attempt_count} attempts in 24 hours",
+                #             duration_hours=ban_duration_api,  # Configurable hours for API abuse
+                #             created_by='api_key_detector'
+                #         )
+                #
+                #         # Only delete tracker if ban was successful
+                #         if success:
+                #             logs_session.delete(tracker)
             else:
                 # Create new tracker
                 tracker = InvalidAPIKeyTracker(

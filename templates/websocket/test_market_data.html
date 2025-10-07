@@ -206,11 +206,11 @@
 </div>
 
 <script>
-    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
-    console.log('🌐 Current URL:', window.location.href);
-    console.log('📝 Script timestamp:', new Date().toISOString());
-    console.log('🔄 CACHE BUSTER:', Math.random());
-    
+    // console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
+    // console.log('🌐 Current URL:', window.location.href);
+    // console.log('📝 Script timestamp:', new Date().toISOString());
+    // console.log('🔄 CACHE BUSTER:', Math.random());
+
     // Global variables
     let socket = null;
     let subscriptions = new Set();
@@ -869,11 +869,11 @@
 
     // Log events
     function logEvent(message, type = 'info') {
-        console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
-        
+        // console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
+
         const logElement = document.getElementById('event-log');
         if (!logElement) {
-            console.warn('Log element not found!');
+            // console.warn('Log element not found!');
             return;
         }
         
@@ -900,10 +900,10 @@
     }
 
     // Test the logEvent function immediately
-    console.log('🧪 Testing logEvent function...');
+    // console.log('🧪 Testing logEvent function...');
     try {
         logEvent('🧪 Script loaded and logEvent function is working', 'success');
-        console.log('✅ logEvent function test passed');
+        // console.log('✅ logEvent function test passed');
     } catch (error) {
         console.error('❌ logEvent function test failed:', error);
     }

@@ -5,8 +5,9 @@ import base64
 from sqlalchemy import create_engine, UniqueConstraint
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean  
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -85,8 +86,13 @@ broker_cache = TTLCache(maxsize=1024, ttl=3000)
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and 'sqlite' in DATABASE_URL:
-    # SQLite does not support these pooling options with its default setup
-    engine = create_engine(DATABASE_URL)
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    # NullPool creates a new connection for each request and closes it when done
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
 else:
     # For other databases like PostgreSQL, use connection pooling
     engine = create_engine(

@@ -13,9 +13,9 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/kotak/loginflow" method="POST" class="space-y-4" id="kotakForm">
+                    <form action="/kotak/loginflow" method="POST" class="space-y-6" id="kotakForm">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>
                                 <span class="label-text-alt">
@@ -24,35 +24,35 @@
                                     </div>
                                 </span>
                             </label>
-                            <div class="flex">
+                            <div class="flex w-full">
                                 <span class="inline-flex items-center px-3 text-sm bg-base-200 border border-r-0 border-base-300 rounded-l-md">
                                     +91
                                 </span>
-                                <input type="tel" 
-                                       id="mobilenumber" 
-                                       name="mobilenumber" 
-                                       required 
-                                       class="input input-bordered w-full rounded-l-none" 
+                                <input type="tel"
+                                       id="mobilenumber"
+                                       name="mobilenumber"
+                                       required
+                                       class="input input-bordered w-full rounded-l-none"
                                        placeholder="9999955555"
                                        pattern="[0-9]{10}"
                                        title="Please enter a valid 10-digit mobile number" />
                             </div>
-                            <label class="label">
+                            <label class="label pt-2">
                                 <span class="label-text-alt text-info">Your registered mobile number</span>
                             </label>
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Password</span>
                             </label>
-                            <input type="password" 
-                                   id="password" 
-                                   name="password" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="password"
+                                   id="password"
+                                   name="password"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your password" />
-                            <label class="label">
+                            <label class="label pt-2">
                                 <span class="label-text-alt text-info">Your Kotak Securities trading password</span>
                             </label>
                         </div>
@@ -67,8 +67,8 @@
                         {% endif %}
 
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary w-full">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <button type="submit" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                                 </svg>
                                 Connect Account
@@ -78,8 +78,8 @@
 
                     <div class="divider">OR</div>
 
-                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
                         </svg>
                         Back to Broker Selection

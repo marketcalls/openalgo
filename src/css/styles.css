@@ -1,11 +1,21 @@
-/* Import Tailwind CSS base styles */
-@tailwind base;
+/* Tailwind CSS v4 imports */
+@import "tailwindcss";
 
-/* Import Tailwind CSS component styles */
-@tailwind components;
+/* DaisyUI Plugin with all built-in themes */
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark, cupcake, bumblebee, emerald, corporate, synthwave, retro, cyberpunk, valentine, halloween, garden, aqua, lofi, pastel, fantasy, wireframe, luxury, dracula, cmyk, autumn, business, acid, lemonade, night, coffee, winter, dim, nord, sunset;
+}
 
-/* Import Tailwind CSS utility styles */
-@tailwind utilities;
+/* Custom Dracula theme color overrides - Pink for symbol names only */
+[data-theme="dracula"] {
+  /* Keep original primary color */
+  --color-primary: #ff79c6;
+}
+
+/* Target only result-symbol class (used for symbol names in search results) */
+[data-theme="dracula"] .result-symbol {
+  color: #FF79C6 !important;
+}
 
 /* Custom base styles */
 @layer base {
@@ -38,15 +48,6 @@
         @apply mb-12;
     }
 
-    /* Theme consistency */
-    [data-theme="light"] {
-        @apply bg-base-100 text-base-content;
-    }
-
-    [data-theme="dark"] {
-        @apply bg-base-100 text-base-content;
-    }
-
     /* Theme switcher */
     .theme-switcher {
         @apply opacity-100 pointer-events-auto transition-opacity duration-300;
@@ -61,14 +62,6 @@
         @apply inline-flex items-center px-4 py-2 rounded-lg font-medium text-sm leading-none whitespace-nowrap mr-2;
     }
 
-    #mode-badge.badge-success {
-        @apply bg-success text-white;
-    }
-
-    #mode-badge.badge-warning {
-        @apply bg-warning text-white;
-    }
-
     /* Mode controller container */
     .mode-controller-container {
         @apply flex items-center gap-2 mr-2;
@@ -76,7 +69,7 @@
 
     /* Card styles */
     .card {
-        @apply bg-base-100 transition-all duration-200;
+        @apply transition-all duration-200;
     }
 
     .card:hover {
@@ -85,7 +78,7 @@
 
     /* Stats cards */
     .stat-card {
-        @apply bg-base-100 transition-all duration-300;
+        @apply transition-all duration-300;
     }
 
     .stat-card:hover {
@@ -97,14 +90,14 @@
         @apply mb-4;
     }
 
-    .input:focus, 
+    .input:focus,
     .select:focus {
-        @apply outline-none border-primary ring-2 ring-primary/20;
+        @apply outline-none ring-2;
     }
 
     /* Table styles */
     .table-container {
-        @apply bg-base-100 overflow-x-auto my-4 rounded-lg;
+        @apply overflow-x-auto my-4 rounded-lg;
     }
 
     .table {
@@ -112,11 +105,7 @@
     }
 
     .table th {
-        @apply sticky top-0 bg-base-200 z-10;
-    }
-
-    .drawer-side .table th {
-        @apply bg-base-300 border-b border-base-200;
+        @apply sticky top-0 z-10;
     }
 
     /* Toast notifications */
@@ -138,17 +127,17 @@
 
     /* Loading spinner */
     .loading {
-        @apply inline-block w-6 h-6 border-2 border-base-200 rounded-full border-t-primary animate-spin;
+        @apply inline-block w-6 h-6 border-2 rounded-full animate-spin;
     }
 
     /* Navigation */
     .navbar {
-        @apply bg-base-100 border-b border-base-200;
+        @apply w-full;
     }
 
     /* Footer */
     footer {
-        @apply w-full border-t border-base-200;
+        @apply w-full;
     }
 
     /* Button styles */
@@ -158,22 +147,20 @@
 
     /* Code block styles */
     pre[class*="language-"] {
-        @apply bg-base-200 m-0 rounded-lg;
-        background-color: hsl(var(--b2)) !important;
+        @apply m-0 rounded-lg;
     }
 
     code[class*="language-"] {
-        @apply text-base-content no-underline;
-        color: hsl(var(--bc)) !important;
+        @apply no-underline;
     }
 
     /* Search results */
     .search-results {
-        @apply absolute w-full max-h-[300px] overflow-y-auto bg-base-100 border border-base-200 rounded-lg shadow-lg z-50 hidden;
+        @apply absolute w-full max-h-[300px] overflow-y-auto border rounded-lg shadow-lg z-50 hidden;
     }
 
     .result-item {
-        @apply p-4 border-b border-base-200 hover:bg-base-200 cursor-pointer transition-all duration-200;
+        @apply p-4 border-b cursor-pointer transition-all duration-200;
     }
 
     .result-item:last-child {
