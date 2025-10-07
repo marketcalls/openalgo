@@ -29,6 +29,9 @@ from broker.ibulls.streaming.ibulls_adapter import IbullsWebSocketAdapter
 # Import the compositedge_adapter
 from broker.compositedge.streaming.compositedge_adapter import CompositedgeWebSocketAdapter
 
+# Import the fivepaisa_adapter
+from broker.fivepaisa.streaming.fivepaisa_adapter import FivepaisaWebSocketAdapter
+
 # Import the fivepaisaxts_adapter
 from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter
 
@@ -60,6 +63,7 @@ register_adapter("flattrade", FlattradeWebSocketAdapter)
 register_adapter("shoonya", ShoonyaWebSocketAdapter)
 register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
+register_adapter("fivepaisa", FivepaisaWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
@@ -82,6 +86,7 @@ __all__ = [
     'ShoonyaWebSocketAdapter',
     'IbullsWebSocketAdapter',
     'CompositedgeWebSocketAdapter',
+    'FivepaisaWebSocketAdapter',
     'FivepaisaXTSWebSocketAdapter',
     'IiflWebSocketAdapter',
     'JainamWebSocketAdapter',
