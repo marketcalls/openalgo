@@ -81,29 +81,6 @@ def broker_callback(broker,para=None):
             auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
     
-    elif broker == 'motilal':
-        if request.method == 'GET':
-            return render_template('motilal.html')
-        
-        elif request.method == 'POST':
-            userid = request.form.get('userid')
-            password = request.form.get('password')
-            totp_code = request.form.get('totp')
-            twofa = request.form.get('twofa')
-            
-            logger.info(f'Motilal Oswal login initiated for user: {userid}')
-            
-            auth_token, feed_token, error_message = auth_function(userid, password, totp_code, twofa)
-            
-            if auth_token:
-                logger.info(f'Motilal Oswal authentication successful for user: {userid}')
-                return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
-            else:
-                logger.error(f'Motilal Oswal authentication failed for user: {userid}, error: {error_message}')
-                return render_template('motilal.html', error_message=error_message)
-            
-            forward_url = 'motilal.html'
-    
     elif broker == 'aliceblue':
         if request.method == 'GET':
             return render_template('aliceblue.html')
@@ -357,7 +334,7 @@ def broker_callback(broker,para=None):
     elif broker == 'firstock':
         if request.method == 'GET':
             return render_template('firstock.html')
-        
+
         elif request.method == 'POST':
             userid = request.form.get('userid')
             password = request.form.get('password')
@@ -365,6 +342,19 @@ def broker_callback(broker,para=None):
 
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'firstock.html'
+
+    elif broker == 'motilal':
+        if request.method == 'GET':
+            return render_template('motilal.html')
+
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+            date_of_birth = request.form.get('dob')
+
+            auth_token, feed_token, error_message = auth_function(userid, password, totp_code, date_of_birth)
+            forward_url = 'motilal.html'
 
     elif broker == 'flattrade':
         code = request.args.get('code')
