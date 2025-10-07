@@ -399,7 +399,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'high': message.get('high_price_of_the_day', 0) / 100,  # Divide by 100 for correct price
                 'low': message.get('low_price_of_the_day', 0) / 100,  # Divide by 100 for correct price
                 'close': message.get('closed_price', 0) / 100,  # Divide by 100 for correct price
-                'last_quantity': message.get('last_traded_quantity', 0),
+                'last_trade_quantity': message.get('last_traded_quantity', 0),
                 'average_price': message.get('average_traded_price', 0) / 100,  # Divide by 100 for correct price
                 'total_buy_quantity': message.get('total_buy_quantity', 0),
                 'total_sell_quantity': message.get('total_sell_quantity', 0)
@@ -417,6 +417,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'high': message.get('high_price', 0) / 100,
                 'low': message.get('low_price', 0) / 100,
                 'close': message.get('close_price', 0) / 100,
+                'last_quantity': message.get('last_traded_quantity', 0),
                 'oi': message.get('open_interest', 0),
                 'upper_circuit': message.get('upper_circuit_limit', 0) / 100,
                 'lower_circuit': message.get('lower_circuit_limit', 0) / 100

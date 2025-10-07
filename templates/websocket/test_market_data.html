@@ -206,11 +206,11 @@
 </div>
 
 <script>
-    console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
-    console.log('🌐 Current URL:', window.location.href);
-    console.log('📝 Script timestamp:', new Date().toISOString());
-    console.log('🔄 CACHE BUSTER:', Math.random());
-    
+    // console.log('🚀 WEBSOCKET TEST SCRIPT LOADED v2.0 - Starting execution...');
+    // console.log('🌐 Current URL:', window.location.href);
+    // console.log('📝 Script timestamp:', new Date().toISOString());
+    // console.log('🔄 CACHE BUSTER:', Math.random());
+
     // Global variables
     let socket = null;
     let subscriptions = new Set();
@@ -726,6 +726,14 @@
                 setTimeout(() => avgPriceElement.classList.remove('flash'), 500);
             }
 
+            // Last Trade Quantity
+            const lastTradeQtyElement = document.getElementById(`${symbol}-last-trade-quantity`);
+            if (lastTradeQtyElement && marketData.last_trade_quantity !== undefined) {
+                lastTradeQtyElement.textContent = formatVolume(marketData.last_trade_quantity);
+                lastTradeQtyElement.classList.add('flash');
+                setTimeout(() => lastTradeQtyElement.classList.remove('flash'), 500);
+            }
+
             // Buy/Sell quantities
             const buyQtyElement = document.getElementById(`${symbol}-total-buy-quantity`);
             if (buyQtyElement && marketData.total_buy_quantity !== undefined) {
@@ -861,11 +869,11 @@
 
     // Log events
     function logEvent(message, type = 'info') {
-        console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
-        
+        // console.log(`[WebSocket Test] ${type.toUpperCase()}: ${message}`);
+
         const logElement = document.getElementById('event-log');
         if (!logElement) {
-            console.warn('Log element not found!');
+            // console.warn('Log element not found!');
             return;
         }
         
@@ -892,10 +900,10 @@
     }
 
     // Test the logEvent function immediately
-    console.log('🧪 Testing logEvent function...');
+    // console.log('🧪 Testing logEvent function...');
     try {
         logEvent('🧪 Script loaded and logEvent function is working', 'success');
-        console.log('✅ logEvent function test passed');
+        // console.log('✅ logEvent function test passed');
     } catch (error) {
         console.error('❌ logEvent function test failed:', error);
     }
@@ -919,8 +927,8 @@
             if (ltpTimeElement) ltpTimeElement.textContent = '-';
             
             // Clear quote data
-            ['open', 'high', 'low', 'close', 'volume', 'average-price', 
-             'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
+            ['open', 'high', 'low', 'close', 'volume', 'average-price',
+             'last-trade-quantity', 'total-buy-quantity', 'total-sell-quantity'].forEach(field => {
                 const element = document.getElementById(`${symbolId}-${field}`);
                 if (element) element.textContent = '-';
             });
@@ -1187,6 +1195,10 @@
                             <div>
                                 <span class="text-xs text-base-content/50">Avg Price:</span>
                                 <div id="${symbolId}-average-price" class="data-value">-</div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-base-content/50">Last Qty:</span>
+                                <div id="${symbolId}-last-trade-quantity" class="data-value">-</div>
                             </div>
                             <div>
                                 <span class="text-xs text-base-content/50">Buy Qty:</span>

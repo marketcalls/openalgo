@@ -2,6 +2,7 @@ import os
 from sqlalchemy import create_engine, Column, String, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from datetime import datetime
 import logging
 
@@ -14,13 +15,24 @@ DB_PATH = os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')
 os.makedirs(os.path.dirname(DB_PATH.replace('sqlite:///', '')), exist_ok=True)
 
 # Create the engine and session
-engine = create_engine(
-    DB_PATH, 
-    echo=False,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if DB_PATH and 'sqlite' in DB_PATH:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        DB_PATH,
+        echo=False,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DB_PATH,
+        echo=False,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

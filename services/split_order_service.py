@@ -18,6 +18,7 @@ from utils.constants import (
     REQUIRED_ORDER_FIELDS
 )
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -201,53 +202,69 @@ def split_order_with_auth(
         log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
         return False, error_response, 400
     
-    # If in analyze mode, analyze each order
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
+        from services.sandbox_service import sandbox_place_order
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, emit_analyzer_error(original_data, 'API key required for sandbox mode'), 400
+
         analyze_results = []
-        
-        # Analyze full-size orders
+
+        # Place full-size orders in sandbox
         for i in range(num_full_orders):
             order_data = copy.deepcopy(split_data)
             order_data['quantity'] = str(split_size)
-            
-            # Analyze the order
-            _, analysis = analyze_request(order_data, 'splitorder', True)
-            
-            if analysis.get('status') == 'success':
+            order_data['apikey'] = api_key
+
+            # Place order in sandbox
+            success, response, status_code = sandbox_place_order(
+                order_data,
+                api_key,
+                {'apikey': api_key, 'order_type': 'split'}
+            )
+
+            if success:
                 analyze_results.append({
                     'order_num': i + 1,
                     'quantity': split_size,
                     'status': 'success',
-                    'orderid': generate_order_id()
+                    'orderid': response.get('orderid')
                 })
             else:
                 analyze_results.append({
                     'order_num': i + 1,
                     'quantity': split_size,
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
-        # Analyze remaining quantity if any
+        # Place remaining quantity order if any
         if remaining_qty > 0:
             order_data = copy.deepcopy(split_data)
             order_data['quantity'] = str(remaining_qty)
-            
-            _, analysis = analyze_request(order_data, 'splitorder', True)
-            
-            if analysis.get('status') == 'success':
+            order_data['apikey'] = api_key
+
+            success, response, status_code = sandbox_place_order(
+                order_data,
+                api_key,
+                {'apikey': api_key, 'order_type': 'split'}
+            )
+
+            if success:
                 analyze_results.append({
                     'order_num': num_full_orders + 1,
                     'quantity': remaining_qty,
                     'status': 'success',
-                    'orderid': generate_order_id()
+                    'orderid': response.get('orderid')
                 })
             else:
                 analyze_results.append({
                     'order_num': num_full_orders + 1,
                     'quantity': remaining_qty,
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
         response_data = {
@@ -261,16 +278,18 @@ def split_order_with_auth(
         # Store complete request data without apikey
         analyzer_request = split_request_data.copy()
         analyzer_request['api_type'] = 'splitorder'
-        
+
         # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'splitorder')
-        
+
         # Emit socket event for toast notification
         socketio.emit('analyzer_update', {
             'request': analyzer_request,
             'response': response_data
         })
-        
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))
         return True, response_data, 200
 
     # Live mode - process actual orders
@@ -337,6 +356,9 @@ def split_order_with_auth(
             'results': results
         }
         log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
+
+        # Send Telegram alert for live mode
+        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))
 
         return True, response_data, 200
 

@@ -17,6 +17,7 @@ from utils.constants import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -196,17 +197,24 @@ def process_basket_order_with_auth(
     
     api_key = basket_data.get('apikey')
     
-    # If in analyze mode, analyze each order and return
+    # If in analyze mode, route each order to sandbox
     if get_analyze_mode():
+        from services.sandbox_service import sandbox_place_order
+
         analyze_results = []
         total_orders = len(basket_data['orders'])
-        
-        for i, order in enumerate(basket_data['orders']):
+
+        # Sort orders to prioritize BUY orders before SELL orders (same as live mode)
+        buy_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'BUY']
+        sell_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'SELL']
+        sorted_orders = buy_orders + sell_orders
+
+        for i, order in enumerate(sorted_orders):
             # Create order data with common fields from basket order
             order_with_auth = order.copy()
             order_with_auth['apikey'] = api_key
             order_with_auth['strategy'] = basket_data['strategy']
-            
+
             # Validate order
             is_valid, error_message = validate_order(order_with_auth)
             if not is_valid:
@@ -217,14 +225,18 @@ def process_basket_order_with_auth(
                 })
                 continue
 
-            # Analyze the order
-            _, analysis = analyze_request(order_with_auth, 'basketorder', True)
-            
-            if analysis.get('status') == 'success':
+            # Place order in sandbox
+            success, response, status_code = sandbox_place_order(
+                order_with_auth,
+                api_key,
+                {'apikey': api_key, 'order_type': 'basket'}
+            )
+
+            if success:
                 analyze_results.append({
                     'symbol': order.get('symbol', 'Unknown'),
                     'status': 'success',
-                    'orderid': generate_order_id(),
+                    'orderid': response.get('orderid'),
                     'batch_order': True,
                     'is_last_order': i == total_orders - 1
                 })
@@ -232,7 +244,7 @@ def process_basket_order_with_auth(
                 analyze_results.append({
                     'symbol': order.get('symbol', 'Unknown'),
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
         response_data = {
@@ -244,16 +256,18 @@ def process_basket_order_with_auth(
         # Store complete request data without apikey
         analyzer_request = basket_request_data.copy()
         analyzer_request['api_type'] = 'basketorder'
-        
+
         # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'basketorder')
-        
+
         # Emit socket event for toast notification
         socketio.emit('analyzer_update', {
             'request': analyzer_request,
             'response': response_data
         })
-        
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, basket_data.get('apikey'))
         return True, response_data, 200
 
     # Live mode - process actual orders
@@ -329,6 +343,9 @@ def process_basket_order_with_auth(
         'results': results
     }
     log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
+
+    # Send Telegram alert for live basket order
+    telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, basket_data.get('apikey'))
 
     return True, response_data, 200
 

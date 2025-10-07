@@ -18,6 +18,7 @@ from utils.constants import (
     REQUIRED_SMART_ORDER_FIELDS
 )
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -150,37 +151,37 @@ def place_smart_order_with_auth(
         executor.submit(async_log_order, 'placesmartorder', original_data, error_response)
         return False, error_response, 400
     
-    # If in analyze mode, analyze the request and return
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
-        _, analysis = analyze_request(order_data, 'placesmartorder', True)
-        
+        from services.sandbox_service import sandbox_place_smart_order
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, emit_analyzer_error(original_data, 'API key required for sandbox mode'), 400
+
+        # Route to sandbox smart order
+        success, response_data, status_code = sandbox_place_smart_order(
+            order_data,
+            api_key,
+            original_data
+        )
+
         # Store complete request data without apikey
         analyzer_request = order_request_data.copy()
         analyzer_request['api_type'] = 'placesmartorder'
-        
-        if analysis.get('status') == 'success':
-            response_data = {
-                'mode': 'analyze',
-                'orderid': generate_order_id(),
-                'status': 'success'
-            }
-        else:
-            response_data = {
-                'mode': 'analyze',
-                'status': 'error',
-                'message': analysis.get('message', 'Analysis failed')
-            }
-        
+
         # Log to analyzer database with complete request and response
         executor.submit(async_log_analyzer, analyzer_request, response_data, 'placesmartorder')
-        
+
         # Emit socket event for toast notification
         socketio.emit('analyzer_update', {
             'request': analyzer_request,
             'response': response_data
         })
-        
-        return True, response_data, 200
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('placesmartorder', order_data, response_data, order_data.get('apikey'))
+        return success, response_data, status_code
 
     # Live Mode - Proceed with actual order placement
     broker_module = import_broker_module(broker)
@@ -210,12 +211,16 @@ def place_smart_order_with_auth(
                 'status': 'info',
                 'message': ' Positions Already Matched. No Action needed.'
             })
+            # Send Telegram alert
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
         if res and res.status == 200:
             order_response_data = {'status': 'success', 'orderid': order_id}
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
+            # Send Telegram alert
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
             socketio.emit('order_event', {
                 'symbol': order_data.get('symbol'),
                 'action': order_data.get('action'),

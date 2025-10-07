@@ -52,31 +52,31 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form id="loginForm" onsubmit="login(event)" class="space-y-4">
+                    <form id="loginForm" onsubmit="login(event)" class="space-y-6">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Username</span>
                             </label>
-                            <input type="text" 
-                                   id="username" 
-                                   name="username" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="text"
+                                   id="username"
+                                   name="username"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your username" />
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Password</span>
                             </label>
-                            <input type="password" 
-                                   id="password" 
-                                   name="password" 
-                                   required 
-                                   class="input input-bordered" 
+                            <input type="password"
+                                   id="password"
+                                   name="password"
+                                   required
+                                   class="input input-bordered w-full"
                                    placeholder="Enter your password" />
-                            <label class="label">
+                            <label class="label pt-2">
                                 <a href="{{ url_for('auth.reset_password') }}" class="label-text-alt link link-hover">Forgot password?</a>
                             </label>
                         </div>
@@ -89,8 +89,8 @@
                         </div>
 
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary w-full">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <button type="submit" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                                 </svg>
                                 Sign in

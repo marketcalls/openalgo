@@ -2,16 +2,18 @@
 
 ## Overview
 
-The OpenAlgo Telegram Bot provides a convenient interface to access your trading data through Telegram. It offers read-only access to your trading account, allowing you to view positions, orders, holdings, P&L, and generate charts directly from your Telegram app.
+The OpenAlgo Telegram Bot provides a comprehensive interface to access your trading data and receive real-time order notifications through Telegram. It offers both read-only access to your trading account and automatic alerts for all order-related activities, allowing you to view positions, orders, holdings, P&L, generate charts, and stay updated on your trading activities directly from your Telegram app.
 
 ## Features
 
 - **Account Linking**: Securely link your OpenAlgo account using API keys
 - **Real-time Data Access**: View orderbook, tradebook, positions, holdings, and funds
+- **Automatic Order Alerts**: Receive instant notifications for all order activities
 - **P&L Tracking**: Monitor realized and unrealized profit/loss
 - **Quote Information**: Get real-time quotes for any symbol
 - **Chart Generation**: Generate intraday and daily charts with technical indicators
 - **Interactive Menu**: Easy-to-use button interface for quick access
+- **Mode Differentiation**: Clear distinction between LIVE and ANALYZE mode orders
 
 ## Setup
 
@@ -65,6 +67,78 @@ For detailed setup instructions, please refer to the official OpenAlgo documenta
 - `/menu` - Display interactive button menu
 - `/help` - Show help message with all commands
 
+## Order Alerts (Automatic Notifications)
+
+### Overview
+The bot automatically sends real-time notifications for all order-related API activities. No additional commands are needed - alerts are sent automatically when orders are placed through the OpenAlgo API.
+
+### Supported Order Types
+- **Place Order** - Regular order placement notifications
+- **Place Smart Order** - Smart orders with position sizing alerts
+- **Basket Order** - Multiple orders in one request notifications
+- **Split Order** - Large orders split into smaller chunks alerts
+- **Modify Order** - Order modification notifications
+- **Cancel Order** - Single order cancellation alerts
+- **Cancel All Orders** - Bulk order cancellation notifications
+- **Close Position** - Position closing alerts
+
+### Alert Format
+Each alert includes:
+- **Mode Indicator**:
+  - 💰 **LIVE MODE** - Real orders executed with the broker
+  - 🔬 **ANALYZE MODE** - Simulated orders for testing/analysis
+- **Order Details**: Symbol, action, quantity, price, exchange, product type
+- **Status**: Success or failure with error messages if applicable
+- **Order ID**: Unique identifier for tracking
+- **Timestamp**: Time of order execution
+- **Strategy Name**: If provided in the API call
+
+### Example Notifications
+
+#### Live Order Placed:
+```
+📈 Order Placed
+💰 LIVE MODE - Real Order
+─────────────────────
+Strategy: MyStrategy
+Symbol: RELIANCE
+Action: BUY
+Quantity: 10
+Price Type: MARKET
+Exchange: NSE
+Product: MIS
+Order ID: 250408000989443
+⏰ Time: 14:23:45
+```
+
+#### Analyze Mode Order:
+```
+📈 Order Placed
+🔬 ANALYZE MODE - No Real Order
+─────────────────────
+Strategy: TestStrategy
+Symbol: RELIANCE
+Action: BUY
+Quantity: 10
+Price Type: MARKET
+Exchange: NSE
+Product: MIS
+Order ID: ANALYZE123456
+⏰ Time: 14:23:45
+```
+
+### Configuration
+- Alerts are **enabled by default** for all linked users
+- Users can enable/disable notifications in their preferences
+- Failed alerts are queued for retry when the bot comes online
+- Zero impact on order execution speed (asynchronous processing)
+
+### Requirements for Receiving Alerts
+1. Telegram bot must be running (`/telegram/bot/start` in web interface)
+2. Your account must be linked via `/link` command
+3. Notifications must be enabled (default: enabled)
+4. Orders must be placed through the OpenAlgo API
+
 ## Chart Features
 
 ### Intraday Charts
@@ -109,16 +183,30 @@ The bot uses SQLAlchemy ORM with the following tables:
 - Stores user-bot linkage information
 - Encrypted API key storage
 - User preferences and settings
+- Notification enable/disable flag
 
 ### BotConfig
 - Bot configuration settings
 - Webhook URL and polling mode
 - Bot state management
+- Broadcast enable/disable settings
 
 ### CommandLog
 - Audit trail of all commands
 - Usage analytics
 - Error tracking
+
+### NotificationQueue
+- Stores pending notifications for delivery
+- Priority-based queue system
+- Retry mechanism for failed messages
+- Delivery status tracking
+
+### UserPreference
+- Individual user notification preferences
+- Order type specific settings
+- Daily summary configuration
+- Timezone and language settings
 
 ## Technical Architecture
 
@@ -129,20 +217,32 @@ The bot uses SQLAlchemy ORM with the following tables:
    - OpenAlgo SDK integration
    - Chart generation using Plotly
 
-2. **Database Layer** (`database/telegram_db.py`)
+2. **TelegramAlertService** (`services/telegram_alert_service.py`)
+   - Automatic order notification system
+   - Asynchronous alert processing
+   - Message formatting and queuing
+   - Mode differentiation (LIVE vs ANALYZE)
+
+3. **Database Layer** (`database/telegram_db.py`)
    - SQLAlchemy models and queries
    - Encryption/decryption utilities
    - Configuration management
+   - Notification queue for failed messages
 
-3. **Blueprint** (`blueprints/telegram.py`)
+4. **Blueprint** (`blueprints/telegram.py`)
    - Flask routes for bot management
    - Web interface for configuration
    - Bot lifecycle management
 
-4. **Auto-start Feature**
+5. **Auto-start Feature**
    - Bot automatically starts on application launch if previously active
    - State persistence across restarts
    - Configured in `app.py`
+
+6. **Order Service Integration**
+   - All order services automatically trigger alerts
+   - Non-blocking execution using thread pools
+   - Zero latency impact on order processing
 
 ### Threading Model
 - Bot runs in a separate thread with its own event loop
@@ -163,6 +263,14 @@ The bot uses SQLAlchemy ORM with the following tables:
 3. Check network connectivity
 4. Review logs for errors
 
+### Order Alerts Not Received
+1. **Check Username Match**: Ensure your Telegram linked username matches your OpenAlgo auth username
+2. **Verify Bot Status**: Confirm bot is running in `/telegram/bot/status`
+3. **Check Notifications**: Ensure notifications are enabled in user preferences
+4. **Review Logs**: Look for "Telegram alert triggered" messages in logs
+5. **Test Connection**: Send a test message from `/telegram` dashboard
+6. **Mode Check**: Verify if orders are in LIVE or ANALYZE mode
+
 ### Chart Generation Issues
 1. Ensure market data is available for the symbol
 2. Check if the exchange is correct
@@ -174,6 +282,7 @@ The bot uses SQLAlchemy ORM with the following tables:
 2. Ensure host URL is accessible
 3. Check if API key has necessary permissions
 4. Verify OpenAlgo server is running
+5. **Username Format**: Ensure consistent username format (without @ prefix)
 
 ## Environment Variables
 
@@ -206,15 +315,22 @@ The bot respects the following environment variables:
 - API calls use connection pooling
 - Database queries are optimized with indexes
 - Image generation uses efficient Kaleido backend
+- **Order alerts use thread pools for zero-latency execution**
+- **Notification queue prevents message loss during downtime**
+- **Async processing ensures order execution is never blocked**
 
 ## Future Enhancements
 
+- [x] ~~Real-time order alerts~~ ✅ **Implemented**
 - [ ] Real-time price alerts
 - [ ] Portfolio analytics
 - [ ] Multi-account support
 - [ ] Custom indicators on charts
 - [ ] Webhook mode for better scalability
 - [ ] Inline queries for quick quotes
+- [ ] Customizable alert templates
+- [ ] Alert filtering by strategy/symbol
+- [ ] Daily P&L summary reports
 
 ## Support
 

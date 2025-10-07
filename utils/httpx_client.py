@@ -81,29 +81,31 @@ def _create_http_client() -> httpx.Client:
     import os
     
     try:
-        # Detect if running in Docker by checking for .dockerenv file or Docker-specific env vars
-        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
-        
-        # Disable HTTP/2 in Docker environments to avoid protocol negotiation issues
-        http2_enabled = not is_docker
+        # Detect if running in standalone mode (Docker/production) vs integrated mode (local dev)
+        # In standalone mode, disable HTTP/2 to avoid protocol negotiation issues
+        app_mode = os.environ.get('APP_MODE', 'integrated').strip().strip("'\"")
+        is_standalone = app_mode == 'standalone'
+
+        # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
+        http2_enabled = not is_standalone
         
         client = httpx.Client(
-            http2=http2_enabled,  # Disable HTTP/2 in Docker, enable otherwise
+            http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
-            timeout=30.0,
+            timeout=120.0,  # Increased timeout for large historical data requests
             limits=httpx.Limits(
                 max_keepalive_connections=20,  # Balanced for most broker APIs
                 max_connections=50,  # Reasonable max without overloading
                 keepalive_expiry=120.0  # 2 minutes - good balance
             ),
-            # Add verify parameter to handle SSL/TLS issues in Docker
+            # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True  # Can be set to False for debugging SSL issues (not recommended for production)
         )
         
-        if is_docker:
-            logger.info("Running in Docker environment - HTTP/2 disabled for compatibility")
+        if is_standalone:
+            logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
         else:
-            logger.info("HTTP/2 enabled for optimal performance")
+            logger.info("Running in integrated mode - HTTP/2 enabled for optimal performance")
             
         return client
         

@@ -5,8 +5,9 @@ import base64
 from sqlalchemy import create_engine, UniqueConstraint
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean  
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -83,12 +84,23 @@ feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
 broker_cache = TTLCache(maxsize=1024, ttl=3000)
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    # NullPool creates a new connection for each request and closes it when done
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -305,11 +317,16 @@ def get_api_key_for_tradingview(user_id):
 
 def verify_api_key(provided_api_key):
     """Verify an API key using Argon2"""
+    from flask import request, has_request_context
+    from utils.ip_helper import get_real_ip
+    from database.traffic_db import InvalidAPIKeyTracker
+    import hashlib
+
     peppered_key = provided_api_key + PEPPER
     try:
         # Query all API keys
         api_keys = ApiKeys.query.all()
-        
+
         # Try to verify against each stored hash
         for api_key_obj in api_keys:
             try:
@@ -317,11 +334,33 @@ def verify_api_key(provided_api_key):
                 return api_key_obj.user_id
             except VerifyMismatchError:
                 continue
-        
+
+        # If we reach here, the API key is invalid
+        # Track the invalid attempt
+        try:
+            # Check if we're in a request context
+            if has_request_context():
+                client_ip = get_real_ip()
+            else:
+                client_ip = '127.0.0.1'
+
+            # Hash the API key for tracking (don't store plaintext)
+            api_key_hash = hashlib.sha256(provided_api_key.encode()).hexdigest()[:16]
+
+            # Track the invalid API key attempt
+            InvalidAPIKeyTracker.track_invalid_api_key(client_ip, api_key_hash)
+
+        except Exception as track_error:
+            logger.warning(f"Could not track invalid API key attempt: {track_error}")
+
         return None
     except Exception as e:
         logger.error(f"Error verifying API key: {e}")
         return None
+
+def get_username_by_apikey(provided_api_key):
+    """Get username for a given API key"""
+    return verify_api_key(provided_api_key)
 
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""

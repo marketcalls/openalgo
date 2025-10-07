@@ -91,13 +91,37 @@ def toggle_analyzer_mode_with_auth(
     try:
         # Get the requested mode
         new_mode = analyzer_data.get('mode', False)
-        
+
         # Set the analyzer mode
         set_analyze_mode(new_mode)
-        
+
+        # Start/stop execution engine and squareoff scheduler based on mode
+        from sandbox.execution_thread import start_execution_engine, stop_execution_engine
+        from sandbox.squareoff_thread import start_squareoff_scheduler, stop_squareoff_scheduler
+
+        if new_mode:
+            # Analyzer mode ON - start both threads
+            start_execution_engine()
+            start_squareoff_scheduler()
+
+            # Run catch-up settlement for any missed settlements while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed")
+            except Exception as e:
+                logger.error(f"Error in catch-up settlement: {e}")
+
+            logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
+        else:
+            # Analyzer mode OFF - stop both threads
+            stop_execution_engine()
+            stop_squareoff_scheduler()
+            logger.info("Analyzer mode disabled - Execution engine and square-off scheduler stopped")
+
         # Get logs count for response
         logs_count = db_session.query(AnalyzerLog).count()
-        
+
         response_data = {
             'status': 'success',
             'data': {
@@ -107,7 +131,7 @@ def toggle_analyzer_mode_with_auth(
                 'message': f'Analyzer mode switched to {"analyze" if new_mode else "live"}'
             }
         }
-        
+
         log_executor.submit(async_log_order, 'analyzer_toggle', request_data, response_data)
         return True, response_data, 200
         

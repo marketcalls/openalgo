@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "1.0.0.33"
+version = "1.0.0.35"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -45,7 +45,7 @@ dependencies = [
   "Flask-WTF==1.2.1",
   "greenlet==3.1.1",
   "h11==0.16.0",
-  "h2==4.2.0",
+  "h2==4.3.0",
   "hpack==4.1.0",
   "httpcore==1.0.9",
   "httpx[http2]==0.28.1",
@@ -80,7 +80,7 @@ dependencies = [
   "nest-asyncio==1.6.0",
   "numba==0.61.2",
   "numpy==2.2.4",
-  "openalgo==1.0.31",
+  "openalgo==1.0.32",
   "ordered-set==4.1.0",
   "orjson==3.11.3",
   "packaging==24.1",

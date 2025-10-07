@@ -71,16 +71,35 @@ class BrokerData:
         }
 
     def _get_instrument_key(self, symbol: str, exchange: str) -> str:
-        """Get the correct instrument key for a symbol"""
+        """Get the correct instrument key for a symbol with smart fallback for indices"""
         try:
             # Get token from database - this already includes the exchange prefix
             token = get_token(symbol, exchange)
+
+            # If token not found and exchange looks like it might be an index exchange
+            # Try the _INDEX variant (e.g., NSE -> NSE_INDEX)
+            if not token and exchange in ['NSE', 'BSE', 'MCX']:
+                index_exchange = f"{exchange}_INDEX"
+                logger.debug(f"Token not found for {symbol} on {exchange}, trying {index_exchange}")
+                token = get_token(symbol, index_exchange)
+                if token:
+                    logger.info(f"Found token using index exchange: {index_exchange}")
+
+            # If still not found and exchange is an index exchange, try without _INDEX
+            # (e.g., NSE_INDEX -> NSE)
+            if not token and exchange.endswith('_INDEX'):
+                base_exchange = exchange.replace('_INDEX', '')
+                logger.debug(f"Token not found for {symbol} on {exchange}, trying {base_exchange}")
+                token = get_token(symbol, base_exchange)
+                if token:
+                    logger.info(f"Found token using base exchange: {base_exchange}")
+
             if not token:
                 raise ValueError(f"No token found for {symbol} on {exchange}")
-            
+
             logger.debug(f"Using instrument key: {token}")
             return token
-            
+
         except Exception as e:
             logger.exception(f"Error getting instrument key for {symbol} on {exchange}")
             raise
@@ -97,12 +116,26 @@ class BrokerData:
         Get real-time quotes for given symbol
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
+            exchange: Exchange (e.g., NSE, BSE, NSE_INDEX)
         Returns:
             dict: Quote data with standard fields
         """
         try:
-            # Get the correct instrument key
+            logger.debug(f"get_quotes called with symbol='{symbol}', exchange='{exchange}'")
+
+            # Auto-detect and fix reversed parameters (defensive programming)
+            # Exchange names are typically short codes like NSE, BSE, NFO, etc.
+            # Symbols are typically longer or alphanumeric
+            known_exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX',
+                             'NSE_EQ', 'NSE_FO', 'BSE_EQ', 'BSE_FO', 'MCX_FO', 'NSE_CD']
+            if symbol in known_exchanges and exchange not in known_exchanges:
+                # Parameters are likely reversed
+                logger.warning(f"Detected reversed parameters: symbol='{symbol}', exchange='{exchange}'. Auto-correcting...")
+                symbol, exchange = exchange, symbol
+                logger.info(f"Corrected to: symbol='{symbol}', exchange='{exchange}'")
+
+            # Get the correct instrument key using the original exchange (important for indices)
+            # This must happen BEFORE exchange normalization (like Angel does)
             instrument_key = self._get_instrument_key(symbol, exchange)
             
             # URL encode the instrument key
@@ -356,7 +389,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if intraday_candles:
-                            logger.info(f"Sample intraday candle: {intraday_candles[0]}")
+                            logger.debug(f"Sample intraday candle: {intraday_candles[0]}")
                         
                         # Filter candles to chunk date range
                         filtered_candles = self._filter_candles_by_date(intraday_candles, start_date, end_date)
@@ -386,7 +419,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if historical_candles:
-                            logger.info(f"Sample historical candle: {historical_candles[0]}")
+                            logger.debug(f"Sample historical candle: {historical_candles[0]}")
                         
                         all_candles.extend(historical_candles)
                         logger.info(f"Total candles after historical: {len(all_candles)}")
@@ -453,7 +486,7 @@ class BrokerData:
                 return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
             
             # Debug: Log sample candle data to understand structure
-            logger.info(f"Sample candle data (first 2): {all_candles[:2]}")
+            logger.debug(f"Sample candle data (first 2): {all_candles[:2]}")
             logger.info(f"Total candles for processing: {len(all_candles)}")
             
             # Convert to DataFrame
@@ -461,7 +494,7 @@ class BrokerData:
             
             # Debug: Check timestamp column before conversion
             logger.info(f"Timestamp column types before conversion: {df['timestamp'].dtype}")
-            logger.info(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
+            logger.debug(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
             logger.info(f"Unique timestamp types: {df['timestamp'].apply(type).unique()}")
             
             # Convert timestamp from ISO 8601 string to Unix timestamp (seconds since epoch)

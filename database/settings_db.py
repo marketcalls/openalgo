@@ -3,6 +3,7 @@
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Text
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.pool import NullPool
 import os
 from utils.logging import get_logger
 from cryptography.fernet import Fernet
@@ -12,12 +13,22 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -27,7 +38,7 @@ class Settings(Base):
     __tablename__ = 'settings'
     id = Column(Integer, primary_key=True)
     analyze_mode = Column(Boolean, default=False)  # Default to Live Mode
-    
+
     # SMTP Configuration
     smtp_server = Column(String(255), nullable=True)
     smtp_port = Column(Integer, nullable=True)
@@ -36,6 +47,13 @@ class Settings(Base):
     smtp_use_tls = Column(Boolean, default=True)
     smtp_from_email = Column(String(255), nullable=True)
     smtp_helo_hostname = Column(String(255), nullable=True)  # HELO/EHLO hostname
+
+    # Security Settings
+    security_404_threshold = Column(Integer, default=20)  # 404 errors per day before ban
+    security_404_ban_duration = Column(Integer, default=24)  # Ban duration in hours
+    security_api_threshold = Column(Integer, default=10)  # Invalid API attempts before ban
+    security_api_ban_duration = Column(Integer, default=48)  # Ban duration in hours
+    security_repeat_offender_limit = Column(Integer, default=3)  # Bans before permanent ban
 
 def init_db():
     """Initialize the settings database"""
@@ -137,3 +155,50 @@ def set_smtp_settings(smtp_server=None, smtp_port=None, smtp_username=None,
     
     db_session.commit()
     logger.info("SMTP settings updated successfully")
+
+def get_security_settings():
+    """Get security configuration"""
+    settings = Settings.query.first()
+    if not settings:
+        # Create with defaults
+        settings = Settings(
+            analyze_mode=False,
+            security_404_threshold=20,
+            security_404_ban_duration=24,
+            security_api_threshold=10,
+            security_api_ban_duration=48,
+            security_repeat_offender_limit=3
+        )
+        db_session.add(settings)
+        db_session.commit()
+
+    return {
+        '404_threshold': settings.security_404_threshold or 20,
+        '404_ban_duration': settings.security_404_ban_duration or 24,
+        'api_threshold': settings.security_api_threshold or 10,
+        'api_ban_duration': settings.security_api_ban_duration or 48,
+        'repeat_offender_limit': settings.security_repeat_offender_limit or 3
+    }
+
+def set_security_settings(threshold_404=None, ban_duration_404=None,
+                         threshold_api=None, ban_duration_api=None,
+                         repeat_offender_limit=None):
+    """Set security configuration"""
+    settings = Settings.query.first()
+    if not settings:
+        settings = Settings(analyze_mode=False)
+        db_session.add(settings)
+
+    if threshold_404 is not None:
+        settings.security_404_threshold = threshold_404
+    if ban_duration_404 is not None:
+        settings.security_404_ban_duration = ban_duration_404
+    if threshold_api is not None:
+        settings.security_api_threshold = threshold_api
+    if ban_duration_api is not None:
+        settings.security_api_ban_duration = ban_duration_api
+    if repeat_offender_limit is not None:
+        settings.security_repeat_offender_limit = repeat_offender_limit
+
+    db_session.commit()
+    logger.info("Security settings updated successfully")

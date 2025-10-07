@@ -10,6 +10,7 @@ from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.api_analyzer import analyze_request
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -91,39 +92,37 @@ def cancel_all_orders_with_auth(
     if 'apikey' in order_request_data:
         order_request_data.pop('apikey', None)
     
-    # If in analyze mode, analyze the request and return
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
-        _, analysis = analyze_request(order_data, 'cancelallorder', True)
-        
+        from services.sandbox_service import sandbox_cancel_all_orders
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, emit_analyzer_error(original_data, 'API key required for sandbox mode'), 400
+
+        # Route to sandbox cancel all orders
+        success, response_data, status_code = sandbox_cancel_all_orders(
+            order_data,
+            api_key,
+            original_data
+        )
+
         # Store complete request data without apikey
         analyzer_request = order_request_data.copy()
         analyzer_request['api_type'] = 'cancelallorder'
-        
-        if analysis.get('status') == 'success':
-            response_data = {
-                'mode': 'analyze',
-                'status': 'success',
-                'message': 'All open orders will be cancelled',
-                'canceled_orders': [],
-                'failed_cancellations': []
-            }
-        else:
-            response_data = {
-                'mode': 'analyze',
-                'status': 'error',
-                'message': analysis.get('message', 'Analysis failed')
-            }
-        
+
         # Log to analyzer database with complete request and response
         executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelallorder')
-        
+
         # Emit socket event for toast notification
         socketio.emit('analyzer_update', {
             'request': analyzer_request,
             'response': response_data
         })
-        
-        return True, response_data, 200
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('cancelallorder', order_data, response_data, order_data.get('apikey'))
+        return success, response_data, status_code
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
@@ -165,6 +164,9 @@ def cancel_all_orders_with_auth(
 
     # Log the action asynchronously
     executor.submit(async_log_order, 'cancelallorder', order_request_data, response_data)
+
+    # Send Telegram alert for live mode
+    telegram_alert_service.send_order_alert('cancelallorder', order_data, response_data, order_data.get('apikey'))
 
     return True, response_data, 200
 

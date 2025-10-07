@@ -10,6 +10,7 @@ from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.api_analyzer import analyze_request
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -91,36 +92,36 @@ def close_position_with_auth(
     if 'apikey' in position_request_data:
         position_request_data.pop('apikey', None)
     
-    # If in analyze mode, analyze the request and return
+    # If in analyze mode, route to sandbox for real position closing
     if get_analyze_mode():
-        _, analysis = analyze_request(position_data, 'closeposition', True)
-        
-        # Store complete request data without apikey
-        analyzer_request = position_request_data.copy()
-        analyzer_request['api_type'] = 'closeposition'
-        
-        if analysis.get('status') == 'success':
-            response_data = {
-                'mode': 'analyze',
-                'status': 'success',
-                'message': 'All Open Positions will be Squared Off'
-            }
-        else:
-            response_data = {
-                'mode': 'analyze',
+        from services.sandbox_service import sandbox_close_position
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
                 'status': 'error',
-                'message': analysis.get('message', 'Analysis failed')
-            }
-        
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, 'closeposition')
-        
-        # Emit socket event for toast notification
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        # Convert position_data format if needed
+        close_data = {
+            'symbol': position_data.get('symbol'),
+            'exchange': position_data.get('exchange'),
+            'product': position_data.get('product_type') or position_data.get('product')
+        }
+
+        return sandbox_close_position(close_data, api_key, original_data)
+
+    # Existing broker logic below - keep the socketio.emit line
+    if False:  # This will never execute but preserves the code structure
         socketio.emit('analyzer_update', {
             'request': analyzer_request,
             'response': response_data
         })
-        
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('closeposition', position_data, response_data, position_data.get('apikey'))
         return True, response_data, 200
 
     broker_module = import_broker_module(broker)
@@ -157,6 +158,8 @@ def close_position_with_auth(
             'mode': 'live'
         })
         executor.submit(async_log_order, 'closeposition', position_request_data, response_data)
+        # Send Telegram alert for live mode
+        telegram_alert_service.send_order_alert('closeposition', position_data, response_data, position_data.get('apikey'))
         return True, response_data, 200
     else:
         message = response_code.get('message', 'Failed to close positions') if isinstance(response_code, dict) else 'Failed to close positions'

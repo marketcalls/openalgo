@@ -1,20 +1,48 @@
-# API Layer
+# OpenAlgo API Layer Architecture
 
-The API layer is the primary interface for interacting with the OpenAlgo platform. It handles incoming HTTP requests, routes them to the appropriate logic, processes data, and returns responses.
+## Executive Summary
 
-## Frameworks Used
+The API layer serves as the primary programmatic interface for the OpenAlgo platform, providing comprehensive RESTful endpoints for trading operations, market data access, and portfolio management. Built with Flask-RESTX, it offers automatic API documentation, robust validation, and standardized responses across 25+ broker integrations.
 
-*   **Flask:** The core microframework providing routing, request context, and application structure.
-*   **Flask-RESTX:** An extension for Flask that adds support for quickly building REST APIs. It provides tools for structuring APIs using Namespaces, marshalling data, and automatically generating Swagger documentation.
-*   **Flask Blueprints:** Used alongside or potentially instead of RESTX Namespaces in some parts of the application (`blueprints/` directory) to organize routes and views into reusable components.
+## Core Architecture
 
-## Structure and Organization
+### Technology Stack
 
-*   **Entry Point:** The API is initialized and configured in `app.py`.
-*   **RESTX API Definition:** The primary RESTful API structure (likely versioned, e.g., `/api/v1`) is defined in `restx_api/__init__.py`. This module initializes the Flask-RESTX `Api` object and registers different `Namespaces`.
-*   **Namespaces:** Flask-RESTX `Namespaces` (likely located within the `restx_api` directory, e.g., `restx_api/endpoints/`) group related resources together (e.g., a namespace for orders, another for positions).
-*   **Blueprints:** Traditional Flask `Blueprints` (located in the `blueprints/` directory, e.g., `blueprints/auth.py`, `blueprints/dashboard.py`) are used for organizing both UI routes (rendering HTML templates) and potentially some API endpoints that might not follow the strict RESTX structure.
-*   **Registration:** Both RESTX Namespaces (via the `api.add_namespace()` method) and Flask Blueprints (via `app.register_blueprint()`) are registered with the main Flask `app` object in `app.py`.
+*   **Flask 3.0.3**: Core web framework with extensive middleware support
+*   **Flask-RESTX**: RESTful API framework with OpenAPI/Swagger generation
+*   **Flask-Limiter**: Rate limiting and throttling
+*   **Flask-CORS**: Cross-Origin Resource Sharing management
+*   **Marshmallow**: Request/response serialization and validation
+*   **HTTPx**: Modern async HTTP client with connection pooling
+
+### API Organization
+
+```python
+# API Structure in restx_api/__init__.py
+from flask_restx import Api, Namespace
+
+api = Api(
+    version='1.0',
+    title='OpenAlgo Trading API',
+    description='Unified trading API for 25+ Indian brokers',
+    doc='/api/v1/docs',
+    prefix='/api/v1',
+    authorizations={
+        'apikey': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'X-API-KEY'
+        }
+    }
+)
+
+# Namespace organization
+trading_ns = Namespace('trading', description='Trading operations')
+market_ns = Namespace('market', description='Market data')
+portfolio_ns = Namespace('portfolio', description='Portfolio management')
+analytics_ns = Namespace('analytics', description='Trade analytics')
+utility_ns = Namespace('utility', description='Utility endpoints')
+```
 
 ## Request Handling
 

@@ -41,7 +41,9 @@ def get_token(symbol, exchange):
 from datetime import datetime, timedelta
 
 from utils.httpx_client import get_httpx_client
-from database.token_db import get_token, get_br_symbol, get_oa_symbol
+from database.token_db import get_token, get_br_symbol, get_oa_symbol, get_brexchange
+from database.symbol import SymToken
+from database.auth_db import db_session
 from .alicebluewebsocket import AliceBlueWebSocket
 
 # AliceBlue API URLs
@@ -58,7 +60,50 @@ class BrokerData:
     BrokerData class for AliceBlue broker.
     Handles market data operations including quotes, market depth, and historical data.
     """
-    
+
+    def _auto_detect_exchange(self, symbol: str) -> str:
+        """
+        Auto-detect exchange for a symbol by looking up its instrumenttype in database
+        Returns the appropriate exchange based on instrumenttype
+        """
+        try:
+            # Query database for the symbol
+            with db_session() as session:
+                # First try to find any matching symbol
+                results = session.query(SymToken).filter(
+                    SymToken.symbol == symbol
+                ).all()
+
+                if results:
+                    for result in results:
+                        # Check instrumenttype to determine exchange
+                        if result.instrumenttype:
+                            instrument_type = result.instrumenttype.upper()
+                            # If instrumenttype contains INDEX, use it as exchange
+                            if 'INDEX' in instrument_type:
+                                # instrumenttype like NSE_INDEX, BSE_INDEX, MCX_INDEX
+                                return result.instrumenttype
+                            else:
+                                # For other types, use the exchange field
+                                return result.exchange
+
+                    # If no instrumenttype, return the exchange of first match
+                    return results[0].exchange
+
+                # If not found, make educated guess based on symbol pattern
+                if symbol.endswith('FUT'):
+                    return 'NFO'
+                elif symbol.endswith('CE') or symbol.endswith('PE'):
+                    return 'NFO'
+                elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
+                    return 'CDS'
+                else:
+                    return 'NSE'  # Default to NSE
+
+        except Exception as e:
+            logger.error(f"Error in auto-detecting exchange: {str(e)}")
+            return 'NSE'  # Default fallback
+
     def __init__(self, auth_token=None):
         self.token_mapping = {}
         self.session_id = auth_token  # Store the session ID from authentication
@@ -165,28 +210,14 @@ class BrokerData:
                     "message": f"Error processing request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
+        # Handle plain string (like just "YESBANK" or "NIFTY")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            
-            # Auto-detect exchange based on symbol pattern
-            if symbol.endswith('FUT'):
-                # Futures contracts - NFO for equity futures, BFO for BSE futures
-                exchange = 'NFO'  # Default to NFO for futures
-            elif symbol.endswith('CE') or symbol.endswith('PE'):
-                # Options contracts - NFO for equity options, BFO for BSE options
-                exchange = 'NFO'  # Default to NFO for options
-            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
-                # Currency derivatives
-                exchange = 'CDS'
-            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
-                # Commodity futures
-                exchange = 'MCX'
-            else:
-                # Default to NSE for equity stocks
-                exchange = 'NSE'
-                
-            logger.info(f"Processing string symbol: {symbol} on {exchange} (auto-detected)")
+
+            # Use the helper function to auto-detect exchange based on database lookup
+            exchange = self._auto_detect_exchange(symbol)
+
+            logger.info(f"Processing string symbol: {symbol} on {exchange} (auto-detected from database)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, let's create mock data for testing
@@ -201,26 +232,38 @@ class BrokerData:
                 
                 # Get token for this symbol
                 token = get_token(symbol, exchange)
-                
+
                 if token:
                     # Get WebSocket connection or create a new one
                     websocket = self.get_websocket()
-                    
+
                     if not websocket or not websocket.is_connected:
                         logger.warning("WebSocket not connected, reconnecting...")
                         websocket = self.get_websocket(force_new=True)
-                    
+
                     if websocket and websocket.is_connected:
+                        # Get broker symbol if different
+                        br_symbol = get_br_symbol(symbol, exchange) or symbol
+
+                        # Convert exchange for AliceBlue API (same as Angel)
+                        if exchange == 'NSE_INDEX':
+                            exchange = 'NSE'
+                        elif exchange == 'BSE_INDEX':
+                            exchange = 'BSE'
+                        elif exchange == 'MCX_INDEX':
+                            exchange = 'MCX'
+
                         # Create instrument for subscription
                         class Instrument:
                             def __init__(self, exchange, token, symbol=None):
                                 self.exchange = exchange
                                 self.token = token
                                 self.symbol = symbol
-                        
-                        instrument = Instrument(exchange=exchange, token=token, symbol=symbol)
+
+                        # Use converted exchange for websocket subscription
+                        instrument = Instrument(exchange=exchange, token=token, symbol=br_symbol)
                         instruments = [instrument]
-                        
+
                         # Subscribe to this instrument
                         logger.info(f"Subscribing to {exchange}:{symbol} with token {token}")
                         success = websocket.subscribe(instruments)
@@ -230,10 +273,10 @@ class BrokerData:
                             logger.info(f"Waiting for WebSocket data for {exchange}:{symbol}")
                             time.sleep(2.0)  # Increased wait time
                             
-                            # Retrieve quote from WebSocket
-                            logger.info(f"Attempting to retrieve quote for {exchange}:{token}")
+                            # Retrieve quote from WebSocket using converted exchange
+                            logger.debug(f"Attempting to retrieve quote for {exchange}:{token}")
                             quote = websocket.get_quote(exchange, token)
-                            logger.info(f"Quote retrieval result: {quote is not None}")
+                            logger.debug(f"Quote retrieval result: {quote is not None}")
                             
                             if quote:
                                 # Format the response according to OpenAlgo standard format
@@ -261,16 +304,16 @@ class BrokerData:
                                     quote_item['depth'] = quote['depth']
                                 
                                 quote_data.append(quote_item)
-                                logger.info(f"Retrieved real-time quote for {symbol} on {exchange}")
+                                logger.debug(f"Retrieved real-time quote for {symbol} on {exchange}")
                                 
                                 # Unsubscribe after getting the data to stop continuous streaming
                                 logger.info(f"Unsubscribing from {exchange}:{symbol} after retrieving quote")
-                                websocket.unsubscribe(instruments)
+                                websocket.unsubscribe(instruments, is_depth=False)
                             else:
                                 logger.warning(f"No quote data received for {symbol} on {exchange}")
                                 # Unsubscribe even if no data received to clean up subscription
                                 logger.info(f"Unsubscribing from {exchange}:{symbol} due to no quote data")
-                                websocket.unsubscribe(instruments)
+                                websocket.unsubscribe(instruments, is_depth=False)
                                 # Create fallback data with zeros
                                 quote_item = {
                                     'symbol': symbol,
@@ -705,28 +748,14 @@ class BrokerData:
                     "message": f"Error processing depth request: {str(e)}"
                 }
         
-        # Handle plain string (like just "YESBANK" or "TCS31JUL25FUT")
+        # Handle plain string (like just "YESBANK" or "NIFTY")
         elif isinstance(symbol_list, str):
             symbol = symbol_list.strip()
-            
-            # Auto-detect exchange based on symbol pattern (same logic as quotes)
-            if symbol.endswith('FUT'):
-                # Futures contracts - NFO for equity futures, BFO for BSE futures
-                exchange = 'NFO'  # Default to NFO for futures
-            elif symbol.endswith('CE') or symbol.endswith('PE'):
-                # Options contracts - NFO for equity options, BFO for BSE options
-                exchange = 'NFO'  # Default to NFO for options
-            elif 'USDINR' in symbol.upper() or 'EURINR' in symbol.upper():
-                # Currency derivatives
-                exchange = 'CDS'
-            elif any(mcx_symbol in symbol.upper() for mcx_symbol in ['GOLD', 'SILVER', 'CRUDE', 'COPPER', 'ZINC', 'LEAD', 'NICKEL']):
-                # Commodity futures
-                exchange = 'MCX'
-            else:
-                # Default to NSE for equity stocks
-                exchange = 'NSE'
-                
-            logger.info(f"Processing string symbol depth: {symbol} on {exchange} (auto-detected)")
+
+            # Use the helper function to auto-detect exchange based on database lookup
+            exchange = self._auto_detect_exchange(symbol)
+
+            logger.info(f"Processing string symbol depth: {symbol} on {exchange} (auto-detected from database)")
             symbol_list = [{'symbol': symbol, 'exchange': exchange}]
         
         # For simple case, prepare the instruments for WebSocket subscription
@@ -758,15 +787,27 @@ class BrokerData:
                 token = get_token(symbol, exchange)
                 
                 if token:
+                    # Get broker symbol if different
+                    br_symbol = get_br_symbol(symbol, exchange) or symbol
+
+                    # Convert exchange for AliceBlue API (same as Angel)
+                    if exchange == 'NSE_INDEX':
+                        exchange = 'NSE'
+                    elif exchange == 'BSE_INDEX':
+                        exchange = 'BSE'
+                    elif exchange == 'MCX_INDEX':
+                        exchange = 'MCX'
+
                     # Create instrument for subscription
                     class Instrument:
                         def __init__(self, exchange, token, symbol=None):
                             self.exchange = exchange
                             self.token = token
                             self.symbol = symbol
-                    
-                    instrument = Instrument(exchange=exchange, token=token, symbol=symbol)
-                    
+
+                    # Use converted exchange for websocket subscription
+                    instrument = Instrument(exchange=exchange, token=token, symbol=br_symbol)
+
                     # Subscribe to market depth
                     logger.info(f"Subscribing to market depth for {exchange}:{symbol} with token {token}")
                     
@@ -778,7 +819,7 @@ class BrokerData:
                         logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
                         time.sleep(2.0)  # Increased wait time for depth data
                         
-                        # Retrieve depth from WebSocket
+                        # Retrieve depth from WebSocket using converted exchange
                         depth = websocket.get_market_depth(exchange, token)
                         
                         if depth:
@@ -817,7 +858,7 @@ class BrokerData:
                                 })
                             
                             depth_data.append(item)
-                            logger.info(f"Retrieved market depth for {symbol} on {exchange}")
+                            logger.debug(f"Retrieved market depth for {symbol} on {exchange}")
                             
                             # Unsubscribe after getting the data to stop continuous streaming
                             logger.info(f"Unsubscribing from depth for {exchange}:{symbol} after retrieving data")
@@ -873,18 +914,26 @@ class BrokerData:
             pd.DataFrame: DataFrame with historical candle data
         """
         try:
-            logger.info(f"Getting historical data for {symbol}:{exchange}, timeframe: {timeframe}")
-            logger.info(f"Date range: {start_date} to {end_date}")
-            logger.info(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
+            logger.debug(f"Getting historical data for {symbol}:{exchange}, timeframe: {timeframe}")
+            logger.debug(f"Date range: {start_date} to {end_date}")
+            logger.debug(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
             
             # Get token for the symbol
             token = get_token(symbol, exchange)
             if not token:
                 logger.error(f"Token not found for {symbol} on {exchange}")
                 return pd.DataFrame()
-            
-            logger.info(f"Found token {token} for {symbol}:{exchange}")
-            
+
+            logger.debug(f"Found token {token} for {symbol}:{exchange}")
+
+            # Convert exchange for AliceBlue API (same as Angel)
+            if exchange == 'NSE_INDEX':
+                exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                exchange = 'MCX'
+
             # Check for exchange limitations based on AliceBlue API documentation
             if exchange in ['BSE', 'BCD', 'BFO']:
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
@@ -963,8 +1012,9 @@ class BrokerData:
                                 # Set to end of day (23:59:59) for end dates
                                 dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                             else:
-                                # Set to start of day (00:00:00) for start dates
-                                dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                                # For intraday data, set to market open (09:15:00) for start dates
+                                # This ensures we get full day data from market open
+                                dt = dt.replace(hour=9, minute=15, second=0, microsecond=0)
                         
                         # Localize to IST timezone (AliceBlue expects IST timestamps)
                         dt_ist = ist.localize(dt)
@@ -1035,10 +1085,10 @@ class BrokerData:
             }
             
             # Debug logging
-            logger.info(f"Making historical data request:")
-            logger.info(f"URL: {HISTORICAL_API_URL}")
-            logger.info(f"Headers: {headers}")
-            logger.info(f"Payload: {payload}")
+            logger.debug(f"Making historical data request:")
+            logger.debug(f"URL: {HISTORICAL_API_URL}")
+            logger.debug(f"Headers: {headers}")
+            logger.debug(f"Payload: {payload}")
             
             # Make request to historical API
             client = get_httpx_client()
@@ -1083,6 +1133,10 @@ class BrokerData:
                 logger.error(f"Missing required columns in historical data response")
                 return pd.DataFrame()
 
+            # Log the first few rows of raw data to debug
+            logger.info(f"First 3 rows of historical data from AliceBlue: {df.head(3).to_dict('records')}")
+            logger.info(f"Total rows received: {len(df)}")
+
             # Convert time column to datetime
             # AliceBlue returns time as string in format 'YYYY-MM-DD HH:MM:SS'
             df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -1121,6 +1175,53 @@ class BrokerData:
 
             # Add OI column with zeros (AliceBlue doesn't provide OI in historical data)
             df['oi'] = 0
+
+            # For intraday data, ensure we have data from market open (9:15 AM)
+            if timeframe != 'D' and not df.empty:
+                import pytz
+                from datetime import datetime, time, timedelta
+                ist = pytz.timezone('Asia/Kolkata')
+
+                # Get the date from the first timestamp
+                first_timestamp = pd.to_datetime(df['timestamp'].iloc[0], unit='s')
+                first_timestamp = first_timestamp.tz_localize('UTC').tz_convert(ist)
+
+                # Create market open time for that date
+                market_date = first_timestamp.date()
+                market_open = ist.localize(datetime.combine(market_date, time(9, 15)))
+                market_open_ts = int(market_open.timestamp())
+
+                # If first data point is after 9:15 AM, pad with data from 9:15 AM
+                if df['timestamp'].iloc[0] > market_open_ts:
+                    logger.info(f"Padding data from market open (9:15 AM) to first available data point")
+
+                    # Get the first available price as reference
+                    first_price = df['open'].iloc[0]
+
+                    # Create timestamps from 9:15 AM to first data point (1-minute intervals)
+                    current_ts = market_open_ts
+                    padding_data = []
+
+                    while current_ts < df['timestamp'].iloc[0]:
+                        padding_data.append({
+                            'timestamp': current_ts,
+                            'open': first_price,
+                            'high': first_price,
+                            'low': first_price,
+                            'close': first_price,
+                            'volume': 0,
+                            'oi': 0
+                        })
+                        current_ts += 60  # Add 1 minute
+
+                    if padding_data:
+                        # Create DataFrame from padding data
+                        padding_df = pd.DataFrame(padding_data)
+                        # Concatenate with original data
+                        df = pd.concat([padding_df, df], ignore_index=True)
+                        # Re-sort by timestamp
+                        df = df.sort_values('timestamp').reset_index(drop=True)
+                        logger.info(f"Added {len(padding_data)} data points from market open")
 
             # Return columns in the order matching Angel broker format
             df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]

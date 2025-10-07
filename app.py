@@ -11,7 +11,8 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
-from utils.logging import get_logger, log_startup_banner  # Import centralized logging
+from utils.security_middleware import init_security_middleware  # Import security middleware
+from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
@@ -36,6 +37,8 @@ from blueprints.websocket_example import websocket_bp  # Import the websocket ex
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
+from blueprints.security import security_bp  # Import the security blueprint
+from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -51,6 +54,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -84,6 +88,10 @@ def create_app():
     
     # Initialize Socket.IO error handling
     init_socketio_error_handling(socketio)
+
+    # Register custom Jinja2 filters
+    from utils.number_formatter import format_indian_number
+    app.jinja_env.filters['indian_number'] = format_indian_number
 
     # Environment variables
     app.secret_key = os.getenv('APP_KEY')
@@ -140,7 +148,10 @@ def create_app():
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
 
-    # Initialize traffic logging middleware after RESTx but before other blueprints
+    # Initialize security middleware before traffic logging
+    init_security_middleware(app)
+
+    # Initialize traffic logging middleware after security
     init_traffic_logging(app)
 
     # Register other blueprints
@@ -164,7 +175,9 @@ def create_app():
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
-    
+    app.register_blueprint(security_bp)  # Register Security blueprint
+    app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
+
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -180,27 +193,45 @@ def create_app():
 
         # Auto-start Telegram bot if it was active
         try:
-            import asyncio
+            import sys
             bot_config = get_bot_config()
             if bot_config.get('is_active') and bot_config.get('bot_token'):
                 logger.info("Auto-starting Telegram bot...")
 
-                # Create a new event loop for the async operation
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # Check if we're in eventlet environment
+                if 'eventlet' in sys.modules:
+                    logger.info("Eventlet detected during auto-start - using synchronous initialization")
+                    # Use synchronous initialization for eventlet
+                    success, message = telegram_bot_service.initialize_bot_sync(token=bot_config['bot_token'])
+                else:
+                    # Initialize the bot in a separate thread for non-eventlet environments
+                    logger.info("Standard environment during auto-start - using async initialization")
+                    import asyncio
+                    import threading
 
-                # Initialize the bot
-                success, message = loop.run_until_complete(
-                    telegram_bot_service.initialize_bot(
-                        token=bot_config['bot_token']
-                    )
-                )
+                    def init_bot():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(
+                                telegram_bot_service.initialize_bot(token=bot_config['bot_token'])
+                            )
+                        finally:
+                            loop.close()
+
+                    result = [None]
+                    def run_init():
+                        result[0] = init_bot()
+
+                    thread = threading.Thread(target=run_init)
+                    thread.start()
+                    thread.join(timeout=10)
+
+                    success, message = result[0] if result[0] else (False, "Initialization timeout")
 
                 if success:
-                    # Start the bot
-                    success, message = loop.run_until_complete(
-                        telegram_bot_service.start_bot()
-                    )
+                    # Start the bot (now synchronous)
+                    success, message = telegram_bot_service.start_bot()
 
                     if success:
                         logger.info(f"Telegram bot auto-started successfully: {message}")
@@ -208,8 +239,6 @@ def create_app():
                         logger.error(f"Failed to auto-start Telegram bot: {message}")
                 else:
                     logger.error(f"Failed to initialize Telegram bot: {message}")
-
-                loop.close()
 
         except Exception as e:
             logger.error(f"Error auto-starting Telegram bot: {str(e)}")
@@ -237,6 +266,17 @@ def create_app():
     
     @app.errorhandler(404)
     def not_found_error(error):
+        from flask import request
+        from database.traffic_db import Error404Tracker
+        from utils.ip_helper import get_real_ip
+
+        # Track the 404 error
+        client_ip = get_real_ip()
+        path = request.path
+
+        # Track 404 error for security monitoring
+        Error404Tracker.track_404(client_ip, path)
+
         return render_template('404.html'), 404
 
     @app.errorhandler(500)
@@ -269,6 +309,7 @@ def setup_environment(app):
         ensure_traffic_logs_exists()
         ensure_latency_tables_exists()
         ensure_strategy_tables_exists()
+        ensure_sandbox_tables_exists()
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
@@ -281,8 +322,48 @@ app = create_app()
 # Explicitly call the setup environment function
 setup_environment(app)
 
+# Auto-start execution engine and squareoff scheduler if in analyzer mode
+with app.app_context():
+    try:
+        from database.settings_db import get_analyze_mode
+        from sandbox.execution_thread import start_execution_engine
+        from sandbox.squareoff_thread import start_squareoff_scheduler
+
+        if get_analyze_mode():
+            # Start execution engine for order processing
+            success, message = start_execution_engine()
+            if success:
+                logger.info("Execution engine auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start execution engine: {message}")
+
+            # Start squareoff scheduler for MIS auto-squareoff
+            success, message = start_squareoff_scheduler()
+            if success:
+                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
+            else:
+                logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+
+            # Run catch-up settlement for any CNC positions that should have been settled while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed on startup")
+            except Exception as e:
+                logger.error(f"Error in startup catch-up settlement: {e}")
+    except Exception as e:
+        logger.error(f"Error checking analyzer mode on startup: {e}")
+
 # Integrate the WebSocket proxy server with the Flask app
-start_websocket_proxy(app)
+# Check if running in Docker (standalone mode) or local (integrated mode)
+# Docker is detected by checking for /.dockerenv file or APP_MODE override
+is_docker = os.path.exists('/.dockerenv') or os.environ.get('APP_MODE', '').strip().strip("'\"") == 'standalone'
+
+if is_docker:
+    logger.info("Running in Docker/standalone mode - WebSocket server started separately by start.sh")
+else:
+    logger.info("Running in local/integrated mode - Starting WebSocket proxy in Flask")
+    start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == '__main__':
@@ -292,7 +373,37 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
     # Log the OpenAlgo access URL with enhanced styling
-    url = f"http://{host_ip}:{port}"
-    log_startup_banner(logger, "OpenAlgo is running!", url)
+    import socket
+
+    # If binding to all interfaces (0.0.0.0), show all available IPs
+    if host_ip == '0.0.0.0':
+        urls = []
+        urls.append(f"http://localhost:{port}")
+        urls.append(f"http://127.0.0.1:{port}")
+
+        # Get local network IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            urls.append(f"http://{local_ip}:{port}")
+        except:
+            local_ip = "127.0.0.1"
+
+        # Show accessible URLs (excluding localhost) with blue highlighting
+        logger.info("=" * 60)
+        logger.info("OpenAlgo is running!")
+        logger.info(f"Access the application at:")
+        for url in urls:
+            # Skip localhost URL
+            if "localhost" not in url:
+                highlighted = highlight_url(url)
+                logger.info(f"  → {highlighted}")
+        logger.info("=" * 60)
+    else:
+        # Single IP binding
+        url = f"http://{host_ip}:{port}"
+        log_startup_banner(logger, "OpenAlgo is running!", url)
 
     socketio.run(app, host=host_ip, port=port, debug=debug)

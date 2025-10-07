@@ -39,7 +39,7 @@ flask-sqlalchemy==3.1.1
 flask-wtf==1.2.1
 greenlet==3.1.1
 h11==0.16.0
-h2==4.2.0
+h2==4.3.0
 hpack==4.1.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -74,7 +74,7 @@ nbformat==5.10.4
 nest-asyncio==1.6.0
 numba==0.61.2
 numpy==2.2.4
-openalgo==1.0.31
+openalgo==1.0.32
 ordered-set==4.1.0
 orjson==3.11.3
 packaging==24.1

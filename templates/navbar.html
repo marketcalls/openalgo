@@ -72,11 +72,11 @@
         <!-- Mode Badge and Toggle Container -->
         <div class="mode-controller-container">
             <!-- Mode Badge -->
-            <div class="badge badge-lg badge-success" id="mode-badge">Live Mode</div>
-            
+            <div class="badge badge-lg" id="mode-badge" style="opacity: 0;"></div>
+
             <!-- Mode Toggle -->
             <div class="tooltip tooltip-bottom" data-tip="Toggle Live/Analyze Mode">
-                <label class="swap swap-rotate btn btn-ghost btn-circle">
+                <label class="swap swap-rotate btn btn-ghost btn-circle" style="opacity: 0;">
                     <input type="checkbox" class="mode-controller" />
                     <!-- analyze icon -->
                     <svg class="swap-on fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -89,9 +89,42 @@
                 </label>
             </div>
         </div>
+        <script>
+            // Initialize mode badge and toggle immediately
+            (function() {
+                const analyzeMode = sessionStorage.getItem('analyzeMode') || localStorage.getItem('analyzeMode');
+                const modeBadge = document.getElementById('mode-badge');
+                const modeController = document.querySelector('.mode-controller');
+                const modeToggleLabel = document.querySelector('.mode-controller-container .swap');
+
+                const isAnalyze = analyzeMode === 'true';
+
+                // Set mode controller checkbox state
+                if (modeController) {
+                    modeController.checked = isAnalyze;
+                }
+
+                // Show toggle with correct icon
+                if (modeToggleLabel) {
+                    modeToggleLabel.style.opacity = '1';
+                }
+
+                // Set mode badge
+                if (modeBadge) {
+                    if (isAnalyze) {
+                        modeBadge.textContent = 'Analyze Mode';
+                        modeBadge.classList.add('badge-warning');
+                    } else {
+                        modeBadge.textContent = 'Live Mode';
+                        modeBadge.classList.add('badge-success');
+                    }
+                    modeBadge.style.opacity = '1';
+                }
+            })();
+        </script>
 
         <!-- Theme Toggle -->
-        <label class="swap swap-rotate btn btn-ghost btn-circle theme-switcher">
+        <label class="swap swap-rotate btn btn-ghost btn-circle theme-switcher" style="opacity: 0;">
             <input type="checkbox" class="theme-controller" />
             <!-- sun icon -->
             <svg class="swap-on fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -102,12 +135,38 @@
                 <path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/>
             </svg>
         </label>
+        <script>
+            // Initialize theme toggle immediately to prevent flicker
+            (function() {
+                const analyzeMode = sessionStorage.getItem('analyzeMode') || localStorage.getItem('analyzeMode');
+                const themeSwitcher = document.querySelector('.theme-switcher');
+                const themeController = document.querySelector('.theme-controller');
+
+                if (analyzeMode === 'true') {
+                    // In analyze mode, disable and hide
+                    if (themeController) themeController.disabled = true;
+                    if (themeSwitcher) {
+                        themeSwitcher.classList.add('disabled');
+                        themeSwitcher.style.opacity = '1';
+                    }
+                } else {
+                    // Set correct initial state based on theme
+                    const currentTheme = document.documentElement.getAttribute('data-theme');
+                    if (themeController) {
+                        themeController.checked = currentTheme === 'dark';
+                    }
+                    if (themeSwitcher) {
+                        themeSwitcher.style.opacity = '1';
+                    }
+                }
+            })();
+        </script>
 
         <!-- Profile Dropdown -->
         <div class="dropdown dropdown-end">
-            <label tabindex="0" class="btn btn-ghost btn-circle avatar placeholder">
-                <div class="bg-primary text-primary-content rounded-full w-10">
-                    <span class="text-xl">{{ session['user'][0]|upper if session.user else 'O' }}</span>
+            <label tabindex="0" class="cursor-pointer">
+                <div class="bg-primary text-primary-content rounded-full w-10 h-10 flex items-center justify-center">
+                    <span class="text-lg font-medium" style="line-height: 1;">{{ session['user'][0]|upper if session.user else 'O' }}</span>
                 </div>
             </label>
             <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow-lg bg-base-100 rounded-box w-52">
@@ -184,11 +243,27 @@
                     </a>
                 </li>
                 <li>
+                    <a href="{{ url_for('security_bp.security_dashboard') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        Security
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('search_bp.token') }}" class="text-base">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                         Search
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('sandbox_bp.sandbox_config') }}" class="text-base">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                        </svg>
+                        Sandbox
                     </a>
                 </li>
                 <li>

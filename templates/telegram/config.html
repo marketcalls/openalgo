@@ -14,18 +14,18 @@
     </div>
 
     <!-- Configuration Form -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body p-6">
             <h2 class="card-title text-xl mb-4">Bot Settings</h2>
 
             <!-- Bot Token -->
             <div class="form-control mb-4">
                 <label class="label">
-                    <span class="label-text font-semibold">Bot Token</span>
+                    <span class="label-text font-medium">Bot Token</span>
                     <span class="label-text-alt">Get from @BotFather on Telegram</span>
                 </label>
                 <input type="password" id="botToken"
-                       class="input input-bordered"
+                       class="input input-bordered w-full"
                        placeholder="Enter your bot token"
                        value="{{ config.bot_token or '' }}">
                 <label class="label">
@@ -36,11 +36,11 @@
 
             <!-- Broadcast Settings -->
             <div class="form-control mb-4">
-                <label class="label cursor-pointer">
-                    <span class="label-text font-semibold">Enable Broadcast</span>
+                <label class="label cursor-pointer justify-start gap-4">
                     <input type="checkbox" id="broadcastEnabled"
                            class="toggle toggle-primary"
                            {% if config.broadcast_enabled %}checked{% endif %}>
+                    <span class="label-text font-medium">Enable Broadcast</span>
                 </label>
                 <label class="label">
                     <span class="label-text-alt">Allow sending messages to all users</span>
@@ -50,10 +50,10 @@
             <!-- Rate Limiting -->
             <div class="form-control mb-4">
                 <label class="label">
-                    <span class="label-text font-semibold">Rate Limit (per minute)</span>
+                    <span class="label-text font-medium">Rate Limit (per minute)</span>
                 </label>
                 <input type="number" id="rateLimit"
-                       class="input input-bordered"
+                       class="input input-bordered w-full"
                        min="1" max="120"
                        value="{{ config.rate_limit_per_minute or 30 }}">
                 <label class="label">
@@ -62,16 +62,16 @@
             </div>
 
             <!-- Save Button and Documentation -->
-            <div class="card-actions justify-between">
+            <div class="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-2">
                 <a href="https://docs.openalgo.in/trading-platform/telegram" target="_blank"
                    class="btn btn-outline btn-info">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                         <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
                     </svg>
                     View Documentation
                 </a>
                 <button id="saveConfigBtn" class="btn btn-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                         <path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z" />
                     </svg>
                     Save Configuration
@@ -82,14 +82,14 @@
 
     <!-- Help Section -->
     <div class="card bg-base-200 shadow-xl mt-6">
-        <div class="card-body">
+        <div class="card-body p-6">
             <h2 class="card-title text-xl mb-4">Quick Setup Guide</h2>
 
-            <div class="alert alert-info mb-4">
-                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <div role="alert" class="alert alert-info mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="h-6 w-6 shrink-0 stroke-current">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <div>
+                <div class="space-y-1">
                     <p class="font-semibold">Need detailed instructions?</p>
                     <p>Visit our complete <a href="https://docs.openalgo.in/trading-platform/telegram" target="_blank" class="link link-primary font-semibold">Telegram Bot Setup Guide</a> for step-by-step instructions with screenshots.</p>
                 </div>

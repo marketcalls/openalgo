@@ -9,6 +9,7 @@ from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
 from extensions import socketio
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -90,28 +91,23 @@ def cancel_order_with_auth(
     if 'apikey' in order_request_data:
         order_request_data.pop('apikey', None)
     
-    # If in analyze mode, return success response
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
-        # Store complete request data without apikey
-        analyzer_request = order_request_data.copy()
-        analyzer_request['api_type'] = 'cancelorder'
-        
-        response_data = {
-            'mode': 'analyze',
-            'orderid': orderid,
-            'status': 'success'
-        }
-        
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelorder')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
-        
-        return True, response_data, 200
+        from services.sandbox_service import sandbox_cancel_order
+
+        # Get API key from original data
+        api_key = original_data.get('apikey')
+        if not api_key:
+            error_response = {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }
+            return False, error_response, 400
+
+        # Route to sandbox
+        order_data = {'orderid': orderid}
+        return sandbox_cancel_order(order_data, api_key, original_data)
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
@@ -146,6 +142,8 @@ def cancel_order_with_auth(
             'orderid': orderid
         }
         executor.submit(async_log_order, 'cancelorder', order_request_data, order_response_data)
+        # Send Telegram alert for live mode
+        telegram_alert_service.send_order_alert('cancelorder', {'orderid': orderid}, order_response_data, original_data.get('apikey'))
         return True, order_response_data, 200
     else:
         message = response_message.get('message', 'Failed to cancel order') if isinstance(response_message, dict) else 'Failed to cancel order'

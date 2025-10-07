@@ -3,58 +3,75 @@
 {% block head %}
 <style>
     .table-header {
-        @apply sticky top-0 bg-base-200 z-10;
+        position: sticky;
+        top: 0;
+        background: oklch(var(--b2));
+        z-index: 10;
     }
 
     .sort-icon {
-        @apply inline-block ml-1 opacity-50;
+        display: inline-block;
+        margin-left: 0.25rem;
+        opacity: 0.5;
     }
 
     th.sortable {
-        @apply cursor-pointer hover:bg-base-300 transition-colors duration-200;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+    }
+
+    th.sortable:hover {
+        background: oklch(var(--b3));
     }
 
     .symbol-cell {
-        @apply font-medium flex items-center gap-2;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
 
     .name-cell {
-        @apply opacity-70;
+        opacity: 0.7;
     }
 
     .token-cell {
-        @apply font-mono text-sm;
-    }
-
-    .numeric-cell {
-        @apply font-mono text-right;
+        font-family: ui-monospace, monospace;
+        font-size: 0.875rem;
     }
 
     .copy-btn {
-        @apply btn btn-ghost btn-xs p-1;
+        padding: 0.25rem;
+        border-radius: 0.375rem;
+        transition: color 0.15s ease, background-color 0.15s ease;
+        cursor: pointer;
+        background: transparent;
+        border: none;
+        color: oklch(var(--bc) / 0.6);
     }
 
     .copy-btn:hover {
-        @apply text-primary;
+        color: oklch(var(--p));
+        background: oklch(var(--p) / 0.1);
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full">
+<div class="w-full py-6">
     <!-- Search Header -->
-    <div class="card bg-base-100 shadow-lg mb-6">
-        <div class="card-body">
-            <div class="flex justify-between items-center mb-4">
-                <h1 class="text-2xl font-bold">Search Results</h1>
-                <a href="{{ url_for('search_bp.token') }}" class="btn btn-ghost btn-sm gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <div class="card bg-base-200 shadow-xl mb-6">
+        <div class="card-body p-6">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                <h1 class="text-3xl font-bold">Search Results</h1>
+                <a href="{{ url_for('search_bp.token') }}" class="btn btn-primary gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
                     New Search
                 </a>
             </div>
-            <div class="stats shadow">
+            <div class="stats bg-base-100 shadow">
                 <div class="stat">
                     <div class="stat-title">Found</div>
                     <div class="stat-value text-primary">{{ results|length }}</div>
@@ -65,44 +82,88 @@
     </div>
 
     <!-- Results Table -->
-    <div class="card bg-base-100 shadow-lg overflow-x-auto">
-        <div class="card-body p-0">
-            <table class="table table-zebra w-full">
+    <div class="card bg-base-200 shadow-xl overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="table w-full table-pin-rows">
                 <thead class="table-header">
                     <tr>
-                        <th class="sortable" data-sort="symbol">
-                            Symbol
-                            <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                            </svg>
+                        <th class="sortable w-48" data-sort="symbol">
+                            <div class="flex items-center gap-1">
+                                Symbol
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
                         </th>
-                        <th class="sortable" data-sort="brsymbol">Broker Symbol</th>
-                        <th class="sortable" data-sort="name">Name</th>
-                        <th class="sortable" data-sort="exchange">Exchange</th>
-                        <th class="sortable" data-sort="brexchange">Broker Exchange</th>
-                        <th class="sortable" data-sort="token">Token</th>
-                        <th class="sortable" data-sort="lotsize">Lot Size</th>
+                        <th class="sortable w-48" data-sort="brsymbol">
+                            <div class="flex items-center gap-1">
+                                Broker Symbol
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable w-40" data-sort="name">
+                            <div class="flex items-center gap-1">
+                                Name
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable w-28" data-sort="exchange">
+                            <div class="flex items-center gap-1">
+                                Exchange
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable w-32" data-sort="brexchange">
+                            <div class="flex items-center gap-1">
+                                Broker Exch
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable w-36" data-sort="token">
+                            <div class="flex items-center gap-1">
+                                Token
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="sortable w-20" data-sort="lotsize">
+                            <div class="flex items-center gap-1">
+                                Lot Size
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in results %}
-                    <tr>
-                        <td>
+                    <tr class="hover">
+                        <td class="w-48">
                             <div class="symbol-cell">
-                                {{ row.symbol }}
-                                <button class="copy-btn tooltip {% if loop.index <= 3 %}tooltip-bottom{% else %}tooltip-top{% endif %}" data-tip="Copy symbol" onclick="copyToClipboard('{{ row.symbol }}', event)">
+                                <span class="font-semibold">{{ row.symbol }}</span>
+                                <button class="copy-btn tooltip {% if loop.index <= 3 %}tooltip-bottom{% else %}tooltip-top{% endif %}" data-tip="Copy" onclick="copyToClipboard('{{ row.symbol }}', event)">
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                                     </svg>
                                 </button>
                             </div>
                         </td>
-                        <td>{{ row.brsymbol }}</td>
-                        <td class="name-cell">{{ row.name }}</td>
-                        <td><div class="badge badge-ghost">{{ row.exchange }}</div></td>
-                        <td><div class="badge badge-ghost">{{ row.brexchange }}</div></td>
-                        <td class="token-cell">{{ row.token }}</td>
-                        <td class="numeric-cell">{{ row.lotsize or '-' }}</td>
+                        <td class="w-48">{{ row.brsymbol }}</td>
+                        <td class="name-cell w-40 truncate">{{ row.name }}</td>
+                        <td class="w-28"><div class="badge badge-primary badge-outline badge-sm">{{ row.exchange }}</div></td>
+                        <td class="w-32"><div class="badge badge-secondary badge-outline badge-sm">{{ row.brexchange }}</div></td>
+                        <td class="token-cell w-36">{{ row.token }}</td>
+                        <td class="w-20">{{ row.lotsize or '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -110,11 +171,26 @@
         </div>
     </div>
 
-    <!-- Pagination -->
-    {% if results|length > 10 %}
-    <div id="pagination" class="flex justify-center mt-8">
+    <!-- Pagination Controls -->
+    {% if results|length > 25 %}
+    <div class="flex flex-col sm:flex-row justify-between items-center gap-4 mt-6">
+        <div class="text-sm text-base-content/70">
+            Showing <span id="showingStart">1</span> to <span id="showingEnd">25</span> of <span id="totalResults">{{ results|length }}</span> results
+        </div>
         <div class="join">
-            <!-- Pagination will be populated by JavaScript -->
+            <button class="join-item btn btn-sm" id="prevPage">«</button>
+            <button class="join-item btn btn-sm btn-disabled" id="pageInfo">Page 1</button>
+            <button class="join-item btn btn-sm" id="nextPage">»</button>
+        </div>
+        <div class="form-control">
+            <select id="rowsPerPageSelect" class="select select-bordered select-sm">
+                <option value="25">25 per page</option>
+                <option value="50">50 per page</option>
+                <option value="100">100 per page</option>
+                <option value="250">250 per page</option>
+                <option value="500">500 per page</option>
+                <option value="99999">Show All</option>
+            </select>
         </div>
     </div>
     {% endif %}
@@ -122,7 +198,7 @@
 
 <script>
 function copyToClipboard(text, event) {
-    event.stopPropagation(); // Prevent row click event if any
+    event.stopPropagation();
     navigator.clipboard.writeText(text).then(() => {
         showToast('Symbol copied to clipboard', 'success');
     }).catch(err => {
@@ -132,140 +208,130 @@ function copyToClipboard(text, event) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    const rows = Array.from(document.querySelectorAll('tbody tr'));
+    const totalResults = rows.length;
+    let rowsPerPage = 25;
+    let currentPage = 1;
+
     // Sorting functionality
     document.querySelectorAll('th.sortable').forEach(header => {
         header.addEventListener('click', () => {
             const table = header.closest('table');
             const tbody = table.querySelector('tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
             const index = Array.from(header.parentElement.children).indexOf(header);
             const sortKey = header.dataset.sort;
-            
-            // Get current sort direction
+
             const currentDirection = header.getAttribute('data-sort-direction') || 'asc';
             const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
-            
-            // Update sort direction indicators
+
             document.querySelectorAll('th').forEach(th => {
                 th.removeAttribute('data-sort-direction');
+                const icon = th.querySelector('.sort-icon');
+                if (icon) icon.style.opacity = '0.5';
             });
             header.setAttribute('data-sort-direction', newDirection);
-            
-            // Sort rows
+
+            const icon = header.querySelector('.sort-icon');
+            if (icon) {
+                icon.style.opacity = '1';
+                icon.style.transform = newDirection === 'desc' ? 'rotate(180deg)' : 'rotate(0deg)';
+            }
+
             rows.sort((a, b) => {
-                const aValue = a.children[index].textContent.trim();
-                const bValue = b.children[index].textContent.trim();
-                
-                // Handle numeric values
-                if (['lotsize'].includes(sortKey)) {
-                    const aNum = parseFloat(aValue) || 0;
-                    const bNum = parseFloat(bValue) || 0;
-                    return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
+                let aValue = a.children[index].textContent.trim();
+                let bValue = b.children[index].textContent.trim();
+
+                if (['lotsize', 'token'].includes(sortKey)) {
+                    aValue = parseFloat(aValue.replace(/[^0-9.-]/g, '')) || 0;
+                    bValue = parseFloat(bValue.replace(/[^0-9.-]/g, '')) || 0;
+                    return newDirection === 'asc' ? aValue - bValue : bValue - aValue;
                 }
-                
-                // Handle text values
-                return newDirection === 'asc' 
+
+                return newDirection === 'asc'
                     ? aValue.localeCompare(bValue)
                     : bValue.localeCompare(aValue);
             });
-            
-            // Clear and repopulate tbody
+
             tbody.innerHTML = '';
-            rows.forEach((row, index) => {
-                // Update tooltip position based on row index
-                const copyBtn = row.querySelector('.copy-btn');
-                if (copyBtn) {
-                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
-                    copyBtn.classList.add(index < 3 ? 'tooltip-bottom' : 'tooltip-top');
-                }
-                tbody.appendChild(row);
-            });
+            rows.forEach(row => tbody.appendChild(row));
+            updatePagination();
         });
     });
 
-    // Pagination functionality
-    const rowsPerPage = 10;
-    const rows = document.querySelectorAll('tbody tr');
-    const totalPages = Math.ceil(rows.length / rowsPerPage);
-    let currentPage = 1;
-
     function showPage(pageNumber) {
-        let visibleIndex = 0;
+        const start = (pageNumber - 1) * rowsPerPage;
+        const end = start + rowsPerPage;
+
         rows.forEach((row, index) => {
-            const isVisible = (index >= (pageNumber - 1) * rowsPerPage && index < pageNumber * rowsPerPage);
-            row.style.display = isVisible ? '' : 'none';
-            
-            // Update tooltip position for visible rows
-            if (isVisible) {
-                const copyBtn = row.querySelector('.copy-btn');
-                if (copyBtn) {
-                    copyBtn.classList.remove('tooltip-top', 'tooltip-bottom');
-                    copyBtn.classList.add(visibleIndex < 3 ? 'tooltip-bottom' : 'tooltip-top');
-                }
-                visibleIndex++;
-            }
+            row.style.display = (index >= start && index < end) ? '' : 'none';
         });
+
+        // Update pagination info
+        const showingStartEl = document.getElementById('showingStart');
+        const showingEndEl = document.getElementById('showingEnd');
+        const pageInfoEl = document.getElementById('pageInfo');
+
+        if (showingStartEl) showingStartEl.textContent = Math.min(start + 1, totalResults);
+        if (showingEndEl) showingEndEl.textContent = Math.min(end, totalResults);
+        if (pageInfoEl) pageInfoEl.textContent = `Page ${pageNumber} of ${Math.ceil(totalResults / rowsPerPage)}`;
+
+        // Update button states
+        const prevBtn = document.getElementById('prevPage');
+        const nextBtn = document.getElementById('nextPage');
+        const totalPages = Math.ceil(totalResults / rowsPerPage);
+
+        if (prevBtn) {
+            prevBtn.disabled = pageNumber === 1;
+            prevBtn.classList.toggle('btn-disabled', pageNumber === 1);
+        }
+        if (nextBtn) {
+            nextBtn.disabled = pageNumber >= totalPages;
+            nextBtn.classList.toggle('btn-disabled', pageNumber >= totalPages);
+        }
+
+        // Scroll to top of table
+        document.querySelector('.card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    function setupPagination() {
-        const pagination = document.getElementById('pagination').querySelector('.join');
-        if (!pagination) return;
-        
-        pagination.innerHTML = '';
-        
-        // Previous button
-        const prevButton = document.createElement('button');
-        prevButton.className = 'join-item btn btn-sm';
-        prevButton.innerHTML = '«';
-        prevButton.addEventListener('click', () => {
+    function updatePagination() {
+        showPage(currentPage);
+    }
+
+    // Pagination controls
+    const prevBtn = document.getElementById('prevPage');
+    const nextBtn = document.getElementById('nextPage');
+    const rowsPerPageSelect = document.getElementById('rowsPerPageSelect');
+
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
             if (currentPage > 1) {
                 currentPage--;
                 updatePagination();
             }
         });
-        pagination.appendChild(prevButton);
+    }
 
-        // Page buttons
-        for (let i = 1; i <= totalPages; i++) {
-            const button = document.createElement('button');
-            button.className = `join-item btn btn-sm ${i === currentPage ? 'btn-active' : ''}`;
-            button.textContent = i;
-            button.addEventListener('click', () => {
-                currentPage = i;
-                updatePagination();
-            });
-            pagination.appendChild(button);
-        }
-
-        // Next button
-        const nextButton = document.createElement('button');
-        nextButton.className = 'join-item btn btn-sm';
-        nextButton.innerHTML = '»';
-        nextButton.addEventListener('click', () => {
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+            const totalPages = Math.ceil(totalResults / rowsPerPage);
             if (currentPage < totalPages) {
                 currentPage++;
                 updatePagination();
             }
         });
-        pagination.appendChild(nextButton);
     }
 
-    function updatePagination() {
-        showPage(currentPage);
-        
-        // Update button states
-        document.querySelectorAll('.join-item').forEach(button => {
-            button.classList.remove('btn-active');
-            if (button.textContent == currentPage) {
-                button.classList.add('btn-active');
-            }
+    if (rowsPerPageSelect) {
+        rowsPerPageSelect.addEventListener('change', (e) => {
+            rowsPerPage = parseInt(e.target.value);
+            currentPage = 1;
+            updatePagination();
         });
     }
 
-    // Initialize pagination if needed
-    if (rows.length > rowsPerPage) {
-        setupPagination();
-        showPage(1);
+    // Initialize pagination
+    if (totalResults > 25) {
+        updatePagination();
     }
 });
 </script>

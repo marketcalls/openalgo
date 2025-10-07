@@ -13,6 +13,7 @@ from database.telegram_db import (
 from services.telegram_bot_service import telegram_bot_service
 from utils.logging import get_logger
 import asyncio
+import concurrent.futures
 import json
 import os
 
@@ -25,14 +26,7 @@ TELEGRAM_MESSAGE_RATE_LIMIT = os.getenv("TELEGRAM_MESSAGE_RATE_LIMIT", "10 per m
 telegram_bp = Blueprint('telegram_bp', __name__, url_prefix='/telegram')
 
 
-def run_async(coro):
-    """Helper to run async coroutine in sync context"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+# No longer need run_async since we use the sync wrapper
 
 
 @telegram_bp.route('/')
@@ -162,16 +156,55 @@ def start_bot():
                 'message': 'Bot token not configured'
             }), 400
 
-        # Initialize bot
-        success, message = run_async(telegram_bot_service.initialize_bot(
-            token=config['bot_token']
-        ))
+        # Initialize bot - detect environment and use appropriate method
+        import sys
+
+        if 'eventlet' in sys.modules:
+            logger.info("Eventlet environment detected - using synchronous initialization")
+            # Use synchronous initialization for eventlet
+            success, message = telegram_bot_service.initialize_bot_sync(token=config['bot_token'])
+        else:
+            # Non-eventlet environment - use threaded async initialization
+            logger.info("Standard environment - using async initialization")
+
+            def init_bot():
+                try:
+                    # Try to get the current event loop
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If there's a running loop (e.g., in Docker),
+                        # schedule the coroutine in that loop
+                        future = asyncio.run_coroutine_threadsafe(
+                            telegram_bot_service.initialize_bot(token=config['bot_token']),
+                            loop
+                        )
+                        return future.result(timeout=10)
+                    else:
+                        # No running loop, create a new one
+                        return asyncio.run(
+                            telegram_bot_service.initialize_bot(token=config['bot_token'])
+                        )
+                except RuntimeError:
+                    # No event loop exists, create one
+                    return asyncio.run(
+                        telegram_bot_service.initialize_bot(token=config['bot_token'])
+                    )
+
+            import threading
+            result = [None]
+            def run_init():
+                result[0] = init_bot()
+
+            thread = threading.Thread(target=run_init)
+            thread.start()
+            thread.join(timeout=10)
+            success, message = result[0] if result[0] else (False, "Initialization failed")
 
         if not success:
             return jsonify({'status': 'error', 'message': message}), 500
 
-        # Start bot
-        success, message = run_async(telegram_bot_service.start_bot())
+        # Start bot (now synchronous)
+        success, message = telegram_bot_service.start_bot()
 
         if success:
             return jsonify({'status': 'success', 'message': message})
@@ -189,7 +222,7 @@ def stop_bot():
     """Stop the telegram bot"""
     try:
         # Use the synchronous stop method
-        success, message = telegram_bot_service.stop_bot_sync()
+        success, message = telegram_bot_service.stop_bot()
 
         if success:
             return jsonify({'status': 'success', 'message': message})
@@ -239,17 +272,16 @@ def broadcast():
         if not config.get('broadcast_enabled', True):
             return jsonify({'status': 'error', 'message': 'Broadcast is disabled'}), 403
 
-        # Use the bot's event loop for broadcast
-        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
-            # Schedule the coroutine in the bot's event loop
+        # Run broadcast using the bot's event loop
+        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
             future = asyncio.run_coroutine_threadsafe(
                 telegram_bot_service.broadcast_message(message, filters),
                 telegram_bot_service.bot_loop
             )
-            success_count, fail_count = future.result(timeout=30)  # Wait up to 30 seconds
+            success_count, fail_count = future.result(timeout=30)
         else:
-            # Fallback to creating new event loop
-            success_count, fail_count = run_async(telegram_bot_service.broadcast_message(message, filters))
+            success_count, fail_count = 0, 0
+            logger.error("Bot not running or loop not available")
 
         return jsonify({
             'status': 'success',
@@ -311,17 +343,16 @@ def send_test_message():
                 'message': 'No Telegram users found. Please ensure at least one user has started the bot with /start'
             }), 404
 
-        # Use the bot's event loop for sending notification
-        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
-            # Schedule the coroutine in the bot's event loop
+        # Run notification using the bot's event loop
+        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
             future = asyncio.run_coroutine_threadsafe(
                 telegram_bot_service.send_notification(telegram_user['telegram_id'], message),
                 telegram_bot_service.bot_loop
             )
-            success = future.result(timeout=10)  # Wait up to 10 seconds
+            success = future.result(timeout=10)
         else:
-            # Fallback to creating new event loop
-            success = run_async(telegram_bot_service.send_notification(telegram_user['telegram_id'], message))
+            success = False
+            logger.error("Bot not running or loop not available")
 
         if success:
             return jsonify({'status': 'success', 'message': 'Test message sent'})
@@ -373,17 +404,16 @@ def send_message():
         # Log who sent the message for audit trail
         logger.info(f"User {username} sending message to Telegram ID {telegram_id}")
 
-        # Use the bot's event loop for sending notification
-        if telegram_bot_service.bot_loop and telegram_bot_service.bot_loop.is_running():
-            # Schedule the coroutine in the bot's event loop
+        # Run notification using the bot's event loop
+        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
             future = asyncio.run_coroutine_threadsafe(
                 telegram_bot_service.send_notification(telegram_id, message),
                 telegram_bot_service.bot_loop
             )
-            success = future.result(timeout=10)  # Wait up to 10 seconds
+            success = future.result(timeout=10)
         else:
-            # Fallback to creating new event loop
-            success = run_async(telegram_bot_service.send_notification(telegram_id, message))
+            success = False
+            logger.error("Bot not running or loop not available")
 
         if success:
             logger.info(f"Message sent to Telegram ID {telegram_id}")

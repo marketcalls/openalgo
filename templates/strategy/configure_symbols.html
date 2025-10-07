@@ -35,13 +35,13 @@
                 <h2 class="card-title">Add Single Symbol</h2>
                 
                 <form id="singleSymbolForm" class="space-y-4">
-                    <div class="form-control">
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Symbol</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
                         <div class="relative">
-                            <input type="text" id="symbolSearch" name="symbol" class="input input-bordered w-full" 
+                            <input type="text" id="symbolSearch" name="symbol" class="input input-bordered w-full"
                                    placeholder="Search symbol..." required readonly>
                             <div id="searchResults" class="absolute z-10 w-full mt-1 hidden">
                                 <ul class="menu bg-base-200 rounded-box shadow-lg max-h-60 overflow-y-auto">
@@ -51,12 +51,12 @@
                         </div>
                     </div>
 
-                    <div class="form-control">
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Exchange</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <select name="exchange" class="select select-bordered" required>
+                        <select name="exchange" class="select select-bordered w-full" required>
                             <option value="NSE" selected>NSE</option>
                             <option value="BSE">BSE</option>
                             <option value="NFO">NFO</option>
@@ -68,21 +68,21 @@
                         </select>
                     </div>
 
-                    <div class="form-control">
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Quantity</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <input type="number" name="quantity" class="input input-bordered" 
+                        <input type="number" name="quantity" class="input input-bordered w-full"
                                min="1" step="1" required>
                     </div>
 
-                    <div class="form-control">
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Product Type</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <select name="product_type" class="select select-bordered" required>
+                        <select name="product_type" class="select select-bordered w-full" required>
                             <option value="MIS">MIS (Intraday)</option>
                             <option value="CNC">CNC (Delivery)</option>
                             <option value="NRML">NRML (Normal)</option>
@@ -102,12 +102,12 @@
                 <h2 class="card-title">Add Multiple Symbols</h2>
                 
                 <form id="bulkSymbolsForm" class="space-y-4">
-                    <div class="form-control">
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Symbols (CSV format)</span>
                             <span class="label-text-alt text-error">*</span>
                         </label>
-                        <textarea name="symbols" class="textarea textarea-bordered h-48" required
+                        <textarea name="symbols" class="textarea textarea-bordered w-full h-48" required
                                   placeholder="Format: Symbol,Exchange,Quantity,Product&#10;Example:&#10;SBIN,NSE,100,MIS&#10;INFY,NSE,50,CNC"></textarea>
                     </div>
 
