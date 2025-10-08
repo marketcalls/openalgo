@@ -12,6 +12,8 @@ class FivePaisaExchangeMapper:
         'NFO': 'N',  # NFO uses NSE exchange code
         'BFO': 'B',  # BFO uses BSE exchange code
         'CDS': 'N',  # Currency uses NSE
+        'NSE_INDEX': 'N',  # NSE indices use NSE exchange code
+        'BSE_INDEX': 'B',  # BSE indices use BSE exchange code
     }
 
     # Exchange Type mapping for 5Paisa
@@ -23,6 +25,8 @@ class FivePaisaExchangeMapper:
         'BFO': 'D',     # BSE F&O
         'MCX': 'D',     # MCX Commodities
         'CDS': 'U',     # Currency Derivatives
+        'NSE_INDEX': 'C',  # NSE indices use Cash type
+        'BSE_INDEX': 'C',  # BSE indices use Cash type
     }
 
     @staticmethod

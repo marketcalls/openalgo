@@ -74,7 +74,9 @@ def map_exchange(exchange):
         "BFO": "B",
         "CDS": "N",
         "BCD": "B",
-        "MCX": "M"
+        "MCX": "M",
+        "NSE_INDEX": "N",  # NSE indices use same exchange code as NSE
+        "BSE_INDEX": "B"   # BSE indices use same exchange code as BSE
     }
     return exchange_mapping.get(exchange) 
 
@@ -90,7 +92,9 @@ def map_exchange_type(exchange):
         "BFO": "D",
         "CDS": "U",
         "BCD": "U",
-        "MCX": "D"
+        "MCX": "D",
+        "NSE_INDEX": "C",  # Indices use Cash type in Fivepaisa scrip master
+        "BSE_INDEX": "C"   # Indices use Cash type in Fivepaisa scrip master
     }
     return exchange_mapping_type.get(exchange) 
 

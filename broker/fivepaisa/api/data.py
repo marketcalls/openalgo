@@ -18,6 +18,32 @@ logger = get_logger(__name__)
 broker_api_key = os.getenv('BROKER_API_KEY')
 api_key, user_id, client_id = broker_api_key.split(':::')
 
+
+def normalize_exchange_for_query(symbol: str, exchange: str) -> str:
+    """
+    Normalize exchange for symbol lookup in database.
+    Indices need to use NSE_INDEX or BSE_INDEX instead of NSE/BSE.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (NSE, BSE, etc.)
+
+    Returns:
+        str: Normalized exchange for database query
+    """
+    # Common index symbols
+    index_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50',
+                     'SENSEX', 'BANKEX', 'SENSEX50', 'INDIAVIX']
+
+    # Check if symbol is an index
+    if symbol.upper() in index_symbols or 'NIFTY' in symbol.upper() or 'SENSEX' in symbol.upper():
+        if exchange == 'NSE':
+            return 'NSE_INDEX'
+        elif exchange == 'BSE':
+            return 'BSE_INDEX'
+
+    return exchange
+
 # Base URL for 5Paisa API
 BASE_URL = "https://Openapi.5paisa.com"
 
@@ -93,9 +119,12 @@ class BrokerData:
             dict: Market depth data
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
 
             # Prepare request payload
             json_data = {
@@ -105,7 +134,7 @@ class BrokerData:
                 "body": {
                     "ClientCode": client_id,
                     "Exchange": map_exchange(exchange),
-                    "ExchangeType": map_exchange_type(exchange),
+                    "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
                     "ScripData": br_symbol if token == "0" else ""
                 }
@@ -171,9 +200,12 @@ class BrokerData:
             dict: Market depth data with OHLC, volume and open interest
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
 
             # Get market snapshot for overall data
             snapshot_data = {
@@ -185,7 +217,7 @@ class BrokerData:
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
-                            "ExchangeType": map_exchange_type(exchange),
+                            "ExchangeType": map_exchange_type(normalized_exchange),
                             "ScripCode": token,
                             "ScripData": br_symbol if token == "0" else ""
                         }
@@ -212,6 +244,10 @@ class BrokerData:
             if snapshot_response['head']['statusDescription'] != 'Success':
                 raise Exception(f"Error from 5Paisa API: {snapshot_response['head']['statusDescription']}")
 
+            # Check if Data array exists and has elements
+            if not snapshot_response.get('body', {}).get('Data') or len(snapshot_response['body']['Data']) == 0:
+                raise Exception(f"No data returned for symbol {symbol} on exchange {exchange}")
+
             quote_data = snapshot_response['body']['Data'][0]
 
             # Get market depth data
@@ -222,7 +258,7 @@ class BrokerData:
                 "body": {
                     "ClientCode": client_id,
                     "Exchange": map_exchange(exchange),
-                    "ExchangeType": map_exchange_type(exchange),
+                    "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
                     "ScripData": br_symbol if token == "0" else ""
                 }
@@ -306,9 +342,15 @@ class BrokerData:
             dict: Quote data with bid, ask, ltp, open, high, low, prev_close, volume
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+            logger.info(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
+
+            logger.info(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
 
             # Prepare request payload
             json_data = {
@@ -320,13 +362,15 @@ class BrokerData:
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
-                            "ExchangeType": map_exchange_type(exchange),
+                            "ExchangeType": map_exchange_type(normalized_exchange),
                             "ScripCode": token,
                             "ScripData": br_symbol if token == "0" else ""
                         }
                     ]
                 }
             }
+
+            logger.info(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
 
             # Get the shared httpx client
             client = get_httpx_client()
@@ -346,6 +390,13 @@ class BrokerData:
 
             # Check for successful response
             if response['head']['statusDescription'] != 'Success':
+                logger.error(f"API returned non-success status: {response['head']['statusDescription']}")
+                return None
+
+            # Check if Data array exists and has elements
+            if not response.get('body', {}).get('Data') or len(response['body']['Data']) == 0:
+                logger.error(f"No data returned for symbol {symbol} on exchange {exchange}")
+                logger.error(f"Response: {response}")
                 return None
 
             # Extract quote data

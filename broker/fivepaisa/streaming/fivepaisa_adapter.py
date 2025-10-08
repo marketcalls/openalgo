@@ -3,6 +3,8 @@ import json
 import logging
 import time
 import os
+import re
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
@@ -34,6 +36,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self.last_snapshot = {}  # Store last known values for each token
 
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -203,7 +206,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Subscribe if connected
         if self.connected and self.ws_client:
             try:
+                self.logger.info(f"Subscribing to {symbol} ({exchange}/{brexchange}) - Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}")
                 self.ws_client.subscribe(method, scrip_data)
+                self.logger.info(f"Successfully sent subscription request for {symbol}.{exchange}")
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
@@ -314,45 +319,93 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Extract token from message
             token = str(message.get('Token'))
 
-            # Find the subscription that matches this token
-            subscription = None
+            # Find ALL subscriptions that match this token
+            # Fivepaisa sends one message that should update all modes subscribed to that token
+            matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
                     if str(sub['token']) == token:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
 
-            if not subscription:
+            if not matching_subscriptions:
                 self.logger.warning(f"Received data for unsubscribed token: {token}")
                 return
 
-            # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
-            mode = subscription['mode']
+            # Publish data to ALL matching subscriptions
+            for subscription in matching_subscriptions:
+                # Create topic for ZeroMQ
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                mode = subscription['mode']
 
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
-            topic = f"{exchange}_{symbol}_{mode_str}"
+                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+                topic = f"{exchange}_{symbol}_{mode_str}"
 
-            # Normalize the data based on the mode
-            market_data = self._normalize_market_data(message, mode)
+                # Apply snapshot logic - merge current message with last known values
+                token_key = f"{token}_{mode}"
+                message_with_snapshot = self._apply_snapshot(message, token_key)
 
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-            })
+                # Normalize the data based on the mode
+                market_data = self._normalize_market_data(message_with_snapshot, mode)
 
-            # Log the market data we're sending
-            self.logger.debug(f"Publishing market data: {market_data}")
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': mode,
+                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
+                })
 
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
+                # Log the market data we're sending
+                self.logger.info(f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}")
+                self.logger.debug(f"Full market data: {market_data}")
+
+                # Publish to ZeroMQ
+                self.publish_market_data(topic, market_data)
 
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
+
+    def _apply_snapshot(self, message: Dict, token_key: str) -> Dict[str, Any]:
+        """
+        Apply snapshot logic - merge current message with last known values.
+        If current value is 0, use the last known non-zero value.
+
+        Args:
+            message: Current market data message
+            token_key: Unique key for this token and mode combination
+
+        Returns:
+            Dict: Message with snapshot values applied
+        """
+        # Fields that should use snapshot logic (hold last value if current is 0)
+        snapshot_fields = [
+            'LastRate', 'OpenRate', 'High', 'Low', 'PClose',
+            'BidRate', 'OffRate', 'AvgRate'
+        ]
+
+        # Get last snapshot for this token
+        last_snapshot = self.last_snapshot.get(token_key, {})
+
+        # Create new message with snapshot values
+        merged_message = message.copy()
+
+        for field in snapshot_fields:
+            current_value = message.get(field, 0)
+
+            # If current value is 0 or None, use last known value
+            if current_value == 0 or current_value is None:
+                if field in last_snapshot and last_snapshot[field] != 0:
+                    merged_message[field] = last_snapshot[field]
+                    self.logger.debug(f"Using snapshot value for {field}: {last_snapshot[field]}")
+            else:
+                # Update snapshot with new non-zero value
+                last_snapshot[field] = current_value
+
+        # Store updated snapshot
+        self.last_snapshot[token_key] = last_snapshot
+
+        return merged_message
 
     def _normalize_market_data(self, message: Dict, mode: int) -> Dict[str, Any]:
         """
@@ -368,12 +421,12 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 1:  # LTP mode
             return {
                 'ltp': message.get('LastRate', 0),
-                'ltt': message.get('TickDt', '')
+                'ltt': self._parse_fivepaisa_time(message.get('TickDt', ''))
             }
         elif mode == 2:  # Quote mode
             return {
                 'ltp': message.get('LastRate', 0),
-                'ltt': message.get('TickDt', ''),
+                'ltt': self._parse_fivepaisa_time(message.get('TickDt', '')),
                 'volume': message.get('TotalQty', 0),
                 'open': message.get('OpenRate', 0),
                 'high': message.get('High', 0),
@@ -435,3 +488,26 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'buy': buy_depth[:5],  # Limit to 5 levels
             'sell': sell_depth[:5]  # Limit to 5 levels
         }
+
+    def _parse_fivepaisa_time(self, time_str: str) -> int:
+        """
+        Parse Fivepaisa's Microsoft JSON date format to Unix timestamp in milliseconds
+
+        Args:
+            time_str: Time string in format '/Date(1759900055000)/' or '/Date(1759900055000+0530)/'
+
+        Returns:
+            int: Unix timestamp in milliseconds, or 0 if parsing fails
+        """
+        if not time_str:
+            return 0
+
+        try:
+            # Extract timestamp from /Date(timestamp)/ format
+            match = re.search(r'/Date\((\d+)', time_str)
+            if match:
+                return int(match.group(1))
+            return 0
+        except Exception as e:
+            self.logger.error(f"Error parsing time {time_str}: {e}")
+            return 0
