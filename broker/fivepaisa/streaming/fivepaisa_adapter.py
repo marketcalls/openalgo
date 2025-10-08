@@ -3,6 +3,8 @@ import json
 import logging
 import time
 import os
+import re
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
@@ -309,7 +311,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message: Dict) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            self.logger.debug(f"RAW 5PAISA DATA: {message}")
+            self.logger.info(f"RAW 5PAISA DATA: {message}")
 
             # Extract token from message
             token = str(message.get('Token'))
@@ -368,12 +370,12 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 1:  # LTP mode
             return {
                 'ltp': message.get('LastRate', 0),
-                'ltt': message.get('TickDt', '')
+                'ltt': self._parse_fivepaisa_time(message.get('TickDt', ''))
             }
         elif mode == 2:  # Quote mode
             return {
                 'ltp': message.get('LastRate', 0),
-                'ltt': message.get('TickDt', ''),
+                'ltt': self._parse_fivepaisa_time(message.get('TickDt', '')),
                 'volume': message.get('TotalQty', 0),
                 'open': message.get('OpenRate', 0),
                 'high': message.get('High', 0),
@@ -435,3 +437,26 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             'buy': buy_depth[:5],  # Limit to 5 levels
             'sell': sell_depth[:5]  # Limit to 5 levels
         }
+
+    def _parse_fivepaisa_time(self, time_str: str) -> int:
+        """
+        Parse Fivepaisa's Microsoft JSON date format to Unix timestamp in milliseconds
+
+        Args:
+            time_str: Time string in format '/Date(1759900055000)/' or '/Date(1759900055000+0530)/'
+
+        Returns:
+            int: Unix timestamp in milliseconds, or 0 if parsing fails
+        """
+        if not time_str:
+            return 0
+
+        try:
+            # Extract timestamp from /Date(timestamp)/ format
+            match = re.search(r'/Date\((\d+)', time_str)
+            if match:
+                return int(match.group(1))
+            return 0
+        except Exception as e:
+            self.logger.error(f"Error parsing time {time_str}: {e}")
+            return 0
