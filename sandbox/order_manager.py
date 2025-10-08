@@ -208,6 +208,14 @@ class OrderManager:
             # Determine price for margin calculation based on order type
             margin_calculation_price = None
 
+            # Check for existing position early (needed for fallback pricing)
+            temp_existing_position = SandboxPositions.query.filter_by(
+                user_id=self.user_id,
+                symbol=symbol,
+                exchange=exchange,
+                product=product
+            ).first()
+
             if price_type == 'MARKET':
                 # For MARKET orders, fetch current LTP for margin calculation
                 try:
@@ -220,21 +228,21 @@ class OrderManager:
                     else:
                         # In sandbox mode, use a default price if API fails
                         # Try to get last execution price from positions
-                        if existing_position and existing_position.ltp:
-                            margin_calculation_price = existing_position.ltp
+                        if temp_existing_position and temp_existing_position.ltp:
+                            margin_calculation_price = temp_existing_position.ltp
                             logger.warning(f"API failed, using last known price {margin_calculation_price} for {symbol}")
                         else:
                             # Use a reasonable default for sandbox testing
-                            margin_calculation_price = Decimal('112.37')  # Default ZEEL price for testing
+                            margin_calculation_price = Decimal('100.00')  # Default price for testing
                             logger.warning(f"API failed, using default sandbox price {margin_calculation_price} for {symbol}")
                 except Exception as e:
                     logger.error(f"Error fetching quote for margin calculation: {e}")
                     # In sandbox mode, use a fallback price
-                    if existing_position and existing_position.ltp:
-                        margin_calculation_price = existing_position.ltp
+                    if temp_existing_position and temp_existing_position.ltp:
+                        margin_calculation_price = temp_existing_position.ltp
                         logger.warning(f"API error, using last known price {margin_calculation_price} for {symbol}")
                     else:
-                        margin_calculation_price = Decimal('112.37')  # Default ZEEL price for testing
+                        margin_calculation_price = Decimal('100.00')  # Default price for testing
                         logger.warning(f"API error, using default sandbox price {margin_calculation_price} for {symbol}")
 
             elif price_type == 'LIMIT':
