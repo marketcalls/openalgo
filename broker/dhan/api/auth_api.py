@@ -16,6 +16,13 @@ def generate_consent(dhan_client_id):
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
 
+        # Extract client_id from API key if format is client_id:::api_key
+        if ':::' in BROKER_API_KEY:
+            extracted_client_id, BROKER_API_KEY = BROKER_API_KEY.split(':::')
+            # Use extracted client_id if dhan_client_id not provided
+            if not dhan_client_id:
+                dhan_client_id = extracted_client_id
+
         if not dhan_client_id:
             logger.error("Dhan Client ID is required for generating consent")
             return None, "Dhan Client ID is required"
@@ -74,6 +81,10 @@ def consume_consent(token_id):
         BROKER_API_KEY = os.getenv('BROKER_API_KEY')
         BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
 
+        # Extract client_id from API key if format is client_id:::api_key
+        if ':::' in BROKER_API_KEY:
+            extracted_client_id, BROKER_API_KEY = BROKER_API_KEY.split(':::')
+
         client = get_httpx_client()
 
         headers = {
@@ -85,7 +96,7 @@ def consume_consent(token_id):
         url = f"{AUTH_BASE_URL}/app/consumeApp-consent"
         params = {'tokenId': token_id}
 
-        logger.info(f"Consuming consent with tokenId: {token_id}")
+        logger.debug(f"Consuming consent with tokenId: {token_id}")
         response = client.post(url, headers=headers, params=params)
 
         if response.status_code == 200:
@@ -100,8 +111,8 @@ def consume_consent(token_id):
                     'ddpi_status': data.get('givenPowerOfAttorney', False),
                     'token_expiry': data.get('expiryTime')
                 }
-                logger.info(f"Access Token obtained: {access_token}")
-                logger.info(f"Additional Data: {additional_data}")
+                logger.debug(f"Access Token obtained: {access_token}")
+                logger.debug(f"Additional Data: {additional_data}")
                 return access_token, additional_data
             else:
                 return None, "Access token not found in response"
@@ -140,7 +151,7 @@ def authenticate_broker(code):
             if access_token and isinstance(additional_data, dict):
                 # Extract the dhanClientId to return as user_id
                 dhan_client_id = additional_data.get('dhan_client_id')
-                logger.info(f"Dhan authentication successful, client_id: {dhan_client_id}")
+                logger.debug(f"Dhan authentication successful, client_id: {dhan_client_id}")
                 # Return access_token, user_id (dhanClientId), error_message format
                 # This matches the format expected by brlogin.py for brokers with user_id
                 return access_token, dhan_client_id, None

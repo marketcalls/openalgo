@@ -9,48 +9,41 @@ def transform_data(data,token):
     # Build payload exactly as shown in Dhan documentation
     transformed = {
         "dhanClientId": data.get("dhan_client_id", data["apikey"]),
-        "correlationId": "",  # Empty as shown in docs
         "transactionType": data["action"].upper(),
         "exchangeSegment": map_exchange_type(data["exchange"]),
         "productType": map_product_type(data["product"]),
         "orderType": map_order_type(data["pricetype"]),
         "validity": "DAY",
         "securityId": token,
-        "quantity": str(int(data["quantity"])),
-        "disclosedQuantity": "",
-        "price": "",
-        "triggerPrice": "",
-        "afterMarketOrder": False,
-        "amoTime": "",
-        "boProfitValue": "",
-        "boStopLossValue": ""
+        "quantity": int(data["quantity"])
     }
+
+    # Add optional fields only if needed
+    correlation_id = data.get("correlation_id", "")
+    if correlation_id:
+        transformed["correlationId"] = correlation_id
 
     # Set price for non-market orders
     if data["pricetype"] != "MARKET":
         price = float(data.get("price", 0))
-        transformed["price"] = str(price)
+        transformed["price"] = float(price)
 
     # Set disclosed quantity if provided
     disclosed_qty = int(data.get("disclosed_quantity", 0))
     if disclosed_qty > 0:
-        transformed["disclosedQuantity"] = str(disclosed_qty)
+        transformed["disclosedQuantity"] = disclosed_qty
 
     # Set trigger price for SL orders
     if data["pricetype"] in ["SL", "SL-M"]:
         trigger_price = float(data.get("trigger_price", 0))
         if trigger_price > 0:
-            transformed["triggerPrice"] = str(trigger_price)
+            transformed["triggerPrice"] = float(trigger_price)
         else:
             raise ValueError("Trigger price is required for Stop Loss orders")
 
-    # Set correlation ID if provided
-    correlation_id = data.get("correlation_id")
-    if correlation_id:
-        transformed["correlationId"] = correlation_id
-
     # Handle after market orders
-    if data.get("after_market_order", False):
+    after_market = data.get("after_market_order", False)
+    if after_market:
         transformed["afterMarketOrder"] = True
         amo_time = data.get("amo_time", "")
         if amo_time in ["PRE_OPEN", "OPEN", "OPEN_30", "OPEN_60"]:
@@ -61,9 +54,9 @@ def transform_data(data,token):
         bo_profit = data.get("bo_profit_value")
         bo_stop_loss = data.get("bo_stop_loss_value")
         if bo_profit:
-            transformed["boProfitValue"] = str(bo_profit)
+            transformed["boProfitValue"] = float(bo_profit)
         if bo_stop_loss:
-            transformed["boStopLossValue"] = str(bo_stop_loss)
+            transformed["boStopLossValue"] = float(bo_stop_loss)
 
     # Handle IOC validity
     if data.get("validity") == "IOC":
@@ -75,31 +68,28 @@ def transform_data(data,token):
 
 def transform_modify_order_data(data):
     modified = {
-        "dhanClientId": data.get("dhan_client_id", data["apikey"]),  # Use provided client_id or fallback to apikey
+        "dhanClientId": data.get("dhan_client_id", data["apikey"]),
         "orderId": data["orderid"],
         "orderType": map_order_type(data["pricetype"]),
-        "legName":"ENTRY_LEG",
-        "quantity": str(data["quantity"]),
-        "price": str(data["price"]) if data.get("pricetype") != "MARKET" else "",
+        "legName": "ENTRY_LEG",
+        "quantity": int(data["quantity"]),
         "validity": "DAY"
     }
 
-    # Only add optional fields if they have values
+    # Set price for non-market orders
+    if data.get("pricetype") != "MARKET":
+        modified["price"] = float(data["price"])
+
+    # Set disclosed quantity if provided
     disclosed_qty = int(data.get("disclosed_quantity", 0))
     if disclosed_qty > 0:
-        modified["disclosedQuantity"] = str(disclosed_qty)
-    else:
-        modified["disclosedQuantity"] = ""
+        modified["disclosedQuantity"] = disclosed_qty
 
     # Handle trigger price for SL orders
     if data["pricetype"] in ["SL", "SL-M"]:
         trigger_price = float(data.get("trigger_price", 0))
         if trigger_price > 0:
-            modified["triggerPrice"] = str(trigger_price)
-        else:
-            modified["triggerPrice"] = ""
-    else:
-        modified["triggerPrice"] = ""
+            modified["triggerPrice"] = float(trigger_price)
 
     return modified
 
