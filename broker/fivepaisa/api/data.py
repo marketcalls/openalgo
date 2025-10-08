@@ -157,7 +157,7 @@ class BrokerData:
             response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
-                logger.info(f"Market Depth Error: {response['head']['statusDescription']}")
+                logger.debug(f"Market Depth Error: {response['head']['statusDescription']}")
                 return None
 
             depth_data = response['body']
@@ -180,7 +180,7 @@ class BrokerData:
                 # Get lowest sell price
                 ask = min(float(order['Price']) for order in sell_orders)
             
-            logger.info(f"Extracted Bid: {bid}, Ask: {ask}")
+            logger.debug(f"Extracted Bid: {bid}, Ask: {ask}")
             return {'bid': bid, 'ask': ask}
 
         except Exception as e:
@@ -344,13 +344,13 @@ class BrokerData:
         try:
             # Normalize exchange for index symbols
             normalized_exchange = normalize_exchange_for_query(symbol, exchange)
-            logger.info(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
+            logger.debug(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
 
             # Get token from symbol
             token = get_token(symbol, normalized_exchange)
             br_symbol = get_br_symbol(symbol, normalized_exchange)
 
-            logger.info(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
+            logger.debug(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
 
             # Prepare request payload
             json_data = {
@@ -370,7 +370,7 @@ class BrokerData:
                 }
             }
 
-            logger.info(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
+            logger.debug(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
 
             # Get the shared httpx client
             client = get_httpx_client()
@@ -699,7 +699,7 @@ class BrokerData:
 
             # Log first timestamp after processing
             if len(df) > 0:
-                logger.info(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
+                logger.debug(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
             
             # Ensure numeric columns are properly typed
             numeric_columns = ['open', 'high', 'low', 'close', 'volume']
@@ -711,7 +711,7 @@ class BrokerData:
             # Reorder columns to match Angel broker REST API format
             df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
 
-            logger.info(f"Returning {len(df)} total candles")
+            logger.debug(f"Returning {len(df)} total candles")
             return df
 
         except Exception as e:
