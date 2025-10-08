@@ -9,6 +9,7 @@ import json
 import jwt
 import base64
 import hashlib
+import os
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -263,23 +264,87 @@ def broker_callback(broker,para=None):
         forward_url = 'broker.html'
 
     elif broker=='dhan':
-        code = 'dhan'
-        logger.debug(f'Dhan broker - The code is {code}')
-        auth_token, error_message = auth_function(code)
-        
-        # Validate authentication by testing funds API before proceeding
-        if auth_token:
-            # Import the funds function to test authentication
-            from broker.dhan.api.funds import test_auth_token
-            is_valid, validation_error = test_auth_token(auth_token)
-            
-            if not is_valid:
-                logger.error(f"Dhan authentication validation failed: {validation_error}")
-                return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
-            
-            logger.info("Dhan authentication validation successful")
-        
+        auth_token = None
+        error_message = None
         forward_url = 'broker.html'
+
+        if request.method == 'GET':
+            # Handle OAuth callback with tokenId
+            # Log all incoming parameters to debug
+            logger.info(f"Dhan callback - GET parameters: {dict(request.args)}")
+            logger.info(f"Dhan callback - Full URL: {request.url}")
+            logger.info(f"Dhan callback - Request path: {request.path}")
+            logger.info(f"Dhan callback - Query string: {request.query_string.decode()}")
+
+            # Log if we're coming from a redirect
+            referrer = request.headers.get('Referer', 'No referrer')
+            logger.info(f"Dhan callback - Referrer: {referrer}")
+
+            # Check for tokenId in various possible parameter names
+            token_id = request.args.get('tokenId') or request.args.get('token_id') or request.args.get('token')
+
+            if token_id:
+                # Step 3: Consume consent with tokenId
+                logger.debug(f'Dhan broker - Received tokenId: {token_id}')
+                # auth_function now returns (auth_token, user_id, error_message)
+                auth_result = auth_function(token_id)
+
+                # Handle both old format (2 values) and new format (3 values)
+                if len(auth_result) == 3:
+                    auth_token, user_id, error_message = auth_result
+                else:
+                    auth_token, error_message = auth_result
+                    user_id = None
+
+                # Validate authentication by testing funds API before proceeding
+                if auth_token:
+                    # Import the funds function to test authentication
+                    from broker.dhan.api.funds import test_auth_token
+                    is_valid, validation_error = test_auth_token(auth_token)
+
+                    if not is_valid:
+                        logger.error(f"Dhan authentication validation failed: {validation_error}")
+                        return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
+
+                    logger.info("Dhan authentication validation successful")
+                    # Set forward_url for successful authentication
+                    forward_url = 'broker.html'
+                    # The auth_token will be handled by the common success flow below
+                else:
+                    # Authentication failed
+                    return handle_auth_failure(error_message or "Authentication failed", forward_url='broker.html')
+            else:
+                # First time coming from broker.html - redirect to initiate OAuth
+                # This avoids showing the form and directly starts OAuth if we have a stored client ID
+                return redirect('/dhan/initiate-oauth')
+
+        elif request.method == 'POST':
+            # This should only handle direct access token submission now
+            # OAuth flow is handled by /dhan/initiate-oauth
+            access_token = request.form.get('access_token')
+
+            if access_token:
+                # Direct token authentication
+                logger.info("Processing direct access token for Dhan")
+                auth_token, error_message = auth_function(access_token)
+
+                if auth_token:
+                    # Validate authentication by testing funds API
+                    from broker.dhan.api.funds import test_auth_token
+                    is_valid, validation_error = test_auth_token(auth_token)
+
+                    if is_valid:
+                        logger.info("Dhan direct token authentication successful")
+                        forward_url = 'broker.html'
+                        # The auth_token will be handled by the common success flow below
+                    else:
+                        logger.error(f"Dhan direct token validation failed: {validation_error}")
+                        return render_template('dhan.html', error_message=f"Token validation failed: {validation_error}")
+                else:
+                    return render_template('dhan.html', error_message=error_message or "Invalid access token")
+            else:
+                # If no access token provided, show the form again
+                return render_template('dhan.html', error_message="Please provide either Client ID for OAuth or Access Token for direct login")
     elif broker=='indmoney':
         code = 'indmoney'
         logger.debug(f'IndMoney broker - The code is {code}')
@@ -505,9 +570,9 @@ def broker_callback(broker,para=None):
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
             auth_token = f'{auth_token}'
-        
+
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker =='angel' or broker == 'compositedge' or broker == 'pocketful' or broker == 'definedge':
+        if broker in ['angel', 'compositedge', 'pocketful', 'definedge', 'dhan']:
             # For Compositedge, handle missing session user
             if broker == 'compositedge' and 'user' not in session:
                 # Get the admin user from the database
@@ -530,6 +595,67 @@ def broker_callback(broker,para=None):
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     
+
+@brlogin_bp.route('/dhan/initiate-oauth', methods=['GET', 'POST'])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def dhan_initiate_oauth():
+    """Handle Dhan OAuth initiation"""
+    # Check if user is not in session first
+    if 'user' not in session:
+        return redirect(url_for('auth.login'))
+
+    # Get client_id from .env BROKER_API_KEY (format: client_id:::api_key)
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    client_id = None
+
+    if ':::' in BROKER_API_KEY:
+        client_id, _ = BROKER_API_KEY.split(':::')
+
+    if not client_id:
+        error_message = "Client ID not found in BROKER_API_KEY. Please configure BROKER_API_KEY as 'client_id:::api_key' in .env"
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
+
+    logger.info(f"Initiating Dhan OAuth flow with client ID from .env: {client_id}")
+
+    # Import the required functions
+    from broker.dhan.api.auth_api import generate_consent, get_login_url
+
+    # Generate consent with the client ID
+    consent_app_id, error = generate_consent(client_id)
+
+    if consent_app_id:
+        # Store consent_app_id in session
+        session['consent_app_id'] = consent_app_id
+
+        # Get the login URL
+        login_url = get_login_url(consent_app_id)
+        if login_url:
+            logger.info(f'Redirecting to Dhan OAuth login URL: {login_url}')
+            # Return a page that will redirect via JavaScript
+            # This ensures the browser properly redirects to the external URL
+            return f'''
+            <html>
+            <head>
+                <title>Redirecting to Dhan...</title>
+            </head>
+            <body>
+                <p>Redirecting to Dhan login page...</p>
+                <script>
+                    window.location.href = "{login_url}";
+                </script>
+            </body>
+            </html>
+            '''
+        else:
+            error_message = "Failed to generate login URL"
+            logger.error(error_message)
+            return handle_auth_failure(error_message, forward_url='broker.html')
+    else:
+        error_message = error or "Failed to generate consent. Please check your API credentials and Client ID."
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
 
 @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)

@@ -43,7 +43,8 @@
                     break;
                 
                 case 'dhan':
-                    loginUrl = '/dhan/callback';
+                    // Directly initiate OAuth flow (client_id from .env)
+                    loginUrl = '/dhan/initiate-oauth';
                     break;
                 case 'indmoney':
                     loginUrl = '/indmoney/callback';
