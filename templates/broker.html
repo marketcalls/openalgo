@@ -58,6 +58,9 @@
                 case 'firstock':
                     loginUrl = '/firstock/callback';
                     break;
+                case 'motilal':
+                    loginUrl = '/motilal/callback';
+                    break;
                 case 'flattrade':
                     const flattradeApiKey = getFlattradeApiKey('{{broker_api_key}}');
                     loginUrl = 'https://auth.flattrade.in/?app_key=' + flattradeApiKey;
@@ -167,6 +170,7 @@
                                 <option value="definedge" {{ 'disabled' if broker_name != 'definedge' }}>Definedge {{ '(Disabled)' if broker_name != 'definedge' }}</option>
                                 <option value="firstock" {{ 'disabled' if broker_name != 'firstock' }}>Firstock {{ '(Disabled)' if broker_name != 'firstock' }}</option>
                                 <option value="flattrade" {{ 'disabled' if broker_name != 'flattrade' }}>Flattrade {{ '(Disabled)' if broker_name != 'flattrade' }}</option>
+                                <option value="motilal" {{ 'disabled' if broker_name != 'motilal' }}>Motilal Oswal {{ '(Disabled)' if broker_name != 'motilal' }}</option>
                                 <option value="fyers" {{ 'disabled' if broker_name != 'fyers' }}>Fyers {{ '(Disabled)' if broker_name != 'fyers' }}</option>
                                 <option value="groww" {{ 'disabled' if broker_name != 'groww' }}>Groww {{ '(Disabled)' if broker_name != 'groww' }}</option>
                                 <option value="ibulls" {{ 'disabled' if broker_name != 'ibulls' }}>Ibulls {{ '(Disabled)' if broker_name != 'ibulls' }}</option>

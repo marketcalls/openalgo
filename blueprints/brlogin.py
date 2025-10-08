@@ -398,7 +398,7 @@ def broker_callback(broker,para=None):
     elif broker == 'firstock':
         if request.method == 'GET':
             return render_template('firstock.html')
-        
+
         elif request.method == 'POST':
             userid = request.form.get('userid')
             password = request.form.get('password')
@@ -406,6 +406,19 @@ def broker_callback(broker,para=None):
 
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'firstock.html'
+
+    elif broker == 'motilal':
+        if request.method == 'GET':
+            return render_template('motilal.html')
+
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+            date_of_birth = request.form.get('dob')
+
+            auth_token, feed_token, error_message = auth_function(userid, password, totp_code, date_of_birth)
+            forward_url = 'motilal.html'
 
     elif broker == 'flattrade':
         code = request.args.get('code')
