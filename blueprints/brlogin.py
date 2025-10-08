@@ -9,6 +9,7 @@ import json
 import jwt
 import base64
 import hashlib
+import os
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -604,24 +605,19 @@ def dhan_initiate_oauth():
     if 'user' not in session:
         return redirect(url_for('auth.login'))
 
-    if request.method == 'GET':
-        # Check if we have a stored client ID
-        if 'dhan_client_id' in session and session['dhan_client_id']:
-            client_id = session['dhan_client_id']
-        else:
-            # Redirect to dhan.html to get client ID from user
-            logger.info("Client ID required - showing input form")
-            return render_template('dhan.html')
-    else:
-        # POST request - get client ID from form
-        client_id = request.form.get('clientid', '').strip()
-        if not client_id:
-            return render_template('dhan.html', error_message="Please enter your Dhan Client ID")
+    # Get client_id from .env BROKER_API_KEY (format: client_id:::api_key)
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    client_id = None
 
-        # Store client ID in session
-        session['dhan_client_id'] = client_id
+    if ':::' in BROKER_API_KEY:
+        client_id, _ = BROKER_API_KEY.split(':::')
 
-    logger.info(f"Initiating Dhan OAuth flow with client ID: {client_id}")
+    if not client_id:
+        error_message = "Client ID not found in BROKER_API_KEY. Please configure BROKER_API_KEY as 'client_id:::api_key' in .env"
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
+
+    logger.info(f"Initiating Dhan OAuth flow with client ID from .env: {client_id}")
 
     # Import the required functions
     from broker.dhan.api.auth_api import generate_consent, get_login_url
@@ -654,10 +650,12 @@ def dhan_initiate_oauth():
             '''
         else:
             error_message = "Failed to generate login URL"
-            return render_template('dhan.html', error_message=error_message)
+            logger.error(error_message)
+            return handle_auth_failure(error_message, forward_url='broker.html')
     else:
         error_message = error or "Failed to generate consent. Please check your API credentials and Client ID."
-        return render_template('dhan.html', error_message=error_message)
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
 
 @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)

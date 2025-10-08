@@ -43,8 +43,8 @@
                     break;
                 
                 case 'dhan':
-                    // Redirect to our endpoint that will generate consent and redirect to Dhan
-                    loginUrl = '/dhan/callback';
+                    // Directly initiate OAuth flow (client_id from .env)
+                    loginUrl = '/dhan/initiate-oauth';
                     break;
                 case 'indmoney':
                     loginUrl = '/indmoney/callback';
