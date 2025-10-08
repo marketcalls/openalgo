@@ -142,6 +142,23 @@ class ExecutionEngine:
         Determines if order should be executed based on price type
         """
         try:
+            # Check if this order already has a trade (prevent duplicates)
+            # This can happen with MARKET orders that are executed immediately on placement
+            # but the order status hasn't been updated to 'complete' yet due to race condition
+            existing_trade = SandboxTrades.query.filter_by(orderid=order.orderid).first()
+            if existing_trade:
+                logger.debug(f"Order {order.orderid} already has trade {existing_trade.tradeid}, skipping execution")
+                # Update order status to complete if it's still open (race condition cleanup)
+                if order.order_status == 'open':
+                    order.order_status = 'complete'
+                    order.average_price = existing_trade.price
+                    order.filled_quantity = order.quantity
+                    order.pending_quantity = 0
+                    order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+                    db_session.commit()
+                    logger.info(f"Updated order {order.orderid} status to complete (was in race condition)")
+                return
+
             ltp = Decimal(str(quote.get('ltp', 0)))
             bid = Decimal(str(quote.get('bid', 0)))
             ask = Decimal(str(quote.get('ask', 0)))
