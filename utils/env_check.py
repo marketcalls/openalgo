@@ -209,6 +209,19 @@ def load_and_check_env_variables():
             print("  https://docs.openalgo.in/connect-brokers/brokers/flattrade")
             sys.exit(1)
 
+    # Validate dhan API key format
+    elif broker_name == 'dhan':
+        if ':::' not in broker_api_key or broker_api_key.count(':::') != 1:
+            print("\nError: Invalid Dhan API key format detected!")
+            print("The BROKER_API_KEY for Dhan must be in the format:")
+            print("  BROKER_API_KEY = 'client_id:::api_key'")
+            print("\nExample:")
+            print("  BROKER_API_KEY = '1234567890:::your_dhan_apikey'")
+            print("  BROKER_API_SECRET = 'your_dhan_apisecret'")
+            print("\nFor detailed instructions, please refer to:")
+            print("  https://docs.openalgo.in/connect-brokers/brokers/dhan")
+            sys.exit(1)
+
     # Validate environment variable values
     flask_debug = os.getenv('FLASK_DEBUG', '').lower()
     if flask_debug not in ['true', 'false', '1', '0', 't', 'f']:
