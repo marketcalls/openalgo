@@ -114,7 +114,7 @@ class FivePaisaWebSocket(object):
 
             # Extract RedirectServer
             redirect_server = payload_data.get('RedirectServer', 'default')
-            self.logger.info(f"Decoded RedirectServer: {redirect_server}")
+            self.logger.debug(f"Decoded RedirectServer: {redirect_server}")
             return redirect_server
 
         except Exception as e:
@@ -135,7 +135,7 @@ class FivePaisaWebSocket(object):
         str: WebSocket URL
         """
         url = self.WEBSOCKET_URLS.get(redirect_server, self.WEBSOCKET_URLS['default'])
-        self.logger.info(f"Using WebSocket URL: {url}")
+        self.logger.debug(f"Using WebSocket URL: {url}")
         return url
 
     def connect(self):
@@ -144,10 +144,10 @@ class FivePaisaWebSocket(object):
         Connection URL format: wss://[server].5paisa.com/feeds/api/chat?Value1={{access_token}}|{{clientcode}}
         """
         connection_url = f"{self.websocket_url}?Value1={self.access_token}|{self.client_code}"
-        self.logger.info(f"Connecting to: {connection_url[:80]}...")
-        self.logger.info(f"Client Code: {self.client_code}")
-        self.logger.info(f"Token prefix: {self.access_token[:50]}...")
-        self.logger.info(f"Token suffix: ...{self.access_token[-50:]}")
+        self.logger.debug(f"Connecting to: {connection_url[:80]}...")
+        self.logger.debug(f"Client Code: {self.client_code}")
+        self.logger.debug(f"Token prefix: {self.access_token[:50]}...")
+        self.logger.debug(f"Token suffix: ...{self.access_token[-50:]}")
 
         try:
             self.wsapp = websocket.WebSocketApp(

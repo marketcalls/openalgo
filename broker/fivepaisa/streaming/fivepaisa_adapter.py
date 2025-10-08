@@ -70,7 +70,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     parts = broker_api_key.split(':::')
                     if len(parts) >= 3:
                         client_code = parts[2]  # client_id is the third part
-                        self.logger.info(f"Using client_code from BROKER_API_KEY: {client_code}")
+                        self.logger.debug(f"Using client_code from BROKER_API_KEY: {client_code}")
                     else:
                         client_code = user_id
                         self.logger.warning(f"BROKER_API_KEY format incorrect, using user_id as client_code")
@@ -357,7 +357,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 })
 
                 # Log the market data we're sending
-                self.logger.info(f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}")
+                self.logger.debug(f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}")
                 self.logger.debug(f"Full market data: {market_data}")
 
                 # Publish to ZeroMQ

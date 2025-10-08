@@ -157,7 +157,7 @@ class BrokerData:
             response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
-                logger.info(f"Market Depth Error: {response['head']['statusDescription']}")
+                logger.debug(f"Market Depth Error: {response['head']['statusDescription']}")
                 return None
 
             depth_data = response['body']
@@ -180,7 +180,7 @@ class BrokerData:
                 # Get lowest sell price
                 ask = min(float(order['Price']) for order in sell_orders)
             
-            logger.info(f"Extracted Bid: {bid}, Ask: {ask}")
+            logger.debug(f"Extracted Bid: {bid}, Ask: {ask}")
             return {'bid': bid, 'ask': ask}
 
         except Exception as e:
@@ -344,13 +344,13 @@ class BrokerData:
         try:
             # Normalize exchange for index symbols
             normalized_exchange = normalize_exchange_for_query(symbol, exchange)
-            logger.info(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
+            logger.debug(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
 
             # Get token from symbol
             token = get_token(symbol, normalized_exchange)
             br_symbol = get_br_symbol(symbol, normalized_exchange)
 
-            logger.info(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
+            logger.debug(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
 
             # Prepare request payload
             json_data = {
@@ -370,7 +370,7 @@ class BrokerData:
                 }
             }
 
-            logger.info(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
+            logger.debug(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
 
             # Get the shared httpx client
             client = get_httpx_client()
@@ -581,51 +581,52 @@ class BrokerData:
                             # Skip invalid candles
                             if len(candle) < 6:
                                 continue
-                                
+
                             # Parse date and values
                             dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
                             # Make the datetime timezone-aware (UTC)
                             dt = pytz.UTC.localize(dt)
-                            
+
                             open_price = float(candle[1])
                             high_price = float(candle[2])
                             low_price = float(candle[3])
                             close_price = float(candle[4])
                             volume = int(candle[5])
-                            
+
                             # Skip holidays and invalid data:
                             # 1. Zero volume
                             # 2. All prices are zero
                             # 3. High = Low (usually indicates no trading)
-                            if (volume == 0 or 
+                            if (volume == 0 or
                                 (open_price == 0 and high_price == 0 and low_price == 0 and close_price == 0) or
                                 (high_price == low_price)):
                                 continue
-                            
-                            # Make timezone-aware in UTC
-                            dt = dt.replace(tzinfo=pytz.UTC)
-                            
-                            # For all candles, we need proper market timing
-                            # Convert to IST timezone first
-                            ist = pytz.timezone('Asia/Kolkata')
-                            dt = dt.astimezone(ist)
-                            
-                            # For daily candles, always set time to 9:15 AM IST (market open)
+
+                            # For daily candles, create timestamp at midnight UTC like Angel does
                             if interval.upper() == 'D':
-                                dt = dt.replace(hour=9, minute=15, second=0)
+                                # Extract the date from the API timestamp
+                                date_only = dt.date()
+                                # Create datetime at midnight UTC (same as Angel broker)
+                                dt_midnight = datetime(date_only.year, date_only.month, date_only.day, 0, 0, 0)
+                                dt_midnight = pytz.UTC.localize(dt_midnight)
+                                timestamp_sec = int(dt_midnight.timestamp())
                             else:
-                                # For intraday, make sure we handle the timing correctly
+                                # For intraday candles, convert to IST and fix market hours
+                                ist = pytz.timezone('Asia/Kolkata')
+                                dt = dt.astimezone(ist)
+
+                                # Make sure we handle the timing correctly
                                 # Create a reference time at 9:15 AM on the same date
                                 market_open = dt.replace(hour=9, minute=15, second=0)
-                                
+
                                 # Check if the timestamp is outside of valid market hours
                                 if dt.hour < 9 or (dt.hour == 9 and dt.minute < 15) or dt.hour > 15 or (dt.hour == 15 and dt.minute > 30):
                                     # Shift to market hours by making it relative to market open
                                     minutes_offset = (dt.hour * 60 + dt.minute) % (6 * 60 + 15)  # 6h15m market duration
                                     dt = market_open + timedelta(minutes=minutes_offset)
-                            
-                            # Convert to Unix timestamp in seconds
-                            timestamp_sec = int(dt.timestamp())  # Simple Unix timestamp in seconds
+
+                                # Convert to Unix timestamp in seconds
+                                timestamp_sec = int(dt.timestamp())
                             
                             transformed_candle = {
                                 "timestamp": timestamp_sec,  # Store as integer seconds
@@ -667,134 +668,50 @@ class BrokerData:
             # Sort by timestamp and remove any duplicates
             df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
-            # A completely different approach to guarantee proper market hours
-            # Convert timestamps to datetime first
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            
-            # Convert UTC to IST by adding 5:30
-            df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
-            
-            # Extract date component for reference
-            df['date'] = df['timestamp'].dt.date
-            
-            # Add trading day sequence within each date
-            df['seq'] = df.groupby('date').cumcount()
-            
-            # Handle daily vs intraday differently
-            if interval.upper() == 'D':
-                # For daily candles, always set to 9:15 AM
-                df['timestamp'] = df.apply(lambda row: pd.Timestamp(
-                    year=row['timestamp'].year,
-                    month=row['timestamp'].month,
-                    day=row['timestamp'].day,
-                    hour=9, minute=15, second=0), axis=1)
-            else:
-                # For intraday, calculate proper interval
-                interval_minutes = 5  # Default
-                if 'm' in interval.lower():
-                    try:
-                        interval_minutes = int(interval.lower().replace('m', ''))
-                    except:
-                        interval_minutes = 5
-                elif 'h' in interval.lower():
-                    try:
-                        interval_minutes = int(interval.lower().replace('h', '')) * 60
-                    except:
-                        interval_minutes = 60
-                
-                # Create properly sequenced timestamps within market hours
-                def create_market_timestamp(row):
-                    # Create base timestamp at 09:15 AM
-                    base = pd.Timestamp(
-                        year=row['timestamp'].year,
-                        month=row['timestamp'].month,
-                        day=row['timestamp'].day,
-                        hour=9, minute=15, second=0)
-                    
-                    # Add sequence interval
-                    minutes_to_add = row['seq'] * interval_minutes
-                    new_ts = base + pd.Timedelta(minutes=minutes_to_add)
-                    
-                    # Make sure it's within market hours (9:15 AM - 3:30 PM)
-                    market_close = base.replace(hour=15, minute=30)
-                    if new_ts > market_close:
-                        # If past market close, wrap to next day
-                        extra_minutes = (new_ts - market_close).total_seconds() / 60
-                        # Calculate how many trading days we need to add
-                        trading_day_minutes = 6 * 60 + 15  # 6h15m per trading day
-                        days_to_add = int(extra_minutes / trading_day_minutes) + 1
-                        
-                        # Start from 9:15 AM on the next day
-                        next_day_base = base + pd.Timedelta(days=days_to_add)
-                        next_day_base = next_day_base.replace(hour=9, minute=15)
-                        
-                        # Add remaining minutes
-                        remaining_minutes = extra_minutes % trading_day_minutes
-                        new_ts = next_day_base + pd.Timedelta(minutes=remaining_minutes)
-                        
-                        # Final check to ensure we're within market hours
-                        if new_ts.hour > 15 or (new_ts.hour == 15 and new_ts.minute > 30):
-                            new_ts = new_ts.replace(hour=15, minute=30)
-                    
-                    return new_ts
-                
-                # Apply the function to create proper timestamps
-                df['timestamp'] = df.apply(create_market_timestamp, axis=1)
-            
-            # Drop the temporary columns
-            df = df.drop(['date', 'seq'], axis=1)
-            
             # Sort by the new timestamps
             df = df.sort_values('timestamp').reset_index(drop=True)
-            
-            # For 10m interval, we directly get the API data now and fix the timestamps
-            # No need for resampling from 5m data anymore
-            if interval == '10m' and not df.empty:
-                # Apply our timestamp fixing function with appropriate time alignment
-                logger.debug("Debug: Fixing 10m timestamps")
-                df = self.fix_timestamps(df, '10m')
+
+            # For daily interval, normalize to date only (remove time component)
+            # This matches Upstox and other brokers' behavior for daily data
+            if original_interval.upper() == 'D' or original_interval == 'd':
+                logger.debug("Debug: Processing daily interval - normalizing to date only")
+                # Convert Unix timestamps to datetime
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                # Add IST offset to get correct date
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+                # Extract only the date part, then convert back to datetime at midnight
+                df['timestamp'] = df['timestamp'].apply(lambda x: x.date())
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                # Convert to Unix timestamp (midnight)
+                df['timestamp'] = df['timestamp'].apply(lambda x: int(x.timestamp()))
+                logger.debug(f"Debug: First timestamp value: {df['timestamp'].iloc[0] if len(df) > 0 else 'empty'}")
             else:
-                # Apply our timestamp fixing function as a final step
-                logger.debug(f"Debug: Fixing timestamps for {interval}")
-                df = self.fix_timestamps(df, interval)
-                
-            # Check after timestamp fixing
-            if len(df) > 0:
-                logger.info(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
-            
-            # Final check for daily data with wrong timestamps (03:45 instead of 09:15)
-            # This is a direct fix for the case where uppercase D or lowercase d is used
-            if (original_interval.upper() == 'D' or original_interval == 'd') and len(df) > 0:
-                logger.debug("Debug: Applying final daily timestamp fix")
-                # Convert to datetime for fixing
-                temp_df = df.copy()
-                temp_df['timestamp'] = pd.to_datetime(temp_df['timestamp'], unit='s')
-                
-                # Check if we have any early morning timestamps (like 03:45)
-                early_morning = ((temp_df['timestamp'].dt.hour < 9) | 
-                               ((temp_df['timestamp'].dt.hour == 9) & (temp_df['timestamp'].dt.minute < 15)))
-                
-                if early_morning.any():
-                    logger.debug("Debug: Found early morning timestamps, fixing to 09:15")
-                    # Set all timestamps to 09:15
-                    temp_df['timestamp'] = temp_df['timestamp'].apply(lambda ts: 
-                        ts.replace(hour=9, minute=15, second=0))
-                    df['timestamp'] = temp_df['timestamp'].astype('int64') // 10**9
+                # For intraday data, apply timestamp fixing
+                if interval == '10m' and not df.empty:
+                    logger.debug("Debug: Fixing 10m timestamps")
+                    df = self.fix_timestamps(df, '10m')
                 else:
-                    # Convert back to Unix timestamp in seconds
-                    df['timestamp'] = df['timestamp'].astype('int64') // 10**9
-            else:
+                    logger.debug(f"Debug: Fixing timestamps for {interval}")
+                    df = self.fix_timestamps(df, interval)
+
                 # Convert back to Unix timestamp in seconds
                 df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+
+            # Log first timestamp after processing
+            if len(df) > 0:
+                logger.debug(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
             
             # Ensure numeric columns are properly typed
             numeric_columns = ['open', 'high', 'low', 'close', 'volume']
             df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
-            
-            # Reorder columns to match expected format
-            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-            
-            logger.info(f"Returning {len(df)} total candles")
+
+            # Add OI column (always 0 for stocks, set to 0 for consistency with Angel broker)
+            df['oi'] = 0
+
+            # Reorder columns to match Angel broker REST API format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+
+            logger.debug(f"Returning {len(df)} total candles")
             return df
 
         except Exception as e:
