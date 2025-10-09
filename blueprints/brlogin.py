@@ -447,7 +447,8 @@ def broker_callback(broker,para=None):
     elif broker == 'paytm':
          request_token = request.args.get('requestToken')
          logger.debug(f'Paytm broker - The request token is {request_token}')
-         auth_token, error_message = auth_function(request_token)
+         auth_token, feed_token, error_message = auth_function(request_token)
+         forward_url = 'broker.html'
 
     elif broker == 'pocketful':
         # Handle the OAuth2 authorization code from the callback
@@ -586,11 +587,14 @@ def broker_callback(broker,para=None):
                 else:
                     logger.error("No admin user found in database for Compositedge callback")
                     return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
-            
+
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
+        elif broker == 'paytm':
+            # Paytm has feed_token (public_access_token) but no user_id
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
         else:
-            # Pass just the feed token to handle_auth_success (other brokers don't have user_id)
+            # Pass just the feed token to handle_auth_success (other brokers don't have feed_token or user_id)
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)

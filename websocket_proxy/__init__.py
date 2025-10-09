@@ -53,6 +53,9 @@ from broker.fyers.streaming.fyers_websocket_adapter import FyersWebSocketAdapter
 # Import the definedge_adapter
 from broker.definedge.streaming.definedge_adapter import DefinedgeWebSocketAdapter
 
+# Import the paytm_adapter
+from broker.paytm.streaming.paytm_adapter import PaytmWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -71,6 +74,7 @@ register_adapter("upstox", UpstoxWebSocketAdapter)
 register_adapter("kotak", KotakWebSocketAdapter)
 register_adapter("fyers", FyersWebSocketAdapter)
 register_adapter("definedge", DefinedgeWebSocketAdapter)
+register_adapter("paytm", PaytmWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -95,5 +99,6 @@ __all__ = [
     'UpstoxWebSocketAdapter',
     'KotakWebSocketAdapter',
     'FyersWebSocketAdapter',
-    'DefinedgeWebSocketAdapter'
+    'DefinedgeWebSocketAdapter',
+    'PaytmWebSocketAdapter'
 ]
