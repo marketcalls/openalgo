@@ -92,11 +92,11 @@ class PaytmWebSocket(object):
         if isinstance(message, str):
             try:
                 parsed = json.loads(message)
-                logger.info(f"Received text message: {parsed}")
+                logger.debug(f"Received text message: {parsed}")
                 if 'error' in parsed or 'message' in parsed:
                     logger.error(f"Server message: {parsed}")
             except json.JSONDecodeError:
-                logger.info(f"Received text: {message}")
+                logger.debug(f"Received text: {message}")
             self.on_message(wsapp, message)
         # Binary data - market data packet
         elif isinstance(message, bytes):
@@ -234,7 +234,7 @@ class PaytmWebSocket(object):
             # Construct WebSocket URL with public access token
             url = f"{self.ROOT_URI}?x_jwt_token={self.public_access_token}"
 
-            logger.info(f"Connecting to Paytm WebSocket: {url}")
+            logger.debug(f"Connecting to Paytm WebSocket: {url}")
 
             self.wsapp = websocket.WebSocketApp(
                 url,

@@ -38,7 +38,7 @@ def authenticate_broker(request_token):
 
         if response.status_code == 200:
             response_data = response.json()
-            logger.info(f"Token: {response_data}")
+            logger.debug(f"Token: {response_data}")
 
             # Paytm returns multiple tokens:
             # - access_token: For REST API calls
