@@ -1213,6 +1213,345 @@ total_pnl = realized_pnl + unrealized_pnl
           = 65,000
 ```
 
+### Scenario 5: Exact Margin Tracking (Position-Based)
+
+**File**: `sandbox/execution_engine.py` (lines 280-446)
+**Database**: `sandbox_positions.margin_blocked` column
+
+#### The Problem: Margin Over-Release Bug
+
+**Root Cause**: Previously, margin was recalculated at position close time using execution price instead of using the exact margin blocked at order placement time.
+
+**Example of the Bug**:
+```python
+Order Placement:
+- BUY 150 RELIANCE @ ₹90.60 (order placement price)
+- Margin Blocked: ₹90.60 × 150 ÷ 5 = ₹2,718
+
+Order Execution:
+- Order executes at ₹91.0 (LTP/bid/ask)
+- Trade created at: ₹91.0
+
+Position Close:
+- OLD CODE: Recalculates margin using execution price
+- Margin Released: ₹91.0 × 150 ÷ 5 = ₹2,730
+- Over-released: ₹12 ❌
+
+Result: used_margin becomes negative
+```
+
+#### The Solution: Store Exact Margin in Position
+
+**Database Schema Addition** (`database/sandbox_db.py` lines 122-124):
+```python
+class SandboxPositions(Base):
+    # ... other fields ...
+
+    # Margin tracking - stores exact margin blocked for this position
+    # This prevents margin release bugs when execution price differs from order placement price
+    margin_blocked = Column(DECIMAL(15, 2), default=0.00)  # Total margin blocked for this position
+```
+
+#### How It Works
+
+**Principle**: Store the exact margin amount blocked at order placement time in the position record. When releasing margin, use this stored value instead of recalculating.
+
+##### Case 1: New Position Created
+
+```python
+def _update_position(order, execution_price):
+    if not position:
+        # Store exact margin from order
+        order_margin = order.margin_blocked  # Margin blocked at placement
+        position = SandboxPositions(
+            quantity=order.quantity,
+            average_price=execution_price,
+            margin_blocked=order_margin,  # Store in position ✅
+            # ... other fields ...
+        )
+```
+
+**Example**:
+```python
+Order: BUY 100 RELIANCE @ MARKET
+- Order placed when LTP = ₹1,200
+- Margin blocked at placement: ₹24,000
+- Order executes at ₹1,205 (ask price)
+
+Position Created:
+- quantity: 100
+- average_price: ₹1,205 (execution price)
+- margin_blocked: ₹24,000 (from order, not recalculated) ✅
+```
+
+##### Case 2: Complete Position Close
+
+```python
+def _update_position(order, execution_price):
+    if final_quantity == 0:
+        # Use STORED margin, not recalculated
+        margin_to_release = position.margin_blocked  # ✅ Exact amount
+
+        fund_manager.release_margin(margin_to_release, realized_pnl)
+
+        # Reset margin to 0
+        position.margin_blocked = Decimal('0.00')
+        position.quantity = 0
+```
+
+**Example (The Bug Fix)**:
+```python
+Position:
+- quantity: 150
+- average_price: ₹91.0 (execution price)
+- margin_blocked: ₹2,718 (stored from order placement @ ₹90.60)
+
+Close Order: SELL 150 @ ₹90.7
+- Calculates P&L using position.average_price (₹91.0)
+- Realized P&L: (₹90.7 - ₹91.0) × 150 = -₹45
+
+Margin Release:
+- OLD CODE: Recalculates: ₹91.0 × 150 ÷ 5 = ₹2,730 ❌
+- NEW CODE: Uses stored: ₹2,718 ✅
+- Difference: ₹12 (no over-release!)
+
+Result:
+- available_balance += ₹2,718
+- used_margin -= ₹2,718
+- used_margin = ₹0 (correct!) ✅
+```
+
+##### Case 3: Adding to Position
+
+```python
+def _update_position(order, execution_price):
+    if position_size_increasing:
+        # Accumulate margin from new order
+        order_margin = order.margin_blocked
+        position.margin_blocked += order_margin  # Add to existing ✅
+
+        # Update average price
+        position.average_price = calculate_new_average(...)
+```
+
+**Example**:
+```python
+Initial Position:
+- quantity: 100
+- average_price: ₹1,200
+- margin_blocked: ₹24,000
+
+Add Order: BUY 50 @ ₹1,210
+- Order margin: ₹12,100
+
+Updated Position:
+- quantity: 150
+- average_price: ₹1,203.33
+- margin_blocked: ₹24,000 + ₹12,100 = ₹36,100 ✅
+```
+
+##### Case 4: Partial Position Close
+
+```python
+def _update_position(order, execution_price):
+    if position_reducing:
+        # Calculate proportion being closed
+        reduction_proportion = reduced_qty / abs(old_quantity)
+
+        # Release proportional margin
+        margin_to_release = position.margin_blocked × reduction_proportion  # ✅
+
+        fund_manager.release_margin(margin_to_release, realized_pnl)
+
+        # Update remaining margin
+        position.margin_blocked -= margin_to_release
+```
+
+**Example**:
+```python
+Position:
+- quantity: 100
+- average_price: ₹1,200
+- margin_blocked: ₹24,000
+
+Partial Close: SELL 40 @ ₹1,250
+- Reduction proportion: 40 / 100 = 40%
+- Margin to release: ₹24,000 × 0.40 = ₹9,600 ✅
+- Partial P&L: (₹1,250 - ₹1,200) × 40 = ₹2,000
+
+Updated Position:
+- quantity: 60
+- average_price: ₹1,200 (unchanged)
+- margin_blocked: ₹24,000 - ₹9,600 = ₹14,400 ✅
+
+Funds Updated:
+- available_balance += ₹9,600
+- used_margin -= ₹9,600
+- realized_pnl += ₹2,000
+```
+
+##### Case 5: Position Reversal
+
+```python
+def _update_position(order, execution_price):
+    if position_reversed:
+        # Release margin proportionally for closed portion
+        margin_to_release = position.margin_blocked × (old_qty / new_order_qty)
+
+        # Calculate new position margin from excess quantity
+        excess_proportion = remaining_qty / new_order_qty
+        new_position_margin = order.margin_blocked × excess_proportion  # ✅
+
+        position.margin_blocked = new_position_margin
+        position.quantity = remaining_qty  # opposite direction
+```
+
+**Example**:
+```python
+Initial Position (Long):
+- quantity: +100
+- average_price: ₹1,200
+- margin_blocked: ₹24,000
+
+Reverse Order: SELL 150 @ ₹1,250
+- Order margin: ₹30,000 (blocked at order placement)
+
+Position Reversal:
+- Close 100 (release ₹24,000)
+- Open new -50 SHORT position
+
+Calculation:
+- Closed portion: 100 shares → release ₹24,000
+- New position: -50 shares (SHORT)
+- Excess proportion: 50 / 150 = 33.33%
+- New margin: ₹30,000 × 0.3333 = ₹10,000
+
+Updated Position (Short):
+- quantity: -50
+- average_price: ₹1,250
+- margin_blocked: ₹10,000 ✅
+
+Funds:
+- Margin released from old: ₹24,000
+- Margin blocked for new: ₹10,000 (already blocked at order time)
+- Net used_margin change: -₹24,000
+- Realized P&L: (₹1,250 - ₹1,200) × 100 = ₹5,000
+```
+
+#### Benefits of Position-Based Margin Tracking
+
+**1. Prevents Over-Release**
+```python
+# OLD: Margin recalculated → ₹60 over-release
+# NEW: Exact margin used → ₹0 over-release ✅
+```
+
+**2. Handles Price Differences**
+```python
+Order Price:     ₹90.60  (margin calculated here)
+Execution Price: ₹91.00  (trade happens here)
+Close Price:     ₹90.70  (P&L calculated here)
+
+Result: Each price serves its purpose, no conflicts ✅
+```
+
+**3. Supports Partial Closes**
+```python
+# Proportional release based on stored margin
+Close 40%: Release 40% of stored margin
+Close 60%: Release 60% of remaining margin
+Total: 100% of original margin released ✅
+```
+
+**4. Tracks Multiple Orders**
+```python
+Order 1: BUY 100 @ ₹1,200 → Margin: ₹24,000
+Order 2: BUY 50 @ ₹1,210  → Margin: ₹12,100
+Position margin: ₹36,100 (accumulated) ✅
+
+Close all: Release exact ₹36,100 ✅
+```
+
+#### Migration
+
+**Script**: `upgrade/migrate_sandbox.py`
+
+**What It Does**:
+- Adds `margin_blocked` column to `sandbox_positions` table
+- Sets default value to ₹0.00 for existing positions
+- New positions will store exact margin going forward
+
+**Run Migration**:
+```bash
+cd upgrade
+uv run migrate_sandbox.py
+
+# Check status
+uv run migrate_sandbox.py --status
+```
+
+**Result**:
+```
+✅ Added margin_blocked column to sandbox_positions
+✅ Migration sandbox_complete_setup completed successfully
+```
+
+#### Verification
+
+**Check Schema**:
+```python
+from database.sandbox_db import SandboxPositions
+
+# Verify column exists
+position = SandboxPositions.query.first()
+print(position.margin_blocked)  # Should return Decimal value
+```
+
+**Check Margin Release**:
+```python
+# Before fix:
+1. BUY 150 @ market
+2. SELL 150 @ market
+3. Check used_margin → might be -₹60 ❌
+
+# After fix:
+1. BUY 150 @ market
+2. SELL 150 @ market
+3. Check used_margin → exactly ₹0 ✅
+```
+
+#### Summary: Exact Margin Flow
+
+```
+Order Placement
+     ↓
+Calculate Margin (using order price)
+     ↓
+Block Margin in Funds
+     ↓
+Store in order.margin_blocked
+     ↓
+─────────────────────────────────
+     ↓
+Order Executes (at different price)
+     ↓
+Position Created/Updated
+     ↓
+Store order.margin_blocked → position.margin_blocked ✅
+     ↓
+─────────────────────────────────
+     ↓
+Position Closed
+     ↓
+Use position.margin_blocked (NOT recalculated) ✅
+     ↓
+Release Exact Amount
+     ↓
+used_margin = ₹0 (perfect balance) ✅
+```
+
+**Key Principle**: "Block at order price, store in position, release exact amount" - This ensures perfect margin accounting regardless of price movements between order placement and execution.
+
 ## Common Scenarios
 
 ### Scenario A: Simple BUY and SELL
@@ -1705,13 +2044,14 @@ This comprehensive margin system ensures traders understand real-world margin re
 
 ---
 
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Last Updated**: October 2025
 **File References**:
 - `sandbox/order_manager.py` (lines 33-44, 153-262, 477-537)
 - `sandbox/fund_manager.py` (lines 274-337)
-- `sandbox/execution_engine.py` (lines 138-203, 306-370)
+- `sandbox/execution_engine.py` (lines 280-446) - **Updated with exact margin tracking**
 - `sandbox/position_manager.py` (lines 178-224)
 - `sandbox/squareoff_manager.py` (lines 101-200)
 - `blueprints/sandbox.py` (lines 78-143)
-- `database/sandbox_db.py` (lines 93-117)
+- `database/sandbox_db.py` (lines 122-124) - **Added margin_blocked column**
+- `upgrade/migrate_sandbox.py` - **Migration for margin_blocked column**

@@ -19,7 +19,8 @@
       "Read(//c/Users/Admin1/Downloads/**)",
       "Read(//c/Users/Admin1/Desktop/**)",
       "Bash(sqlite3:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(uv run:*)"
     ],
     "deny": [],
     "ask": []

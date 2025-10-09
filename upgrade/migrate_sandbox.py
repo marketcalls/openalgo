@@ -127,6 +127,7 @@ def create_all_tables(conn):
             pnl DECIMAL(10, 2) DEFAULT 0.00,
             pnl_percent DECIMAL(10, 4) DEFAULT 0.00,
             accumulated_realized_pnl DECIMAL(10, 2) DEFAULT 0.00,
+            margin_blocked DECIMAL(15, 2) DEFAULT 0.00,
             created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
             updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
             UNIQUE(user_id, symbol, exchange, product)
@@ -250,6 +251,14 @@ def add_missing_columns(conn):
         """))
         logger.info("✅ Added accumulated_realized_pnl column to sandbox_positions")
 
+    # Check and add margin_blocked to sandbox_positions if missing
+    if 'margin_blocked' not in columns:
+        conn.execute(text("""
+            ALTER TABLE sandbox_positions
+            ADD COLUMN margin_blocked DECIMAL(15,2) DEFAULT 0.00
+        """))
+        logger.info("✅ Added margin_blocked column to sandbox_positions")
+
     conn.commit()
 
 
@@ -361,12 +370,17 @@ def status():
                 logger.info("   Migration needed")
                 return False
 
-            # Check for accumulated_realized_pnl in sandbox_positions
+            # Check for accumulated_realized_pnl and margin_blocked in sandbox_positions
             result = conn.execute(text("PRAGMA table_info(sandbox_positions)"))
             columns = [row[1] for row in result]
 
             if 'accumulated_realized_pnl' not in columns:
                 logger.info("⚠️  Missing accumulated_realized_pnl column in sandbox_positions")
+                logger.info("   Migration needed")
+                return False
+
+            if 'margin_blocked' not in columns:
+                logger.info("⚠️  Missing margin_blocked column in sandbox_positions")
                 logger.info("   Migration needed")
                 return False
 

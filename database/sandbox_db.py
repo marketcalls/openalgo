@@ -119,6 +119,10 @@ class SandboxPositions(Base):
     pnl_percent = Column(DECIMAL(10, 4), default=0.00)  # P&L percentage
     accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Accumulated realized P&L for the day
 
+    # Margin tracking - stores exact margin blocked for this position
+    # This prevents margin release bugs when execution price differs from order placement price
+    margin_blocked = Column(DECIMAL(15, 2), default=0.00)  # Total margin blocked for this position
+
     # Timestamps
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())

@@ -221,6 +221,9 @@ CREATE TABLE sandbox_positions (
     pnl_percent DECIMAL(10, 4) DEFAULT 0.00,
     accumulated_realized_pnl DECIMAL(10, 2) DEFAULT 0.00,  -- Intraday accumulated P&L
 
+    -- Margin Tracking
+    margin_blocked DECIMAL(15, 2) DEFAULT 0.00,  -- Exact margin blocked for this position
+
     -- Timestamps
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -254,6 +257,7 @@ CREATE INDEX idx_user_product ON sandbox_positions(user_id, product);
 | pnl | DECIMAL(10,2) | Current P&L | Yes | 0.00 |
 | pnl_percent | DECIMAL(10,4) | P&L percentage | Yes | 0.00 |
 | accumulated_realized_pnl | DECIMAL(10,2) | Accumulated intraday P&L | Yes | 0.00 |
+| margin_blocked | DECIMAL(15,2) | Exact margin blocked for position | Yes | 0.00 |
 | created_at | DATETIME | Position creation time (IST) | No | NOW |
 | updated_at | DATETIME | Last update time (IST) | No | NOW |
 
