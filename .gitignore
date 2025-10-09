@@ -4,6 +4,7 @@ venopenalgo
 openalgo.db
 *.db-shm
 *.db-wal
+*.db-journal
 .env
 .flaskenv
 *.pyc
