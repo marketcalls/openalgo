@@ -107,17 +107,22 @@ class BrokerData:
             logger.debug(f"Fetching quotes for {exchange}:{token}")
 
             br_symbol = get_br_symbol(symbol, exchange)
-            # Determine opt_type based on symbol format
-            parts = br_symbol.split('-')
-            if len(parts) > 2:
-                if parts[-1] in ['CE', 'PE']:
-                    opt_type = 'OPTION'
-                elif 'FUT' in parts[-1]:
-                    opt_type = 'FUTURE'
+
+            # Determine opt_type based on exchange and symbol format
+            if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+                opt_type = 'INDEX'
+            else:
+                # Determine opt_type based on symbol format
+                parts = br_symbol.split('-')
+                if len(parts) > 2:
+                    if parts[-1] in ['CE', 'PE']:
+                        opt_type = 'OPTION'
+                    elif 'FUT' in parts[-1]:
+                        opt_type = 'FUTURE'
+                    else:
+                        opt_type = 'EQUITY'
                 else:
                     opt_type = 'EQUITY'
-            else:
-                opt_type = 'EQUITY'
             
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
@@ -177,17 +182,22 @@ class BrokerData:
             logger.debug(f"Fetching market depth for {exchange}:{token}")
 
             br_symbol = get_br_symbol(symbol, exchange)
-            # Determine opt_type based on symbol format
-            parts = br_symbol.split('-')
-            if len(parts) > 2:
-                if parts[-1] in ['CE', 'PE']:
-                    opt_type = 'OPTION'
-                elif 'FUT' in parts[-1]:
-                    opt_type = 'FUTURE'
+
+            # Determine opt_type based on exchange and symbol format
+            if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+                opt_type = 'INDEX'
+            else:
+                # Determine opt_type based on symbol format
+                parts = br_symbol.split('-')
+                if len(parts) > 2:
+                    if parts[-1] in ['CE', 'PE']:
+                        opt_type = 'OPTION'
+                    elif 'FUT' in parts[-1]:
+                        opt_type = 'FUTURE'
+                    else:
+                        opt_type = 'EQUITY'
                 else:
                     opt_type = 'EQUITY'
-            else:
-                opt_type = 'EQUITY'
             
             # URL encode the symbol to handle special characters
             # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
