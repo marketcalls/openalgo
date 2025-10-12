@@ -1,0 +1,24 @@
+# openalgo Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2025-10-12
+
+## Active Technologies
+- Python 3.11 with Flask 3.0.3 + Flask, Jinja2 templates, DaisyUI components (001-add-python-menu)
+
+## Project Structure
+```
+src/
+tests/
+```
+
+## Commands
+cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] pytest [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] ruff check .
+
+## Code Style
+Python 3.11 with Flask 3.0.3: Follow standard conventions
+
+## Recent Changes
+- 001-add-python-menu: Added Python 3.11 with Flask 3.0.3 + Flask, Jinja2 templates, DaisyUI components
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->

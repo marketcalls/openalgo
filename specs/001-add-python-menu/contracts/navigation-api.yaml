@@ -1,0 +1,115 @@
+openapi: 3.0.3
+info:
+  title: Navigation API
+  description: API contracts for navigation menu functionality
+  version: 1.0.0
+  contact:
+    name: OpenAlgo Development Team
+
+paths:
+  /python:
+    get:
+      summary: Access Python Strategy Management
+      description: Navigate to the Python strategy management interface
+      operationId: getPythonStrategyPage
+      tags:
+        - Navigation
+      responses:
+        '200':
+          description: Python strategy management page loaded successfully
+          content:
+            text/html:
+              schema:
+                type: string
+              example: "<!DOCTYPE html><html>...</html>"
+        '404':
+          description: Python strategy page not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Python strategy page not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Internal server error"
+
+components:
+  schemas:
+    NavigationMenuItem:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Display name of the menu item
+          example: "Python"
+        url:
+          type: string
+          description: Target URL for the menu item
+          example: "/python"
+        active:
+          type: boolean
+          description: Whether the menu item is currently active
+          example: true
+        css_class:
+          type: string
+          description: CSS classes for styling
+          example: "text-base hover:bg-base-200 active"
+      required:
+        - name
+        - url
+        - active
+        - css_class
+
+    NavigationMenu:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NavigationMenuItem'
+          description: List of navigation menu items
+        type:
+          type: string
+          enum: [desktop, mobile]
+          description: Type of navigation menu
+        container_class:
+          type: string
+          description: CSS classes for menu container
+          example: "menu menu-horizontal px-1 gap-1"
+      required:
+        - items
+        - type
+        - container_class
+
+  responses:
+    NavigationError:
+      description: Navigation-related error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Error message
+              code:
+                type: string
+                description: Error code
+                example: "NAV_001"
+            required:
+              - error
+              - code
+
+tags:
+  - name: Navigation
+    description: Navigation menu functionality
