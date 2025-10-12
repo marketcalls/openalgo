@@ -406,4 +406,4 @@ if __name__ == '__main__':
         url = f"http://{host_ip}:{port}"
         log_startup_banner(logger, "OpenAlgo is running!", url)
 
-    socketio.run(app, host=host_ip, port=port, debug=debug)
+    socketio.run(app, host=host_ip, port=port, debug=debug, allow_unsafe_werkzeug=True)
