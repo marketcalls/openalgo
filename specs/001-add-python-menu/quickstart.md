@@ -130,13 +130,13 @@ def test_python_route_accessible(client):
 
 ### Success Criteria
 
-- [ ] Python menu item appears in desktop navigation
-- [ ] Python menu item appears in mobile navigation
-- [ ] Python menu item links to `/python` route
-- [ ] Active state highlighting works correctly
-- [ ] Consistent styling with other menu items
-- [ ] Mobile drawer navigation works
-- [ ] All tests pass
+- [x] Python menu item appears in desktop navigation
+- [x] Python menu item appears in mobile navigation
+- [x] Python menu item links to `/python` route
+- [x] Active state highlighting works correctly
+- [x] Consistent styling with other menu items
+- [x] Mobile drawer navigation works
+- [x] All tests pass
 
 ### Performance
 

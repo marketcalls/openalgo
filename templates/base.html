@@ -134,100 +134,84 @@
                     <span class="text-xl font-semibold">OpenAlgo</span>
                 </div>
                 <ul class="menu menu-lg gap-2">
-                    <li>
-                        <a href="{{ url_for('dashboard_bp.dashboard') }}" 
-                           class="{{ 'active' if request.endpoint == 'dashboard_bp.dashboard' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'dashboard_bp.dashboard' }}">
+                        <a href="{{ url_for('dashboard_bp.dashboard') }}">
                             Dashboard
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.orderbook') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.orderbook' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'orders_bp.orderbook' }}">
+                        <a href="{{ url_for('orders_bp.orderbook') }}">
                             Orderbook
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.tradebook') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.tradebook' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'orders_bp.tradebook' }}">
+                        <a href="{{ url_for('orders_bp.tradebook') }}">
                             Tradebook
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.positions') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.positions' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'orders_bp.positions' }}">
+                        <a href="{{ url_for('orders_bp.positions') }}">
                             Positions
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('orders_bp.holdings') }}" 
-                           class="{{ 'active' if request.endpoint == 'orders_bp.holdings' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'orders_bp.holdings' }}">
+                        <a href="{{ url_for('orders_bp.holdings') }}">
                             Holdings
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('python_strategy_bp.index') }}" 
-                           class="{{ 'active' if request.endpoint.startswith('python_strategy_bp.') }}">
-                            Python Strategies
+                    <li class="{{ 'menu-active' if request.endpoint == 'python_strategy_bp.index' }}">
+                        <a href="{{ url_for('python_strategy_bp.index') }}">
+                            Python
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
-                           class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
+                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}">
                             Tradingview
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('chartink_bp.index') }}"
-                           class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
+                    <li class="{{ 'menu-active' if request.endpoint.startswith('chartink_bp.') }}">
+                        <a href="{{ url_for('chartink_bp.index') }}">
                             Chartink
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('strategy_bp.index') }}"
-                           class="{{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
+                    <li class="{{ 'menu-active' if request.endpoint.startswith('strategy_bp.') }}">
+                        <a href="{{ url_for('strategy_bp.index') }}">
                             Strategy
                         </a>
                     </li>
                     <div class="divider"></div>
-                    <li>
-                        <a href="{{ url_for('auth.change_password') }}"
-                           class="{{ 'active' if request.endpoint == 'auth.change_password' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'auth.change_password' }}">
+                        <a href="{{ url_for('auth.change_password') }}">
                             Profile
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('sandbox_bp.sandbox_config') }}"
-                           class="{{ 'active' if request.endpoint.startswith('sandbox_bp.') }}">
+                    <li class="{{ 'menu-active' if request.endpoint.startswith('sandbox_bp.') }}">
+                        <a href="{{ url_for('sandbox_bp.sandbox_config') }}">
                             Sandbox Config
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('api_key_bp.manage_api_key') }}"
-                           class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
+                        <a href="{{ url_for('api_key_bp.manage_api_key') }}">
                             API Key
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('telegram_bp.index') }}"
-                           class="{{ 'active' if request.endpoint.startswith('telegram_bp.') }}">
+                    <li class="{{ 'menu-active' if request.endpoint.startswith('telegram_bp.') }}">
+                        <a href="{{ url_for('telegram_bp.index') }}">
                             Telegram Bot
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('log_bp.view_logs') }}"
-                           class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'log_bp.view_logs' }}">
+                        <a href="{{ url_for('log_bp.view_logs') }}">
                             Logs
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('traffic_bp.traffic_dashboard') }}" 
-                           class="{{ 'active' if request.endpoint == 'traffic_bp.traffic_dashboard' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'traffic_bp.traffic_dashboard' }}">
+                        <a href="{{ url_for('traffic_bp.traffic_dashboard') }}">
                             Traffic Monitor
                         </a>
                     </li>
-                    <li>
-                        <a href="{{ url_for('search_bp.token') }}" 
-                           class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
+                    <li class="{{ 'menu-active' if request.endpoint == 'search_bp.token' }}">
+                        <a href="{{ url_for('search_bp.token') }}">
                             Search
                         </a>
                     </li>
