@@ -90,6 +90,16 @@
 - **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
 - **FR-005**: System MUST [behavior, e.g., "log all security events"]
 
+### OpenAlgo-Specific Requirements
+
+- **FR-ALGO-001**: Feature MUST be implemented using Python and Flask framework
+- **FR-ALGO-002**: UI components MUST use DaisyUI standard for consistency
+- **FR-ALGO-003**: Feature MUST include comprehensive test cases following TDD process
+- **FR-ALGO-004**: Feature MUST be developed as independent file/method for upstream compatibility
+- **FR-ALGO-005**: Feature MUST properly handle API keys through .env configuration system
+- **FR-ALGO-006**: Feature MUST follow established broker adapter pattern if involving broker APIs
+- **FR-ALGO-007**: Feature MUST meet performance standards (< 100ms order placement, < 200ms data retrieval)
+
 *Example of marking unclear requirements:*
 
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]

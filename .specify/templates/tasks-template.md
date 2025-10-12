@@ -46,8 +46,10 @@ description: "Task list template for feature implementation"
 **Purpose**: Project initialization and basic structure
 
 - [ ] T001 Create project structure per implementation plan
-- [ ] T002 Initialize [language] project with [framework] dependencies
-- [ ] T003 [P] Configure linting and formatting tools
+- [ ] T002 Initialize Python project with Flask dependencies
+- [ ] T003 [P] Configure linting and formatting tools (pytest, black, flake8)
+- [ ] T004 [P] Setup DaisyUI and TailwindCSS for frontend components
+- [ ] T005 [P] Configure .env file for API key management
 
 ---
 
@@ -57,14 +59,16 @@ description: "Task list template for feature implementation"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-Examples of foundational tasks (adjust based on your project):
+OpenAlgo foundational tasks:
 
-- [ ] T004 Setup database schema and migrations framework
-- [ ] T005 [P] Implement authentication/authorization framework
-- [ ] T006 [P] Setup API routing and middleware structure
-- [ ] T007 Create base models/entities that all stories depend on
-- [ ] T008 Configure error handling and logging infrastructure
-- [ ] T009 Setup environment configuration management
+- [ ] T006 Setup SQLAlchemy database schema and migrations framework
+- [ ] T007 [P] Implement Argon2 password hashing and Fernet encryption
+- [ ] T008 [P] Setup Flask-RESTX API routing and middleware structure
+- [ ] T009 [P] Create base broker adapter interface and models
+- [ ] T010 Configure Flask-Limiter rate limiting and CSRF protection
+- [ ] T011 Setup WebSocket proxy with ZeroMQ message broker
+- [ ] T012 Configure comprehensive logging and audit trail
+- [ ] T013 Setup DaisyUI theme system and responsive components
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 

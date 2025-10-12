@@ -31,7 +31,15 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+### OpenAlgo Compliance Gates
+
+- **Backend Architecture**: Feature MUST use Python and Flask framework
+- **Frontend Standards**: UI components MUST use DaisyUI standard
+- **Testing Requirements**: Feature MUST include comprehensive test cases following TDD
+- **Feature Independence**: Feature MUST be developed as independent file/method
+- **Security Standards**: Feature MUST properly handle API keys and sensitive data
+- **Broker Integration**: Feature MUST follow established adapter pattern if involving broker APIs
+- **Performance Standards**: Response times MUST be < 100ms for order placement, < 200ms for data retrieval
 
 ## Project Structure
 
